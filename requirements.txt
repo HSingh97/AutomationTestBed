@@ -1,0 +1,18 @@
+# --- Core Test Runner ---
+pytest==8.1.1
+pytest-asyncio==0.23.5    # Crucial for async speed
+pytest-xdist==3.5.0       # For running tests on multiple CPU cores
+pytest-order==1.2.0       # To group tests by channel/state to save time
+
+# --- Transport Layer (The Speed Engines) ---
+asyncssh==2.14.2             # Required underlying SSH engine for Scrapli
+scrapli[asyncio]==2023.7.30  # Replaces Netmiko/Paramiko
+httpx==0.27.0                # Replaces Requests
+playwright==1.42.0           # Replaces Selenium & webdriver-manager
+pysnmp==4.4.12               # For SNMP validations
+
+# --- Reporting & Utilities ---
+pytest-html==4.1.1
+pytest-json-report==1.5.0
+pyyaml==6.0.1
+prettytable==3.10.0
