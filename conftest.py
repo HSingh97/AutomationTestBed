@@ -8,17 +8,27 @@ import httpx
 # --- FIXED IMPORT PATH ---
 from scrapli.driver.generic import AsyncGenericDriver
 
+import asyncio
+
+# Add this fixture to force a single Event Loop for the whole session
+@pytest.fixture(scope="session")
+def event_loop():
+    """Overrides pytest default function-scoped event loop"""
+    policy = asyncio.get_event_loop_policy()
+    loop = policy.new_event_loop()
+    yield loop
+    loop.close()
 
 # =====================================================================
 # 1. COMMAND LINE ARGUMENTS (From your Jenkins/Legacy setup)
 # =====================================================================
 def pytest_addoption(parser):
     group = parser.getgroup("UBR Automation Config")
-    group.addoption("--local-ip", action="store", default="192.168.1.1", help="BSU/Local IP Address")
-    group.addoption("--remote-ip", action="store", default="192.168.1.2",
+    group.addoption("--local-ip", action="store", default="192.168.1.230", help="BSU/Local IP Address")
+    group.addoption("--remote-ip", action="store", default="192.168.1.231",
                     help="CPE/Remote IP Address (comma-separated)")
-    group.addoption("--username", action="store", default="admin", help="Device Username")
-    group.addoption("--password", action="store", default="password", help="Device Password")
+    group.addoption("--username", action="store", default="root", help="Device Username")
+    group.addoption("--password", action="store", default="admin", help="Device Password")
     group.addoption("--bandwidth", action="store", default="HT20", help="Bandwidth")
     group.addoption("--mcs-rate", action="store", default="MCS0", help="MCS Rate")
     group.addoption("--channels", action="store", default="36,50,62,100,120,149,161,167,171", help="Channels to test")
