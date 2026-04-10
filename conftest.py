@@ -4,6 +4,7 @@ import os
 import asyncio
 from datetime import datetime
 import httpx
+from playwright.async_api import async_playwright
 
 # --- FIXED IMPORT PATH ---
 from scrapli.driver.generic import AsyncGenericDriver
@@ -56,30 +57,47 @@ def device_creds(request):
         "pass": request.config.getoption("--password")
     }
 
-
 # =====================================================================
-# 3. HIGH-SPEED CONNECTION FIXTURES (The Engine)
+# SSH ENGINE 1: ROOT BACKEND
 # =====================================================================
-
 @pytest.fixture(scope="session")
-async def bsu_cli(bsu_ip, device_creds):
-    """
-    Establishes an asynchronous SSH connection to the BSU.
-    This connection remains open for the entire test session.
-    """
+async def bsu_root_cli(bsu_ip, device_creds):
+    """SSH connection to the Linux backend as 'root'."""
+    os.makedirs("logs", exist_ok=True)
     device = {
         "host": bsu_ip,
-        "auth_username": device_creds["user"],
+        "auth_username": "root",
         "auth_password": device_creds["pass"],
         "auth_strict_key": False,
         "transport": "asyncssh",
+        # FIX: Pass the exact file path directly to channel_log
+        "channel_log": f"logs/root_cli_{bsu_ip}.log",
     }
-
     conn = AsyncGenericDriver(**device)
     await conn.open()
     yield conn
     await conn.close()
 
+# =====================================================================
+# SSH ENGINE 2: ADMIN CLI
+# =====================================================================
+@pytest.fixture(scope="session")
+async def bsu_admin_cli(bsu_ip, device_creds):
+    """SSH connection to the device CLI as 'admin'."""
+    os.makedirs("logs", exist_ok=True)
+    device = {
+        "host": bsu_ip,
+        "auth_username": "admin",
+        "auth_password": device_creds["pass"],
+        "auth_strict_key": False,
+        "transport": "asyncssh",
+        # FIX: Pass the exact file path directly to channel_log
+        "channel_log": f"logs/admin_cli_{bsu_ip}.log",
+    }
+    conn = AsyncGenericDriver(**device)
+    await conn.open()
+    yield conn
+    await conn.close()
 
 @pytest.fixture(scope="session")
 async def bsu_api(bsu_ip, device_creds):
@@ -127,3 +145,18 @@ def pytest_sessionfinish(session, exitstatus):
             writer.writerow([])
             writer.writerow(["Total Executed", "Passed", "Failed", "Skipped", "Success Rate"])
             writer.writerow([total, passed, failed, skipped, success_rate])
+
+# =====================================================================
+# 5. PLAYWRIGHT GUI ENGINE (For Web Automation & Tracing)
+# =====================================================================
+@pytest.fixture(scope="session")
+async def gui_browser():
+    """
+    Spins up a headless Chromium browser for GUI testing.
+    """
+    async with async_playwright() as p:
+        # headless=True runs invisibly in the background.
+        # Change to headless=False if you want to watch the browser pop up and move!
+        browser = await p.chromium.launch(headless=True)
+        yield browser
+        await browser.close()

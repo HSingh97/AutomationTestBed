@@ -37,7 +37,6 @@ echo -e "\n[+] Installing Playwright Browsers..."
 if [ "$OS" = "Linux" ]; then
     playwright install --with-deps chromium
 else
-    # Mac doesn't use apt dependencies for Playwright
     playwright install chromium
 fi
 

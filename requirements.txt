@@ -20,3 +20,4 @@ pytest-html==4.1.1
 pytest-json-report==1.5.0
 pyyaml==6.0.1
 prettytable==3.10.0
+pytest-check
