@@ -1,5 +1,5 @@
 # --- Build Essentials (Protects against Mac/Linux Python version differences) ---
-setuptools>=65.0.0
+setuptools<=70.0.0
 wheel>=0.38.0
 
 # --- Core Test Runner ---
