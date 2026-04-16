@@ -44,15 +44,12 @@ def extract_validated_parameters(test_data):
 def clean_failure_message(raw_failure):
     """
     Translates ugly pytest-check strings into professional human-readable formats.
-    E.g., "check 51.78 <= 5.0: CPU Spike!" -> "CPU Spike! (Detected Drift: 51.78% | Max Allowed: 5.0%)"
     """
-    # 1. Check for numerical tolerance failures (e.g., drift)
     num_match = re.match(r'check\s+([\d.]+)\s*<=\s*([\d.]+):\s*(.*)', raw_failure)
     if num_match:
         val, tol, msg = num_match.groups()
         return f"{msg} <br/><span style='color:#ef4444; font-size:12px;'>↳ <b>Drift Analysis:</b> Detected <b>{float(val):.2f}%</b> (Exceeds allowed {tol}%)</span>"
 
-    # 2. Strip standard pytest_check prefix (e.g., "check 'ap' in 'SU': Mismatch...")
     clean_msg = re.sub(r'^check\s+.*?:\s*', '', raw_failure)
     return clean_msg
 
@@ -80,7 +77,6 @@ def generate():
         stats['total'] += 1
         nodeid = test.get('nodeid', '')
 
-        # Format Module Name (e.g., 'summary_system' -> 'System-Summary')
         match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
         if match:
             test_id = match.group(1).upper()
@@ -118,10 +114,7 @@ def generate():
                 stats['partial'] += 1
                 status = "PARTIAL"
                 raw_failures = re.findall(r'FAILURE: (.*)', longrepr)
-
-                # Apply our new professional formatter to each failure
                 clean_failures = [clean_failure_message(f) for f in raw_failures]
-
                 reason = "<span style='color:#b45309; font-weight:600;'>Discrepancies Detected:</span><br/>• " + "<br/>• ".join(
                     clean_failures)
                 color = "#d97706"
@@ -167,6 +160,11 @@ def generate():
             for r in records:
                 writer.writerow([group_name, r['id'], r['name'], r['status'], r['reason_csv']])
 
+    # Generate Group Filter Options
+    group_options = ""
+    for g in sorted(groups.keys()):
+        group_options += f'<option value="{g}">{g}</option>\n'
+
     # Generate Professional HTML
     html = f"""
     <!DOCTYPE html>
@@ -186,12 +184,18 @@ def generate():
             .meta-info strong {{ color: #0f172a; }}
 
             .summary-cards {{ display: flex; padding: 30px 40px; gap: 20px; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
-            .card {{ flex: 1; padding: 20px; border-radius: 10px; text-align: center; border: 1px solid #e2e8f0; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }}
-            .card h3 {{ margin: 0; font-size: 32px; font-weight: 700; color: #0f172a; }}
-            .card p {{ margin: 8px 0 0 0; font-size: 12px; color: #64748b; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; }}
+            .card {{ flex: 1; padding: 20px; border-radius: 10px; text-align: center; border: 1px solid #e2e8f0; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.02); cursor: pointer; transition: all 0.2s ease; }}
+            .card:hover {{ transform: translateY(-3px); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }}
+            .card.active {{ border-width: 2px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.05); transform: scale(0.98); }}
+            .card h3 {{ margin: 0; font-size: 32px; font-weight: 700; color: #0f172a; pointer-events: none; }}
+            .card p {{ margin: 8px 0 0 0; font-size: 12px; color: #64748b; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; pointer-events: none; }}
 
             .content {{ padding: 0 40px 40px 40px; }}
-            table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
+            .controls {{ display: flex; justify-content: space-between; align-items: center; margin: 25px 0 15px 0; }}
+            .filter-group select {{ padding: 8px 12px; border-radius: 6px; border: 1px solid #cbd5e1; font-family: 'Inter', sans-serif; font-size: 13px; color: #334155; outline: none; cursor: pointer; }}
+            .filter-group label {{ font-weight: 600; font-size: 13px; color: #475569; margin-right: 10px; }}
+
+            table {{ width: 100%; border-collapse: collapse; }}
             th, td {{ padding: 16px 20px; text-align: left; border-bottom: 1px solid #e2e8f0; vertical-align: top; }}
             th {{ background-color: #ffffff; color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px; border-bottom: 2px solid #e2e8f0; }}
             tr:hover {{ background-color: #f8fafc; transition: background-color 0.2s ease; }}
@@ -201,6 +205,54 @@ def generate():
             .reason-cell {{ font-size: 13px; color: #475569; line-height: 1.6; word-break: break-word; }}
             .reason-cell b {{ color: #0f172a; }}
         </style>
+        <script>
+            let currentStatus = 'ALL';
+            let currentGroup = 'ALL';
+
+            function setStatusFilter(status, element) {{
+                currentStatus = status;
+
+                // Highlight active card
+                document.querySelectorAll('.card').forEach(c => c.classList.remove('active'));
+                element.classList.add('active');
+
+                applyFilters();
+            }}
+
+            function setGroupFilter(group) {{
+                currentGroup = group;
+                applyFilters();
+            }}
+
+            function applyFilters() {{
+                const testRows = document.querySelectorAll('.test-row');
+                const groupHeaders = document.querySelectorAll('.group-header-row');
+
+                let groupVisibility = {{}};
+                groupHeaders.forEach(h => groupVisibility[h.dataset.group] = 0);
+
+                testRows.forEach(row => {{
+                    const statusMatch = currentStatus === 'ALL' || row.dataset.status === currentStatus;
+                    const groupMatch = currentGroup === 'ALL' || row.dataset.group === currentGroup;
+
+                    if (statusMatch && groupMatch) {{
+                        row.style.display = '';
+                        groupVisibility[row.dataset.group]++;
+                    }} else {{
+                        row.style.display = 'none';
+                    }}
+                }});
+
+                // Hide group headers if no tests are visible inside them
+                groupHeaders.forEach(header => {{
+                    if (groupVisibility[header.dataset.group] > 0) {{
+                        header.style.display = '';
+                    }} else {{
+                        header.style.display = 'none';
+                    }}
+                }});
+            }}
+        </script>
     </head>
     <body>
         <div class="container">
@@ -209,7 +261,7 @@ def generate():
                     <img src="https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png" alt="Senao Networks">
                     <div class="logo-text">
                         <h1>Validation Execution Report</h1>
-                        <p>Automated Device Telemetry & Consistency Analysis</p>
+                        <p>Automation Test Case Execution Report</p>
                     </div>
                 </div>
                 <div class="meta-info">
@@ -220,13 +272,31 @@ def generate():
             </div>
 
             <div class="summary-cards">
-                <div class="card"><h3>{stats['total']}</h3><p>Modules Executed</p></div>
-                <div class="card" style="border-bottom: 4px solid #10b981;"><h3>{stats['passed']}</h3><p style="color: #10b981;">Fully Passed</p></div>
-                <div class="card" style="border-bottom: 4px solid #f59e0b;"><h3>{stats['partial']}</h3><p style="color: #f59e0b;">Partial (Mismatches)</p></div>
-                <div class="card" style="border-bottom: 4px solid #ef4444;"><h3>{stats['failed']}</h3><p style="color: #ef4444;">Critical Failures</p></div>
+                <div class="card active" style="border-bottom: 4px solid #64748b;" onclick="setStatusFilter('ALL', this)">
+                    <h3>{stats['total']}</h3><p>Total Executed</p>
+                </div>
+                <div class="card" style="border-bottom: 4px solid #10b981;" onclick="setStatusFilter('PASSED', this)">
+                    <h3>{stats['passed']}</h3><p style="color: #10b981;">Fully Passed</p>
+                </div>
+                <div class="card" style="border-bottom: 4px solid #f59e0b;" onclick="setStatusFilter('PARTIAL', this)">
+                    <h3>{stats['partial']}</h3><p style="color: #f59e0b;">Partial (Mismatches)</p>
+                </div>
+                <div class="card" style="border-bottom: 4px solid #ef4444;" onclick="setStatusFilter('FAILED', this)">
+                    <h3>{stats['failed']}</h3><p style="color: #ef4444;">Critical Failures</p>
+                </div>
             </div>
 
             <div class="content">
+                <div class="controls">
+                    <div class="filter-group">
+                        <label for="groupFilter">Filter by Test Group:</label>
+                        <select id="groupFilter" onchange="setGroupFilter(this.value)">
+                            <option value="ALL">All Groups</option>
+                            {group_options}
+                        </select>
+                    </div>
+                </div>
+
                 <table>
                     <thead>
                         <tr>
@@ -241,13 +311,13 @@ def generate():
 
     for group_name, records in groups.items():
         html += f"""
-                        <tr>
+                        <tr class="group-header-row" data-group="{group_name}">
                             <td colspan="4" class="group-header">↳ Test Group: {group_name}</td>
                         </tr>
         """
         for r in records:
             html += f"""
-                            <tr>
+                            <tr class="test-row" data-group="{group_name}" data-status="{r['status']}">
                                 <td style="font-weight: 600; color: #0f172a;">{r['id']}</td>
                                 <td style="font-weight: 500; color: #334155;">{r['name']}</td>
                                 <td><span class="badge" style="background-color: {r['bg']}; color: {r['color']}; border: 1px solid {r['color']}40;">{r['status']}</span></td>
