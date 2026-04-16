@@ -1,19 +1,21 @@
 import pytest
-import pytest_check as check
-import os
-import re
-import datetime
 
-from pages.locators import SummaryLocators, SummaryNetworkLocators
+from pages.locators import SummaryLocators, SummaryNetworkLocators, SummaryPerformanceLocators, SummaryWirelessLocators
 from pages.commands import RootCommands
 
+# Import all shared utilities
+from utils.parsers import (
+    parse_radio_status, parse_link_type, parse_radio_mode,
+    parse_bandwidth, parse_configured_channel, parse_security,
+    extract_uci_value, parse_iwconfig_mac, parse_iwconfig_active_channel
+)
+from utils.validators import (
+    validate_param, validate_network_address, validate_time,
+    validate_temperature, validate_cpu_mem, validate_speed_duplex,
+    validate_throughput, validate_percentage
+)
+
 pytestmark = pytest.mark.sanity
-
-
-def parse_device_time(time_str):
-    clean_str = re.sub(r'\s[A-Z]{3,4}\s', ' ', time_str)
-    clean_str = re.sub(r'\s+', ' ', clean_str).strip()
-    return datetime.datetime.strptime(clean_str, "%a %b %d %H:%M:%S %Y")
 
 
 # =====================================================================
@@ -24,18 +26,18 @@ def parse_device_time(time_str):
 async def test_gui_01_summary_system(root_ssh, gui_page, bsu_ip):
     print("\n[+] Starting GUI_01: Cross-Validating System Summary (Root -> GUI)")
 
-    print("    -> Pulling all 8 parameters from Root Backend...")
-    cli_model = (await root_ssh.send_command(RootCommands.GET_MODEL)).result.strip()
-    cli_hw = (await root_ssh.send_command(RootCommands.GET_HW_VERSION)).result.strip()
-    cli_bootloader = (await root_ssh.send_command(RootCommands.GET_BOOTLOADER)).result.strip()
-    cli_time = (await root_ssh.send_command(RootCommands.GET_TIME)).result.strip()
-    cli_temp = (await root_ssh.send_command(RootCommands.GET_TEMP)).result.strip()
-    cli_gps = (await root_ssh.send_command(RootCommands.GET_GPS)).result.strip()
-    cli_elevation = (await root_ssh.send_command(RootCommands.GET_ELEVATION)).result.strip()
-    cli_cpu_mem = (await root_ssh.send_command(RootCommands.GET_CPU_MEM)).result.strip()
+    ssh_model = (await root_ssh.send_command(RootCommands.GET_MODEL)).result.strip()
+    ssh_hw = (await root_ssh.send_command(RootCommands.GET_HW_VERSION)).result.strip()
+    ssh_bootloader = (await root_ssh.send_command(RootCommands.GET_BOOTLOADER)).result.strip()
+    ssh_time = (await root_ssh.send_command(RootCommands.GET_TIME)).result.strip()
+    ssh_temp = (await root_ssh.send_command(RootCommands.GET_TEMP)).result.strip()
+    ssh_gps = (await root_ssh.send_command(RootCommands.GET_GPS)).result.strip()
+    ssh_elevation = (await root_ssh.send_command(RootCommands.GET_ELEVATION)).result.strip()
+    ssh_cpu = (await root_ssh.send_command(RootCommands.GET_CPU)).result.strip()
+    ssh_mem = (await root_ssh.send_command(RootCommands.GET_MEM)).result.strip()
 
-    # The gui_page is already on the dashboard from the conftest login!
-    print("    -> Scraping GUI data fields...")
+    await gui_page.wait_for_timeout(5000)
+
     gui_model = await gui_page.locator(SummaryLocators.MODEL).inner_text()
     gui_hw = await gui_page.locator(SummaryLocators.HW_VERSION).inner_text()
     gui_bootloader = await gui_page.locator(SummaryLocators.BOOTLOADER).inner_text()
@@ -45,23 +47,14 @@ async def test_gui_01_summary_system(root_ssh, gui_page, bsu_ip):
     gui_elevation = await gui_page.locator(SummaryLocators.ELEVATION).inner_text()
     gui_cpu_mem = await gui_page.locator(SummaryLocators.CPU_MEMORY).inner_text()
 
-    print("    -> Validating Backend vs Frontend...")
-    check.is_in(cli_model, gui_model, f"Model Mismatch! SSH: {cli_model} | GUI: {gui_model}")
-    check.is_in(cli_hw, gui_hw, f"HW Version Mismatch! SSH: {cli_hw} | GUI: {gui_hw}")
-    check.is_in(cli_bootloader, gui_bootloader, f"Bootloader Mismatch! SSH: {cli_bootloader} | GUI: {gui_bootloader}")
-
-    try:
-        cli_dt = parse_device_time(cli_time)
-        gui_dt = parse_device_time(gui_time)
-        time_diff_seconds = abs((gui_dt - cli_dt).total_seconds())
-        check.less_equal(time_diff_seconds, 10,
-                         f"Time Mismatch! Delta is {time_diff_seconds}s. CLI: '{cli_time}' | GUI: '{gui_time}'")
-    except Exception as e:
-        check.fail(f"Failed to parse time strings. CLI: '{cli_time}' | GUI: '{gui_time}' | Error: {e}")
-
-    check.is_in(cli_temp, gui_temp, f"Temp Mismatch! SSH: {cli_temp} | GUI: {gui_temp}")
-    check.is_in(cli_gps, gui_gps, f"GPS Mismatch! SSH: {cli_gps} | GUI: {gui_gps}")
-    check.is_in(cli_elevation, gui_elevation, f"Elevation Mismatch! SSH: {cli_elevation} | GUI: {gui_elevation}")
+    validate_param("MODEL", ssh_model, gui_model)
+    validate_param("HW VERSION", ssh_hw, gui_hw)
+    validate_param("BOOTLOADER", ssh_bootloader, gui_bootloader)
+    validate_time("LOCAL TIME", ssh_time, gui_time)
+    validate_temperature("TEMPERATURE", ssh_temp, gui_temp, tolerance=1.0)
+    validate_param("GPS", ssh_gps, gui_gps)
+    validate_param("ELEVATION", ssh_elevation, gui_elevation)
+    validate_cpu_mem(ssh_cpu, ssh_mem, gui_cpu_mem, tolerance=5.0)
 
     print("[+] GUI_01 Soft Validation Complete.")
 
@@ -74,41 +67,178 @@ async def test_gui_01_summary_system(root_ssh, gui_page, bsu_ip):
 async def test_gui_02_summary_network(root_ssh, gui_page, bsu_ip):
     print("\n[+] Starting GUI_02: Cross-Validating Network Summary (Root -> GUI)")
 
-    print("    -> Pulling network parameters from Root Backend...")
-    ssh_ip = (await root_ssh.send_command(RootCommands.GET_IP)).result.strip()
-    ssh_gw = (await root_ssh.send_command(RootCommands.GET_GATEWAY)).result.strip()
-    ssh_mac1 = (await root_ssh.send_command(RootCommands.GET_MAC_LAN1)).result.strip().upper()
-    ssh_mac2 = (await root_ssh.send_command(RootCommands.GET_MAC_LAN2)).result.strip().upper()
-    ssh_speed1 = (await root_ssh.send_command(RootCommands.GET_SPEED_DUPLEX_LAN1)).result.strip()
-    ssh_speed2 = (await root_ssh.send_command(RootCommands.GET_SPEED_DUPLEX_LAN2)).result.strip()
-    ssh_cable1 = (await root_ssh.send_command(RootCommands.GET_CABLE_LENGTH_LAN1)).result.strip()
-    ssh_cable2 = (await root_ssh.send_command(RootCommands.GET_CABLE_LENGTH_LAN2)).result.strip()
+    ssh_ipv4 = (await root_ssh.send_command(RootCommands.GET_IPv4)).result.strip()
+    ssh_ipv6 = (await root_ssh.send_command(RootCommands.GET_IPv6)).result.strip()
+    ssh_gw_v4 = (await root_ssh.send_command(RootCommands.GET_GATEWAYv4)).result.strip()
+    ssh_gw_v6 = (await root_ssh.send_command(RootCommands.GET_GATEWAYv6)).result.strip()
 
-    # If Senao requires you to click a "Network" tab, uncomment this:
-    # await gui_page.click(SummaryNetworkLocators.NETWORK_TAB_BUTTON)
     await gui_page.wait_for_timeout(5000)
 
-    print("    -> Scraping GUI data fields...")
     gui_ip = await gui_page.locator(SummaryNetworkLocators.IP_ADDRESS).inner_text()
     gui_gw = await gui_page.locator(SummaryNetworkLocators.GATEWAY).inner_text()
-    gui_mac1 = await gui_page.locator(SummaryNetworkLocators.MAC_LAN1).inner_text()
-    gui_mac2 = await gui_page.locator(SummaryNetworkLocators.MAC_LAN2).inner_text()
-    gui_speed1 = await gui_page.locator(SummaryNetworkLocators.SPEED_DUPLEX_LAN1).inner_text()
-    gui_speed2 = await gui_page.locator(SummaryNetworkLocators.SPEED_DUPLEX_LAN2).inner_text()
-    gui_cable1 = await gui_page.locator(SummaryNetworkLocators.CABLE_LENGTH_LAN1).inner_text()
-    gui_cable2 = await gui_page.locator(SummaryNetworkLocators.CABLE_LENGTH_LAN2).inner_text()
 
-    print("    -> Validating Backend vs Frontend...")
-    check.is_in(ssh_ip, gui_ip, f"IP Mismatch! ssh: {ssh_ip} | GUI: {gui_ip}")
-    check.is_in(ssh_gw, gui_gw, f"Gateway Mismatch! ssh: {ssh_gw} | GUI: {gui_gw}")
-    check.is_in(ssh_mac1, gui_mac1.upper(), f"LAN 1 MAC Mismatch! ssh: {ssh_mac1} | GUI: {gui_mac1}")
-    check.is_in(ssh_mac2, gui_mac2.upper(), f"LAN 2 MAC Mismatch! ssh: {ssh_mac2} | GUI: {gui_mac2}")
+    validate_network_address("IP ADDRESS", ssh_ipv4, ssh_ipv6, gui_ip)
+    validate_network_address("GATEWAY", ssh_gw_v4, ssh_gw_v6, gui_gw)
 
-    check.is_true(bool(ssh_speed1) and ssh_speed1 in gui_speed1,
-                  f"LAN 1 Speed Mismatch! ssh: {ssh_speed1} | GUI: {gui_speed1}")
-    check.is_true(bool(ssh_speed2) and ssh_speed2 in gui_speed2,
-                  f"LAN 2 Speed Mismatch! ssh: {ssh_speed2} | GUI: {gui_speed2}")
-    check.is_in(ssh_cable1, gui_cable1, f"LAN 1 Cable Length Mismatch! ssh: {ssh_cable1} | GUI: {gui_cable1}")
-    check.is_in(ssh_cable2, gui_cable2, f"LAN 2 Cable Length Mismatch! ssh: {ssh_cable2} | GUI: {gui_cable2}")
+    lan_num = 1
+    while True:
+        mac_locator = getattr(SummaryNetworkLocators, f"MAC_LAN{lan_num}", None)
+        speed_locator = getattr(SummaryNetworkLocators, f"SPEED_DUPLEX_LAN{lan_num}", None)
+        cable_locator = getattr(SummaryNetworkLocators, f"CABLE_LENGTH_LAN{lan_num}", None)
+
+        if not mac_locator or not speed_locator or not cable_locator: break
+        if await gui_page.locator(mac_locator).count() == 0: break
+
+        eth_idx = lan_num - 1
+
+        ssh_mac = (await root_ssh.send_command(RootCommands.get_mac_lan(eth_idx))).result.strip().upper()
+        ssh_speed = (await root_ssh.send_command(RootCommands.get_speed_lan(eth_idx))).result.strip()
+        ssh_duplex = (await root_ssh.send_command(RootCommands.get_duplex_lan(eth_idx))).result.strip()
+        ssh_cable = (await root_ssh.send_command(RootCommands.get_cable_length_lan(eth_idx))).result.strip()
+
+        gui_mac = await gui_page.locator(mac_locator).inner_text()
+        gui_speed = await gui_page.locator(speed_locator).inner_text()
+        gui_cable = await gui_page.locator(cable_locator).inner_text()
+
+        validate_param(f"MAC LAN{lan_num}", ssh_mac, gui_mac.upper())
+        validate_speed_duplex(f"SPEED LAN{lan_num}", ssh_speed, ssh_duplex, gui_speed)
+        validate_param(f"CABLE LENGTH LAN{lan_num}", ssh_cable, gui_cable)
+
+        lan_num += 1
 
     print("[+] GUI_02 Soft Validation Complete.")
+
+
+# =====================================================================
+# GUI_03: PERFORMANCE SUMMARY
+# =====================================================================
+@pytest.mark.asyncio(scope="session")
+@pytest.mark.GUI_03
+async def test_gui_03_summary_performance(root_ssh, gui_page, bsu_ip):
+    print("\n[+] Starting GUI_03: Cross-Validating Performance Summary (Root -> GUI)")
+
+    ssh_tx_r1 = (await root_ssh.send_command(RootCommands.GET_TX_R1)).result.strip()
+    ssh_rx_r1 = (await root_ssh.send_command(RootCommands.GET_RX_R1)).result.strip()
+
+    await gui_page.wait_for_timeout(5000)
+
+    gui_tx_r1 = await gui_page.locator(SummaryPerformanceLocators.TX_R1).inner_text()
+    gui_rx_r1 = await gui_page.locator(SummaryPerformanceLocators.RX_R1).inner_text()
+
+    validate_throughput("TX R1", ssh_tx_r1, gui_tx_r1, tolerance=15.0)
+    validate_throughput("RX R1", ssh_rx_r1, gui_rx_r1, tolerance=15.0)
+
+    lan_num = 1
+    while True:
+        tx_locator = getattr(SummaryPerformanceLocators, f"TX_LAN{lan_num}", None)
+        rx_locator = getattr(SummaryPerformanceLocators, f"RX_LAN{lan_num}", None)
+
+        if not tx_locator or not rx_locator: break
+        if await gui_page.locator(tx_locator).count() == 0: break
+
+        eth_idx = lan_num - 1
+
+        ssh_tx_lan = (await root_ssh.send_command(RootCommands.get_tx_lan(eth_idx))).result.strip()
+        ssh_rx_lan = (await root_ssh.send_command(RootCommands.get_rx_lan(eth_idx))).result.strip()
+
+        gui_tx_lan = await gui_page.locator(tx_locator).inner_text()
+        gui_rx_lan = await gui_page.locator(rx_locator).inner_text()
+
+        validate_throughput(f"TX LAN{lan_num}", ssh_tx_lan, gui_tx_lan, tolerance=15.0)
+        validate_throughput(f"RX LAN{lan_num}", ssh_rx_lan, gui_rx_lan, tolerance=15.0)
+
+        lan_num += 1
+
+    print("[+] GUI_03 Soft Validation Complete.")
+
+
+# =====================================================================
+# GUI_04: WIRELESS SUMMARY
+# =====================================================================
+@pytest.mark.asyncio(scope="session")
+@pytest.mark.GUI_04
+async def test_gui_04_summary_wireless(root_ssh, gui_page, bsu_ip):
+    print("\n[+] Starting GUI_04: Cross-Validating Wireless Summary (Root -> GUI)")
+
+    await gui_page.wait_for_timeout(5000)
+    print("    -> Commencing Dynamic Wireless Radio Discovery & Validation...")
+
+    # Looping specifically for exactly radio 0 and radio 1
+    radio_num = 0
+    while radio_num <= 1:
+        status_loc = SummaryWirelessLocators.RADIO_STATUS.format(radio_num)
+
+        if await gui_page.locator(status_loc).count() == 0:
+            if radio_num == 0:
+                print("    -> WARNING: No Wireless Radios found on the GUI page!")
+            break
+
+        print(f"\n    -> [Radio {radio_num}] Pulling parameters from Root Backend...")
+        wifi_idx = radio_num
+
+        ssh_status_raw = (await root_ssh.send_command(RootCommands.get_radio_status(wifi_idx))).result.strip()
+        ssh_status = parse_radio_status(ssh_status_raw)
+
+        iwconfig_out = (await root_ssh.send_command(RootCommands.get_mac_wireless(wifi_idx))).result.strip()
+        ssh_mac = parse_iwconfig_mac(iwconfig_out)
+        ssh_act_ch = parse_iwconfig_active_channel(iwconfig_out)
+
+        # Apply 10 MHz offset exclusively for Radio 1 active channel
+        if radio_num == 1 and ssh_act_ch.isdigit():
+            ssh_act_ch = str(int(ssh_act_ch) - 10)
+
+        ssh_link_raw = (await root_ssh.send_command(RootCommands.get_link_type(wifi_idx))).result.strip()
+        ssh_link = parse_link_type(ssh_link_raw)
+
+        ssh_mode_raw = (await root_ssh.send_command(RootCommands.get_radio_mode(wifi_idx))).result.strip()
+        ssh_mode = parse_radio_mode(ssh_mode_raw, radio_num)
+
+        ssh_band_raw = (await root_ssh.send_command(RootCommands.get_bandwidth(wifi_idx))).result.strip()
+        ssh_band = parse_bandwidth(ssh_band_raw)
+
+        ssh_ssid_raw = (await root_ssh.send_command(RootCommands.get_ssid(wifi_idx))).result.strip()
+        ssh_ssid = extract_uci_value(ssh_ssid_raw)
+
+        ssh_conf_ch_raw = (await root_ssh.send_command(RootCommands.get_configured_channel(wifi_idx))).result.strip()
+        ssh_conf_ch = parse_configured_channel(ssh_conf_ch_raw)
+
+        ssh_sec_raw = (await root_ssh.send_command(RootCommands.get_security(wifi_idx))).result.strip()
+        ssh_sec = parse_security(ssh_sec_raw)
+
+        ssh_rtx = (await root_ssh.send_command(RootCommands.get_rtx_percentage(wifi_idx))).result.strip()
+        ssh_parts = (await root_ssh.send_command(RootCommands.get_remote_partners(wifi_idx))).result.strip()
+
+        print(f"    -> [Radio {radio_num}] Scraping GUI data fields...")
+        gui_status = await gui_page.locator(SummaryWirelessLocators.RADIO_STATUS.format(radio_num)).inner_text()
+        gui_mac = await gui_page.locator(SummaryWirelessLocators.MAC_ADDRESS.format(radio_num)).inner_text()
+        gui_link = await gui_page.locator(SummaryWirelessLocators.LINK_TYPE.format(radio_num)).inner_text()
+        gui_mode = await gui_page.locator(SummaryWirelessLocators.RADIO_MODE.format(radio_num)).inner_text()
+        gui_band = await gui_page.locator(SummaryWirelessLocators.BANDWIDTH.format(radio_num)).inner_text()
+        gui_ssid = await gui_page.locator(SummaryWirelessLocators.SSID.format(radio_num)).inner_text()
+        gui_conf_ch = await gui_page.locator(SummaryWirelessLocators.CONFIGURED_CHANNEL.format(radio_num)).inner_text()
+        gui_act_ch = await gui_page.locator(SummaryWirelessLocators.ACTIVE_CHANNEL.format(radio_num)).inner_text()
+        gui_sec = await gui_page.locator(SummaryWirelessLocators.SECURITY.format(radio_num)).inner_text()
+        gui_rtx = await gui_page.locator(SummaryWirelessLocators.RTX_PERCENTAGE.format(radio_num)).inner_text()
+        gui_parts = await gui_page.locator(SummaryWirelessLocators.REMOTE_PARTNERS.format(radio_num)).inner_text()
+
+        print(f"    -> [Radio {radio_num}] Validating Backend vs Frontend...")
+        validate_param(f"R{radio_num} RADIO STATUS", ssh_status, gui_status)
+        validate_param(f"R{radio_num} MAC ADDRESS", ssh_mac, gui_mac.upper())
+        validate_param(f"R{radio_num} LINK TYPE", ssh_link, gui_link)
+        validate_param(f"R{radio_num} RADIO MODE", ssh_mode, gui_mode)
+        validate_param(f"R{radio_num} BANDWIDTH", ssh_band, gui_band)
+        validate_param(f"R{radio_num} SSID", ssh_ssid, gui_ssid)
+        validate_param(f"R{radio_num} CONFIGURED CHANNEL", ssh_conf_ch, gui_conf_ch)
+        validate_param(f"R{radio_num} ACTIVE CHANNEL", ssh_act_ch, gui_act_ch)
+        validate_param(f"R{radio_num} SECURITY", ssh_sec, gui_sec)
+
+        if radio_num == 0:
+            print(f"    -> R{radio_num} RTX PERCENTAGE: SKIPPED (Not supported for R0)")
+        else:
+            validate_percentage(f"R{radio_num} RTX PERCENTAGE", ssh_rtx, gui_rtx, tolerance=5.0)
+
+        validate_param(f"R{radio_num} REMOTE PARTNERS", ssh_parts, gui_parts)
+
+        radio_num += 1
+
+    print("\n[+] GUI_04 Soft Validation Complete.")
