@@ -2,9 +2,8 @@ pipeline {
     agent { node { label "${TARGET_STAND}" } }
 
     parameters {
-        // This parameter allows you to type "Summary", "GUI_01", "GUI", etc., when starting the build.
-        string(name: 'TEST_MARKER', defaultValue: 'GUI_02', description: 'Enter the pytest marker to run (e.g., Summary, GUI_01, GUI_02)')
-        string(name: 'Local IP Address', defaultValue: '192.168.1.230', description: 'IP Address of the target device')
+        string(name: 'TEST_MARKER', defaultValue: 'Summary', description: 'Enter the pytest marker to run (e.g., Summary, GUI_01)')
+        string(name: 'Local IP Address', defaultValue: '', description: 'IP Address of the target device')
     }
 
     stages {
@@ -27,13 +26,10 @@ pipeline {
                     echo "----------------------------------------"
                     echo "Installing Dependencies"
                     echo "----------------------------------------"
-
                     sh """
                         python3.10 -m venv venv
                         venv/bin/pip install --upgrade pip
-                        venv/bin/pip install -r requirements.txt pytest-html pytest-check
-
-                        # Tell Playwright to download the browser binaries (Chromium)
+                        venv/bin/pip install -r requirements.txt pytest-check pytest-json-report
                         venv/bin/playwright install chromium
                     """
                 }
@@ -44,23 +40,32 @@ pipeline {
                 script {
                     def localIP = params['Local IP Address']
                     def marker = params.TEST_MARKER
-                    def reportName = "Customer_Report_${env.BUILD_ID}.html"
 
                     echo "Local IP Address: ${localIP}"
                     echo "✅ Cleared old workspace"
-
                     echo "----------------------------------------"
                     echo "Testing GUI with Marker: [ ${marker} ]"
                     echo "----------------------------------------"
 
+                    // Use pytest-json-report to generate the raw report.json data
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                        // Use the freshly created venv's python directly
                         sh """
                             venv/bin/python -m pytest tests/GUI/test_summary.py -v -s -m "${marker}" \
-                            --html="${reportName}" \
-                            --self-contained-html
+                            --json-report --json-report-file=report.json
                         """
                     }
+                }
+            }
+        }
+        stage('Generate Customer Report') {
+            steps {
+                script {
+                    def localIP = params['Local IP Address']
+                    def buildNo = env.BUILD_ID
+                    def dateStr = new Date().format("yyyyMMdd")
+
+                    echo "Building detailed HTML & CSV reports..."
+                    sh "venv/bin/python utils/report_generator.py ${buildNo} ${localIP} ${dateStr}"
                 }
             }
         }
@@ -68,26 +73,21 @@ pipeline {
     post {
         always {
             script {
-                def reportFileName = "Customer_Report_${env.BUILD_ID}.html"
+                def dateStr = new Date().format("yyyyMMdd")
+                def htmlFileName = "Senao_Release_${env.BUILD_ID}_Report_${dateStr}.html"
+                def csvFileName = "Senao_Release_${env.BUILD_ID}_Report_${dateStr}.csv"
 
-                // Publish the detailed HTML report to the Jenkins UI
                 publishHTML(target: [
                     allowMissing: true,
                     alwaysLinkToLastBuild: true,
                     keepAll: true,
                     reportDir: '.',
-                    reportFiles: reportFileName,
-                    reportName: 'Detailed Customer Report'
+                    reportFiles: htmlFileName,
+                    reportName: 'Senao Customer Report'
                 ])
 
-                echo "-----------------------------------------"
-                echo 'Determining user to send email...'
-                echo "-----------------------------------------"
-
-                // Extract the user who clicked "Build with Parameters"
                 def buildCauses = currentBuild.getBuildCauses()
                 def userCause = buildCauses.find { it._class == 'hudson.model.Cause$UserIdCause' }
-
                 def buildUserName = userCause?.userName ?: "Unknown User"
                 def buildUserId = userCause?.userId ?: "unknown"
 
@@ -95,13 +95,8 @@ pipeline {
                     "puneet": "puneet.sharma@senao.com",
                     "harman": "harmanjot.singh@senao.com"
                 ]
-
-                // Fallback to Puneet if the user is unknown or triggered by a webhook
                 def userEmail = userEmails.get(buildUserId, "puneet.sharma@senao.com")
 
-                echo "Sending email report to: ${userEmail}"
-
-                // Send the email and attach the Customer Report
                 emailext(
                     subject: "Test Automation Report [Marker: ${params.TEST_MARKER}] - ${currentBuild.currentResult}",
                     body: """
@@ -109,39 +104,20 @@ pipeline {
                         <body style="font-family: Arial, sans-serif; color: #333;">
                             <h2 style="color: #2e6c80;">Jenkins Automated Test Run</h2>
                             <table style="border-collapse: collapse; width: 100%; max-width: 600px;">
-                                <tr>
-                                    <td style="padding: 8px; border: 1px solid #ddd;"><strong>Test Marker Executed:</strong></td>
-                                    <td style="padding: 8px; border: 1px solid #ddd;">${params.TEST_MARKER}</td>
-                                </tr>
-                                <tr>
-                                    <td style="padding: 8px; border: 1px solid #ddd;"><strong>Target IP:</strong></td>
-                                    <td style="padding: 8px; border: 1px solid #ddd;">${params['Local IP Address']}</td>
-                                </tr>
-                                <tr>
-                                    <td style="padding: 8px; border: 1px solid #ddd;"><strong>Pipeline Status:</strong></td>
-                                    <td style="padding: 8px; border: 1px solid #ddd; color:${currentBuild.currentResult == 'SUCCESS' ? 'green' : 'red'}; font-weight:bold;">
-                                        ${currentBuild.currentResult}
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td style="padding: 8px; border: 1px solid #ddd;"><strong>Started By:</strong></td>
-                                    <td style="padding: 8px; border: 1px solid #ddd;">${buildUserName} (${buildUserId})</td>
-                                </tr>
-                                <tr>
-                                    <td style="padding: 8px; border: 1px solid #ddd;"><strong>Jenkins Console:</strong></td>
-                                    <td style="padding: 8px; border: 1px solid #ddd;"><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td>
-                                </tr>
+                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Marker Executed:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params.TEST_MARKER}</td></tr>
+                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Target IP:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params['Local IP Address']}</td></tr>
+                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Status:</strong></td><td style="padding: 8px; border: 1px solid #ddd; color:${currentBuild.currentResult == 'SUCCESS' ? 'green' : 'red'}; font-weight:bold;">${currentBuild.currentResult}</td></tr>
+                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Started By:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${buildUserName}</td></tr>
+                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Console Log:</strong></td><td style="padding: 8px; border: 1px solid #ddd;"><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td></tr>
                             </table>
                             <br/>
-                            <p><strong>A detailed, customer-facing HTML report containing all validation steps, soft-assertions, and logs is attached to this email.</strong></p>
-                            <br/>
-                            <p style="color:gray; font-size: 12px;">--<br/>Jenkins Automated Notification</p>
+                            <p><strong>The official HTML Customer Report and CSV data sheet are attached to this email.</strong></p>
                         </body>
                         </html>
                     """,
                     to: userEmail,
                     mimeType: 'text/html',
-                    attachmentsPattern: "${reportFileName}"
+                    attachmentsPattern: "${htmlFileName},${csvFileName}"
                 )
             }
         }
