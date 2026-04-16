@@ -28,12 +28,13 @@ pipeline {
                     echo "Installing Dependencies"
                     echo "----------------------------------------"
 
-                    // 1. Create a fresh virtual environment named 'venv'
-                    // 2. Use that new venv's pip to install everything
                     sh """
                         python3.10 -m venv venv
                         venv/bin/pip install --upgrade pip
                         venv/bin/pip install -r requirements.txt pytest-html pytest-check
+
+                        # Tell Playwright to download the browser binaries (Chromium)
+                        venv/bin/playwright install chromium
                     """
                 }
             }
