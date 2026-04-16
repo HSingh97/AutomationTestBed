@@ -23,6 +23,7 @@ pytestmark = pytest.mark.sanity
 # =====================================================================
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_01
+@pytest.mark.Summary
 async def test_gui_01_summary_system(root_ssh, gui_page, bsu_ip):
     print("\n[+] Starting GUI_01: Cross-Validating System Summary (Root -> GUI)")
 
@@ -64,6 +65,7 @@ async def test_gui_01_summary_system(root_ssh, gui_page, bsu_ip):
 # =====================================================================
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_02
+@pytest.mark.Summary
 async def test_gui_02_summary_network(root_ssh, gui_page, bsu_ip):
     print("\n[+] Starting GUI_02: Cross-Validating Network Summary (Root -> GUI)")
 
@@ -114,6 +116,7 @@ async def test_gui_02_summary_network(root_ssh, gui_page, bsu_ip):
 # =====================================================================
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_03
+@pytest.mark.Summary
 async def test_gui_03_summary_performance(root_ssh, gui_page, bsu_ip):
     print("\n[+] Starting GUI_03: Cross-Validating Performance Summary (Root -> GUI)")
 
@@ -157,6 +160,7 @@ async def test_gui_03_summary_performance(root_ssh, gui_page, bsu_ip):
 # =====================================================================
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_04
+@pytest.mark.Summary
 async def test_gui_04_summary_wireless(root_ssh, gui_page, bsu_ip):
     print("\n[+] Starting GUI_04: Cross-Validating Wireless Summary (Root -> GUI)")
 
