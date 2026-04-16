@@ -27,12 +27,13 @@ pipeline {
                     echo "----------------------------------------"
                     echo "Installing Dependencies"
                     echo "----------------------------------------"
-                    // Ensure pytest-html is installed to generate the customer report
-                    sh "pip install -r utilities/requirements.txt pytest-html pytest-check"
+
+                    // FIXED: Point to root requirements.txt AND use the venv's pip
+                    sh ".venv/bin/pip install -r requirements.txt pytest-html pytest-check"
                 }
             }
         }
-        stage('Execute Pytest Suite') {
+        stage('Execute Test Suite') {
             steps {
                 script {
                     def localIP = params['Local IP Address']
@@ -46,13 +47,10 @@ pipeline {
                     echo "Testing GUI with Marker: [ ${marker} ]"
                     echo "----------------------------------------"
 
-                    // We use catchError so if tests fail, the pipeline turns YELLOW (UNSTABLE) or RED (FAILURE)
-                    // but continues to the post-block to generate the report and send the email.
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                        // The --html flag automatically builds the detailed customer report
-                        // The --self-contained-html ensures CSS/Images are embedded directly in the file
+                        // FIXED: Call the venv's python directly instead of the system python
                         sh """
-                            python3.10 -m pytest tests/GUI/test_summary.py -v -s -m "${marker}" \
+                            .venv/bin/python -m pytest tests/GUI/test_summary.py -v -s -m "${marker}" \
                             --html="${reportName}" \
                             --self-contained-html
                         """
