@@ -3,8 +3,8 @@ pipeline {
 
     parameters {
         // This parameter allows you to type "Summary", "GUI_01", "GUI", etc., when starting the build.
-        string(name: 'TEST_MARKER', defaultValue: 'Summary', description: 'Enter the pytest marker to run (e.g., Summary, GUI_01, GUI_02)')
-        string(name: 'Local IP Address', defaultValue: '', description: 'IP Address of the target device')
+        string(name: 'TEST_MARKER', defaultValue: 'GUI_02', description: 'Enter the pytest marker to run (e.g., Summary, GUI_01, GUI_02)')
+        string(name: 'Local IP Address', defaultValue: '192.168.1.230', description: 'IP Address of the target device')
     }
 
     stages {
@@ -28,12 +28,17 @@ pipeline {
                     echo "Installing Dependencies"
                     echo "----------------------------------------"
 
-                    // FIXED: Point to root requirements.txt AND use the venv's pip
-                    sh ".venv/bin/pip install -r requirements.txt pytest-html pytest-check"
+                    // 1. Create a fresh virtual environment named 'venv'
+                    // 2. Use that new venv's pip to install everything
+                    sh """
+                        python3.10 -m venv venv
+                        venv/bin/pip install --upgrade pip
+                        venv/bin/pip install -r requirements.txt pytest-html pytest-check
+                    """
                 }
             }
         }
-        stage('Execute Test Suite') {
+        stage('Execute Pytest Suite') {
             steps {
                 script {
                     def localIP = params['Local IP Address']
@@ -48,9 +53,9 @@ pipeline {
                     echo "----------------------------------------"
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                        // FIXED: Call the venv's python directly instead of the system python
+                        // Use the freshly created venv's python directly
                         sh """
-                            .venv/bin/python -m pytest tests/GUI/test_summary.py -v -s -m "${marker}" \
+                            venv/bin/python -m pytest tests/GUI/test_summary.py -v -s -m "${marker}" \
                             --html="${reportName}" \
                             --self-contained-html
                         """
