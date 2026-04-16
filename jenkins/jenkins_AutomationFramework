@@ -47,10 +47,10 @@ pipeline {
                     echo "Testing GUI with Marker: [ ${marker} ]"
                     echo "----------------------------------------"
 
-                    // Use pytest-json-report to generate the raw report.json data
+                    // REMOVED '-s' FLAG so pytest-json-report can capture the printed parameters!
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                         sh """
-                            venv/bin/python -m pytest tests/GUI/test_summary.py -v -s -m "${marker}" \
+                            venv/bin/python -m pytest tests/GUI/test_summary.py -v -m "${marker}" \
                             --json-report --json-report-file=report.json
                         """
                     }
