@@ -121,3 +121,38 @@ def parse_iwconfig_active_channel(ssh_str):
             pass
 
     return ""
+
+
+def parse_uptime_to_seconds(gui_uptime_str):
+    """
+    Converts the GUI string like '2h 42m 28s' into raw seconds for math comparison.
+    Handles variations like '42m 28s' or '28s'.
+    """
+    total_seconds = 0
+    parts = gui_uptime_str.lower().split()
+
+    for part in parts:
+        if 'h' in part:
+            total_seconds += int(part.replace('h', '')) * 3600
+        elif 'm' in part:
+            total_seconds += int(part.replace('m', '')) * 60
+        elif 's' in part:
+            total_seconds += int(part.replace('s', ''))
+
+    return total_seconds
+
+
+def parse_desc_info(desc_str):
+    """
+    Parses a combined description string like '0.0.0.0   SNo. 2411XC813HCK'
+    Returns a tuple: (sw_version, serial_number)
+    """
+    try:
+        # Split the string around the 'SNo.' keyword
+        parts = desc_str.split("SNo.")
+        sw_ver = parts[0].strip()
+        serial = parts[1].strip()
+        return sw_ver, serial
+    except IndexError:
+        print(f"    -> WARNING: Failed to parse desc string, unexpected format: '{desc_str}'")
+        return desc_str.strip(), "" # Fallback

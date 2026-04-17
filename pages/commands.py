@@ -9,6 +9,12 @@ class RootCommands:
     GET_ELEVATION = ""
     GET_CPU = "cat /tmp/cpu_usage"
     GET_MEM = "cat /tmp/mem_usage"
+
+    GET_SYSNAME = "uci get system.@system[0].hostname"
+    GET_SW_VERSION = "cat /etc/version; echo"
+    GET_SERIAL_NO = "fw_printenv -n dsn"
+    GET_UPTIME = "cat /proc/uptime"
+
     GET_IPv4 = "ucidyn get network.lan.ipaddr"
     GET_IPv6 = "ucidyn get network.lan.ip6addr"
     GET_GATEWAYv4 = "ucidyn get network.lan.gateway"

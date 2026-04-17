@@ -1,6 +1,6 @@
 import re
 import pytest_check as check
-from utils.parsers import parse_device_time, extract_ip_objects
+from utils.parsers import parse_device_time, extract_ip_objects, parse_uptime_to_seconds
 
 
 def is_empty_or_unknown(val):
@@ -287,3 +287,31 @@ def validate_percentage(param_name, ssh_val, gui_val, tolerance=5.0):
             check.fail(f"Could not convert to float. SSH: {ssh_clean} | GUI: {gui_clean}")
     else:
         validate_param(param_name, ssh_clean, gui_clean)
+
+
+from utils.parsers import parse_uptime_to_seconds
+
+
+def validate_uptime(ssh_proc_uptime, gui_uptime_str, tolerance_seconds=10):
+    """
+    Validates uptime by comparing raw backend seconds to the parsed GUI string.
+    Includes a tolerance because time passes between the SSH command and UI load.
+    """
+    # 1. Extract the raw backend seconds (e.g., "9748.55 1234.56" -> 9748)
+    try:
+        backend_seconds = int(float(ssh_proc_uptime.split()[0]))
+    except (IndexError, ValueError):
+        assert False, f"Failed to parse backend /proc/uptime: {ssh_proc_uptime}"
+
+    # 2. Convert the GUI string to seconds
+    gui_seconds = parse_uptime_to_seconds(gui_uptime_str)
+
+    # 3. Calculate the difference
+    diff = abs(backend_seconds - gui_seconds)
+
+    # 4. Assert with a tolerance (10 seconds is usually safe for automation lag)
+    assert diff <= tolerance_seconds, (
+        f"Uptime mismatch! Backend: {backend_seconds}s, GUI: '{gui_uptime_str}' ({gui_seconds}s). "
+        f"Difference of {diff} seconds exceeds {tolerance_seconds}s tolerance."
+    )
+    print(f"    -> Uptime Match: Backend ({backend_seconds}s) vs GUI ({gui_seconds}s) [Diff: {diff}s]")

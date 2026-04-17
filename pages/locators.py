@@ -63,3 +63,25 @@ class SummaryWirelessLocators:
     SECURITY = "//*[@id='wifi{0}_security']"
     RTX_PERCENTAGE = "//*[@id='wifi{0}_rtx']"
     REMOTE_PARTNERS = "//*[@id='wifi{0}_links']"
+
+
+class TopPanelLocators:
+    """CSS/XPath selectors for the Top Panel Header Navigation."""
+    LOGO = "a.header-logo, .brand"
+
+    # !!! UPDATE THESE LOCATORS BY INSPECTING YOUR GUI !!!
+    TOP_SYSNAME = "//*[@id='sysname']"
+    TOP_DESC_INFO = "//*[@id='desc']"
+    TOP_UPTIME = "//*[@id='uptime']"
+
+    # Navigation Menus
+    MENU_RADIO = "//*[@id='menu_radio']"
+    SUBMENU_RADIO_2_4GHZ = "//*[@id='menu_radio_24']"
+    MENU_NETWORK = "//*[@id='menu_network']"
+
+    # Action Buttons
+    HOME_BUTTON = "/li[title='Home']]"
+    APPLY_BUTTON = "//*[@id='header_apply']"
+    REBOOT_BUTTON = "//*[@id='header_reboot']"
+    REBOOT_CONFIRM = "//*[@id='maincontent']/div/p[3]/a"
+    LOGOUT_BUTTON = "li[title='Logout']"
