@@ -63,3 +63,15 @@ class SummaryWirelessLocators:
     SECURITY = "//*[@id='wifi{0}_security']"
     RTX_PERCENTAGE = "//*[@id='wifi{0}_rtx']"
     REMOTE_PARTNERS = "//*[@id='wifi{0}_links']"
+
+class NetworkLocators:
+    MENU_NETWORK = "text=Network"
+    SUBMENU_IP_CONFIG = "text=IP Configuration"
+
+    IPv4_PROTO = "select[name='cbid.network.lan.proto']"
+    IPv4_ADDRESS = "input[name='cbid.network.lan.ipaddr']"
+    IPv4_NETMASK = "input[name='cbid.network.lan.netmask']"
+    IPv4_GATEWAY = "input[name='cbid.network.lan.gateway']"
+
+    SAVE_BUTTON = "button:has-text('Save')"
+    SAVE_APPLY_BUTTON = "button:has-text('Save & Apply')"
