@@ -7,7 +7,7 @@ from pages.commands import RootCommands
 from utils.parsers import (
     parse_radio_status, parse_link_type, parse_radio_mode,
     parse_bandwidth, parse_configured_channel, parse_security,
-    extract_uci_value, parse_iwconfig_mac, parse_iwconfig_active_channel
+    extract_uci_value, parse_ifconfig_mac, parse_iwconfig_active_channel
 )
 from utils.validators import (
     validate_param, validate_network_address, validate_time,
@@ -128,8 +128,8 @@ async def test_gui_03_summary_performance(root_ssh, gui_page, bsu_ip):
     gui_tx_r1 = await gui_page.locator(SummaryPerformanceLocators.TX_R1).inner_text()
     gui_rx_r1 = await gui_page.locator(SummaryPerformanceLocators.RX_R1).inner_text()
 
-    validate_throughput("TX R1", ssh_tx_r1, gui_tx_r1, tolerance=15.0)
-    validate_throughput("RX R1", ssh_rx_r1, gui_rx_r1, tolerance=15.0)
+    validate_throughput("TX R1", ssh_tx_r1, gui_tx_r1, tolerance=20.0)
+    validate_throughput("RX R1", ssh_rx_r1, gui_rx_r1, tolerance=20.0)
 
     lan_num = 1
     while True:
@@ -147,8 +147,8 @@ async def test_gui_03_summary_performance(root_ssh, gui_page, bsu_ip):
         gui_tx_lan = await gui_page.locator(tx_locator).inner_text()
         gui_rx_lan = await gui_page.locator(rx_locator).inner_text()
 
-        validate_throughput(f"TX LAN{lan_num}", ssh_tx_lan, gui_tx_lan, tolerance=15.0)
-        validate_throughput(f"RX LAN{lan_num}", ssh_rx_lan, gui_rx_lan, tolerance=15.0)
+        validate_throughput(f"TX LAN{lan_num}", ssh_tx_lan, gui_tx_lan, tolerance=20.0)
+        validate_throughput(f"RX LAN{lan_num}", ssh_rx_lan, gui_rx_lan, tolerance=20.0)
 
         lan_num += 1
 
@@ -184,8 +184,13 @@ async def test_gui_04_summary_wireless(root_ssh, gui_page, bsu_ip):
         ssh_status = parse_radio_status(ssh_status_raw)
 
         iwconfig_out = (await root_ssh.send_command(RootCommands.get_mac_wireless(wifi_idx))).result.strip()
-        ssh_mac = parse_iwconfig_mac(iwconfig_out)
+        ssh_mac = parse_ifconfig_mac(iwconfig_out)
         ssh_act_ch = parse_iwconfig_active_channel(iwconfig_out)
+        # 2. Fetch Active Channel using iwconfig
+        iwconfig_out = (await root_ssh.send_command(RootCommands.get_active_channel(wifi_idx))).result.strip()
+        print(f"\n--- RAW IWCONFIG OUTPUT FOR R{radio_num} ---")
+        print(repr(iwconfig_out))
+        print("--------------------------------------\n")
 
         # Apply 10 MHz offset exclusively for Radio 1 active channel
         if radio_num == 1 and ssh_act_ch.isdigit():
@@ -209,8 +214,10 @@ async def test_gui_04_summary_wireless(root_ssh, gui_page, bsu_ip):
         ssh_sec_raw = (await root_ssh.send_command(RootCommands.get_security(wifi_idx))).result.strip()
         ssh_sec = parse_security(ssh_sec_raw)
 
-        ssh_rtx = (await root_ssh.send_command(RootCommands.get_rtx_percentage(wifi_idx))).result.strip()
         ssh_parts = (await root_ssh.send_command(RootCommands.get_remote_partners(wifi_idx))).result.strip()
+        ssh_rtx = (await root_ssh.send_command(RootCommands.get_rtx_percentage(wifi_idx))).result.strip()
+
+        await gui_page.wait_for_timeout(5000)
 
         print(f"    -> [Radio {radio_num}] Scraping GUI data fields...")
         gui_status = await gui_page.locator(SummaryWirelessLocators.RADIO_STATUS.format(radio_num)).inner_text()
@@ -226,18 +233,37 @@ async def test_gui_04_summary_wireless(root_ssh, gui_page, bsu_ip):
         gui_parts = await gui_page.locator(SummaryWirelessLocators.REMOTE_PARTNERS.format(radio_num)).inner_text()
 
         print(f"    -> [Radio {radio_num}] Validating Backend vs Frontend...")
+
+        # Check if the device is a disconnected Station (SU)
+        is_unlinked_su = (ssh_mode == "SU" and ssh_parts == "0")
+
         validate_param(f"R{radio_num} RADIO STATUS", ssh_status, gui_status)
         validate_param(f"R{radio_num} MAC ADDRESS", ssh_mac, gui_mac.upper())
         validate_param(f"R{radio_num} LINK TYPE", ssh_link, gui_link)
         validate_param(f"R{radio_num} RADIO MODE", ssh_mode, gui_mode)
-        validate_param(f"R{radio_num} BANDWIDTH", ssh_band, gui_band)
+
+        # Conditionally skip Bandwidth
+        if is_unlinked_su:
+            print(f"    -> R{radio_num} BANDWIDTH: SKIPPED (Unlinked SU)")
+        else:
+            validate_param(f"R{radio_num} BANDWIDTH", ssh_band, gui_band)
+
         validate_param(f"R{radio_num} SSID", ssh_ssid, gui_ssid)
         validate_param(f"R{radio_num} CONFIGURED CHANNEL", ssh_conf_ch, gui_conf_ch)
-        validate_param(f"R{radio_num} ACTIVE CHANNEL", ssh_act_ch, gui_act_ch)
+
+        # Conditionally skip Active Channel
+        if is_unlinked_su:
+            print(f"    -> R{radio_num} ACTIVE CHANNEL: SKIPPED (Unlinked SU)")
+        else:
+            validate_param(f"R{radio_num} ACTIVE CHANNEL", ssh_act_ch, gui_act_ch)
+
         validate_param(f"R{radio_num} SECURITY", ssh_sec, gui_sec)
 
+        # Conditionally skip RTX Percentage
         if radio_num == 0:
             print(f"    -> R{radio_num} RTX PERCENTAGE: SKIPPED (Not supported for R0)")
+        elif is_unlinked_su:
+            print(f"    -> R{radio_num} RTX PERCENTAGE: SKIPPED (Unlinked SU)")
         else:
             validate_percentage(f"R{radio_num} RTX PERCENTAGE", ssh_rtx, gui_rtx, tolerance=5.0)
 

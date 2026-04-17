@@ -50,7 +50,7 @@ class RootCommands:
 
     @staticmethod
     def get_mac_wireless(radio_idx):
-        return f"iwconfig ath{radio_idx}"
+        return f"ifconfig ath{radio_idx}"
 
     @staticmethod
     def get_link_type(radio_idx):

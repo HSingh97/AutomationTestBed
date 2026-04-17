@@ -2,6 +2,7 @@ import re
 import datetime
 import ipaddress
 
+
 def parse_device_time(time_str):
     clean_str = re.sub(r'\s[A-Z]{3,4}\s', ' ', time_str)
     clean_str = re.sub(r'\s+', ' ', clean_str).strip()
@@ -79,19 +80,44 @@ def parse_security(ssh_str):
     return val
 
 
-def parse_iwconfig_mac(ssh_str):
-    """Extracts MAC Address from iwconfig block"""
-    match = re.search(r'(?:Access Point:|HWaddr)\s*([0-9A-Fa-f:]+)', str(ssh_str), re.IGNORECASE)
+def parse_ifconfig_mac(ssh_str):
+    """Extracts MAC Address from ifconfig block"""
+    match = re.search(r'(?:HWaddr|ether)\s+([0-9A-Fa-f:]+)', str(ssh_str), re.IGNORECASE)
     if match:
         return match.group(1).upper()
     return ""
 
 
 def parse_iwconfig_active_channel(ssh_str):
-    """Extracts frequency (5.835 GHz) and converts to MHz (5835)"""
-    match = re.search(r'Frequency:([\d.]+)\s*GHz', str(ssh_str))
+    """
+    Parses iwconfig output to extract frequency and calculate the Wi-Fi channel.
+    Formats the return string to match GUI expectations: 'Channel (Frequency MHz)'
+    """
+    # Target the 'Frequency:X.XXX GHz' pattern from iwconfig
+    match = re.search(r'Frequency:([\d.]+)\s*GHz', str(ssh_str), re.IGNORECASE)
+
     if match:
-        freq_ghz = float(match.group(1))
-        freq_mhz = int(freq_ghz * 1000)
-        return str(freq_mhz)
+        try:
+            freq_ghz = float(match.group(1))
+            freq_mhz = int(round(freq_ghz * 1000))
+
+            # Calculate Wi-Fi Channel based on standard bands
+            channel = 0
+            if 2412 <= freq_mhz <= 2472:
+                channel = (freq_mhz - 2407) // 5
+            elif freq_mhz == 2484:
+                channel = 14
+            elif freq_mhz >= 5955:  # 6 GHz Band
+                channel = (freq_mhz - 5950) // 5
+            elif freq_mhz >= 5000:  # 5 GHz Band
+                channel = (freq_mhz - 5000) // 5
+
+            if channel > 0:
+                return f"{channel} ({freq_mhz} MHz)"
+            else:
+                return f"{freq_mhz} MHz"
+
+        except ValueError:
+            pass
+
     return ""
