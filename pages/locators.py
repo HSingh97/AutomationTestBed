@@ -51,19 +51,28 @@ class SummaryWirelessLocators:
     RTX_PERCENTAGE = "//*[@id='wifi{0}_rtx']"
     REMOTE_PARTNERS = "//*[@id='wifi{0}_links']"
 
-class NetworkLocators:
-    """CSS/XPath selectors for the Network Configuration pages."""
-    # Sidebar Navigation - Using text-based selectors for robustness
-    MENU_NETWORK = "text=Network"
-    SUBMENU_IP_CONFIG = "text=IP Configuration"
 
-    # IP Configuration Page Fields
-    IPv4_PROTO = "select[name='cbid.network.lan.proto']"
-    IPv4_ADDRESS = "input[name='cbid.network.lan.ipaddr']"
-    IPv4_NETMASK = "input[name='cbid.network.lan.netmask']"
-    IPv4_GATEWAY = "input[name='cbid.network.lan.gateway']"
+# pages/locators.py
+
+class NetworkLocators:
+    """Technical selectors refined for duplicated LuCI menus."""
+
+    # Target the 'Network' link specifically inside the desktop sidebar
+    MENU_NETWORK = "div.sidebar li.Network > a.menu"
+
+    # Target the 'IP Configuration' link specifically inside the sidebar's Network list
+    # Using the href part is the most unique way to find it
+    SUBMENU_IP_CONFIG = "div.sidebar a[href*='/network/ip']"
+
+    # IP Configuration Fields - Using the exact 'name' attributes from your HTML
+    IPv4_PROTO = "select[name='network.lan.proto']"
+    IPv4_ADDRESS = "input[name='network.lan.ipaddr']"
+    IPv4_NETMASK = "input[name='network.lan.netmask']"
+    IPv4_GATEWAY = "input[name='network.lan.gateway']"
+
+    IPv6_ADDRESS = "input[name='network.lan.ip6addr']"
+    IPv6_GATEWAY = "input[name='network.lan.ip6gw']"
 
     # Action Buttons
-    SAVE_BUTTON = "button:has-text('Save')"
-    APPLY_BUTTON = "button:has-text('Apply')"
-    SAVE_APPLY_BUTTON = "button:has-text('Save & Apply')"
+    SAVE_BUTTON = "input.cbi-button[value='Save']"
+    APPLY_ICON = "#header_apply"

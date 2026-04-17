@@ -120,6 +120,8 @@ async def test_gui_02_summary_network(root_ssh, gui_page, bsu_ip):
 async def test_gui_03_summary_performance(root_ssh, gui_page, bsu_ip):
     print("\n[+] Starting GUI_03: Cross-Validating Performance Summary (Root -> GUI)")
 
+    
+
     ssh_tx_r1 = (await root_ssh.send_command(RootCommands.GET_TX_R1)).result.strip()
     ssh_rx_r1 = (await root_ssh.send_command(RootCommands.GET_RX_R1)).result.strip()
 
