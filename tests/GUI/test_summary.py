@@ -185,12 +185,9 @@ async def test_gui_04_summary_wireless(root_ssh, gui_page, bsu_ip):
 
         iwconfig_out = (await root_ssh.send_command(RootCommands.get_mac_wireless(wifi_idx))).result.strip()
         ssh_mac = parse_ifconfig_mac(iwconfig_out)
-        ssh_act_ch = parse_iwconfig_active_channel(iwconfig_out)
         # 2. Fetch Active Channel using iwconfig
         iwconfig_out = (await root_ssh.send_command(RootCommands.get_active_channel(wifi_idx))).result.strip()
-        print(f"\n--- RAW IWCONFIG OUTPUT FOR R{radio_num} ---")
-        print(repr(iwconfig_out))
-        print("--------------------------------------\n")
+        ssh_act_ch = parse_iwconfig_active_channel(iwconfig_out)
 
         # Apply 10 MHz offset exclusively for Radio 1 active channel
         if radio_num == 1 and ssh_act_ch.isdigit():
