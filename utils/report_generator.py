@@ -44,11 +44,23 @@ def extract_validated_parameters(test_data):
 def clean_failure_message(raw_failure):
     """
     Translates ugly pytest-check strings into professional human-readable formats.
+    Dynamically identifies if the unit is %, degrees, or Mbps.
     """
     num_match = re.match(r'check\s+([\d.]+)\s*<=\s*([\d.]+):\s*(.*)', raw_failure)
     if num_match:
         val, tol, msg = num_match.groups()
-        return f"{msg} <br/><span style='color:#ef4444; font-size:12px;'>↳ <b>Drift Analysis:</b> Detected <b>{float(val):.2f}%</b> (Exceeds allowed {tol}%)</span>"
+
+        # Smartly guess the unit based on the parameter name in the message
+        unit = ""
+        msg_upper = msg.upper()
+        if "PERCENTAGE" in msg_upper or "CPU" in msg_upper or "MEM" in msg_upper:
+            unit = "%"
+        elif "TEMPERATURE" in msg_upper:
+            unit = "°"
+        elif "TX" in msg_upper or "RX" in msg_upper:
+            unit = " Mbps"
+
+        return f"{msg} <br/><span style='color:#ef4444; font-size:12px;'>↳ <b>Drift Analysis:</b> Detected deviation of <b>{float(val):.2f}{unit}</b> (Allowed: {tol}{unit})</span>"
 
     clean_msg = re.sub(r'^check\s+.*?:\s*', '', raw_failure)
     return clean_msg

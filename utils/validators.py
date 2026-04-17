@@ -195,10 +195,11 @@ def validate_speed_duplex(param_name, ssh_speed, ssh_duplex, gui_val):
     check.is_true(duplex_match, f"{param_name} Duplex Mismatch! SSH: {ssh_duplex} | GUI: {gui_val}")
 
 
-def validate_throughput(param_name, ssh_val, gui_val, tolerance=15.0):
+def validate_throughput(param_name, ssh_val, gui_val, tolerance=20.0):
     ssh_clean, gui_clean = str(ssh_val).strip(), str(gui_val).strip()
     no_info_strings = ["", "none", "n/a", "no information", "unknown", "down"]
 
+    # If the SSH or GUI outright says it has no info/is down
     if not ssh_clean or ssh_clean.lower() in no_info_strings or gui_clean.lower() in no_info_strings:
         print(f"    -> {param_name}: NO INFORMATION/DOWN")
         check.is_true(True)
@@ -212,29 +213,30 @@ def validate_throughput(param_name, ssh_val, gui_val, tolerance=15.0):
             ssh_raw = float(ssh_num_match.group())
             gui_f = float(gui_num_match.group())
 
+            # Convert SSH bits-per-second (bps) to Mbps unconditionally
             ssh_f = ssh_raw / 1000000.0
 
+            # If both are essentially zero, they are idle
             if ssh_f < 0.01 and gui_f < 0.01:
                 print(f"    -> {param_name}: PASSED (Idle: 0.00)")
                 return
 
+            # Calculate the FLAT difference in Mbps (no longer using percentages)
             diff = abs(ssh_f - gui_f)
-            avg = (ssh_f + gui_f) / 2.0
-            percent_diff = (diff / avg) * 100 if avg > 0 else 0
 
-            if percent_diff <= tolerance:
-                print(f"    -> {param_name}: PASSED (Within {tolerance}% tolerance. SSH: {ssh_f:.2f} Mbps | GUI: {gui_f} Mbps)")
+            if diff <= tolerance:
+                print(f"    -> {param_name}: PASSED (Within {tolerance} Mbps tolerance. SSH: {ssh_f:.2f} Mbps | GUI: {gui_f} Mbps)")
             else:
-                print(f"    -> {param_name}: FAILED (Live Drift > {tolerance}%. SSH: {ssh_f:.2f} Mbps | GUI: {gui_f} Mbps)")
+                print(f"    -> {param_name}: FAILED (Live Drift > {tolerance} Mbps. SSH: {ssh_f:.2f} Mbps | GUI: {gui_f} Mbps)")
 
-            check.less_equal(percent_diff, tolerance, f"{param_name} Drift exceeded! SSH Raw: {ssh_raw} ({ssh_f:.2f} Mbps) | GUI: {gui_clean}")
+            # Pass the failure to pytest-check
+            check.less_equal(diff, tolerance, f"{param_name} Drift exceeded! SSH: {ssh_f:.2f} Mbps | GUI: {gui_f} Mbps")
         except ValueError:
             print(f"    -> {param_name}: FAILED TO PARSE NUMBERS")
             check.fail(f"Could not convert to float. SSH: {ssh_clean} | GUI: {gui_clean}")
     else:
         validate_param(param_name, ssh_clean, gui_clean)
-
-
+        
 def validate_percentage(param_name, ssh_val, gui_val, tolerance=5.0):
     ssh_clean, gui_clean = str(ssh_val).strip(), str(gui_val).strip()
     no_info_strings = ["", "none", "n/a", "no information", "unknown", "-"]
