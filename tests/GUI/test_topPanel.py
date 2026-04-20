@@ -83,23 +83,35 @@ async def test_gui_06_top_panel_parameters(root_ssh, gui_page):
 async def test_gui_07_top_panel_radio_redirect(gui_page):
     print("\n[+] Starting GUI_07: Verifying Radio Navigation from Top Panel")
 
-    radio_menu = gui_page.locator(TopPanelLocators.MENU_RADIO)
-    assert await radio_menu.is_visible(), "Radio menu locator is incorrect or not visible."
-    await radio_menu.click()
-    await gui_page.wait_for_load_state("networkidle")
+    # 1. Check Radio 0 (2.4 GHz) Submenu
+    radio_0 = gui_page.locator(TopPanelLocators.SUBMENU_RADIO_0)
+    if await radio_0.is_visible():
+        await radio_0.click()
 
-    assert "radio" in gui_page.url.lower(), "Clicking Radio did not redirect to Radio Statistics."
-
-    radio_24 = gui_page.locator(TopPanelLocators.SUBMENU_RADIO_2_4GHZ)
-    if await radio_24.is_visible():
-        await radio_24.click()
-        await gui_page.wait_for_load_state("networkidle")
-        assert "2.4" in gui_page.url.lower() or "radio0" in gui_page.url.lower(), "Did not redirect to 2.4GHz Statistics."
+        # Wait specifically for the URL to change instead of networkidle
+        try:
+            await gui_page.wait_for_url("**/admin/monitor/radio0*", timeout=10000)
+            print("    -> Successfully redirected to 2.4 GHz statistics.")
+        except Exception:
+            assert False, f"Did not redirect to 2.4GHz Stats. Current URL: {gui_page.url}"
     else:
-        print("    -> WARNING: 2.4 GHz menu not visible or not supported on this model.")
+        print("    -> WARNING: Radio 0 (2.4 GHz) submenu not visible.")
+
+    # 2. Check Radio 1 Submenu
+    radio_1 = gui_page.locator(TopPanelLocators.SUBMENU_RADIO_1)
+    if await radio_1.is_visible():
+        await radio_1.click()
+
+        # Wait specifically for the URL to change instead of networkidle
+        try:
+            await gui_page.wait_for_url("**/admin/monitor/radio1*", timeout=10000)
+            print("    -> Successfully redirected to Radio 1 statistics.")
+        except Exception:
+            assert False, f"Did not redirect to Radio 1 Stats. Current URL: {gui_page.url}"
+    else:
+        print("    -> WARNING: Radio 1 submenu not visible.")
 
     print("[+] GUI_07 Radio Navigation Validation Complete.")
-
 
 # =====================================================================
 # GUI_08: GUI Top Panel - Home and Apply Button

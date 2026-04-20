@@ -49,9 +49,9 @@ def parse_link_type(ssh_str):
 def parse_radio_mode(ssh_str, radio_idx):
     val = extract_uci_value(ssh_str).lower()
     if val == "ap":
-        return "BSU" if radio_idx == 1 else "AP"
+        return "BTS" if radio_idx == 1 else "AP"
     if val == "sta":
-        return "SU"
+        return "CPE"
     return val
 
 

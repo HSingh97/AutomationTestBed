@@ -76,7 +76,10 @@ class TopPanelLocators:
 
     # Navigation Menus
     MENU_RADIO = "//*[@id='menu_radio']"
-    SUBMENU_RADIO_2_4GHZ = "//*[@id='menu_radio_24']"
+
+    SUBMENU_RADIO_0 = "//*[@id='radio_sec0']/ul"  # Usually 2.4 GHz
+    SUBMENU_RADIO_1 = "//*[@id='radio_sec1']/ul"  # Radio 1 (5GHz or 6GHz)
+
     MENU_NETWORK = "//*[@id='menu_network']"
 
     # Action Buttons
