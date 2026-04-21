@@ -113,6 +113,7 @@ async def test_gui_07_top_panel_radio_redirect(gui_page):
 
     print("[+] GUI_07 Radio Navigation Validation Complete.")
 
+
 # =====================================================================
 # GUI_08: GUI Top Panel - Home and Apply Button
 # =====================================================================
@@ -122,30 +123,45 @@ async def test_gui_07_top_panel_radio_redirect(gui_page):
 async def test_gui_08_home_and_apply_buttons(gui_page, root_ssh):
     print("\n[+] Starting GUI_08: Verifying Home and Apply Buttons")
 
-    network_menu = gui_page.locator(TopPanelLocators.MENU_NETWORK)
-    assert await network_menu.is_visible(), "Network menu locator is incorrect or not visible."
-    await network_menu.click()
-    await gui_page.wait_for_load_state("networkidle")
-    assert "network" in gui_page.url.lower()
+    # 1. Navigate to any module other than Home
+    # Since the submenus are already visible, we skip clicking a master menu and click the link directly
+    print("    -> Navigating away from Home page...")
+    radio_0 = gui_page.locator(TopPanelLocators.SUBMENU_RADIO_0)
 
-    home_btn = gui_page.locator(TopPanelLocators.HOME_BUTTON)
-    assert await home_btn.is_visible(), "Home button locator is incorrect or not visible."
+    assert await radio_0.is_visible(), "Could not find a link to navigate away from Home."
+    await radio_0.click()
+
+    try:
+        await gui_page.wait_for_url("**/admin/monitor/radio0*", timeout=10000)
+        print("    -> Successfully navigated away from Home page.")
+    except Exception:
+        assert False, f"Failed to navigate away from Home page. Current URL: {gui_page.url}"
+
+    # 2. Click the Home button (Top Right House Icon)
+    print("    -> Clicking Home button...")
+    home_btn = gui_page.locator(TopPanelLocators.HOME_BUTTON).first
+    assert await home_btn.is_visible(), "Home button (House icon) is incorrect or not visible."
     await home_btn.click()
-    await gui_page.wait_for_load_state("networkidle")
-    assert "home" in gui_page.url.lower() or "summary" in gui_page.url.lower(), "Home button did not redirect to Home Page."
 
-    print("    -> Clicking Apply button...")
-    apply_btn = gui_page.locator(TopPanelLocators.APPLY_BUTTON)
+    # Wait for the URL to return to the home/summary state
+    try:
+        await gui_page.wait_for_url("**/admin/home*", timeout=10000)
+        print("    -> Home button successfully redirected to Home Page.")
+    except Exception:
+        assert False, f"Home button did not redirect properly. Current URL: {gui_page.url}"
+
+    # 3. Test Apply Button (Top Right Floppy Disk Icon)
+    print("    -> Checking Apply button...")
+    apply_btn = gui_page.locator(TopPanelLocators.APPLY_BUTTON).first
 
     if await apply_btn.is_enabled():
         await apply_btn.click()
         await gui_page.wait_for_timeout(3000)
-        print("    -> Apply successfully executed.")
+        print("    -> Apply button successfully clicked.")
     else:
-        print("    -> WARNING: Apply button is disabled (no changes to apply).")
+        print("    -> WARNING: Apply button is disabled (expected if no changes were made).")
 
     print("[+] GUI_08 Home and Apply Button Validation Complete.")
-
 
 # =====================================================================
 # GUI_09: GUI Top Panel - Reboot Functionality

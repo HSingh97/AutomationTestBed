@@ -83,7 +83,7 @@ class TopPanelLocators:
     MENU_NETWORK = "//*[@id='menu_network']"
 
     # Action Buttons
-    HOME_BUTTON = "/li[title='Home']]"
+    HOME_BUTTON = "li[title='Home']"
     APPLY_BUTTON = "//*[@id='header_apply']"
     REBOOT_BUTTON = "//*[@id='header_reboot']"
     REBOOT_CONFIRM = "//*[@id='maincontent']/div/p[3]/a"

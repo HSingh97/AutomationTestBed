@@ -2,7 +2,7 @@ pipeline {
     agent { node { label "${TARGET_STAND}" } }
 
     parameters {
-        string(name: 'TEST_MARKER', defaultValue: 'Summary', description: 'Enter the pytest marker to run (e.g., Summary, GUI_01)')
+        string(name: 'TEST_FILTER', defaultValue: 'Summary', description: 'Enter test keyword (e.g., gui_0, gui_10, top_panel) or exact marker')
         string(name: 'Local IP Address', defaultValue: '', description: 'IP Address of the target device')
     }
 
@@ -39,18 +39,17 @@ pipeline {
             steps {
                 script {
                     def localIP = params['Local IP Address']
-                    def marker = params.TEST_MARKER
+                    def filter = params.TEST_FILTER // Updated variable
 
                     echo "Local IP Address: ${localIP}"
                     echo "✅ Cleared old workspace"
                     echo "----------------------------------------"
-                    echo "Testing GUI with Marker: [ ${marker} ]"
+                    echo "Testing GUI with Filter: [ ${filter} ]"
                     echo "----------------------------------------"
 
-                    // REMOVED '-s' FLAG so pytest-json-report can capture the printed parameters!
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                         sh """
-                            venv/bin/python -m pytest tests/GUI/test_summary.py -v -m "${marker}" \
+                            venv/bin/python -m pytest tests/GUI/ -v -k "${filter}" \
                             --json-report --json-report-file=report.json
                         """
                     }
