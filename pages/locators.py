@@ -55,24 +55,28 @@ class SummaryWirelessLocators:
 # pages/locators.py
 
 class NetworkLocators:
-    """Technical selectors refined for duplicated LuCI menus."""
+    """Technical selectors refined for stable LuCI interaction and Fallback support."""
 
-    # Target the 'Network' link specifically inside the desktop sidebar
-    MENU_NETWORK = "div.sidebar li.Network > a.menu"
+    # Sidebar Navigation (Reverted to the simple versions that pass)
+    MENU_NETWORK = "li.Network > a.menu"
+    SUBMENU_IP_CONFIG = "ul.dropdown-menu a[href*='/network/ip']"
 
-    # Target the 'IP Configuration' link specifically inside the sidebar's Network list
-    # Using the href part is the most unique way to find it
-    SUBMENU_IP_CONFIG = "div.sidebar a[href*='/network/ip']"
+    # IPv4 Configuration Fields (Using 'contains' for better cbid prefix handling)
+    IPv4_PROTO = "select[name*='network.lan.proto']"
+    IPv4_ADDRESS = "input[name*='network.lan.ipaddr']"
+    IPv4_NETMASK = "input[name*='network.lan.netmask']"
+    IPv4_GATEWAY = "input[name*='network.lan.gateway']"
 
-    # IP Configuration Fields - Using the exact 'name' attributes from your HTML
-    IPv4_PROTO = "select[name='network.lan.proto']"
-    IPv4_ADDRESS = "input[name='network.lan.ipaddr']"
-    IPv4_NETMASK = "input[name='network.lan.netmask']"
-    IPv4_GATEWAY = "input[name='network.lan.gateway']"
+    # IPv6 Configuration Fields
+    IPv6_ADDRESS = "input[name*='network.lan.ip6addr']"
+    IPv6_GATEWAY = "input[name*='network.lan.ip6gw']"
 
-    IPv6_ADDRESS = "input[name='network.lan.ip6addr']"
-    IPv6_GATEWAY = "input[name='network.lan.ip6gw']"
+    # Fallback IP Configuration (Updated to match your UCI: fallback.lan)
+    # Using 'contains' name search to bypass cbid/technical prefixes
+    FALLBACK_IP = "input[name*='fallback.lan.ipaddr']"
+    FALLBACK_NETMASK = "input[name*='fallback.lan.netmask']"
 
     # Action Buttons
     SAVE_BUTTON = "input.cbi-button[value='Save']"
+    CONFIRM_APPLY = "input[value='Apply']"
     APPLY_ICON = "#header_apply"

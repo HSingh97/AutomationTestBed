@@ -1,7 +1,26 @@
 import re
 import datetime
 import ipaddress
+import random
 
+def generate_test_ip(current_ip, version="v4"):
+    """Generates a random test IP for validation."""
+    if version == "v4":
+        parts = current_ip.split('.')
+        # Use a random octet between 100-200 to avoid common SU/Gateway IPs
+        new_octet = random.randint(100, 200)
+        # Ensure we don't pick the same one
+        if str(new_octet) == parts[3]:
+            new_octet += 5
+        return f"{parts[0]}.{parts[1]}.{parts[2]}.{new_octet}"
+    else:
+        # For IPv6, we just change a small part of the suffix
+        if not current_ip or ":" not in current_ip:
+            return "2003:738:2c02::99/64"
+        prefix = current_ip.rsplit(':', 1)[0]
+        return f"{prefix}:{random.randint(10, 99)}/64"
+
+    
 def parse_device_time(time_str):
     clean_str = re.sub(r'\s[A-Z]{3,4}\s', ' ', time_str)
     clean_str = re.sub(r'\s+', ' ', clean_str).strip()

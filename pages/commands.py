@@ -1,5 +1,7 @@
 class RootCommands:
     """Linux backend commands executed via SSH as 'root'."""
+
+    # --- SYSTEM INFORMATION ---
     GET_MODEL = "cat /etc/ademodel"
     GET_HW_VERSION = "cat /etc/hwver"
     GET_BOOTLOADER = "cat /etc/blver"
@@ -9,6 +11,18 @@ class RootCommands:
     GET_ELEVATION = ""
     GET_CPU = "cat /tmp/cpu_usage"
     GET_MEM = "cat /tmp/mem_usage"
+
+    # --- NETWORK CONFIGURATION (Used for GUI_50 Validation) ---
+    # These 'uci' commands fetch the actual saved settings
+    GET_NET_PROTO = "uci get network.lan.proto"
+    GET_NET_IP = "uci get network.lan.ipaddr"
+    GET_NET_MASK = "uci get network.lan.netmask"
+    GET_NET_GW = "uci get network.lan.gateway"
+    GET_NET_IP6 = "uci get network.lan.ip6addr"
+    GET_NET_GW6 = "uci get network.lan.ip6gw"
+
+    # --- NETWORK DYNAMIC STATUS (Used for Summary Pages) ---
+    # These 'ucidyn' commands fetch live/assigned status
     GET_IPv4 = "ucidyn get network.lan.ipaddr"
     GET_IPv6 = "ucidyn get network.lan.ip6addr"
     GET_GATEWAYv4 = "ucidyn get network.lan.gateway"
