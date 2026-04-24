@@ -1,6 +1,6 @@
 import pytest
 
-from pages.locators import SummaryLocators, SummaryNetworkLocators, SummaryPerformanceLocators, SummaryWirelessLocators
+from pages.locators import SummaryLocators, SummaryNetworkLocators, SummaryPerformanceLocators, SummaryWirelessLocators, TopPanelLocators
 from pages.commands import RootCommands
 
 # Import all shared utilities
@@ -26,6 +26,11 @@ pytestmark = pytest.mark.sanity
 @pytest.mark.Summary
 async def test_gui_01_summary_system(root_ssh, gui_page, bsu_ip):
     print("\n[+] Starting GUI_01: Cross-Validating System Summary (Root -> GUI)")
+
+    print("    -> Navigating to Dashboard via Top Panel Logo...")
+    await gui_page.locator(TopPanelLocators.LOGO).first.click()
+    await gui_page.wait_for_load_state("domcontentloaded")
+    await gui_page.wait_for_timeout(2000)
 
     ssh_model = (await root_ssh.send_command(RootCommands.GET_MODEL)).result.strip()
     ssh_hw = (await root_ssh.send_command(RootCommands.GET_HW_VERSION)).result.strip()
@@ -68,6 +73,11 @@ async def test_gui_01_summary_system(root_ssh, gui_page, bsu_ip):
 @pytest.mark.Summary
 async def test_gui_02_summary_network(root_ssh, gui_page, bsu_ip):
     print("\n[+] Starting GUI_02: Cross-Validating Network Summary (Root -> GUI)")
+
+    print("    -> Navigating to Dashboard via Top Panel Logo...")
+    await gui_page.locator(TopPanelLocators.LOGO).first.click()
+    await gui_page.wait_for_load_state("domcontentloaded")
+    await gui_page.wait_for_timeout(2000)
 
     ssh_ipv4 = (await root_ssh.send_command(RootCommands.GET_IPv4)).result.strip()
     ssh_ipv6 = (await root_ssh.send_command(RootCommands.GET_IPv6)).result.strip()
@@ -120,6 +130,11 @@ async def test_gui_02_summary_network(root_ssh, gui_page, bsu_ip):
 async def test_gui_03_summary_performance(root_ssh, gui_page, bsu_ip):
     print("\n[+] Starting GUI_03: Cross-Validating Performance Summary (Root -> GUI)")
 
+    print("    -> Navigating to Dashboard via Top Panel Logo...")
+    await gui_page.locator(TopPanelLocators.LOGO).first.click()
+    await gui_page.wait_for_load_state("domcontentloaded")
+    await gui_page.wait_for_timeout(2000)
+
     ssh_tx_r1 = (await root_ssh.send_command(RootCommands.GET_TX_R1)).result.strip()
     ssh_rx_r1 = (await root_ssh.send_command(RootCommands.GET_RX_R1)).result.strip()
 
@@ -164,10 +179,14 @@ async def test_gui_03_summary_performance(root_ssh, gui_page, bsu_ip):
 async def test_gui_04_summary_wireless(root_ssh, gui_page, bsu_ip):
     print("\n[+] Starting GUI_04: Cross-Validating Wireless Summary (Root -> GUI)")
 
+    print("    -> Navigating to Dashboard via Top Panel Logo...")
+    await gui_page.locator(TopPanelLocators.LOGO).first.click()
+    await gui_page.wait_for_load_state("domcontentloaded")
+    await gui_page.wait_for_timeout(2000)
+
     await gui_page.wait_for_timeout(5000)
     print("    -> Commencing Dynamic Wireless Radio Discovery & Validation...")
 
-    # Looping specifically for exactly radio 0 and radio 1
     radio_num = 0
     while radio_num <= 1:
         status_loc = SummaryWirelessLocators.RADIO_STATUS.format(radio_num)
