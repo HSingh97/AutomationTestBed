@@ -80,3 +80,45 @@ class NetworkLocators:
     SAVE_BUTTON = "input.cbi-button[value='Save']"
     CONFIRM_APPLY = "input[value='Apply']"
     APPLY_ICON = "#header_apply"
+
+
+class EthernetLocators:
+    # Sidebar
+    MENU_NETWORK = "li.Network > a.menu"
+    SUBMENU_ETHERNET = "ul.dropdown-menu a[href*='/network/eth']"
+
+    # Tabs - Specific to LAN 1 / LAN 2
+    LAN_TABS = "ul.cbi-tabmenu > li > a"
+
+    # Fields (Wildcard matching for safety)
+    SPEED_DROPDOWN = "select[name*='.speed']"
+    MTU_INPUT = "input[name*='.mtu']"
+
+    # Action Buttons (Matched to your stable Network logic)
+    SAVE_BUTTON = "input.cbi-button[value='Save']"
+    APPLY_ICON = "#header_apply"
+    CONFIRM_APPLY = "input[value='Apply']"
+
+
+class DHCPLocators:
+    # Sidebar Navigation
+    SUBMENU_DHCP = "ul.dropdown-menu a[href*='/network/dhcp']"
+
+    # --- Radio 1 (Default Tab) ---
+    DHCP_SERVER_DROPDOWN = "select[name*='ignore']"
+    LEASE_TIME_INPUT = "input[name*='leasetime']"
+
+    # --- 2.4 GHz Radio Tab ---
+    TAB_RADIO_24 = "ul.cbi-tabmenu > li > a[href*='dhcp24']"
+
+    # IP Configuration Fields (Using wildcard for cbid compatibility)
+    RADIO_24_IP = "input[name*='lan24.ipaddr']"
+    RADIO_24_MASK = "input[name*='lan24.netmask']"
+
+    SAVE_BUTTON = "input.cbi-button[value='Save']"
+    RADIO_24_DHCP_DROPDOWN = "select[name*='lan24.ignore']"
+
+    # DHCP Pool Configuration for 2.4 GHz tab
+    RADIO_24_START_IP = "input[name*='lan24.start']"
+    RADIO_24_END_IP = "input[name*='lan24.limit']"
+
