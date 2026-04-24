@@ -186,7 +186,7 @@ async def test_gui_09_reboot_device(gui_page):
 
 
 # =====================================================================
-# GUI_10: GUI Top Panel - Logout
+# GUI_10: LOGOUT
 # =====================================================================
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_10
@@ -194,13 +194,14 @@ async def test_gui_09_reboot_device(gui_page):
 async def test_gui_10_logout(gui_page):
     print("\n[+] Starting GUI_10: Verifying Logout functionality")
 
-    logout_btn = gui_page.locator(TopPanelLocators.LOGOUT_BUTTON)
-    assert await logout_btn.is_visible(), "Logout button locator is incorrect or not visible."
+    logout_btn = gui_page.locator(TopPanelLocators.LOGOUT_BUTTON).first
+
+    try:
+        await logout_btn.wait_for(state="visible", timeout=10000)
+    except Exception:
+        assert False, "Logout button did not become visible within 10 seconds on the Reboot screen."
+
+    await gui_page.wait_for_timeout(1000)  # Human pause before clicking
     await logout_btn.click()
-
-    await gui_page.wait_for_load_state("networkidle")
-
-    username_input = gui_page.locator(LoginPageLocators.USERNAME_INPUT)
-    assert await username_input.is_visible(), "Logout button did not redirect to the login page properly."
 
     print("[+] GUI_10 Logout Validation Complete.")

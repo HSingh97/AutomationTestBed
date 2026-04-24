@@ -2,8 +2,8 @@ pipeline {
     agent { node { label "${TARGET_STAND}" } } // Note: Ensure TARGET_STAND is defined globally or injected!
 
     parameters {
-        string(name: 'TEST_FILTER', defaultValue: 'Summary', description: 'Enter test keyword (e.g., gui_0, gui_10) or comma-separated list')
-        string(name: 'Local IP Address', defaultValue: '', description: 'IP Address of the target device')
+        string(name: 'TEST_FILTER', defaultValue: 'Summary, TopPanel, WirelessProperties', description: 'Enter test keyword (e.g., gui_0, gui_10) or comma-separated list')
+        string(name: 'Local IP Address', defaultValue: '192.168.2.230', description: 'IP Address of the target device')
     }
 
     stages {

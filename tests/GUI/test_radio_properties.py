@@ -86,7 +86,7 @@ async def test_gui_18_link_type(gui_page, root_ssh):
 # =====================================================================
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_19
-@pytest.mark.RadioConfig
+@pytest.mark.WirelessProperties
 async def test_gui_19_radio_mode(gui_page, root_ssh, request):
     # Retrieve the fallback configurations from conftest.py options
     fallback_ip = request.config.getoption("--fallback-ip")
