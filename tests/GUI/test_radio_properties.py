@@ -46,7 +46,7 @@ async def navigate_to_radio_properties_page(gui_page, local_ip="192.168.2.230"):
 # =====================================================================
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_17
-#@pytest.mark.WirelessProperties
+@pytest.mark.WirelessProperties
 async def test_gui_17_radio_status(gui_page, root_ssh):
     await navigate_to_radio_properties_page(gui_page)
     print("\n[+] Starting GUI_17: Verifying Radio Status (Enable/Disable)")
@@ -68,7 +68,7 @@ async def test_gui_17_radio_status(gui_page, root_ssh):
 # =====================================================================
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_18
-#@pytest.mark.WirelessProperties
+@pytest.mark.WirelessProperties
 async def test_gui_18_link_type(gui_page, root_ssh):
     await navigate_to_radio_properties_page(gui_page)
     print("\n[+] Starting GUI_18: Verifying Link Type (PTP/PTMP)")
@@ -175,7 +175,6 @@ async def test_gui_19_radio_mode(gui_page, root_ssh, request):
 
             match = re.search(r'(https?://)(?:[^/]+)(/.*)', current_url)
 
-            # If we have a valid URL with a token, swap the IP and go
             if match and "chrome-error" not in current_url:
                 safe_url = f"https://{local_ip}{match.group(2)}"
                 try:
@@ -184,14 +183,12 @@ async def test_gui_19_radio_mode(gui_page, root_ssh, request):
                     await gui_page.goto(f"https://{local_ip}/cgi-bin/luci", wait_until="domcontentloaded",
                                         timeout=15000)
 
-            # If we got Dinosaur'd, we lost the token. Go to base URL to force a clean re-login.
             else:
                 print("    -> [TEARDOWN] Recovering from Chrome network crash...")
                 await gui_page.goto(f"https://{local_ip}/cgi-bin/luci", wait_until="domcontentloaded", timeout=15000)
 
             await gui_page.wait_for_timeout(3000)
 
-            # Re-authenticate on the Primary IP so GUI_20 doesn't get stuck!
             try:
                 if await gui_page.locator(LoginPageLocators.USERNAME_INPUT).first.is_visible(timeout=3000):
                     print("    -> [TEARDOWN] Kicked to login screen! Re-authenticating on Primary IP...")
