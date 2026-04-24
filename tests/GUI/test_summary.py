@@ -185,6 +185,7 @@ async def test_gui_04_summary_wireless(root_ssh, gui_page, bsu_ip):
 
         iwconfig_out = (await root_ssh.send_command(RootCommands.get_mac_wireless(wifi_idx))).result.strip()
         ssh_mac = parse_ifconfig_mac(iwconfig_out)
+
         # 2. Fetch Active Channel using iwconfig
         iwconfig_out = (await root_ssh.send_command(RootCommands.get_active_channel(wifi_idx))).result.strip()
         ssh_act_ch = parse_iwconfig_active_channel(iwconfig_out)
@@ -231,40 +232,55 @@ async def test_gui_04_summary_wireless(root_ssh, gui_page, bsu_ip):
 
         print(f"    -> [Radio {radio_num}] Validating Backend vs Frontend...")
 
-        # Check if the device is a disconnected Station (SU)
+        # State flags for validation logic
+        is_disabled = (ssh_status.lower() == "disable")
         is_unlinked_su = (ssh_mode == "SU" and ssh_parts == "0")
 
+        # Status and MAC are always validated regardless of state
         validate_param(f"R{radio_num} RADIO STATUS", ssh_status, gui_status)
         validate_param(f"R{radio_num} MAC ADDRESS", ssh_mac, gui_mac.upper())
-        validate_param(f"R{radio_num} LINK TYPE", ssh_link, gui_link)
-        validate_param(f"R{radio_num} RADIO MODE", ssh_mode, gui_mode)
 
-        # Conditionally skip Bandwidth
-        if is_unlinked_su:
-            print(f"    -> R{radio_num} BANDWIDTH: SKIPPED (Unlinked SU)")
+        if is_disabled:
+            print(f"    -> R{radio_num} LINK TYPE: SKIPPED (Radio Disabled)")
+            print(f"    -> R{radio_num} RADIO MODE: SKIPPED (Radio Disabled)")
+            print(f"    -> R{radio_num} BANDWIDTH: SKIPPED (Radio Disabled)")
+            print(f"    -> R{radio_num} SSID: SKIPPED (Radio Disabled)")
+            print(f"    -> R{radio_num} CONFIGURED CHANNEL: SKIPPED (Radio Disabled)")
+            print(f"    -> R{radio_num} ACTIVE CHANNEL: SKIPPED (Radio Disabled)")
+            print(f"    -> R{radio_num} SECURITY: SKIPPED (Radio Disabled)")
+            if radio_num != 0:
+                print(f"    -> R{radio_num} RTX PERCENTAGE: SKIPPED (Radio Disabled)")
+            print(f"    -> R{radio_num} REMOTE PARTNERS: SKIPPED (Radio Disabled)")
         else:
-            validate_param(f"R{radio_num} BANDWIDTH", ssh_band, gui_band)
+            validate_param(f"R{radio_num} LINK TYPE", ssh_link, gui_link)
+            validate_param(f"R{radio_num} RADIO MODE", ssh_mode, gui_mode)
 
-        validate_param(f"R{radio_num} SSID", ssh_ssid, gui_ssid)
-        validate_param(f"R{radio_num} CONFIGURED CHANNEL", ssh_conf_ch, gui_conf_ch)
+            # Conditionally skip Bandwidth
+            if is_unlinked_su:
+                print(f"    -> R{radio_num} BANDWIDTH: SKIPPED (Unlinked SU)")
+            else:
+                validate_param(f"R{radio_num} BANDWIDTH", ssh_band, gui_band)
 
-        # Conditionally skip Active Channel
-        if is_unlinked_su:
-            print(f"    -> R{radio_num} ACTIVE CHANNEL: SKIPPED (Unlinked SU)")
-        else:
-            validate_param(f"R{radio_num} ACTIVE CHANNEL", ssh_act_ch, gui_act_ch)
+            validate_param(f"R{radio_num} SSID", ssh_ssid, gui_ssid)
+            validate_param(f"R{radio_num} CONFIGURED CHANNEL", ssh_conf_ch, gui_conf_ch)
 
-        validate_param(f"R{radio_num} SECURITY", ssh_sec, gui_sec)
+            # Conditionally skip Active Channel
+            if is_unlinked_su:
+                print(f"    -> R{radio_num} ACTIVE CHANNEL: SKIPPED (Unlinked SU)")
+            else:
+                validate_param(f"R{radio_num} ACTIVE CHANNEL", ssh_act_ch, gui_act_ch)
 
-        # Conditionally skip RTX Percentage
-        if radio_num == 0:
-            print(f"    -> R{radio_num} RTX PERCENTAGE: SKIPPED (Not supported for R0)")
-        elif is_unlinked_su:
-            print(f"    -> R{radio_num} RTX PERCENTAGE: SKIPPED (Unlinked SU)")
-        else:
-            validate_percentage(f"R{radio_num} RTX PERCENTAGE", ssh_rtx, gui_rtx, tolerance=5.0)
+            validate_param(f"R{radio_num} SECURITY", ssh_sec, gui_sec)
 
-        validate_param(f"R{radio_num} REMOTE PARTNERS", ssh_parts, gui_parts)
+            # Conditionally skip RTX Percentage
+            if radio_num == 0:
+                print(f"    -> R{radio_num} RTX PERCENTAGE: SKIPPED (Not supported for R0)")
+            elif is_unlinked_su:
+                print(f"    -> R{radio_num} RTX PERCENTAGE: SKIPPED (Unlinked SU)")
+            else:
+                validate_percentage(f"R{radio_num} RTX PERCENTAGE", ssh_rtx, gui_rtx, tolerance=5.0)
+
+            validate_param(f"R{radio_num} REMOTE PARTNERS", ssh_parts, gui_parts)
 
         radio_num += 1
 
