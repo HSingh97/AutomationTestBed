@@ -27,7 +27,11 @@ RADIO_1_URL_CHUNK = "/admin/wireless/radio1"
 # =====================================================================
 # SETUP: Navigate Helper (Specific to this test file)
 # =====================================================================
-async def navigate_to_radio_properties_page(gui_page):
+async def navigate_to_radio_properties_page(gui_page, local_ip="192.168.2.230"):
+    if "chrome-error" in gui_page.url:
+        print("    -> [RECOVERY] Chrome error page detected! Forcing a hard reload to router UI...")
+        await gui_page.goto(f"https://{local_ip}/cgi-bin/luci/admin/wireless/radio1", timeout=15000)
+        await gui_page.wait_for_timeout(4000)
     if "radio1" in gui_page.url.lower() and "admin" in gui_page.url.lower():
         return
     radio_1 = gui_page.locator(RadioPropertiesLocators.SUBMENU_RADIO_1).first
@@ -156,6 +160,9 @@ async def test_gui_19_radio_mode(gui_page, root_ssh, request):
         await fallback_ssh.close()
         print(f"    -> Closed isolated SSH connection to Fallback IP.")
 
+        # CRITICAL FIX: Wait for the network bridge to physically come back online!
+        print(f"    -> [TEARDOWN] Waiting 15 seconds for router hardware to stabilize...")
+        await gui_page.wait_for_timeout(15000)
         # ==========================================================
         # TEARDOWN: Pivot the browser safely back to the Local IP
         # ==========================================================
