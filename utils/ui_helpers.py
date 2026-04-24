@@ -81,28 +81,32 @@ async def execute_triple_apply(gui_page, fallback_url):
 
         await super_apply.click(force=True)
         print("    -> [DEBUG] Super Apply button clicked! Committing to backend...")
+
+        # CRITICAL FIX: Give the browser time to navigate to the Apply screen!
+        await gui_page.wait_for_timeout(3000)
+
     except Exception:
         print("    -> [DEBUG] Super Apply button skipped (not found).")
 
-        # 4. Wait for router to restart services and return
-        try:
-            await gui_page.wait_for_url(f"**{fallback_url}*", timeout=25000)
-        except Exception:
-            print(f"    -> WARNING: Did not automatically return. Forcing navigation to {fallback_url}")
-            match = re.search(r'(https?://[^/]+/cgi-bin/luci/;stok=[^/]+)', gui_page.url)
-            if match:
-                base_url_with_token = match.group(1)
-                full_target_url = base_url_with_token + fallback_url
+    # 4. Wait for router to restart services and return
+    try:
+        await gui_page.wait_for_url(f"**{fallback_url}*", timeout=25000)
+    except Exception:
+        print(f"    -> WARNING: Did not automatically return. Forcing navigation to {fallback_url}")
+        match = re.search(r'(https?://[^/]+/cgi-bin/luci/;stok=[^/]+)', gui_page.url)
+        if match:
+            base_url_with_token = match.group(1)
+            full_target_url = base_url_with_token + fallback_url
 
+            try:
+                await gui_page.goto(full_target_url, timeout=15000)
+            except Exception as e:
+                print(f"    -> [DEBUG] Network unreachable (Bridge restarting). Waiting 10s and retrying...")
+                await gui_page.wait_for_timeout(10000)
                 try:
                     await gui_page.goto(full_target_url, timeout=15000)
-                except Exception as e:
-                    print(f"    -> [DEBUG] Network unreachable (Bridge restarting). Waiting 10s and retrying...")
-                    await gui_page.wait_for_timeout(10000)
-                    try:
-                        await gui_page.goto(full_target_url, timeout=15000)
-                    except Exception:
-                        print("    -> [DEBUG] Second navigation attempt failed. Proceeding anyway...")
+                except Exception:
+                    print("    -> [DEBUG] Second navigation attempt failed. Proceeding anyway...")
 
 
 # =====================================================================
