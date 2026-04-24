@@ -160,17 +160,23 @@ async def test_gui_19_radio_mode(gui_page, root_ssh, request):
         await fallback_ssh.close()
         print(f"    -> Closed isolated SSH connection to Fallback IP.")
 
-        # CRITICAL FIX: Wait for the network bridge to physically come back online!
+        # Wait for the network bridge to physically come back online!
         print(f"    -> [TEARDOWN] Waiting 15 seconds for router hardware to stabilize...")
         await gui_page.wait_for_timeout(15000)
+
         # ==========================================================
         # TEARDOWN: Pivot the browser safely back to the Local IP
         # ==========================================================
         current_url = gui_page.url
-        if fallback_ip in current_url:
+
+        # CRITICAL FIX: Catch the Chrome Error URL too!
+        if fallback_ip in current_url or "chrome-error" in current_url:
             print(f"    -> [TEARDOWN] Pivoting GUI session back to Primary IP ({local_ip})...")
+
             match = re.search(r'(https?://)(?:[^/]+)(/.*)', current_url)
-            if match:
+
+            # If we have a valid URL with a token, swap the IP and go
+            if match and "chrome-error" not in current_url:
                 safe_url = f"https://{local_ip}{match.group(2)}"
                 try:
                     await gui_page.goto(safe_url, wait_until="domcontentloaded", timeout=10000)
@@ -178,16 +184,21 @@ async def test_gui_19_radio_mode(gui_page, root_ssh, request):
                     await gui_page.goto(f"https://{local_ip}/cgi-bin/luci", wait_until="domcontentloaded",
                                         timeout=15000)
 
-            await gui_page.wait_for_timeout(2000)
+            # If we got Dinosaur'd, we lost the token. Go to base URL to force a clean re-login.
+            else:
+                print("    -> [TEARDOWN] Recovering from Chrome network crash...")
+                await gui_page.goto(f"https://{local_ip}/cgi-bin/luci", wait_until="domcontentloaded", timeout=15000)
 
-            # CRITICAL FIX: Re-authenticate on the Primary IP so GUI_20 doesn't get stuck!
+            await gui_page.wait_for_timeout(3000)
+
+            # Re-authenticate on the Primary IP so GUI_20 doesn't get stuck!
             try:
                 if await gui_page.locator(LoginPageLocators.USERNAME_INPUT).first.is_visible(timeout=3000):
                     print("    -> [TEARDOWN] Kicked to login screen! Re-authenticating on Primary IP...")
                     await gui_page.locator(LoginPageLocators.USERNAME_INPUT).first.fill(username)
                     await gui_page.locator(LoginPageLocators.PASSWORD_INPUT).first.fill(password)
                     await gui_page.locator(LoginPageLocators.LOGIN_BUTTON).first.click()
-                    await gui_page.wait_for_timeout(4000)  # Wait for dashboard routing to finish
+                    await gui_page.wait_for_timeout(5000)  # Wait for dashboard routing to finish
             except Exception:
                 pass
 
