@@ -26,6 +26,7 @@ def pytest_addoption(parser):
     group = parser.getgroup("UBR Automation Config")
     group.addoption("--local-ip", action="store", default="192.168.2.230", help="BTS/Local IP Address")
     group.addoption("--remote-ip", action="store", default="192.168.2.231", help="CPE/Remote IP Address")
+    group.addoption("--fallback-ip", action="store", default="10.0.0.1", help="BTS/CPE Fallback IP Address")
     group.addoption("--username", action="store", default="root", help="Device Username")
     group.addoption("--password", action="store", default="Sen@0ubRNwk$", help="Device Password")
 

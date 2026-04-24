@@ -88,3 +88,22 @@ class TopPanelLocators:
     REBOOT_BUTTON = "//*[@id='header_reboot']"
     REBOOT_CONFIRM = "//*[@id='maincontent']/div/p[3]/a"
     LOGOUT_BUTTON = "li[title='Logout']"
+
+    SUPER_APPLY_BUTTON = "//*[@id='super_apply']"
+    SUPER_REVERT_BUTTON = "//*[@id='super_revert']"
+
+    FORM_SAVE_BUTTON = "//*[@id='maincontent']/div/div[2]/input"
+    ""
+
+class RadioPropertiesLocators:
+
+    MENU_WIRELESS = "xpath=/html/body/header/div/div/div[1]/ul/li[2]/a"
+    SUBMENU_RADIO_1 = "//*[@id='Wireless']/li[1]/a"
+
+    # --- Form Elements ---
+    STATUS_DROPDOWN = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[1]/div/select"
+    LINK_TYPE_DROPDOWN = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[3]/div/select"
+
+    RADIO_MODE_DROPDOWN = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[4]/div/select"
+    SSID_INPUT = "//*[@id='edit_ssid']//input"
+    BANDWIDTH_DROPDOWN = "//select[@name='wireless.wifi1.htmode']"

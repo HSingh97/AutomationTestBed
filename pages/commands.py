@@ -52,7 +52,7 @@ class RootCommands:
     # --- DYNAMIC WIRELESS COMMANDS ---
     @staticmethod
     def get_radio_status(radio_idx):
-        return f"uci show wireless.@wifi-iface[{radio_idx}].disabled"
+        return f"uci get wireless.@wifi-iface[{radio_idx}].disabled"
 
     @staticmethod
     def get_mac_wireless(radio_idx):
@@ -60,11 +60,11 @@ class RootCommands:
 
     @staticmethod
     def get_link_type(radio_idx):
-        return f"uci show wireless.wifi{radio_idx}.linktype"
+        return f"uci get wireless.wifi{radio_idx}.linktype"
 
     @staticmethod
     def get_radio_mode(radio_idx):
-        return f"uci show wireless.@wifi-iface[{radio_idx}].mode"
+        return f"uci get wireless.@wifi-iface[{radio_idx}].mode"
 
     @staticmethod
     def get_bandwidth(radio_idx):
@@ -72,11 +72,11 @@ class RootCommands:
 
     @staticmethod
     def get_ssid(radio_idx):
-        return f"uci show wireless.@wifi-iface[{radio_idx}].ssid"
+        return f"uci get wireless.@wifi-iface[{radio_idx}].ssid"
 
     @staticmethod
     def get_configured_channel(radio_idx):
-        return f"uci show advwireless.ath1{radio_idx}.channel"
+        return f"uci get advwireless.ath1{radio_idx}.channel"
 
     @staticmethod
     def get_active_channel(radio_idx):
@@ -84,7 +84,7 @@ class RootCommands:
 
     @staticmethod
     def get_security(radio_idx):
-        return f"uci show wireless.@wifi-iface[{radio_idx}].encryption"
+        return f"uci get wireless.@wifi-iface[{radio_idx}].encryption"
 
     @staticmethod
     def get_rtx_percentage(radio_idx):
