@@ -168,9 +168,21 @@ async def test_gui_19_radio_mode(gui_page, root_ssh, request):
                 try:
                     await gui_page.goto(safe_url, wait_until="domcontentloaded", timeout=10000)
                 except Exception:
-                    await gui_page.goto(f"https://{local_ip}/admin/wireless/radio1", wait_until="domcontentloaded",
+                    await gui_page.goto(f"https://{local_ip}/cgi-bin/luci", wait_until="domcontentloaded",
                                         timeout=15000)
+
             await gui_page.wait_for_timeout(2000)
+
+            # CRITICAL FIX: Re-authenticate on the Primary IP so GUI_20 doesn't get stuck!
+            try:
+                if await gui_page.locator(LoginPageLocators.USERNAME_INPUT).first.is_visible(timeout=3000):
+                    print("    -> [TEARDOWN] Kicked to login screen! Re-authenticating on Primary IP...")
+                    await gui_page.locator(LoginPageLocators.USERNAME_INPUT).first.fill(username)
+                    await gui_page.locator(LoginPageLocators.PASSWORD_INPUT).first.fill(password)
+                    await gui_page.locator(LoginPageLocators.LOGIN_BUTTON).first.click()
+                    await gui_page.wait_for_timeout(4000)  # Wait for dashboard routing to finish
+            except Exception:
+                pass
 
 # =====================================================================
 # GUI_20: Wireless - Radio - Properties [SSID]
