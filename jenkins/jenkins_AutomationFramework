@@ -1,8 +1,8 @@
 pipeline {
-    agent { node { label "${TARGET_STAND}" } }
+    agent { node { label "${TARGET_STAND}" } } // Note: Ensure TARGET_STAND is defined globally or injected!
 
     parameters {
-        string(name: 'TEST_FILTER', defaultValue: 'Summary', description: 'Enter test keyword (e.g., gui_0, gui_10, top_panel) or exact marker')
+        string(name: 'TEST_FILTER', defaultValue: 'Summary', description: 'Enter test keyword (e.g., gui_0, gui_10) or comma-separated list')
         string(name: 'Local IP Address', defaultValue: '', description: 'IP Address of the target device')
     }
 
@@ -12,7 +12,7 @@ pipeline {
                 script {
                     echo "----------------------------------------"
                     echo "--- TARGET STAND: ${TARGET_STAND}"
-                    echo "--- TEST MARKER:  ${params.TEST_MARKER}"
+                    echo "--- TEST FILTER:  ${params.TEST_FILTER}"
                     echo "----------------------------------------"
                     if (!params['Local IP Address']) {
                         error "Missing required parameters: Local IP Address"
@@ -39,17 +39,19 @@ pipeline {
             steps {
                 script {
                     def localIP = params['Local IP Address']
-                    def filter = params.TEST_FILTER // Updated variable
+
+                    // CRITICAL FIX: Automatically convert commas to ' or ' for Pytest
+                    def formattedFilter = params.TEST_FILTER.replaceAll(",", " or ")
 
                     echo "Local IP Address: ${localIP}"
                     echo "✅ Cleared old workspace"
                     echo "----------------------------------------"
-                    echo "Testing GUI with Filter: [ ${filter} ]"
+                    echo "Testing GUI with Filter: [ ${formattedFilter} ]"
                     echo "----------------------------------------"
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                         sh """
-                            venv/bin/python -m pytest tests/GUI/ -v -k "${filter}" \
+                            venv/bin/python -m pytest tests/GUI/ -v -k "${formattedFilter}" \
                             --json-report --json-report-file=report.json
                         """
                     }
@@ -97,13 +99,14 @@ pipeline {
                 def userEmail = userEmails.get(buildUserId, "puneet.sharma@senao.com")
 
                 emailext(
-                    subject: "Test Automation Report [Marker: ${params.TEST_MARKER}] - ${currentBuild.currentResult}",
+                    // CRITICAL FIX: Changed TEST_MARKER to TEST_FILTER
+                    subject: "Test Automation Report [Filter: ${params.TEST_FILTER}] - ${currentBuild.currentResult}",
                     body: """
                         <html>
                         <body style="font-family: Arial, sans-serif; color: #333;">
                             <h2 style="color: #2e6c80;">Jenkins Automated Test Run</h2>
                             <table style="border-collapse: collapse; width: 100%; max-width: 600px;">
-                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Marker Executed:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params.TEST_MARKER}</td></tr>
+                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Filter Executed:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params.TEST_FILTER}</td></tr>
                                 <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Target IP:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params['Local IP Address']}</td></tr>
                                 <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Status:</strong></td><td style="padding: 8px; border: 1px solid #ddd; color:${currentBuild.currentResult == 'SUCCESS' ? 'green' : 'red'}; font-weight:bold;">${currentBuild.currentResult}</td></tr>
                                 <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Started By:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${buildUserName}</td></tr>
