@@ -46,7 +46,7 @@ async def navigate_to_radio_properties_page(gui_page, local_ip="192.168.2.230"):
 # =====================================================================
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_17
-@pytest.mark.WirelessProperties
+#@pytest.mark.WirelessProperties
 async def test_gui_17_radio_status(gui_page, root_ssh):
     await navigate_to_radio_properties_page(gui_page)
     print("\n[+] Starting GUI_17: Verifying Radio Status (Enable/Disable)")
@@ -68,7 +68,7 @@ async def test_gui_17_radio_status(gui_page, root_ssh):
 # =====================================================================
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_18
-@pytest.mark.WirelessProperties
+#@pytest.mark.WirelessProperties
 async def test_gui_18_link_type(gui_page, root_ssh):
     await navigate_to_radio_properties_page(gui_page)
     print("\n[+] Starting GUI_18: Verifying Link Type (PTP/PTMP)")
