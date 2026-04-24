@@ -125,14 +125,16 @@ def parse_iwconfig_active_channel(ssh_str):
 
 def parse_uptime_to_seconds(gui_uptime_str):
     """
-    Converts the GUI string like '2h 42m 28s' into raw seconds for math comparison.
+    Converts the GUI string like '3d 2h 42m 28s' into raw seconds for math comparison.
     Handles variations like '42m 28s' or '28s'.
     """
     total_seconds = 0
     parts = gui_uptime_str.lower().split()
 
     for part in parts:
-        if 'h' in part:
+        if 'd' in part:
+            total_seconds += int(part.replace('d', '')) * 86400
+        elif 'h' in part:
             total_seconds += int(part.replace('h', '')) * 3600
         elif 'm' in part:
             total_seconds += int(part.replace('m', '')) * 60
@@ -140,7 +142,6 @@ def parse_uptime_to_seconds(gui_uptime_str):
             total_seconds += int(part.replace('s', ''))
 
     return total_seconds
-
 
 def parse_desc_info(desc_str):
     """

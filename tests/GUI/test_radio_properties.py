@@ -86,10 +86,11 @@ async def test_gui_18_link_type(gui_page, root_ssh):
 # =====================================================================
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_19
-@pytest.mark.WirelessProperties
+@pytest.mark.RadioConfig
 async def test_gui_19_radio_mode(gui_page, root_ssh, request):
     # Retrieve the fallback configurations from conftest.py options
     fallback_ip = request.config.getoption("--fallback-ip")
+    local_ip = request.config.getoption("--local-ip")
     username = request.config.getoption("--username")
     password = request.config.getoption("--password")
 
@@ -155,6 +156,21 @@ async def test_gui_19_radio_mode(gui_page, root_ssh, request):
         await fallback_ssh.close()
         print(f"    -> Closed isolated SSH connection to Fallback IP.")
 
+        # ==========================================================
+        # TEARDOWN: Pivot the browser safely back to the Local IP
+        # ==========================================================
+        current_url = gui_page.url
+        if fallback_ip in current_url:
+            print(f"    -> [TEARDOWN] Pivoting GUI session back to Primary IP ({local_ip})...")
+            match = re.search(r'(https?://)(?:[^/]+)(/.*)', current_url)
+            if match:
+                safe_url = f"https://{local_ip}{match.group(2)}"
+                try:
+                    await gui_page.goto(safe_url, wait_until="domcontentloaded", timeout=10000)
+                except Exception:
+                    await gui_page.goto(f"https://{local_ip}/admin/wireless/radio1", wait_until="domcontentloaded",
+                                        timeout=15000)
+            await gui_page.wait_for_timeout(2000)
 
 # =====================================================================
 # GUI_20: Wireless - Radio - Properties [SSID]
