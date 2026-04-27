@@ -76,7 +76,7 @@ class RootCommands:
 
     @staticmethod
     def get_configured_channel(radio_idx):
-        return f"uci get advwireless.ath1{radio_idx}.channel"
+        return f"uci get advwireless.ath{radio_idx}.channel"
 
     @staticmethod
     def get_active_channel(radio_idx):

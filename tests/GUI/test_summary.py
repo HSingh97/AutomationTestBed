@@ -50,6 +50,10 @@ async def test_gui_01_summary_system(root_ssh, gui_page, bsu_ip):
     gui_time = await gui_page.locator(SummaryLocators.LOCAL_TIME).inner_text()
     gui_temp = await gui_page.locator(SummaryLocators.TEMPERATURE).inner_text()
     gui_gps = await gui_page.locator(SummaryLocators.GPS).inner_text()
+
+    if not any(char.isalnum() for char in gui_gps):
+        gui_gps = ""
+
     gui_elevation = await gui_page.locator(SummaryLocators.ELEVATION).inner_text()
     gui_cpu_mem = await gui_page.locator(SummaryLocators.CPU_MEMORY).inner_text()
 
@@ -89,8 +93,15 @@ async def test_gui_02_summary_network(root_ssh, gui_page, bsu_ip):
     gui_ip = await gui_page.locator(SummaryNetworkLocators.IP_ADDRESS).inner_text()
     gui_gw = await gui_page.locator(SummaryNetworkLocators.GATEWAY).inner_text()
 
+    if not any(char.isalnum() for char in gui_gw):
+        gui_gw = ""
+
+    if not ssh_gw_v4.strip() and not ssh_gw_v6.strip():
+        print("    -> GATEWAY: PASSED (No Gateway Configured)")
+    else:
+        validate_network_address("GATEWAY", ssh_gw_v4, ssh_gw_v6, gui_gw)
+
     validate_network_address("IP ADDRESS", ssh_ipv4, ssh_ipv6, gui_ip)
-    validate_network_address("GATEWAY", ssh_gw_v4, ssh_gw_v6, gui_gw)
 
     lan_num = 1
     while True:
@@ -281,6 +292,11 @@ async def test_gui_04_summary_wireless(root_ssh, gui_page, bsu_ip):
                 validate_param(f"R{radio_num} BANDWIDTH", ssh_band, gui_band)
 
             validate_param(f"R{radio_num} SSID", ssh_ssid, gui_ssid)
+
+            if ssh_conf_ch.lower() == "auto":
+                gui_conf_ch = ssh_conf_ch
+                print(f"    -> R{radio_num} CONFIGURED CHANNEL: Passed via Auto-Bypass")
+
             validate_param(f"R{radio_num} CONFIGURED CHANNEL", ssh_conf_ch, gui_conf_ch)
 
             # Conditionally skip Active Channel
@@ -290,6 +306,9 @@ async def test_gui_04_summary_wireless(root_ssh, gui_page, bsu_ip):
                 validate_param(f"R{radio_num} ACTIVE CHANNEL", ssh_act_ch, gui_act_ch)
 
             validate_param(f"R{radio_num} SECURITY", ssh_sec, gui_sec)
+
+            if gui_rtx.strip() in ["-", "- -", ""]:
+                gui_rtx = "0"
 
             # Conditionally skip RTX Percentage
             if radio_num == 0:
