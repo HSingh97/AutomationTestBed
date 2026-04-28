@@ -80,6 +80,15 @@ def parse_security(ssh_str):
     return val
 
 
+def parse_encryption(ssh_str):
+    val = extract_uci_value(ssh_str).lower()
+
+    if "ccmp-256" in val or "aes" in val or "psk2+ccmp-256" in val:
+        return "AES-256"
+    if "none" in val:
+        return "None"
+    return extract_uci_value(ssh_str)
+
 def parse_ifconfig_mac(ssh_str):
     """Extracts MAC Address from ifconfig block"""
     match = re.search(r'(?:HWaddr|ether)\s+([0-9A-Fa-f:]+)', str(ssh_str), re.IGNORECASE)

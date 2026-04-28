@@ -1,5 +1,3 @@
-# pages/locators.py
-
 class LoginPageLocators:
     """CSS/XPath selectors for the main Login Page."""
 
@@ -8,6 +6,7 @@ class LoginPageLocators:
 
     # Matches: <input type="submit" value="Login" ...>
     LOGIN_BUTTON = "input[type='submit']"
+
 
 class SummaryLocators:
     """CSS/XPath selectors for the Quick Start / Summary Page."""
@@ -35,6 +34,7 @@ class SummaryNetworkLocators:
 
     CABLE_LENGTH_LAN1 = "//*[@id='eth0_cable']"
     CABLE_LENGTH_LAN2 = "//*[@id='eth1_cable']"
+
 
 class SummaryPerformanceLocators:
     """CSS selectors for the Performance Summary"""
@@ -93,10 +93,9 @@ class TopPanelLocators:
     SUPER_REVERT_BUTTON = "//*[@id='super_revert']"
 
     FORM_SAVE_BUTTON = "//*[@id='maincontent']/div/div[2]/input"
-    ""
+
 
 class RadioPropertiesLocators:
-
     MENU_WIRELESS = "xpath=/html/body/header/div/div/div[1]/ul/li[2]/a"
     SUBMENU_RADIO_1 = "//*[@id='Wireless']/li[1]/a"
 
@@ -107,3 +106,12 @@ class RadioPropertiesLocators:
     RADIO_MODE_DROPDOWN = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[4]/div/select"
     SSID_INPUT = "//*[@id='edit_ssid']//input"
     BANDWIDTH_DROPDOWN = "//select[@name='wireless.wifi1.htmode']"
+
+    CONFIGURED_CHANNEL_DROPDOWN = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[5]/div/select"
+    ACTIVE_CHANNEL_DISPLAY = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[5]/div/span"
+    ENCRYPTION_DROPDOWN = "//*[@name='wireless.@wifi-iface[1].encryption']"
+    ENCRYPTION_KEY_INPUT = "//*[@name='wireless.@wifi-iface[1].key']"
+    NETWORK_SECRET_INPUT = "input[id*='nwksec'], input[name*='nwksecret']"
+    DISTANCE_INPUT = "//*[@name='wireless.wifi1.distance']"
+
+

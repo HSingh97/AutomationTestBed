@@ -84,6 +84,7 @@ class RootCommands:
 
     @staticmethod
     def get_security(radio_idx):
+        # Used for both getting Security protocol and verifying Encryption
         return f"uci get wireless.@wifi-iface[{radio_idx}].encryption"
 
     @staticmethod
@@ -93,3 +94,15 @@ class RootCommands:
     @staticmethod
     def get_remote_partners(radio_idx):
         return f"cat /sys/class/kwn/wifi{radio_idx}/statistics/links"
+
+    @staticmethod
+    def get_encryption_key(radio_idx):
+        return f"uci get wireless.@wifi-iface[{radio_idx}].key"
+
+    @staticmethod
+    def get_network_secret(radio_idx):
+        return f"uci get wireless.wifi{radio_idx}.nwksecret"
+
+    @staticmethod
+    def get_distance(radio_idx):
+        return f"uci get wireless.wifi{radio_idx}.distance"
