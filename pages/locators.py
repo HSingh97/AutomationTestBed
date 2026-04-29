@@ -113,5 +113,6 @@ class RadioPropertiesLocators:
     ENCRYPTION_KEY_INPUT = "//*[@name='wireless.@wifi-iface[1].key']"
     NETWORK_SECRET_INPUT = "input[id*='nwksec'], input[name*='nwksecret']"
     DISTANCE_INPUT = "//*[@name='wireless.wifi1.distance']"
+    MAXIMUM_SU_INPUT = "//*[@name='wireless.@wifi-iface[1].maxsta']"
 
 

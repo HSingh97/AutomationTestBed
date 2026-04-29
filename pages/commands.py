@@ -106,3 +106,7 @@ class RootCommands:
     @staticmethod
     def get_distance(radio_idx):
         return f"uci get wireless.wifi{radio_idx}.distance"
+
+    @staticmethod
+    def get_maxcpe(radio_idx):
+        return f"uci get wireless.@wifi-iface[{radio_idx}].maxsta"

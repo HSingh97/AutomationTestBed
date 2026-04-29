@@ -12,6 +12,7 @@ DEFAULT_VALUES = {
     "Radio Mode": "BTS",
     "SSID": "Senao_Default_SSID",
     "Bandwidth": "20 MHz",
+    "Maximum SUs":"16"
 
     # You can expand this as you build out other pages!
     # "IP Address": "192.168.1.1",
