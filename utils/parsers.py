@@ -3,6 +3,86 @@ import datetime
 import ipaddress
 
 
+def clean_ssh_output(raw_output):
+    """
+    Normalizes noisy interactive SSH output to the last meaningful line.
+    Useful when command output is prefixed with banner/prompt/echo lines.
+    """
+    text = str(raw_output or "").replace("\r", "")
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if not lines:
+        return ""
+
+    # Ignore common shell prompt and command-echo lines.
+    filtered = []
+    prompt_or_echo_patterns = (
+        r"^root@.+[:#]\s*$",
+        r"^root@.+[:#]\s+.+$",
+        r"^#\s*$",
+        r"^uci\s+get\s+.+$",
+    )
+    for line in lines:
+        if any(re.match(pat, line) for pat in prompt_or_echo_patterns):
+            continue
+        filtered.append(line)
+
+    if not filtered:
+        return lines[-1]
+    return filtered[-1]
+
+
+def extract_command_result(raw_output, command):
+    """
+    Extract command value from noisy interactive SSH output.
+    Prioritizes the first meaningful line after the echoed command.
+    """
+    text = str(raw_output or "").replace("\r", "")
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if not lines:
+        return ""
+
+    cmd_idx = -1
+    for idx, line in enumerate(lines):
+        if command in line:
+            cmd_idx = idx
+
+    def _is_noise(line):
+        if re.match(r"^root@.+[:#](\s+.*)?$", line):
+            return True
+        if line.startswith("BusyBox"):
+            return True
+        if re.match(r"^[\\/|_\-\s`'.()]+$", line):
+            return True
+        if line.startswith("/ __") or line.startswith("\\__") or line.startswith("|___"):
+            return True
+        return False
+
+    if cmd_idx >= 0:
+        for line in lines[cmd_idx + 1:]:
+            if not _is_noise(line):
+                return line
+
+    cleaned = clean_ssh_output(raw_output)
+    return cleaned
+
+
+def extract_hostname_value(raw_output):
+    """
+    Extracts hostname from noisy SSH output.
+    Hostname is expected as a single token without spaces.
+    """
+    text = str(raw_output or "").replace("\r", "")
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if not lines:
+        return ""
+
+    for line in reversed(lines):
+        if re.match(r"^[A-Za-z0-9._-]+$", line):
+            return line
+
+    return clean_ssh_output(raw_output)
+
+
 def parse_device_time(time_str):
     clean_str = re.sub(r'\s[A-Z]{3,4}\s', ' ', time_str)
     clean_str = re.sub(r'\s+', ' ', clean_str).strip()
