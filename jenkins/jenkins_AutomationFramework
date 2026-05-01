@@ -3,7 +3,7 @@ pipeline {
 
     parameters {
         string(name: 'TEST_FILTER', defaultValue: 'Summary, TopPanel, WirelessProperties', description: 'Enter test keyword (e.g., gui_0, gui_10) or comma-separated list')
-        string(name: 'Local IP Address', defaultValue: '192.168.2.230', description: 'IP Address of the target device')
+        string(name: 'Local IP Address', defaultValue: '192.168.2.10', description: 'IP Address of the target device')
     }
 
     stages {
@@ -51,7 +51,7 @@ pipeline {
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                         sh """
-                            venv/bin/python -m pytest tests/GUI/ -v -k "${formattedFilter}" \ --local-ip 192.168.2.10
+                            venv/bin/python -m pytest tests/GUI/ -v -k "${formattedFilter}" \
                             --json-report --json-report-file=report.json
                         """
                     }
