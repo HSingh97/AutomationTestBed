@@ -122,3 +122,18 @@ class DHCPLocators:
     RADIO_24_START_IP = "input[name*='lan24.start']"
     RADIO_24_END_IP = "input[name*='lan24.limit']"
 
+
+class ManagementLocators:
+    # Sidebar
+    MENU_MANAGEMENT = "li.Management > a.menu"
+    SUBMENU_SYSTEM = "ul.dropdown-menu a[href*='/management/system']"
+
+    # System Page - General Tab
+    TIMEZONE_DROPDOWN = "select[name*='timezone']"
+    SAVE_BUTTON = "input.cbi-button[value='Save']"
+
+    NTP_SERVER_LIST = "div.cbi-section-node div.cbi-value"
+    NTP_DELETE_BTNS = "input.cbi-button[value='Delete']"
+    NTP_ADD_INPUT = "input[id*='cbi-system-ntp-server']"
+    NTP_ADD_BTN = "input.cbi-button[value='Add']"
+

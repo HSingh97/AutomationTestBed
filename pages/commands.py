@@ -32,6 +32,13 @@ class RootCommands:
     GET_TX_R1 = "cat /sys/class/kwn/wifi1/statistics/tx_tput"
     GET_RX_R1 = "cat /sys/class/kwn/wifi1/statistics/rx_tput"
 
+    # --- SYSTEM / TIMEZONE ---
+    GET_TIMEZONE = "uci get system.@system[0].timezone"
+    GET_LOCAL_TIME = "date"
+
+    # Optional: Command to check logs for the timestamp verify
+    GET_LOGS = "logread | tail -n 20"
+
     # --- DYNAMIC LAN COMMANDS ---
     @staticmethod
     def get_mac_lan(eth_index):
