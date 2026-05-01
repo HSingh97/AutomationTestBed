@@ -8,7 +8,6 @@ from datetime import datetime
 def get_group_marker(keywords):
     """
     Extracts the logical group name from pytest markers.
-    Filters out default pytest markers and test names to find custom markers like 'Summary'.
     """
     ignore_list = {'pytestmark', 'asyncio', 'usefixtures', 'parametrize', 'filterwarnings'}
 
@@ -44,13 +43,11 @@ def extract_validated_parameters(test_data):
 def clean_failure_message(raw_failure):
     """
     Translates ugly pytest-check strings into professional human-readable formats.
-    Dynamically identifies if the unit is %, degrees, or Mbps.
     """
     num_match = re.match(r'check\s+([\d.]+)\s*<=\s*([\d.]+):\s*(.*)', raw_failure)
     if num_match:
         val, tol, msg = num_match.groups()
 
-        # Smartly guess the unit based on the parameter name in the message
         unit = ""
         msg_upper = msg.upper()
         if "PERCENTAGE" in msg_upper or "CPU" in msg_upper or "MEM" in msg_upper:
@@ -60,7 +57,7 @@ def clean_failure_message(raw_failure):
         elif "TX" in msg_upper or "RX" in msg_upper:
             unit = " Mbps"
 
-        return f"{msg} <br/><span style='color:#ef4444; font-size:12px;'>↳ <b>Drift Analysis:</b> Detected deviation of <b>{float(val):.2f}{unit}</b> (Allowed: {tol}{unit})</span>"
+        return f"{msg} <br/><span style='color:#ef4444; font-size:12px; margin-top: 4px; display: inline-block;'>↳ <b>Drift Analysis:</b> Detected deviation of <b>{float(val):.2f}{unit}</b> (Allowed: {tol}{unit})</span>"
 
     clean_msg = re.sub(r'^check\s+.*?:\s*', '', raw_failure)
     return clean_msg
@@ -104,7 +101,8 @@ def generate():
 
         group_name = get_group_marker(test.get('keywords', []))
         outcome = test.get('outcome', 'unknown').upper()
-        reason = ""
+        reason_html = ""
+        reason_csv = ""
 
         validated_params = extract_validated_parameters(test)
 
@@ -112,10 +110,14 @@ def generate():
             stats['passed'] += 1
             status = "PASSED"
             if validated_params:
-                reason = f"<span style='color:#0f172a; font-weight:600;'>Successfully Verified ({len(validated_params)} parameters):</span><br/>" + ", ".join(
+                # Create CSS pills for each parameter
+                pills = "".join([f"<span class='param-pill'>{p}</span>" for p in validated_params])
+                reason_html = f"<div class='reason-title'>Successfully Verified ({len(validated_params)} parameters):</div><div class='param-container'>{pills}</div>"
+                reason_csv = f"Successfully Verified ({len(validated_params)} parameters):\n" + ", ".join(
                     validated_params)
             else:
-                reason = "All telemetry and backend parameters successfully matched the GUI."
+                reason_html = "All telemetry and backend parameters successfully matched the GUI."
+                reason_csv = reason_html
             color = "#10b981"
             bg = "#ecfdf5"
 
@@ -127,8 +129,15 @@ def generate():
                 status = "PARTIAL"
                 raw_failures = re.findall(r'FAILURE: (.*)', longrepr)
                 clean_failures = [clean_failure_message(f) for f in raw_failures]
-                reason = "<span style='color:#b45309; font-weight:600;'>Discrepancies Detected:</span><br/>• " + "<br/>• ".join(
-                    clean_failures)
+
+                # Format failures as a clean CSS list
+                failures_html = "".join([f"<div class='failure-item'>{f}</div>" for f in clean_failures])
+                reason_html = f"<div class='reason-title' style='color:#b45309;'>Discrepancies Detected:</div><div class='failure-list'>{failures_html}</div>"
+
+                # Strip HTML tags for the CSV
+                csv_failures = [re.sub(r'<[^<]+>', '', f) for f in clean_failures]
+                reason_csv = "Discrepancies Detected:\n- " + "\n- ".join(csv_failures)
+
                 color = "#d97706"
                 bg = "#fffbeb"
             else:
@@ -136,12 +145,14 @@ def generate():
                 status = "FAILED"
                 lines = longrepr.strip().split('\n')
                 err = lines[-1] if lines else "Unknown Exception"
-                reason = f"<span style='color:#991b1b; font-weight:600;'>Critical Execution Error:</span><br/>{err}"
+                reason_html = f"<div class='reason-title' style='color:#991b1b;'>Critical Execution Error:</div><div class='failure-list'><div class='failure-item'>{err}</div></div>"
+                reason_csv = f"Critical Execution Error:\n- {err}"
                 color = "#ef4444"
                 bg = "#fef2f2"
         else:
             status = "SKIPPED"
-            reason = "Test execution was bypassed."
+            reason_html = "Test execution was bypassed."
+            reason_csv = reason_html
             color = "#64748b"
             bg = "#f8fafc"
 
@@ -149,10 +160,8 @@ def generate():
             'id': test_id,
             'name': test_name,
             'status': status,
-            'reason': reason,
-            'reason_csv': reason.replace('<b>', '').replace('</b>', '').replace('<strong>', '').replace('</strong>',
-                                                                                                        '').replace(
-                '<span', '<').replace('</span>', '').replace('<br/>', '\n').replace('• ', '- '),
+            'reason': reason_html,
+            'reason_csv': reason_csv,
             'color': color,
             'bg': bg
         }
@@ -214,8 +223,17 @@ def generate():
             .group-header {{ background-color: #f1f5f9 !important; color: #334155; font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; padding-top: 24px; border-bottom: 2px solid #cbd5e1; }}
 
             .badge {{ padding: 6px 12px; border-radius: 6px; font-size: 11px; font-weight: 700; text-align: center; display: inline-block; letter-spacing: 0.5px; text-transform: uppercase; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }}
+
+            /* New CSS for Parameters and Failures */
             .reason-cell {{ font-size: 13px; color: #475569; line-height: 1.6; word-break: break-word; }}
-            .reason-cell b {{ color: #0f172a; }}
+            .reason-title {{ font-weight: 600; color: #0f172a; margin-bottom: 10px; }}
+            .param-container {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+            .param-pill {{ background-color: #f1f5f9; color: #334155; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-family: 'Consolas', monospace; border: 1px solid #cbd5e1; }}
+
+            .failure-list {{ margin-top: 6px; }}
+            .failure-item {{ position: relative; padding-left: 14px; margin-bottom: 8px; }}
+            .failure-item::before {{ content: "•"; position: absolute; left: 0; color: #ef4444; font-weight: bold; }}
+            .failure-item b {{ color: #0f172a; }}
         </style>
         <script>
             let currentStatus = 'ALL';
@@ -224,7 +242,6 @@ def generate():
             function setStatusFilter(status, element) {{
                 currentStatus = status;
 
-                // Highlight active card
                 document.querySelectorAll('.card').forEach(c => c.classList.remove('active'));
                 element.classList.add('active');
 
@@ -255,7 +272,6 @@ def generate():
                     }}
                 }});
 
-                // Hide group headers if no tests are visible inside them
                 groupHeaders.forEach(header => {{
                     if (groupVisibility[header.dataset.group] > 0) {{
                         header.style.display = '';

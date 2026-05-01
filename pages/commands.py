@@ -23,6 +23,11 @@ class RootCommands:
 
     # --- NETWORK DYNAMIC STATUS (Used for Summary Pages) ---
     # These 'ucidyn' commands fetch live/assigned status
+    GET_SYSNAME = "uci get system.@system[0].hostname"
+    GET_SW_VERSION = "cat /etc/version; echo"
+    GET_SERIAL_NO = "fw_printenv -n dsn"
+    GET_UPTIME = "cat /proc/uptime"
+
     GET_IPv4 = "ucidyn get network.lan.ipaddr"
     GET_IPv6 = "ucidyn get network.lan.ip6addr"
     GET_GATEWAYv4 = "ucidyn get network.lan.gateway"
@@ -67,19 +72,19 @@ class RootCommands:
     # --- DYNAMIC WIRELESS COMMANDS ---
     @staticmethod
     def get_radio_status(radio_idx):
-        return f"uci show wireless.@wifi-iface[{radio_idx}].disabled"
+        return f"uci get wireless.@wifi-iface[{radio_idx}].disabled"
 
     @staticmethod
     def get_mac_wireless(radio_idx):
-        return f"iwconfig ath{radio_idx}"
+        return f"ifconfig ath{radio_idx}"
 
     @staticmethod
     def get_link_type(radio_idx):
-        return f"uci show wireless.wifi{radio_idx}.linktype"
+        return f"uci get wireless.wifi{radio_idx}.linktype"
 
     @staticmethod
     def get_radio_mode(radio_idx):
-        return f"uci show wireless.@wifi-iface[{radio_idx}].mode"
+        return f"uci get wireless.@wifi-iface[{radio_idx}].mode"
 
     @staticmethod
     def get_bandwidth(radio_idx):
@@ -87,11 +92,11 @@ class RootCommands:
 
     @staticmethod
     def get_ssid(radio_idx):
-        return f"uci show wireless.@wifi-iface[{radio_idx}].ssid"
+        return f"uci get wireless.@wifi-iface[{radio_idx}].ssid"
 
     @staticmethod
     def get_configured_channel(radio_idx):
-        return f"uci show advwireless.ath1{radio_idx}.channel"
+        return f"uci get advwireless.ath{radio_idx}.channel"
 
     @staticmethod
     def get_active_channel(radio_idx):
@@ -99,7 +104,8 @@ class RootCommands:
 
     @staticmethod
     def get_security(radio_idx):
-        return f"uci show wireless.@wifi-iface[{radio_idx}].encryption"
+        # Used for both getting Security protocol and verifying Encryption
+        return f"uci get wireless.@wifi-iface[{radio_idx}].encryption"
 
     @staticmethod
     def get_rtx_percentage(radio_idx):
@@ -108,3 +114,19 @@ class RootCommands:
     @staticmethod
     def get_remote_partners(radio_idx):
         return f"cat /sys/class/kwn/wifi{radio_idx}/statistics/links"
+
+    @staticmethod
+    def get_encryption_key(radio_idx):
+        return f"uci get wireless.@wifi-iface[{radio_idx}].key"
+
+    @staticmethod
+    def get_network_secret(radio_idx):
+        return f"uci get wireless.wifi{radio_idx}.nwksecret"
+
+    @staticmethod
+    def get_distance(radio_idx):
+        return f"uci get wireless.wifi{radio_idx}.distance"
+
+    @staticmethod
+    def get_maxcpe(radio_idx):
+        return f"uci get wireless.@wifi-iface[{radio_idx}].maxsta"
