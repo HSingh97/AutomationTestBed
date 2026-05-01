@@ -44,14 +44,13 @@ pipeline {
                     echo "Local IP Address: ${localIP}"
                     echo "----------------------------------------"
 
-                    // CRITICAL FIX: Wrap execution in withEnv so Pytest picks up the IP
-                    withEnv(["bsu_ip=${localIP}"]) {
-                        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                            sh """
-                                venv/bin/python -m pytest tests/GUI/ -v -k "${formattedFilter}" \
-                                --json-report --json-report-file=report.json
-                            """
-                        }
+                    catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                        // UPDATED: Added --local-ip and --password flags to match your local execution style
+                        sh """
+                            venv/bin/python -m pytest tests/GUI/ -v -k "${formattedFilter}" \
+                            --local-ip ${localIP} --password 'Sen@0ubRNwk$' \
+                            --json-report --json-report-file=report.json
+                        """
                     }
                 }
             }
