@@ -51,7 +51,7 @@ pipeline {
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                         sh """
-                            venv/bin/python -m pytest tests/GUI/ -v -k "${formattedFilter}" \
+                            venv/bin/python -m pytest tests/GUI/ -v -k "${formattedFilter}" \ --local-ip 192.168.2.10
                             --json-report --json-report-file=report.json
                         """
                     }
