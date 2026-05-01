@@ -1,10 +1,9 @@
-# pages/locators.py
-
 class LoginPageLocators:
     """CSS/XPath selectors for the main Login Page."""
     USERNAME_INPUT = "input[name='luci_username']"
     PASSWORD_INPUT = "input[name='luci_password']"
     LOGIN_BUTTON = "input[type='submit']"
+
 
 class SummaryLocators:
     """CSS/XPath selectors for the Quick Start / Summary Page."""
@@ -27,6 +26,7 @@ class SummaryNetworkLocators:
     SPEED_DUPLEX_LAN2 = "//*[@id='eth1_opmode']"
     CABLE_LENGTH_LAN1 = "//*[@id='eth0_cable']"
     CABLE_LENGTH_LAN2 = "//*[@id='eth1_cable']"
+
 
 class SummaryPerformanceLocators:
     """CSS selectors for the Performance Summary"""
@@ -121,4 +121,54 @@ class DHCPLocators:
     # DHCP Pool Configuration for 2.4 GHz tab
     RADIO_24_START_IP = "input[name*='lan24.start']"
     RADIO_24_END_IP = "input[name*='lan24.limit']"
+class TopPanelLocators:
+    """CSS/XPath selectors for the Top Panel Header Navigation."""
+    LOGO = "a.header-logo, .brand"
+
+    # !!! UPDATE THESE LOCATORS BY INSPECTING YOUR GUI !!!
+    TOP_SYSNAME = "//*[@id='sysname']"
+    TOP_DESC_INFO = "//*[@id='desc']"
+    TOP_UPTIME = "//*[@id='uptime']"
+
+    # Navigation Menus
+    MENU_RADIO = "//*[@id='menu_radio']"
+
+    SUBMENU_RADIO_0 = "//*[@id='radio_sec0']/ul"  # Usually 2.4 GHz
+    SUBMENU_RADIO_1 = "//*[@id='radio_sec1']/ul"  # Radio 1 (5GHz or 6GHz)
+
+    MENU_NETWORK = "//*[@id='menu_network']"
+
+    # Action Buttons
+    HOME_BUTTON = "li[title='Home']"
+    APPLY_BUTTON = "//*[@id='header_apply']"
+    REBOOT_BUTTON = "//*[@id='header_reboot']"
+    REBOOT_CONFIRM = "//*[@id='maincontent']/div/p[3]/a"
+    LOGOUT_BUTTON = "li[title='Logout']"
+
+    SUPER_APPLY_BUTTON = "//*[@id='super_apply']"
+    SUPER_REVERT_BUTTON = "//*[@id='super_revert']"
+
+    FORM_SAVE_BUTTON = "//*[@id='maincontent']/div/div[2]/input"
+
+
+class RadioPropertiesLocators:
+    MENU_WIRELESS = "xpath=/html/body/header/div/div/div[1]/ul/li[2]/a"
+    SUBMENU_RADIO_1 = "//*[@id='Wireless']/li[1]/a"
+
+    # --- Form Elements ---
+    STATUS_DROPDOWN = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[1]/div/select"
+    LINK_TYPE_DROPDOWN = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[3]/div/select"
+
+    RADIO_MODE_DROPDOWN = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[4]/div/select"
+    SSID_INPUT = "//*[@id='edit_ssid']//input"
+    BANDWIDTH_DROPDOWN = "//select[@name='wireless.wifi1.htmode']"
+
+    CONFIGURED_CHANNEL_DROPDOWN = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[5]/div/select"
+    ACTIVE_CHANNEL_DISPLAY = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[5]/div/span"
+    ENCRYPTION_DROPDOWN = "//*[@name='wireless.@wifi-iface[1].encryption']"
+    ENCRYPTION_KEY_INPUT = "//*[@name='wireless.@wifi-iface[1].key']"
+    NETWORK_SECRET_INPUT = "input[id*='nwksec'], input[name*='nwksecret']"
+    DISTANCE_INPUT = "//*[@name='wireless.wifi1.distance']"
+    MAXIMUM_SU_INPUT = "//*[@name='wireless.@wifi-iface[1].maxsta']"
+
 

@@ -21,6 +21,8 @@ def generate_test_ip(current_ip, version="v4"):
         return f"{prefix}:{random.randint(10, 99)}/64"
 
     
+
+
 def parse_device_time(time_str):
     clean_str = re.sub(r'\s[A-Z]{3,4}\s', ' ', time_str)
     clean_str = re.sub(r'\s+', ' ', clean_str).strip()
@@ -67,9 +69,9 @@ def parse_link_type(ssh_str):
 def parse_radio_mode(ssh_str, radio_idx):
     val = extract_uci_value(ssh_str).lower()
     if val == "ap":
-        return "BSU" if radio_idx == 1 else "AP"
+        return "BTS" if radio_idx == 1 else "AP"
     if val == "sta":
-        return "SU"
+        return "CPE"
     return val
 
 
@@ -98,19 +100,89 @@ def parse_security(ssh_str):
     return val
 
 
-def parse_iwconfig_mac(ssh_str):
-    """Extracts MAC Address from iwconfig block"""
-    match = re.search(r'(?:Access Point:|HWaddr)\s*([0-9A-Fa-f:]+)', str(ssh_str), re.IGNORECASE)
+def parse_encryption(ssh_str):
+    val = extract_uci_value(ssh_str).lower()
+
+    if "ccmp-256" in val or "aes" in val or "psk2+ccmp-256" in val:
+        return "AES-256"
+    if "none" in val:
+        return "None"
+    return extract_uci_value(ssh_str)
+
+def parse_ifconfig_mac(ssh_str):
+    """Extracts MAC Address from ifconfig block"""
+    match = re.search(r'(?:HWaddr|ether)\s+([0-9A-Fa-f:]+)', str(ssh_str), re.IGNORECASE)
     if match:
         return match.group(1).upper()
     return ""
 
 
 def parse_iwconfig_active_channel(ssh_str):
-    """Extracts frequency (5.835 GHz) and converts to MHz (5835)"""
-    match = re.search(r'Frequency:([\d.]+)\s*GHz', str(ssh_str))
+    """
+    Parses iwconfig output to extract frequency and calculate the Wi-Fi channel.
+    Formats the return string to match GUI expectations: 'Channel (Frequency MHz)'
+    """
+    # Target the 'Frequency:X.XXX GHz' pattern from iwconfig
+    match = re.search(r'Frequency:([\d.]+)\s*GHz', str(ssh_str), re.IGNORECASE)
+
     if match:
-        freq_ghz = float(match.group(1))
-        freq_mhz = int(freq_ghz * 1000)
-        return str(freq_mhz)
+        try:
+            freq_ghz = float(match.group(1))
+            freq_mhz = int(round(freq_ghz * 1000))
+
+            # Calculate Wi-Fi Channel based on standard bands
+            channel = 0
+            if 2412 <= freq_mhz <= 2472:
+                channel = (freq_mhz - 2407) // 5
+            elif freq_mhz == 2484:
+                channel = 14
+            elif freq_mhz >= 5955:  # 6 GHz Band
+                channel = (freq_mhz - 5950) // 5
+            elif freq_mhz >= 5000:  # 5 GHz Band
+                channel = (freq_mhz - 5000) // 5
+
+            if channel > 0:
+                return f"{channel} ({freq_mhz} MHz)"
+            else:
+                return f"{freq_mhz} MHz"
+
+        except ValueError:
+            pass
+
     return ""
+
+
+def parse_uptime_to_seconds(gui_uptime_str):
+    """
+    Converts the GUI string like '3d 2h 42m 28s' into raw seconds for math comparison.
+    Handles variations like '42m 28s' or '28s'.
+    """
+    total_seconds = 0
+    parts = gui_uptime_str.lower().split()
+
+    for part in parts:
+        if 'd' in part:
+            total_seconds += int(part.replace('d', '')) * 86400
+        elif 'h' in part:
+            total_seconds += int(part.replace('h', '')) * 3600
+        elif 'm' in part:
+            total_seconds += int(part.replace('m', '')) * 60
+        elif 's' in part:
+            total_seconds += int(part.replace('s', ''))
+
+    return total_seconds
+
+def parse_desc_info(desc_str):
+    """
+    Parses a combined description string like '0.0.0.0   SNo. 2411XC813HCK'
+    Returns a tuple: (sw_version, serial_number)
+    """
+    try:
+        # Split the string around the 'SNo.' keyword
+        parts = desc_str.split("SNo.")
+        sw_ver = parts[0].strip()
+        serial = parts[1].strip()
+        return sw_ver, serial
+    except IndexError:
+        print(f"    -> WARNING: Failed to parse desc string, unexpected format: '{desc_str}'")
+        return desc_str.strip(), "" # Fallback

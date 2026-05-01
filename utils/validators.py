@@ -1,23 +1,33 @@
 import re
 import pytest_check as check
+from utils.parsers import parse_device_time, extract_ip_objects, parse_uptime_to_seconds
 
-# Import the necessary parsers from your parsers utility
-from utils.parsers import parse_device_time, extract_ip_objects
+
+def is_empty_or_unknown(val):
+    """Helper to consistently check for blank or unpopulated data."""
+    clean_val = str(val).strip().lower()
+    return not clean_val or clean_val in ["", "none", "n/a", "no information", "unknown", "uci: entry not found",
+                                          "not found", "-", "down"]
+
 
 def validate_param(param_name, ssh_val, gui_val):
-    """Helper to evaluate, print status, and log soft asserts."""
     ssh_val_clean = str(ssh_val).strip() if ssh_val else ""
     gui_val_clean = str(gui_val).strip() if gui_val else ""
 
-    no_info_strings = ["", "none", "n/a", "no information", "unknown", "uci: entry not found", "not found"]
+    # Strictly check for One-Sided Missing Data
+    ssh_empty = is_empty_or_unknown(ssh_val_clean)
+    gui_empty = is_empty_or_unknown(gui_val_clean)
 
-    if ssh_val_clean.lower() in no_info_strings or gui_val_clean.lower() in no_info_strings:
-        print(f"    -> {param_name}: NO INFORMATION (SSH: '{ssh_val_clean}' | GUI: '{gui_val_clean}')")
-        if ssh_val_clean.lower() not in gui_val_clean.lower() and gui_val_clean.lower() not in ssh_val_clean.lower():
-            check.is_in(ssh_val_clean, gui_val_clean,
-                        f"{param_name} Mismatch! SSH: '{ssh_val_clean}' | GUI: '{gui_val_clean}'")
+    if ssh_empty and gui_empty:
+        print(f"    -> {param_name}: PASSED (No Information Populated)")
+        check.is_true(True)
+        return
+    elif ssh_empty != gui_empty:
+        print(f"    -> {param_name}: FAILED (SSH: '{ssh_val_clean}' | GUI: '{gui_val_clean}')")
+        check.fail(f"{param_name} Mismatch! One side is missing data. SSH: '{ssh_val_clean}' | GUI: '{gui_val_clean}'")
         return
 
+    # Standard String Match
     if ssh_val_clean in gui_val_clean:
         print(f"    -> {param_name}: PASSED")
         check.is_in(ssh_val_clean, gui_val_clean)
@@ -32,32 +42,30 @@ def validate_network_address(param_name, ssh_v4, ssh_v6, gui_val):
     ssh_v6_clean = str(ssh_v6).strip() if ssh_v6 else ""
     gui_val_clean = str(gui_val).strip() if gui_val else ""
 
-    no_info_strings = ["", "none", "n/a", "no information", "unknown", "uci: entry not found", "not found"]
+    v4_empty = is_empty_or_unknown(ssh_v4_clean)
+    v6_empty = is_empty_or_unknown(ssh_v6_clean)
+    gui_empty = is_empty_or_unknown(gui_val_clean)
 
-    v4_valid = ssh_v4_clean and ssh_v4_clean.lower() not in no_info_strings
-    v6_valid = ssh_v6_clean and ssh_v6_clean.lower() not in no_info_strings
-
-    if not v4_valid and not v6_valid:
-        if gui_val_clean.lower() in no_info_strings:
-            print(f"    -> {param_name}: NO INFORMATION (Both SSH and GUI empty)")
-            return
-        else:
-            print(f"    -> {param_name}: FAILED (SSH has no info | GUI: '{gui_val_clean}')")
-            check.fail(f"{param_name} Mismatch! SSH is empty but GUI shows: {gui_val_clean}")
-            return
+    if v4_empty and v6_empty and gui_empty:
+        print(f"    -> {param_name}: PASSED (No Information Populated)")
+        check.is_true(True)
+        return
+    elif (v4_empty and v6_empty) != gui_empty:
+        print(f"    -> {param_name}: FAILED (SSH has no info | GUI: '{gui_val_clean}')")
+        check.fail(f"{param_name} Mismatch! SSH is empty but GUI shows: {gui_val_clean}")
+        return
 
     gui_ip_objects = extract_ip_objects(gui_val_clean)
     v4_match, v6_match = False, False
 
-    if v4_valid:
-        import ipaddress
+    import ipaddress
+    if not v4_empty:
         try:
             v4_match = ipaddress.ip_interface(ssh_v4_clean).ip in gui_ip_objects
         except ValueError:
             pass
 
-    if v6_valid:
-        import ipaddress
+    if not v6_empty:
         try:
             v6_match = ipaddress.ip_interface(ssh_v6_clean).ip in gui_ip_objects
         except ValueError:
@@ -72,9 +80,9 @@ def validate_network_address(param_name, ssh_v4, ssh_v6, gui_val):
 
 
 def validate_time(param_name, ssh_time, gui_time):
-    if not ssh_time or not gui_time:
-        print(f"    -> {param_name}: NO INFORMATION")
-        check.fail(f"Missing time string.")
+    if is_empty_or_unknown(ssh_time) or is_empty_or_unknown(gui_time):
+        print(f"    -> {param_name}: FAILED (Missing time string)")
+        check.fail(f"Missing time string. SSH: '{ssh_time}' | GUI: '{gui_time}'")
         return
 
     try:
@@ -97,12 +105,16 @@ def validate_temperature(param_name, ssh_val, gui_val, tolerance=1.0):
     ssh_clean = str(ssh_val).strip()
     gui_clean = str(gui_val).strip()
 
-    no_info_strings = ["", "none", "n/a", "no information", "unknown"]
+    ssh_empty = is_empty_or_unknown(ssh_clean)
+    gui_empty = is_empty_or_unknown(gui_clean)
 
-    if ssh_clean.lower() in no_info_strings or gui_clean.lower() in no_info_strings:
-        print(f"    -> {param_name}: NO INFORMATION (SSH: '{ssh_clean}' | GUI: '{gui_clean}')")
-        if ssh_clean.lower() not in gui_clean.lower() and gui_clean.lower() not in ssh_clean.lower():
-            check.is_in(ssh_clean, gui_clean, f"{param_name} Mismatch!")
+    if ssh_empty and gui_empty:
+        print(f"    -> {param_name}: PASSED (No Information Populated)")
+        check.is_true(True)
+        return
+    elif ssh_empty != gui_empty:
+        print(f"    -> {param_name}: FAILED (SSH: '{ssh_clean}' | GUI: '{gui_clean}')")
+        check.fail(f"{param_name} Mismatch! One side is missing data. SSH: '{ssh_clean}' | GUI: '{gui_clean}'")
         return
 
     ssh_num_match = re.search(r'-?[\d.]+', ssh_clean)
@@ -131,9 +143,9 @@ def validate_temperature(param_name, ssh_val, gui_val, tolerance=1.0):
 def validate_cpu_mem(ssh_cpu, ssh_mem, gui_val, tolerance=5.0):
     ssh_cpu, ssh_mem, gui_val = str(ssh_cpu).strip(), str(ssh_mem).strip(), str(gui_val).strip()
 
-    if not ssh_cpu or not ssh_mem:
-        print(f"    -> CPU & MEMORY: NO INFORMATION")
-        check.fail(f"Missing SSH data for CPU/Mem.")
+    if is_empty_or_unknown(ssh_cpu) or is_empty_or_unknown(ssh_mem) or is_empty_or_unknown(gui_val):
+        print(f"    -> CPU & MEMORY: FAILED (Missing Data)")
+        check.fail(f"Missing Data for CPU/Mem. SSH CPU: '{ssh_cpu}', SSH MEM: '{ssh_mem}' | GUI: '{gui_val}'")
         return
 
     match = re.search(r'\(\s*([\d.]+)\s*/\s*([\d.]+)\s*\)', gui_val)
@@ -162,13 +174,12 @@ def validate_cpu_mem(ssh_cpu, ssh_mem, gui_val, tolerance=5.0):
 
 def validate_speed_duplex(param_name, ssh_speed, ssh_duplex, gui_val):
     ssh_s, ssh_d, gui_v = str(ssh_speed).strip().lower(), str(ssh_duplex).strip().lower(), str(gui_val).strip().lower()
-    no_info_states = ["", "none", "n/a", "no information", "unknown", "down"]
 
-    if gui_v in no_info_states or "down" in gui_v:
+    if gui_v in ["", "none", "n/a", "no information", "unknown", "down"]:
         ssh_num_match = re.search(r'\d+', ssh_s)
         ssh_num = ssh_num_match.group() if ssh_num_match else ""
 
-        if ssh_s in no_info_states or "down" in ssh_s or not ssh_s or ssh_num == "10":
+        if ssh_s in ["", "none", "n/a", "no information", "unknown", "down"] or not ssh_s or ssh_num == "10":
             print(f"    -> {param_name}: PASSED (Link Down)")
             check.is_true(True)
         else:
@@ -197,12 +208,17 @@ def validate_speed_duplex(param_name, ssh_speed, ssh_duplex, gui_val):
 
 def validate_throughput(param_name, ssh_val, gui_val, tolerance=20.0):
     ssh_clean, gui_clean = str(ssh_val).strip(), str(gui_val).strip()
-    no_info_strings = ["", "none", "n/a", "no information", "unknown", "down"]
 
-    # If the SSH or GUI outright says it has no info/is down
-    if not ssh_clean or ssh_clean.lower() in no_info_strings or gui_clean.lower() in no_info_strings:
-        print(f"    -> {param_name}: NO INFORMATION/DOWN")
+    ssh_empty = is_empty_or_unknown(ssh_clean)
+    gui_empty = is_empty_or_unknown(gui_clean)
+
+    if ssh_empty and gui_empty:
+        print(f"    -> {param_name}: PASSED (No Throughput/Idle)")
         check.is_true(True)
+        return
+    elif ssh_empty != gui_empty:
+        print(f"    -> {param_name}: FAILED (SSH: '{ssh_clean}' | GUI: '{gui_clean}')")
+        check.fail(f"{param_name} Mismatch! One side is missing data. SSH: '{ssh_clean}' | GUI: '{gui_clean}'")
         return
 
     ssh_num_match = re.search(r'[\d.]+', ssh_clean)
@@ -213,38 +229,43 @@ def validate_throughput(param_name, ssh_val, gui_val, tolerance=20.0):
             ssh_raw = float(ssh_num_match.group())
             gui_f = float(gui_num_match.group())
 
-            # Convert SSH bits-per-second (bps) to Mbps unconditionally
             ssh_f = ssh_raw / 1000000.0
 
-            # If both are essentially zero, they are idle
             if ssh_f < 0.01 and gui_f < 0.01:
                 print(f"    -> {param_name}: PASSED (Idle: 0.00)")
                 return
 
-            # Calculate the FLAT difference in Mbps (no longer using percentages)
             diff = abs(ssh_f - gui_f)
 
             if diff <= tolerance:
-                print(f"    -> {param_name}: PASSED (Within {tolerance} Mbps tolerance. SSH: {ssh_f:.2f} Mbps | GUI: {gui_f} Mbps)")
+                print(
+                    f"    -> {param_name}: PASSED (Within {tolerance} Mbps tolerance. SSH: {ssh_f:.2f} Mbps | GUI: {gui_f} Mbps)")
             else:
-                print(f"    -> {param_name}: FAILED (Live Drift > {tolerance} Mbps. SSH: {ssh_f:.2f} Mbps | GUI: {gui_f} Mbps)")
+                print(
+                    f"    -> {param_name}: FAILED (Live Drift > {tolerance} Mbps. SSH: {ssh_f:.2f} Mbps | GUI: {gui_f} Mbps)")
 
-            # Pass the failure to pytest-check
-            check.less_equal(diff, tolerance, f"{param_name} Drift exceeded! SSH: {ssh_f:.2f} Mbps | GUI: {gui_f} Mbps")
+            check.less_equal(diff, tolerance,
+                             f"{param_name} Drift exceeded! SSH Raw: {ssh_raw} ({ssh_f:.2f} Mbps) | GUI: {gui_clean}")
         except ValueError:
             print(f"    -> {param_name}: FAILED TO PARSE NUMBERS")
             check.fail(f"Could not convert to float. SSH: {ssh_clean} | GUI: {gui_clean}")
     else:
         validate_param(param_name, ssh_clean, gui_clean)
-        
+
+
 def validate_percentage(param_name, ssh_val, gui_val, tolerance=5.0):
     ssh_clean, gui_clean = str(ssh_val).strip(), str(gui_val).strip()
-    no_info_strings = ["", "none", "n/a", "no information", "unknown", "-"]
 
-    if ssh_clean.lower() in no_info_strings or gui_clean.lower() in no_info_strings:
-        print(f"    -> {param_name}: NO INFORMATION (SSH: '{ssh_clean}' | GUI: '{gui_clean}')")
-        if ssh_clean.lower() not in gui_clean.lower() and gui_clean.lower() not in ssh_clean.lower():
-            check.is_in(ssh_clean, gui_clean, f"{param_name} Mismatch!")
+    ssh_empty = is_empty_or_unknown(ssh_clean)
+    gui_empty = is_empty_or_unknown(gui_clean)
+
+    if ssh_empty and gui_empty:
+        print(f"    -> {param_name}: PASSED (No Information Populated)")
+        check.is_true(True)
+        return
+    elif ssh_empty != gui_empty:
+        print(f"    -> {param_name}: FAILED (SSH: '{ssh_clean}' | GUI: '{gui_clean}')")
+        check.fail(f"{param_name} Mismatch! One side is missing data. SSH: '{ssh_clean}' | GUI: '{gui_clean}'")
         return
 
     ssh_num_match = re.search(r'[\d.]+', ssh_clean)
@@ -266,3 +287,31 @@ def validate_percentage(param_name, ssh_val, gui_val, tolerance=5.0):
             check.fail(f"Could not convert to float. SSH: {ssh_clean} | GUI: {gui_clean}")
     else:
         validate_param(param_name, ssh_clean, gui_clean)
+
+
+from utils.parsers import parse_uptime_to_seconds
+
+
+def validate_uptime(ssh_proc_uptime, gui_uptime_str, tolerance_seconds=10):
+    """
+    Validates uptime by comparing raw backend seconds to the parsed GUI string.
+    Includes a tolerance because time passes between the SSH command and UI load.
+    """
+    # 1. Extract the raw backend seconds (e.g., "9748.55 1234.56" -> 9748)
+    try:
+        backend_seconds = int(float(ssh_proc_uptime.split()[0]))
+    except (IndexError, ValueError):
+        assert False, f"Failed to parse backend /proc/uptime: {ssh_proc_uptime}"
+
+    # 2. Convert the GUI string to seconds
+    gui_seconds = parse_uptime_to_seconds(gui_uptime_str)
+
+    # 3. Calculate the difference
+    diff = abs(backend_seconds - gui_seconds)
+
+    # 4. Assert with a tolerance (10 seconds is usually safe for automation lag)
+    assert diff <= tolerance_seconds, (
+        f"Uptime mismatch! Backend: {backend_seconds}s, GUI: '{gui_uptime_str}' ({gui_seconds}s). "
+        f"Difference of {diff} seconds exceeds {tolerance_seconds}s tolerance."
+    )
+    print(f"    -> Uptime Match: Backend ({backend_seconds}s) vs GUI ({gui_seconds}s) [Diff: {diff}s]")
