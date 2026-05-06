@@ -1,0 +1,127 @@
+pipeline {
+    agent { node { label "${TARGET_STAND}" } } // Note: Ensure TARGET_STAND is defined globally or injected!
+
+    parameters {
+        string(name: 'TEST_FILTER', defaultValue: 'Summary, TopPanel, WirelessProperties', description: 'Enter test keyword (e.g., gui_0, gui_10) or comma-separated list')
+        string(name: 'Local IP Address', defaultValue: '192.168.2.230', description: 'IP Address of the target device')
+    }
+
+    stages {
+        stage('Prepare tests') {
+            steps {
+                script {
+                    echo "----------------------------------------"
+                    echo "--- TARGET STAND: ${TARGET_STAND}"
+                    echo "--- TEST FILTER:  ${params.TEST_FILTER}"
+                    echo "----------------------------------------"
+                    if (!params['Local IP Address']) {
+                        error "Missing required parameters: Local IP Address"
+                    }
+                }
+            }
+        }
+        stage('Install Dependencies') {
+            steps {
+                script {
+                    echo "----------------------------------------"
+                    echo "Installing Dependencies"
+                    echo "----------------------------------------"
+                    sh """
+                        python3.10 -m venv venv
+                        venv/bin/pip install --upgrade pip
+                        venv/bin/pip install -r requirements.txt pytest-check pytest-json-report
+                        venv/bin/playwright install chromium
+                    """
+                }
+            }
+        }
+        stage('Execute Pytest Suite') {
+            steps {
+                script {
+                    def localIP = params['Local IP Address']
+
+                    // CRITICAL FIX: Automatically convert commas to ' or ' for Pytest
+                    def formattedFilter = params.TEST_FILTER.replaceAll(",", " or ")
+
+                    echo "Local IP Address: ${localIP}"
+                    echo "✅ Cleared old workspace"
+                    echo "----------------------------------------"
+                    echo "Testing GUI with Filter: [ ${formattedFilter} ]"
+                    echo "----------------------------------------"
+
+                    catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                        sh """
+                            venv/bin/python -m pytest tests/GUI/ -v -k "${formattedFilter}" \
+                            --json-report --json-report-file=report.json
+                        """
+                    }
+                }
+            }
+        }
+        stage('Generate Customer Report') {
+            steps {
+                script {
+                    def localIP = params['Local IP Address']
+                    def buildNo = env.BUILD_ID
+                    def dateStr = new Date().format("yyyyMMdd")
+
+                    echo "Building detailed HTML & CSV reports..."
+                    sh "venv/bin/python utils/report_generator.py ${buildNo} ${localIP} ${dateStr}"
+                }
+            }
+        }
+    }
+    post {
+        always {
+            script {
+                def dateStr = new Date().format("yyyyMMdd")
+                def htmlFileName = "Senao_Release_${env.BUILD_ID}_Report_${dateStr}.html"
+                def csvFileName = "Senao_Release_${env.BUILD_ID}_Report_${dateStr}.csv"
+
+                publishHTML(target: [
+                    allowMissing: true,
+                    alwaysLinkToLastBuild: true,
+                    keepAll: true,
+                    reportDir: '.',
+                    reportFiles: htmlFileName,
+                    reportName: 'Senao Customer Report'
+                ])
+
+                def buildCauses = currentBuild.getBuildCauses()
+                def userCause = buildCauses.find { it._class == 'hudson.model.Cause$UserIdCause' }
+                def buildUserName = userCause?.userName ?: "Unknown User"
+                def buildUserId = userCause?.userId ?: "unknown"
+
+                def userEmails = [
+                    "puneet": "puneet.sharma@senao.com",
+                    "harman": "harmanjot.singh@senao.com"
+                ]
+                def userEmail = userEmails.get(buildUserId, "puneet.sharma@senao.com")
+
+                emailext(
+                    // CRITICAL FIX: Changed TEST_MARKER to TEST_FILTER
+                    subject: "Test Automation Report [Filter: ${params.TEST_FILTER}] - ${currentBuild.currentResult}",
+                    body: """
+                        <html>
+                        <body style="font-family: Arial, sans-serif; color: #333;">
+                            <h2 style="color: #2e6c80;">Jenkins Automated Test Run</h2>
+                            <table style="border-collapse: collapse; width: 100%; max-width: 600px;">
+                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Filter Executed:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params.TEST_FILTER}</td></tr>
+                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Target IP:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params['Local IP Address']}</td></tr>
+                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Status:</strong></td><td style="padding: 8px; border: 1px solid #ddd; color:${currentBuild.currentResult == 'SUCCESS' ? 'green' : 'red'}; font-weight:bold;">${currentBuild.currentResult}</td></tr>
+                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Started By:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${buildUserName}</td></tr>
+                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Console Log:</strong></td><td style="padding: 8px; border: 1px solid #ddd;"><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td></tr>
+                            </table>
+                            <br/>
+                            <p><strong>The official HTML Customer Report and CSV data sheet are attached to this email.</strong></p>
+                        </body>
+                        </html>
+                    """,
+                    to: userEmail,
+                    mimeType: 'text/html',
+                    attachmentsPattern: "${htmlFileName},${csvFileName}"
+                )
+            }
+        }
+    }
+}

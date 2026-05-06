@@ -110,3 +110,24 @@ class RootCommands:
     @staticmethod
     def get_maxcpe(radio_idx):
         return f"uci get wireless.@wifi-iface[{radio_idx}].maxsta"
+
+    # --- THROUGHPUT CONFIG COMMANDS ---
+    @staticmethod
+    def set_bandwidth_commands(radio_idx, bandwidth):
+        return [
+            f"ucidyn set wireless.wifi{radio_idx}.htmode {bandwidth}",
+            "ucidyn apply",
+        ]
+
+    @staticmethod
+    def set_mcs_sequence_commands(radio_idx, mcs_rate, spatial_stream, ddrs_rate):
+        return [
+            f"ucidyn set txparam.ath{radio_idx}.ddrsstatus 0",
+            f"ucidyn set txparam.ath{radio_idx}.spatialstream {spatial_stream}",
+            f"ucidyn set txparam.ath{radio_idx}.ddrsrate {ddrs_rate}",            
+            "ucidyn apply",
+        ]
+
+    @staticmethod
+    def remote_apply_all_su():
+        return '/usr/sbin/remote_exec.sh 1 "ucidyn apply"'

@@ -1,0 +1,395 @@
+// Functions
+def archiveArtifacts(pattern) {
+    step([$class: 'ArtifactArchiver', artifacts: pattern, fingerprint: true, onlyIfSuccessful: false])
+}
+
+def dateStamp = new Date().format("yyyyMMdd", TimeZone.getTimeZone("Asia/Kolkata"))
+def reportFilename = "throughput_report_${env.BUILD_NUMBER}_${dateStamp}.html"
+
+// Main Pipeline
+pipeline {
+    agent { node { label "${params['Local PC']}" } }
+    parameters {
+        string(name: 'Local PC', defaultValue: 'linux', description: 'Jenkins node label')
+        string(name: 'Local IP Address', defaultValue: '192.168.2.20', description: 'Local/AP DUT IP')
+        string(name: 'Radio', defaultValue: 'radio1', description: 'Radio identifier used by helper tests')
+        string(name: 'Bandwidth', defaultValue: 'HT20,HT40,HT80,HT160', description: 'Comma-separated bandwidth list')
+        string(name: 'MCS', defaultValue: 'MCS0,MCS1,MCS2,MCS3,MCS4,MCS5,MCS6,MCS7,MCS8,MCS9,MCS10,MCS11', description: 'Comma-separated MCS list')
+        string(name: 'Ratios', defaultValue: '80:20', description: 'Comma-separated DL:UL ratios for bidirectional runs')
+        string(name: 'Ixia Tool IP', defaultValue: '10.0.150.50', description: 'IxNetwork API server IP/hostname')
+        string(name: 'Target Total Throughput Mbps', defaultValue: '800', description: 'Requested aggregate throughput (all CPEs combined)')
+        string(name: 'Throughput Test Time', defaultValue: '15', description: 'Measurement duration in seconds')
+        string(name: 'Packet Size', defaultValue: 'imix', description: "Use 'imix' or 'fixed(1500)'")
+        string(name: 'No of CPE', defaultValue: '16', description: 'Number of IXIA streams/CPE pairs')
+        string(name: 'Spatial Stream', defaultValue: '2', description: 'Spatial stream setting for each MCS iteration')
+        string(name: 'DDRS Rate', defaultValue: 'MCS7', description: 'DDRS rate setting for each MCS iteration')
+    }
+
+    stages {
+        stage('Prepare Testbed') {
+            steps {
+                script {
+                    def local_pc = params['Local PC']
+
+                    echo "------------------------------------------"
+                    echo "---> Local TARGET STAND: ${local_pc} "
+                    echo "------------------------------------------"
+                    echo "---> Local PC : ${local_pc} "
+                    echo "----------------------------------------"
+                }
+            }
+        }
+        stage('Install Dependencies') {
+            steps {
+                script {
+                    echo "----------------------------------------"
+                    echo "         Installing Dependencies"
+                    echo "----------------------------------------"
+                    sh "sh utilities/requirements.txt"
+                    // Adding Ixia Dependencies 
+                    sh "pip install weasyprint matplotlib requests ixnetwork_restpy"
+                }
+            }
+        }
+        stage('Throughput Testing') {
+            steps {
+                script {
+                    try {
+                        def localIP = params['Local IP Address']
+                        def selectedRadio = params['Radio']
+                        def targetTotal = (params['Target Total Throughput Mbps'] ?: "800").toBigDecimal()
+                        def ratios = params.Ratios.split(',').collect { it.trim() }.findAll { it }
+                        def bandwidths = params.Bandwidth.split(',').collect { it.trim() }.findAll { it }
+                        def modulationrates = params.MCS.split(',').collect { it.trim() }.findAll { it }
+                        def test_time = params['Throughput Test Time']
+                        def ixiaIp = params['Ixia Tool IP']
+                        def packetSizeRaw = (params['Packet Size'] ?: 'imix').trim().toLowerCase()
+                        def packetProfile = packetSizeRaw == 'fixed(1500)' ? 'fixed' : packetSizeRaw
+                        def radioIndex = selectedRadio.replaceAll(/[^0-9]/, '')
+                        def cpes = (params['No of CPE'] ?: "16").toInteger()
+                        def spatialStream = params['Spatial Stream']
+                        def ddrsRate = params['DDRS Rate']
+                        if (!radioIndex) {
+                            error("Radio must include index (example: radio1)")
+                        }
+
+                        def mcsTrafficCap = [
+                            'MCS0': 80, 'MCS1': 120, 'MCS2': 180, 'MCS3': 260,
+                            'MCS4': 350, 'MCS5': 450, 'MCS6': 550, 'MCS7': 650,
+                            'MCS8': 780, 'MCS9': 900, 'MCS10': 1050, 'MCS11': 1200
+                        ]
+
+                        sh 'rm -f *.json iteration_results.json'
+                        sh 'rm -f throughput_report_*.html'
+                        sh 'rm -f *.pdf'
+                        echo "✅ Cleared old workspace"
+
+                        for (bandwidth in bandwidths) {
+                            for (mcsrate in modulationrates) {
+                                def mcsKey = mcsrate.toUpperCase()
+                                def capForMcs = (mcsTrafficCap[mcsKey] ?: targetTotal) as BigDecimal
+                                def effectiveTarget = [targetTotal, capForMcs].min()
+                                echo "Target shaping for ${mcsKey}: requested=${targetTotal} Mbps, cap=${capForMcs} Mbps, effective=${effectiveTarget} Mbps"
+
+                                def trafficProfiles = [
+                                    [name: 'Downlink',    ratio: '100:0'],
+                                    [name: 'Uplink',      ratio: '0:100']
+                                ]
+                                ratios.each { r -> trafficProfiles << [name: 'Bidirectional', ratio: r] }
+
+                                for (profile in trafficProfiles) {
+                                    def cleanRatio = profile.ratio.trim()
+                                    echo "--------------------------------------------------------------"
+                                    echo " Testing: Bandwidth=${bandwidth} | MCS=${mcsrate} | Mode=${profile.name} | Ratio=${cleanRatio}"
+                                    echo "--------------------------------------------------------------"
+
+                                    def ixia_cmd = """
+                                        python3.10 tests/Throughput/test_throughput.py \
+                                        --mode keep \
+                                        --cpes ${cpes} \
+                                        --target ${effectiveTarget} \
+                                        --ratio ${cleanRatio} \
+                                        --time ${test_time} \
+                                        --ixia-ip '${ixiaIp}' \
+                                        --local-ip '${localIP}' \
+                                        --packet-size '${packetProfile}' \
+                                        --bandwidth '${bandwidth}' \
+                                        --mcs-rate '${mcsrate}' \
+                                        --spatial-stream '${spatialStream}' \
+                                        --ddrs-rate '${ddrsRate}' \
+                                        --radio-index '${radioIndex}' \
+                                        --output-json current_ixia_run.json 2>&1
+                                    """
+                                    def py_output = sh(script: ixia_cmd, returnStdout: true).trim()
+                                    echo "Ixia Automation Output:\n${py_output}"
+
+                                    def ixiaStats = readJSON file: 'current_ixia_run.json'
+                                    def test_record = [
+                                        "Bandwidth": bandwidth,
+                                        "MCS": mcsrate,
+                                        "Mode": profile.name,
+                                        "Ratio": cleanRatio,
+                                        "IxiaToolIP": ixiaIp,
+                                        "LocalIP": localIP,
+                                        "PacketSize": packetSizeRaw,
+                                        "RequestedTargetMbps": targetTotal,
+                                        "CappedTargetMbps": capForMcs,
+                                        "EffectiveTargetMbps": effectiveTarget,
+                                        "Stats": ixiaStats
+                                    ]
+
+                                    def safeRatio = cleanRatio.replace(':', '_')
+                                    def filename = "Throughput_${bandwidth.trim()}_${mcsrate.trim()}_${profile.name}_${safeRatio}.json"
+                                    writeJSON file: filename, json: test_record
+                                    echo "✅ Generated Data Block: ${filename}"
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        echo "⚠️ Exception occurred during Throughput Testing: ${e.message}"
+                    }
+                }
+            }
+        }
+        stage('Generate Report') {
+            steps {
+                script {
+                    try {
+                        def reportFiles = findFiles(glob: 'Throughput_*.json').findAll { it.length > 20 }
+                        if (reportFiles.isEmpty()) {
+                            echo "⚠️ No results found."
+                            writeFile file: reportFilename, text: "<html><body><h2>No results found.</h2></body></html>"
+                            return
+                        }
+
+                        def localIP = params['Local IP Address']
+                        def local_fw_version = "N/A"
+                        def remote_fw_version = "N/A"
+
+                        try { local_fw_version = sh(script: "sshpass -p 'admin' ssh -o StrictHostKeyChecking=no root@${localIP} 'cat /etc/version'", returnStdout: true).trim() } catch (Exception e) {}
+                        def buildParams = [
+                            "Local IP Address": localIP,
+                            "Radio": params['Radio'],
+                            "Bandwidths": params['Bandwidth'],
+                            "MCS Rates": params['MCS'],
+                            "Tested Ratios": params['Ratios'],
+                            "Ixia Tool IP": params['Ixia Tool IP'],
+                            "Packet Size": params['Packet Size'],
+                            "No of CPE": params['No of CPE'],
+                            "Spatial Stream": params['Spatial Stream'],
+                            "DDRS Rate": params['DDRS Rate'],
+                            "FW Version (Local / Remote)": "${local_fw_version} / ${remote_fw_version}"
+                        ]
+
+                        def testedRatios = (['100:0', '0:100'] + params['Ratios'].split(',').collect { it.trim() }).unique()
+
+                        def modulationBase = [
+                            "MCS0": "BPSK 1/2", "MCS1": "QPSK 1/2", "MCS2": "QPSK 3/4",
+                            "MCS3": "16-QAM 1/2", "MCS4": "16-QAM 3/4", "MCS5": "64-QAM 2/3",
+                            "MCS6": "64-QAM 3/4", "MCS7": "64-QAM 5/6", "MCS8": "256-QAM 3/4",
+                            "MCS9": "256-QAM 5/6", "MCS10": "1024-QAM 3/4", "MCS11": "1024-QAM 5/6"
+                        ]
+                        def modulationTable = [:]
+                        (0..23).each { i -> modulationTable["MCS${i}"] = modulationBase["MCS${i % 12}"] }
+                        def mcsOrder = (0..23).collect { "MCS$it".toUpperCase() }
+                        def bandwidthOrder = ["HT20", "HT40", "HT80", "HT160"]
+
+                        // Group all JSON files into Maps
+                        def groupedByBandwidth = [:]
+                        reportFiles.each { file ->
+                            def data = readJSON file: file.name
+                            def bw = data.Bandwidth.trim().toUpperCase()
+                            def mcs = data.MCS.trim().toUpperCase()
+                            def ratio = data.Ratio.trim()
+                            
+                            if (!groupedByBandwidth[bw]) groupedByBandwidth[bw] = [:]
+                            if (!groupedByBandwidth[bw][mcs]) groupedByBandwidth[bw][mcs] = [:]
+                            
+                            groupedByBandwidth[bw][mcs][ratio] = data.Stats
+                        }
+
+                        def iterationRows = reportFiles.collect { file ->
+                            def d = readJSON file: file.name
+                            def s = d.Stats ?: [:]
+                            return """
+                                <tr>
+                                    <td>${d.Bandwidth ?: '-'}</td>
+                                    <td>${d.MCS ?: '-'}</td>
+                                    <td>${d.Mode ?: '-'}</td>
+                                    <td>${d.Ratio ?: '-'}</td>
+                                    <td>${d.RequestedTargetMbps ?: '-'}</td>
+                                    <td>${d.CappedTargetMbps ?: '-'}</td>
+                                    <td>${d.EffectiveTargetMbps ?: '-'}</td>
+                                    <td>${String.format('%.2f', (s.combined?.rx_mbps ?: 0.0) as Double)}</td>
+                                    <td>${String.format('%.2f', (s.downlink?.rx_mbps ?: 0.0) as Double)}</td>
+                                    <td>${String.format('%.2f', (s.uplink?.rx_mbps ?: 0.0) as Double)}</td>
+                                    <td>${String.format('%.2f', (s.combined?.latency_ms ?: 0.0) as Double)}</td>
+                                    <td>${String.format('%.2f', (s.combined?.loss_pct ?: 0.0) as Double)}</td>
+                                </tr>
+                            """
+                        }.join('\n')
+
+                        def dateStr = new Date().format("dd MMM yyyy, HH:mm:ss z", TimeZone.getTimeZone("Asia/Kolkata"))
+                        def companyLogoUrl = "https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png"
+                        def pipelineName = env.JOB_NAME
+
+                        def htmlContent = """
+                            <html><head><title>QA Performance & Throughput Report</title>
+                            <style>
+                                body { font-family: 'Segoe UI', sans-serif; background: #f9f9f9; color: #333; padding: 20px; }
+                                .header { display: flex; justify-content: space-between; align-items: center; background: #fff; padding: 20px; border-bottom: 2px solid #ddd; }
+                                .header img { height: 60px; }
+                                .header-info { text-align: right; }
+                                h2 { margin-top: 40px; font-size: 22px; border-bottom: 2px solid #ddd; padding-bottom: 5px; }
+                                table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #fff; box-shadow: 0 2px 5px rgba(0,0,0,0.05); font-size: 13px; }
+                                th, td { padding: 8px 10px; border: 1px solid #ccc; text-align: center; }
+                                th { background: #2c3e50; color: #fff; }
+                                table.build-params td, table.build-params th { text-align: left !important; }
+                                tr:nth-child(even) { background-color: #f4f4f4; }
+                                .pass { color: green; font-weight: bold; }
+                                .fail { color: red; font-weight: bold; }
+                                .sub-head { background: #34495e !important; }
+                            </style></head><body>
+                            <div class="header">
+                                <img src="${companyLogoUrl}" />
+                                <div class="header-info">
+                                    <h1>IxNetwork Throughput Validation</h1>
+                                    <p><strong>Pipeline:</strong> ${pipelineName}</p>
+                                    <p><strong>Date:</strong> ${dateStr}</p>
+                                </div>
+                            </div>
+                            <h2>Test Metadata</h2>
+                            <table class="build-params">
+                                ${buildParams.collect { "<tr><td><b>${it.key}</b></td><td>${it.value}</td></tr>" }.join('\n')}
+                            </table>
+                            <h2>Iteration Matrix (Most Detailed View)</h2>
+                            <table>
+                                <tr>
+                                    <th>Bandwidth</th><th>MCS</th><th>Mode</th><th>Ratio</th>
+                                    <th>Requested Target</th><th>MCS Cap</th><th>Effective Target</th>
+                                    <th>Combined Rx</th><th>DL Rx</th><th>UL Rx</th><th>Latency (ms)</th><th>Loss %</th>
+                                </tr>
+                                ${iterationRows}
+                            </table>
+                        """
+
+                        bandwidthOrder.each { bandwidth ->
+                            if (!groupedByBandwidth.containsKey(bandwidth)) return
+
+                            def mcsMap = groupedByBandwidth[bandwidth]
+
+                            htmlContent += "<h2>Bandwidth: ${bandwidth}</h2><table><tr><th rowspan='2'>MCS</th><th rowspan='2'>Modulation</th>"
+                            
+                            // Add columns for each ratio tested
+                            testedRatios.each { ratio -> 
+                                htmlContent += "<th colspan='3'>Ratio [ ${ratio} ]</th>" 
+                            }
+                            htmlContent += "<th colspan='2'>Tx/Rx Rate (Mbps)</th><th colspan='2'>Local SNR (dB)</th><th colspan='2'>Remote SNR (dB)</th></tr>"
+                            htmlContent += "<tr>"
+                            
+                            // Sub-columns
+                            testedRatios.each {
+                                htmlContent += "<th class='sub-head'>Tput (Mbps)</th><th class='sub-head'>Lat (ms)</th><th class='sub-head'>Loss %</th>"
+                            }
+                            htmlContent += "<th class='sub-head'>Tx</th><th class='sub-head'>Rx</th><th class='sub-head'>A1</th><th class='sub-head'>A2</th><th class='sub-head'>A1</th><th class='sub-head'>A2</th></tr>"
+
+                            mcsOrder.each { mcs ->
+                                def data = mcsMap[mcs]
+                                if (!data) return
+                                
+                                def modulation = modulationTable[mcs] ?: "-"
+                                htmlContent += "<tr><td>${mcs}</td><td>${modulation}</td>"
+
+                                // Default to capturing RF metrics from the last ratio test parsed to populate the end columns
+                                def rfData = [:] 
+
+                                testedRatios.each { ratio ->
+                                    if (data[ratio]) {
+                                        def stats = data[ratio]
+                                        def tput = String.format("%.2f", stats.combined.rx_mbps)
+                                        def lat = String.format("%.2f", stats.combined.latency_ms)
+                                        def loss = String.format("%.2f", stats.combined.loss_pct)
+                                        
+                                        def lossColor = stats.combined.loss_pct > 0.0 ? "fail" : "pass"
+                                        htmlContent += "<td><b>${tput}</b></td><td>${lat}</td><td class='${lossColor}'>${loss}%</td>"
+                                        
+                                        if (stats.rf_metrics && stats.rf_metrics.size() > 0) {
+                                            rfData = stats.rf_metrics[0] // Safely grab the first CPE connection block for reference rates
+                                        }
+                                    } else {
+                                        htmlContent += "<td>-</td><td>-</td><td>-</td>"
+                                    }
+                                }
+                                
+                                htmlContent += "<td>${rfData.tx_rate ?: '-'}</td><td>${rfData.rx_rate ?: '-'}</td>"
+                                htmlContent += "<td>${rfData.l_snr1 ?: '-'}</td><td>${rfData.l_snr2 ?: '-'}</td>"
+                                htmlContent += "<td>${rfData.r_snr1 ?: '-'}</td><td>${rfData.r_snr2 ?: '-'}</td></tr>"
+                            }
+                            htmlContent += "</table>"
+                        }
+                        htmlContent += "</body></html>"
+                        
+                        writeFile file: reportFilename, text: htmlContent
+                        archiveArtifacts artifacts: "*.pdf", allowEmptyArchive: true
+                        echo "✅ HTML/PDF report generated: ${reportFilename}"
+
+                    } catch (Exception e) {
+                        echo "❌ Report generation failed: ${e.message}"
+                        writeFile file: reportFilename, text: "<html><body><h2 style='color:red;'>Report generation failed</h2><p>${e.message}</p></body></html>"
+                    }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            publishHTML (target: [
+                allowMissing: false,
+                alwaysLinkToLastBuild: true,
+                keepAll: true,
+                reportDir: '.',
+                reportFiles: "${reportFilename}",
+                reportName: "Throughput Report - Build ${env.BUILD_NUMBER}"
+            ])
+            echo "-----------------------------------------"
+            echo 'Script Done!'
+            echo "-----------------------------------------"
+            script {
+                def buildCauses = currentBuild.getBuildCauses()
+                def userCause = buildCauses.find { it._class == 'hudson.model.Cause$UserIdCause' }
+                def buildUserName = userCause?.userName ?: "Unknown User"
+                def buildUserId = userCause?.userId ?: "unknown"
+
+                def userEmails = [
+                    "puneet": "puneet.sharma@senao.com",
+                    "harman": "harmanjot.singh@senao.com",
+                    "mahesh": "mahesh.battala@senao.com",
+                    "sandeep": "sandeep.manchikanti@senao.com",
+                    "sampath": "sampath.marella@senao.com",
+                    "jayanth": "jayanth.munnaluru@senao.com",
+                    "srilatha": "srilatha.tadiboina@senao.com",
+                    "phani": "phani.darla@senao.com",
+                    "dinesh": "dinesh.redddy@senao.com"
+                ]
+                def userEmail = userEmails.get(buildUserId, "puneet.sharma@senao.com")
+
+                emailext(
+                    subject: "Jenkins Build: ${currentBuild.fullDisplayName} - ${currentBuild.currentResult}",
+                    body: """
+                        <html><body>
+                            <h2 style="color:blue;">Jenkins Build Notification</h2>
+                            <p><strong>Build Name:</strong> ${currentBuild.fullDisplayName}</p>
+                            <p><strong>Status:</strong> <span style="color:${currentBuild.currentResult == 'SUCCESS' ? 'green' : 'red'};">${currentBuild.currentResult}</span></p>
+                            <p><strong>Started By:</strong> ${buildUserName} (${buildUserId})</p>
+                            <p><strong>HTML Report:</strong> <a href="${env.BUILD_URL}artifact/${reportFilename}">Click here to view</a></p>
+                            <br/><p style="color:gray;">--<br/>QA Automation Framework</p>
+                        </body></html>
+                    """,
+                    to: userEmail,
+                    mimeType: 'text/html',
+                    attachmentsPattern: "${reportFilename}"
+                )
+            }
+        }
+    }
+}
