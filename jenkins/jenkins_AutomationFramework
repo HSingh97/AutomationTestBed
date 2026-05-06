@@ -1,9 +1,9 @@
 pipeline {
-    agent { node { label "${TARGET_STAND}" } } // Note: Ensure TARGET_STAND is defined globally or injected!
+    agent { node { label "${TARGET_STAND}" } }
 
     parameters {
         string(name: 'TEST_FILTER', defaultValue: 'Summary, TopPanel, WirelessProperties', description: 'Enter test keyword (e.g., gui_0, gui_10) or comma-separated list')
-        string(name: 'Local IP Address', defaultValue: '192.168.2.230', description: 'IP Address of the target device')
+        string(name: 'Local IP Address', defaultValue: '192.168.2.10', description: 'IP Address of the target device')
     }
 
     stages {
@@ -39,19 +39,16 @@ pipeline {
             steps {
                 script {
                     def localIP = params['Local IP Address']
-
-                    // CRITICAL FIX: Automatically convert commas to ' or ' for Pytest
                     def formattedFilter = params.TEST_FILTER.replaceAll(",", " or ")
 
                     echo "Local IP Address: ${localIP}"
-                    echo "✅ Cleared old workspace"
-                    echo "----------------------------------------"
-                    echo "Testing GUI with Filter: [ ${formattedFilter} ]"
                     echo "----------------------------------------"
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                        // UPDATED: Added --local-ip and --password flags to match your local execution style
                         sh """
                             venv/bin/python -m pytest tests/GUI/ -v -k "${formattedFilter}" \
+                            --local-ip ${localIP} --password 'Sen@0ubRNwk$' \
                             --json-report --json-report-file=report.json
                         """
                     }
@@ -99,7 +96,6 @@ pipeline {
                 def userEmail = userEmails.get(buildUserId, "puneet.sharma@senao.com")
 
                 emailext(
-                    // CRITICAL FIX: Changed TEST_MARKER to TEST_FILTER
                     subject: "Test Automation Report [Filter: ${params.TEST_FILTER}] - ${currentBuild.currentResult}",
                     body: """
                         <html>

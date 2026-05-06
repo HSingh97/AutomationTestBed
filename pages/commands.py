@@ -1,5 +1,7 @@
 class RootCommands:
     """Linux backend commands executed via SSH as 'root'."""
+
+    # --- SYSTEM INFORMATION ---
     GET_MODEL = "cat /etc/ademodel"
     GET_HW_VERSION = "cat /etc/hwver"
     GET_BOOTLOADER = "cat /etc/blver"
@@ -10,6 +12,17 @@ class RootCommands:
     GET_CPU = "cat /tmp/cpu_usage"
     GET_MEM = "cat /tmp/mem_usage"
 
+    # --- NETWORK CONFIGURATION (Used for GUI_50 Validation) ---
+    # These 'uci' commands fetch the actual saved settings
+    GET_NET_PROTO = "uci get network.lan.proto"
+    GET_NET_IP = "uci get network.lan.ipaddr"
+    GET_NET_MASK = "uci get network.lan.netmask"
+    GET_NET_GW = "uci get network.lan.gateway"
+    GET_NET_IP6 = "uci get network.lan.ip6addr"
+    GET_NET_GW6 = "uci get network.lan.ip6gw"
+
+    # --- NETWORK DYNAMIC STATUS (Used for Summary Pages) ---
+    # These 'ucidyn' commands fetch live/assigned status
     GET_SYSNAME = "uci get system.@system[0].hostname"
     GET_SW_VERSION = "cat /etc/version; echo"
     GET_SERIAL_NO = "fw_printenv -n dsn"
@@ -23,6 +36,13 @@ class RootCommands:
     # --- PERFORMANCE COMMANDS (R1) ---
     GET_TX_R1 = "cat /sys/class/kwn/wifi1/statistics/tx_tput"
     GET_RX_R1 = "cat /sys/class/kwn/wifi1/statistics/rx_tput"
+
+    # --- SYSTEM / TIMEZONE ---
+    GET_TIMEZONE = "uci get system.@system[0].timezone"
+    GET_LOCAL_TIME = "date"
+
+    # Optional: Command to check logs for the timestamp verify
+    GET_LOGS = "logread | tail -n 20"
 
     # --- DYNAMIC LAN COMMANDS ---
     @staticmethod
