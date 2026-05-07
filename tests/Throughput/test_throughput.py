@@ -16,9 +16,13 @@ Usage:
    - Automation:      python <script> --cpes 16 --target 50 --ratio 70:30 --time 60 --output-json results.json
 """
 
-import sys, os, time, traceback, subprocess, re, argparse, json
+import sys, os, time, traceback, subprocess, re, argparse, json, asyncio
 from ixnetwork_restpy import *
 from pages.commands import RootCommands
+from utils.net_utils import format_snmp_host, format_ssh_host, normalize_ip
+from utils.profile_manager import load_profile_bundle
+from utils.recovery_manager import RecoveryManager
+from utils.traffic.trex_runner import run_trex_stats_check
 
 try:
     from weasyprint import HTML
@@ -118,7 +122,8 @@ def run_shell_command(cmd):
 
 def run_ssh_command(ip, user, pw, command):
     ssh_opts = "-o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8"
-    ssh_cmd = f"sshpass -p '{pw}' ssh {ssh_opts} {user}@{ip} \"{command}\""
+    ssh_host = format_ssh_host(ip)
+    ssh_cmd = f"sshpass -p '{pw}' ssh {ssh_opts} {user}@{ssh_host} \"{command}\""
     return run_shell_command(ssh_cmd)
 
 def configure_bandwidth_and_mcs(ip, user, pw, radio_idx, bandwidth, mcs_rate, spatial_stream, ddrs_rate):
@@ -141,7 +146,8 @@ def parse_snmp_value(output: str) -> str:
 def fetch_ssh_metrics(ip, user, pw, wifi_int, wlan_int):
     metrics = {"obss": "-", "chan_util": "-", "freq_ghz": "-"}
     ssh_opts = "-o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5"
-    base_cmd = f"sshpass -p '{pw}' ssh {ssh_opts} {user}@{ip}"
+    ssh_host = format_ssh_host(ip)
+    base_cmd = f"sshpass -p '{pw}' ssh {ssh_opts} {user}@{ssh_host}"
     
     obss_out = run_shell_command(f"{base_cmd} cfg80211tool {wifi_int} g_ch_util_obss")
     if ":" in obss_out: metrics["obss"] = obss_out.split(":")[1].strip()
@@ -156,10 +162,11 @@ def fetch_ssh_metrics(ip, user, pw, wifi_int, wlan_int):
     return metrics
 
 def fetch_snmp_config(ip):
+    snmp_host = format_snmp_host(ip)
     config = {}
-    def get_val(o): return parse_snmp_value(run_shell_command(f"snmpget -v 2c -c {SNMP_COMMUNITY} {ip} {o}.{SNMP_RADIO_IDX}"))
-    def get_val_suf(o): return parse_snmp_value(run_shell_command(f"snmpget -v 2c -c {SNMP_COMMUNITY} {ip} {o}.{SNMP_RADIO_IDX}.1"))
-    def get_scalar(o): return parse_snmp_value(run_shell_command(f"snmpget -v 2c -c {SNMP_COMMUNITY} {ip} {o}"))
+    def get_val(o): return parse_snmp_value(run_shell_command(f"snmpget -v 2c -c {SNMP_COMMUNITY} {snmp_host} {o}.{SNMP_RADIO_IDX}"))
+    def get_val_suf(o): return parse_snmp_value(run_shell_command(f"snmpget -v 2c -c {SNMP_COMMUNITY} {snmp_host} {o}.{SNMP_RADIO_IDX}.1"))
+    def get_scalar(o): return parse_snmp_value(run_shell_command(f"snmpget -v 2c -c {SNMP_COMMUNITY} {snmp_host} {o}"))
 
     mode_raw = get_val(OID_RADIO_MODE_BASE).lower()
     config['Radio Mode'] = 'BSU' if 'ap' in mode_raw else ('SU' if 'sta' in mode_raw else mode_raw)
@@ -186,7 +193,8 @@ def fetch_snmp_config(ip):
 
 def fetch_connected_clients(ip):
     clients = []
-    walk_cmd = f"snmpwalk -v 2c -c {SNMP_COMMUNITY} {ip} {OID_SU_IP_WALK_BASE}.{SNMP_RADIO_IDX}"
+    snmp_host = format_snmp_host(ip)
+    walk_cmd = f"snmpwalk -v 2c -c {SNMP_COMMUNITY} {snmp_host} {OID_SU_IP_WALK_BASE}.{SNMP_RADIO_IDX}"
     walk_out = run_shell_command(walk_cmd)
     
     for line in walk_out.splitlines():
@@ -197,7 +205,7 @@ def fetch_connected_clients(ip):
             su_ip = ips[-1] 
             su_index = idx_match.group(1)
             
-            def get_rf(base): return parse_snmp_value(run_shell_command(f"snmpget -v 2c -c {SNMP_COMMUNITY} {ip} {base}.{SNMP_RADIO_IDX}.{su_index}"))
+            def get_rf(base): return parse_snmp_value(run_shell_command(f"snmpget -v 2c -c {SNMP_COMMUNITY} {snmp_host} {base}.{SNMP_RADIO_IDX}.{su_index}"))
             
             clients.append({
                 "ip": su_ip,
@@ -699,15 +707,36 @@ try:
                         help="DDRS rate to apply over SSH for each iteration")
     parser.add_argument('--radio-index', type=int, default=1,
                         help="Radio index for wireless.wifi<idx> commands (Default: 1)")
+    parser.add_argument('--profile', type=str, default='default',
+                        help="Primary profile name from profiles/<name>.yaml")
+    parser.add_argument('--recovery-profile', type=str, default='link_formation',
+                        help="Recovery profile name from profiles/<name>.yaml")
+    parser.add_argument('--traffic-mode', type=str, choices=['benchmark', 'stats_check'], default='benchmark',
+                        help="benchmark uses IXIA; stats_check uses TRex for lightweight checks")
+    parser.add_argument('--trex-server', type=str, default='127.0.0.1',
+                        help="TRex server for stats-check mode")
     args = parser.parse_args()
 
     clear_config_flag = (args.mode == 'clear')
     NUM_CPES = args.cpes
     TEST_SECONDS = args.time
     API_SERVER_IP = args.ixia_ip
-    DUT_IP = args.local_ip
+    DUT_IP = normalize_ip(args.local_ip)
     frameSizeType = args.packet_size
     fixedFrameSize = 1500
+    profile_bundle = load_profile_bundle(
+        profile_name=args.profile,
+        recovery_profile_name=args.recovery_profile,
+        local_ip=args.local_ip,
+        username=SSH_USER,
+        password=SSH_PASS,
+    )
+    dut_profile = profile_bundle.active["dut"]
+    if dut_profile.get("ip_mode") == "ipv6" or dut_profile.get("strict_ipv6"):
+        DUT_IP = normalize_ip(str(dut_profile["local_ipv6"]))
+        if ":" not in DUT_IP:
+            raise ValueError("Strict IPv6 mode is enabled, but local IPv6 is not configured correctly.")
+    recovery_manager = RecoveryManager(profile_bundle)
 
     # Ratio Parser
     try:
@@ -740,6 +769,33 @@ try:
     print(f"Uplink Target:   {uplink_total_mbps:.2f} Mbps total => {UPLINK_MBPS_PER_CPE:.2f} Mbps/CPE x {NUM_CPES}")
     print(f"Total Combined:  {totalCombinedMbps:.2f} Mbps")
     print("-" * 70 + "\n")
+    if not asyncio.run(recovery_manager.is_gui_reachable(DUT_IP)):
+        print("[RECOVERY] DUT GUI not reachable. Running soft recovery before traffic...")
+        asyncio.run(recovery_manager.run_soft_recovery())
+
+    if args.traffic_mode == "stats_check":
+        trex_result = run_trex_stats_check(
+            trex_server=args.trex_server,
+            duration_s=TEST_SECONDS,
+            expected_min_mbps=totalCombinedMbps * 0.3,
+            output_json=args.output_json,
+        )
+        json_export = {
+            "mode": "stats_check",
+            "profile": {"active": args.profile, "recovery": args.recovery_profile},
+            "recovery": {
+                "attempts": recovery_manager.metrics.attempts,
+                "successes": recovery_manager.metrics.successes,
+                "failures": recovery_manager.metrics.failures,
+                "factory_resets": recovery_manager.metrics.factory_resets,
+                "last_error": recovery_manager.metrics.last_error,
+            },
+            "trex": trex_result,
+        }
+        with open(args.output_json, 'w') as f:
+            json.dump(json_export, f, indent=4)
+        print(f"TRex stats-check JSON exported to: {os.path.abspath(args.output_json)}")
+        sys.exit(0)
 
     configure_bandwidth_and_mcs(
         DUT_IP, SSH_USER, SSH_PASS, args.radio_index,
@@ -1127,6 +1183,8 @@ try:
     # JSON EXPORT FOR JENKINS PIPELINE
     # =========================================================================
     json_export = {
+        "mode": "benchmark",
+        "profile": {"active": args.profile, "recovery": args.recovery_profile},
         "config": {
             "cpes": NUM_CPES,
             "target_mbps": totalCombinedMbps,
@@ -1139,6 +1197,13 @@ try:
             "mcs_rate": args.mcs_rate,
             "spatial_stream": args.spatial_stream,
             "ddrs_rate": args.ddrs_rate
+        },
+        "recovery": {
+            "attempts": recovery_manager.metrics.attempts,
+            "successes": recovery_manager.metrics.successes,
+            "failures": recovery_manager.metrics.failures,
+            "factory_resets": recovery_manager.metrics.factory_resets,
+            "last_error": recovery_manager.metrics.last_error,
         },
         "combined": {"tx_mbps": comb_tx, "rx_mbps": comb_rx, "loss_pct": comb_avg_loss, "latency_ms": comb_avg},
         "downlink": {"tx_mbps": dl_tx_total, "rx_mbps": dl_rx_total, "loss_pct": dl_avg_loss, "latency_ms": dl_avg_val},

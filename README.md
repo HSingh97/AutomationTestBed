@@ -17,14 +17,29 @@ Automation framework for UBR validation with:
 ## Project Structure
 
 - `conftest.py`  
-  Central fixtures and runtime options (`--local-ip`, `--remote-ip`, `--username`, `--password`).
+  Central fixtures and runtime options (`--local-ipv6`, `--remote-ipv6`, `--profile`, `--recovery-profile`, `--allow-destructive-jumbo`, etc.).
 - `tests/GUI/`  
   GUI test suites:
   - `test_summary.py`
   - `test_topPanel.py`
   - `test_radio_properties.py`
+  - `test_network.py`
+  - `test_management.py`
+- `tests/JumboFrames/`
+  Jumbo frame suite:
+  - `test_jumbo_frames.py` (JMB_01 ... JMB_10)
 - `tests/Throughput/test_throughput.py`  
-  IXIA traffic generation + throughput/latency collection + JSON/PDF outputs.
+  IXIA benchmark or TRex stats-check execution + throughput/latency collection + JSON/PDF outputs.
+- `profiles/`
+  Profile-driven runtime defaults:
+  - `default.yaml`
+  - `link_formation.yaml`
+- `utils/profile_manager.py`
+  Profile loading, validation, and CLI override merge.
+- `utils/recovery_manager.py`
+  Shared link health checks and recovery metrics tracking.
+- `utils/traffic/trex_runner.py`
+  TRex stats-check runner abstraction.
 - `pages/commands.py`  
   Shared backend command templates, including bandwidth and MCS sequence helpers.
 - `jenkins/jenkins-AutomationFramework`  
@@ -39,8 +54,74 @@ Automation framework for UBR validation with:
 - Summary page validation flows implemented.
 - Top panel validations implemented.
 - Radio properties lifecycle validations implemented (status, SSID, bandwidth, channel, encryption, max CPE).
+- Network validations implemented (IP config, gateway/netmask/fallback, Ethernet, DHCP main and 2.4GHz).
+- Management validations implemented (timezone, NTP, browser-time sync, logging config, temperature logging, location tab).
+- Jumbo frame validations implemented in dedicated suite (`tests/JumboFrames`), with destructive cases opt-in.
 - Consolidated fixtures for SSH + GUI login in `conftest.py`.
 - Jenkins GUI pipeline available (`jenkins-AutomationFramework`) with report publishing/email.
+- Profile-driven execution and centralized recovery framework integrated.
+
+### Implemented Jumbo Test Case Index
+
+- `JMB_01` - Configure Jumbo + disable back to default
+- `JMB_02` - Configure MTU 9000
+- `JMB_03` - Min/mid MTU cycle + ICMP validation
+- `JMB_04` - Max MTU 9000 + ICMP validation
+- `JMB_05` - Jumbo with management VLAN/interface checks
+- `JMB_06` - Jumbo with P2MP interface/tunnel presence checks
+- `JMB_07` - Reboot persistence (**destructive; gated**)
+- `JMB_08` - MTU 1500 validation
+- `JMB_09` - Boundary and invalid MTU validation
+- `JMB_10` - Factory reset default MTU (**destructive; gated**)
+
+## Default IPv6 Testbed Configuration
+
+These values are now defaulted in profiles and CLI for consistent runs:
+
+- **BTS / DUT IPv6**: `2401:4900:d0:40d4:0:17b8:0:330`
+- **CPE IPv6**: `2401:4900:d0:40d4::17b8:0:331`
+- **BTS PC IPv6**: `2401:4900:d0:40d4::17b8:0:301`
+- **CPE PC IPv6**: `2401:4900:d0:40d4::17b8:0:302`
+
+### Implemented GUI Test Case Index (Done So Far)
+
+- `GUI_01` - Summary System
+- `GUI_02` - Summary Network
+- `GUI_03` - Summary Performance
+- `GUI_04` - Summary Wireless
+- `GUI_05` - Top Panel Logo
+- `GUI_06` - Top Panel Parameters
+- `GUI_07` - Top Panel Radio Redirect
+- `GUI_08` - Home and Apply Buttons
+- `GUI_09` - Reboot Device
+- `GUI_10` - Logout
+- `GUI_17` - Radio Status
+- `GUI_18` - SSID
+- `GUI_19` - Bandwidth
+- `GUI_20` - Channel
+- `GUI_21` - Encryption
+- `GUI_22` - Max CPE
+- `GUI_50` - Network IP Configuration
+- `GUI_51` - Edit IP Configuration
+- `GUI_52` - Edit Netmask Configuration
+- `GUI_53` - Edit Gateway Configuration
+- `GUI_54` - Edit Fallback IP
+- `GUI_55` - Edit Fallback Netmask
+- `GUI_70` - Ethernet Speed/Duplex
+- `GUI_71` - Ethernet MTU
+- `GUI_72` - DHCP Server Status
+- `GUI_73` - DHCP Lease Time
+- `GUI_74` - DHCP 2.4GHz Radio IP
+- `GUI_75` - DHCP 2.4GHz Radio Netmask
+- `GUI_76` - DHCP 2.4GHz Radio DHCP Status
+- `GUI_77` - DHCP 2.4GHz Radio Pool Range
+- `GUI_78` - DHCP 2.4GHz Radio Lease Time
+- `GUI_88` - Management Timezone Random Validation
+- `GUI_89` - Management NTP Full Cycle
+- `GUI_90` - Sync with Browser Time
+- `GUI_91` - Management Logging IP/Port
+- `GUI_92` - Management Temperature Logging Cycle
+- `GUI_93` - Management Location Configuration
 
 ### Throughput Automation
 
@@ -81,6 +162,12 @@ Run full GUI suite:
 venv/bin/python -m pytest tests/GUI/ -v
 ```
 
+Run Jumbo Frames suite:
+
+```bash
+venv/bin/python -m pytest tests/JumboFrames/ -v
+```
+
 Run only summary tests:
 
 ```bash
@@ -103,10 +190,18 @@ Run with custom DUT details:
 
 ```bash
 venv/bin/python -m pytest tests/GUI/ -v \
-  --local-ip 192.168.2.230 \
-  --remote-ip 192.168.2.231 \
+  --local-ipv6 2401:4900:d0:40d4:0:17b8:0:330 \
+  --remote-ipv6 2401:4900:d0:40d4::17b8:0:331 \
   --username root \
   --password "Sen@0ubRNwk$"
+```
+
+Run destructive jumbo cases (reboot/factory reset):
+
+```bash
+venv/bin/python -m pytest tests/JumboFrames/test_jumbo_frames.py -v \
+  --allow-destructive-jumbo \
+  -k "JMB_07 or JMB_10"
 ```
 
 ## 2) Throughput script (standalone run)
@@ -119,14 +214,17 @@ python3.10 tests/Throughput/test_throughput.py \
   --ratio 80:20 \
   --time 15 \
   --ixia-ip 10.0.150.50 \
-  --local-ip 192.168.2.230 \
+  --local-ip 2401:4900:d0:40d4:0:17b8:0:330 \
   --packet-size imix \
   --bandwidth HT80 \
   --mcs-rate MCS7 \
   --spatial-stream 2 \
   --ddrs-rate MCS7 \
   --radio-index 1 \
-  --output-json current_ixia_run.json
+  --output-json current_ixia_run.json \
+  --profile default \
+  --recovery-profile link_formation \
+  --traffic-mode benchmark
 ```
 
 Notes:
@@ -142,7 +240,10 @@ Notes:
 - Purpose: execute GUI tests by filter and publish customer reports.
 
 Key parameter:
-- `TEST_FILTER` (example: `Summary, TopPanel, WirelessProperties`)
+- `TEST_FILTER` (example: `Summary, TopPanel, WirelessProperties, JumboFrames`)
+- `Local IPv6 Address`
+- `PROFILE_NAME`
+- `RECOVERY_PROFILE_NAME`
 
 ## 2) Throughput Pipeline
 
@@ -159,6 +260,11 @@ Key parameters include:
 - `Packet Size`
 - `Spatial Stream`
 - `DDRS Rate`
+- `PROFILE_NAME`
+- `RECOVERY_PROFILE_NAME`
+- `TRAFFIC_MODE`
+- `TRAFFIC_BACKEND`
+- `TREX_SERVER`
 
 ## Current Status
 

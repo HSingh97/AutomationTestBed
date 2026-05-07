@@ -23,6 +23,11 @@ def generate_test_ip(current_ip, version="v4"):
     
 
 
+def ssh_scalar(raw_output):
+    """Normalized single value from noisy SSH/uci output (last meaningful line, no quotes)."""
+    return clean_ssh_output(raw_output).replace("'", "")
+
+
 def clean_ssh_output(raw_output):
     """
     Normalizes noisy interactive SSH output to the last meaningful line.

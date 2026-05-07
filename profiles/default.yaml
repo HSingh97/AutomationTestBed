@@ -1,0 +1,32 @@
+name: default
+description: Baseline testbed profile for regular GUI/link test execution.
+
+dut:
+  ip_mode: ipv6
+  strict_ipv6: true
+  local_ipv6: "2401:4900:d0:40d4:0:17b8:0:330"
+  remote_ipv6s:
+    - "2401:4900:d0:40d4::17b8:0:331"
+  bts_pc_ipv6: "2401:4900:d0:40d4::17b8:0:301"
+  cpe_pc_ipv6: "2401:4900:d0:40d4::17b8:0:302"
+  mgmt_oob_ipv6: "2401:4900:d0:40d4::17b8:0:301"
+  username: root
+  password: Sen@0ubRNwk$
+
+link:
+  expected_mode: linked
+  min_connected_clients: 1
+  health_check_timeout_s: 20
+
+recovery:
+  max_retries: 2
+  retry_backoff_seconds:
+    - 3
+    - 8
+  allow_factory_reset: true
+  factory_reset_command: firstboot && reboot
+  reboot_wait_seconds: 120
+
+traffic:
+  benchmark_backend: ixia
+  stats_backend: trex

@@ -23,6 +23,11 @@ pipeline {
         string(name: 'No of CPE', defaultValue: '16', description: 'Number of IXIA streams/CPE pairs')
         string(name: 'Spatial Stream', defaultValue: '2', description: 'Spatial stream setting for each MCS iteration')
         string(name: 'DDRS Rate', defaultValue: 'MCS7', description: 'DDRS rate setting for each MCS iteration')
+        string(name: 'PROFILE_NAME', defaultValue: 'default', description: 'Primary automation profile from profiles/<name>.yaml')
+        string(name: 'RECOVERY_PROFILE_NAME', defaultValue: 'link_formation', description: 'Recovery profile from profiles/<name>.yaml')
+        string(name: 'TRAFFIC_MODE', defaultValue: 'benchmark', description: 'benchmark (IXIA) or stats_check (TRex)')
+        string(name: 'TRAFFIC_BACKEND', defaultValue: 'ixia', description: 'ixia or trex')
+        string(name: 'TREX_SERVER', defaultValue: '127.0.0.1', description: 'TRex server for stats-check mode')
     }
 
     stages {
@@ -56,6 +61,7 @@ pipeline {
                 script {
                     try {
                         def localIP = params['Local IP Address']
+                        def sshHost = localIP.contains(':') ? "[${localIP}]" : localIP
                         def selectedRadio = params['Radio']
                         def targetTotal = (params['Target Total Throughput Mbps'] ?: "800").toBigDecimal()
                         def ratios = params.Ratios.split(',').collect { it.trim() }.findAll { it }
@@ -69,6 +75,14 @@ pipeline {
                         def cpes = (params['No of CPE'] ?: "16").toInteger()
                         def spatialStream = params['Spatial Stream']
                         def ddrsRate = params['DDRS Rate']
+                        def profileName = params['PROFILE_NAME']
+                        def recoveryProfileName = params['RECOVERY_PROFILE_NAME']
+                        def trafficMode = (params['TRAFFIC_MODE'] ?: 'benchmark').trim().toLowerCase()
+                        def trafficBackend = (params['TRAFFIC_BACKEND'] ?: 'ixia').trim().toLowerCase()
+                        def trexServer = params['TREX_SERVER']
+                        if (trafficBackend == 'trex') {
+                            trafficMode = 'stats_check'
+                        }
                         if (!radioIndex) {
                             error("Radio must include index (example: radio1)")
                         }
@@ -103,7 +117,7 @@ pipeline {
                                     echo " Testing: Bandwidth=${bandwidth} | MCS=${mcsrate} | Mode=${profile.name} | Ratio=${cleanRatio}"
                                     echo "--------------------------------------------------------------"
 
-                                    def ixia_cmd = """
+                                    def throughput_cmd = """
                                         python3.10 tests/Throughput/test_throughput.py \
                                         --mode keep \
                                         --cpes ${cpes} \
@@ -118,10 +132,14 @@ pipeline {
                                         --spatial-stream '${spatialStream}' \
                                         --ddrs-rate '${ddrsRate}' \
                                         --radio-index '${radioIndex}' \
+                                        --profile '${profileName}' \
+                                        --recovery-profile '${recoveryProfileName}' \
+                                        --traffic-mode '${trafficMode}' \
+                                        --trex-server '${trexServer}' \
                                         --output-json current_ixia_run.json 2>&1
                                     """
-                                    def py_output = sh(script: ixia_cmd, returnStdout: true).trim()
-                                    echo "Ixia Automation Output:\n${py_output}"
+                                    def py_output = sh(script: throughput_cmd, returnStdout: true).trim()
+                                    echo "Traffic Automation Output:\n${py_output}"
 
                                     def ixiaStats = readJSON file: 'current_ixia_run.json'
                                     def test_record = [
@@ -129,6 +147,10 @@ pipeline {
                                         "MCS": mcsrate,
                                         "Mode": profile.name,
                                         "Ratio": cleanRatio,
+                                        "TrafficMode": trafficMode,
+                                        "TrafficBackend": trafficBackend,
+                                        "ProfileName": profileName,
+                                        "RecoveryProfileName": recoveryProfileName,
                                         "IxiaToolIP": ixiaIp,
                                         "LocalIP": localIP,
                                         "PacketSize": packetSizeRaw,
@@ -166,7 +188,7 @@ pipeline {
                         def local_fw_version = "N/A"
                         def remote_fw_version = "N/A"
 
-                        try { local_fw_version = sh(script: "sshpass -p 'admin' ssh -o StrictHostKeyChecking=no root@${localIP} 'cat /etc/version'", returnStdout: true).trim() } catch (Exception e) {}
+                        try { local_fw_version = sh(script: "sshpass -p 'admin' ssh -o StrictHostKeyChecking=no root@${sshHost} 'cat /etc/version'", returnStdout: true).trim() } catch (Exception e) {}
                         def buildParams = [
                             "Local IP Address": localIP,
                             "Radio": params['Radio'],
@@ -178,6 +200,11 @@ pipeline {
                             "No of CPE": params['No of CPE'],
                             "Spatial Stream": params['Spatial Stream'],
                             "DDRS Rate": params['DDRS Rate'],
+                            "Profile Name": params['PROFILE_NAME'],
+                            "Recovery Profile Name": params['RECOVERY_PROFILE_NAME'],
+                            "Traffic Mode": params['TRAFFIC_MODE'],
+                            "Traffic Backend": params['TRAFFIC_BACKEND'],
+                            "TRex Server": params['TREX_SERVER'],
                             "FW Version (Local / Remote)": "${local_fw_version} / ${remote_fw_version}"
                         ]
 
@@ -225,6 +252,8 @@ pipeline {
                                     <td>${String.format('%.2f', (s.uplink?.rx_mbps ?: 0.0) as Double)}</td>
                                     <td>${String.format('%.2f', (s.combined?.latency_ms ?: 0.0) as Double)}</td>
                                     <td>${String.format('%.2f', (s.combined?.loss_pct ?: 0.0) as Double)}</td>
+                                    <td>${s.recovery?.attempts ?: 0}</td>
+                                    <td>${s.recovery?.factory_resets ?: 0}</td>
                                 </tr>
                             """
                         }.join('\n')
@@ -267,7 +296,7 @@ pipeline {
                                 <tr>
                                     <th>Bandwidth</th><th>MCS</th><th>Mode</th><th>Ratio</th>
                                     <th>Requested Target</th><th>MCS Cap</th><th>Effective Target</th>
-                                    <th>Combined Rx</th><th>DL Rx</th><th>UL Rx</th><th>Latency (ms)</th><th>Loss %</th>
+                                    <th>Combined Rx</th><th>DL Rx</th><th>UL Rx</th><th>Latency (ms)</th><th>Loss %</th><th>Recovery Attempts</th><th>Factory Resets</th>
                                 </tr>
                                 ${iterationRows}
                             </table>
