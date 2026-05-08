@@ -6,6 +6,7 @@ pipeline {
         string(name: 'Local IPv6 Address', defaultValue: 'fd00:2::230', description: 'IPv6 address of the target device')
         string(name: 'PROFILE_NAME', defaultValue: 'default', description: 'Primary automation profile from profiles/<name>.yaml')
         string(name: 'RECOVERY_PROFILE_NAME', defaultValue: 'link_formation', description: 'Recovery profile from profiles/<name>.yaml')
+        booleanParam(name: 'ENABLE_DESTRUCTIVE_JUMBO', defaultValue: false, description: 'Allow destructive jumbo tests (JMB_07/JMB_10)')
     }
 
     stages {
@@ -43,6 +44,7 @@ pipeline {
                     def localIP = params['Local IPv6 Address']
                     def profileName = params.PROFILE_NAME
                     def recoveryProfileName = params.RECOVERY_PROFILE_NAME
+                    def destructiveFlag = params.ENABLE_DESTRUCTIVE_JUMBO ? '--allow-destructive-jumbo' : ''
 
                     // CRITICAL FIX: Automatically convert commas to ' or ' for Pytest
                     def formattedFilter = params.TEST_FILTER.replaceAll(",", " or ")
@@ -52,6 +54,7 @@ pipeline {
                     echo "----------------------------------------"
                     echo "Testing GUI with Filter: [ ${formattedFilter} ]"
                     echo "Profile: [ ${profileName} ] | Recovery Profile: [ ${recoveryProfileName} ]"
+                    echo "Destructive Jumbo Enabled: [ ${params.ENABLE_DESTRUCTIVE_JUMBO} ]"
                     echo "----------------------------------------"
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
@@ -60,6 +63,7 @@ pipeline {
                             --local-ipv6 "${localIP}" \
                             --profile "${profileName}" \
                             --recovery-profile "${recoveryProfileName}" \
+                            ${destructiveFlag} \
                             --json-report --json-report-file=report.json
                         """
                     }
@@ -118,6 +122,7 @@ pipeline {
                                 <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Target IPv6:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params['Local IPv6 Address']}</td></tr>
                                 <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Profile:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params.PROFILE_NAME}</td></tr>
                                 <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Recovery Profile:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params.RECOVERY_PROFILE_NAME}</td></tr>
+                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Destructive Jumbo:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params.ENABLE_DESTRUCTIVE_JUMBO}</td></tr>
                                 <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Status:</strong></td><td style="padding: 8px; border: 1px solid #ddd; color:${currentBuild.currentResult == 'SUCCESS' ? 'green' : 'red'}; font-weight:bold;">${currentBuild.currentResult}</td></tr>
                                 <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Started By:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${buildUserName}</td></tr>
                                 <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Console Log:</strong></td><td style="padding: 8px; border: 1px solid #ddd;"><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td></tr>

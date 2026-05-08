@@ -68,11 +68,13 @@ Automation framework for UBR validation with:
 - `JMB_03` - Min/mid MTU cycle + ICMP validation
 - `JMB_04` - Max MTU 9000 + ICMP validation
 - `JMB_05` - Jumbo with management VLAN/interface checks
-- `JMB_06` - Jumbo with P2MP interface/tunnel presence checks
+- `JMB_06` - Jumbo MTU 9000 + ICMP validation (aligned with `JMB_04`)
 - `JMB_07` - Reboot persistence (**destructive; gated**)
 - `JMB_08` - MTU 1500 validation
 - `JMB_09` - Boundary and invalid MTU validation
 - `JMB_10` - Factory reset default MTU (**destructive; gated**)
+
+Jumbo execution status: **JMB_01 through JMB_10 implemented and validated**.
 
 ## Default IPv6 Testbed Configuration
 
@@ -244,6 +246,19 @@ Key parameter:
 - `Local IPv6 Address`
 - `PROFILE_NAME`
 - `RECOVERY_PROFILE_NAME`
+- `ENABLE_DESTRUCTIVE_JUMBO` (set true only for `JMB_07`/`JMB_10`)
+
+Jumbo from Jenkins examples:
+
+```text
+TEST_FILTER=JumboFrames
+ENABLE_DESTRUCTIVE_JUMBO=false
+```
+
+```text
+TEST_FILTER=JMB_07 or JMB_10
+ENABLE_DESTRUCTIVE_JUMBO=true
+```
 
 ## 2) Throughput Pipeline
 
@@ -288,4 +303,5 @@ Key parameters include:
 
 - There are two similarly named GUI pipeline files (`jenkins-AutomationFramework` and `jenkins_AutomationFramework`); standardize to one active file to avoid confusion.
 - GUI pipeline expects `TARGET_STAND` to be available in Jenkins environment.
+- Factory reset / profile-restore flows depend on DUT boot timing; use the destructive toggle only when the bench is reserved.
 

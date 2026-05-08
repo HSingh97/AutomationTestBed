@@ -19,7 +19,7 @@ class CommonLocators:
     # Top/global action buttons
     SAVE_BUTTON = "input.cbi-button[value='Save']"
     APPLY_ICON = "#header_apply"
-    CONFIRM_APPLY = "input[value='Apply']"
+    CONFIRM_APPLY = "input[value='Apply']:visible"
 
     # Sidebar top-level menus
     MENU_WIRELESS = "li.Wireless > a.menu"

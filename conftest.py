@@ -121,7 +121,17 @@ async def root_ssh(bsu_ip, device_creds, recovery_manager):
         "channel_log": f"logs/root_cli_{bsu_ip}.log",
     }
     conn = AsyncGenericDriver(**device)
-    await conn.open()
+    open_errors = []
+    for wait_s in (0, 15, 20, 20):
+        if wait_s:
+            await asyncio.sleep(wait_s)
+        try:
+            await conn.open()
+            break
+        except Exception as exc:
+            open_errors.append(str(exc))
+    else:
+        raise RuntimeError(f"Unable to open root SSH to {bsu_ip} after retries: {' | '.join(open_errors)}")
     await recovery_manager.ensure_link_or_recover(bsu_ip=bsu_ip, device_creds=device_creds, root_ssh=conn)
     yield conn
     await conn.close()
