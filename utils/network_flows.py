@@ -17,8 +17,14 @@ async def _goto_admin_path(gui_page, path_fragment: str):
 
 
 async def open_network_submenu(gui_page, href_fragment):
-    await gui_page.locator(CommonLocators.MENU_NETWORK).first.click()
-    await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
+    try:
+        await gui_page.locator(CommonLocators.MENU_NETWORK).first.click(timeout=5000)
+        await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
+    except Exception:
+        used_direct = await _goto_admin_path(gui_page, href_fragment)
+        if used_direct:
+            return
+        raise
     submenu = gui_page.locator(CommonLocators.submenu_by_href(href_fragment)).first
     try:
         await submenu.click(timeout=5000)

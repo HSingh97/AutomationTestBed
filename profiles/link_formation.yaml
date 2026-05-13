@@ -34,3 +34,15 @@ recovery:
 traffic:
   benchmark_backend: ixia
   stats_backend: trex
+
+capture:
+  enabled: true
+  username: root
+  password: ""
+  tool: tcpdump
+  artifact_dir: logs/jumbo_captures
+  remote_tmp_dir: /tmp/ubr_jumbo_captures
+  bts_host: ""
+  cpe_host: ""
+  bts_interface: enp3s0
+  cpe_interface: enp3s0

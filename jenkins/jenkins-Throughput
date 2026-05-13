@@ -27,7 +27,7 @@ pipeline {
         string(name: 'RECOVERY_PROFILE_NAME', defaultValue: 'link_formation', description: 'Recovery profile from profiles/<name>.yaml')
         string(name: 'TRAFFIC_MODE', defaultValue: 'benchmark', description: 'benchmark (IXIA) or stats_check (TRex)')
         string(name: 'TRAFFIC_BACKEND', defaultValue: 'ixia', description: 'ixia or trex')
-        string(name: 'TREX_SERVER', defaultValue: '127.0.0.1', description: 'TRex server for stats-check mode')
+        string(name: 'TREX_SERVER', defaultValue: '192.168.3.3', description: 'TRex server for stats-check mode')
     }
 
     stages {
@@ -118,7 +118,7 @@ pipeline {
                                     echo "--------------------------------------------------------------"
 
                                     def throughput_cmd = """
-                                        python3.10 tests/Throughput/test_throughput.py \
+                                        python3.10 traffic/throughput_runner.py \
                                         --mode keep \
                                         --cpes ${cpes} \
                                         --target ${effectiveTarget} \

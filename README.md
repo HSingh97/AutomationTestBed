@@ -28,8 +28,10 @@ Automation framework for UBR validation with:
 - `tests/JumboFrames/`
   Jumbo frame suite:
   - `test_jumbo_frames.py` (JMB_01 ... JMB_10)
-- `tests/Throughput/test_throughput.py`  
-  IXIA benchmark or TRex stats-check execution + throughput/latency collection + JSON/PDF outputs.
+- `traffic/throughput_runner.py`  
+  Shared framework throughput entrypoint for IXIA benchmark or TRex stats-check execution.
+- `traffic/trex_stats_check.py`
+  Shared lightweight TRex sanity/stats runner.
 - `profiles/`
   Profile-driven runtime defaults:
   - `default.yaml`
@@ -38,14 +40,12 @@ Automation framework for UBR validation with:
   Profile loading, validation, and CLI override merge.
 - `utils/recovery_manager.py`
   Shared link health checks and recovery metrics tracking.
-- `utils/traffic/trex_runner.py`
+- `traffic/trex_runner.py`
   TRex stats-check runner abstraction.
 - `pages/commands.py`  
   Shared backend command templates, including bandwidth and MCS sequence helpers.
 - `jenkins/jenkins-AutomationFramework`  
   Jenkins pipeline for GUI automation.
-- `jenkins/jenkins-Throughput`  
-  Jenkins pipeline for throughput automation loops (Bandwidth/MCS/Ratio/Mode).
 
 ## What Is Already Done
 
@@ -127,17 +127,13 @@ These values are now defaulted in profiles and CLI for consistent runs:
 
 ### Throughput Automation
 
-- IXIA REST-based throughput runner is implemented in `tests/Throughput/test_throughput.py`.
+- Shared throughput entrypoint is `traffic/throughput_runner.py`.
 - Supports traffic modes via ratios:
   - Downlink (`100:0`)
   - Uplink (`0:100`)
   - Bidirectional (for input ratios, default includes `80:20`)
 - Collects throughput + latency + loss and exports JSON for Jenkins.
 - Generates IXIA PDF report from Python script output.
-- Jenkins throughput pipeline loops all combinations of:
-  - Bandwidth
-  - MCS
-  - DL/UL ratio profiles
 - MCS iteration applies backend settings per loop using command helpers:
   - disable DDRS
   - set spatial stream
@@ -206,10 +202,10 @@ venv/bin/python -m pytest tests/JumboFrames/test_jumbo_frames.py -v \
   -k "JMB_07 or JMB_10"
 ```
 
-## 2) Throughput script (standalone run)
+## 2) Throughput script (shared runner)
 
 ```bash
-python3.10 tests/Throughput/test_throughput.py \
+python3.10 traffic/throughput_runner.py \
   --mode keep \
   --cpes 16 \
   --target 800 \
@@ -260,32 +256,11 @@ TEST_FILTER=JMB_07 or JMB_10
 ENABLE_DESTRUCTIVE_JUMBO=true
 ```
 
-## 2) Throughput Pipeline
-
-- File: `jenkins/jenkins-Throughput`
-- Purpose: execute full matrix for throughput validation and build detailed HTML output.
-
-Key parameters include:
-- `Bandwidth`
-- `MCS`
-- `Ratios`
-- `Ixia Tool IP`
-- `Target Total Throughput Mbps`
-- `No of CPE`
-- `Packet Size`
-- `Spatial Stream`
-- `DDRS Rate`
-- `PROFILE_NAME`
-- `RECOVERY_PROFILE_NAME`
-- `TRAFFIC_MODE`
-- `TRAFFIC_BACKEND`
-- `TREX_SERVER`
-
 ## Current Status
 
 - Core GUI automation: **stable and runnable**.
 - Throughput automation: **implemented and runnable** with looping, mode coverage, and telemetry capture.
-- Jenkins integration: **in place** for both GUI and throughput use-cases.
+- Jenkins integration: **in place** for GUI use-cases.
 - Command standardization: **started** via `pages/commands.py` helper methods for throughput radio configuration sequence.
 
 ## Work In Progress

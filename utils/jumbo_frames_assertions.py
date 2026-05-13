@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shlex
 import time
 
 import pytest
 from scrapli.driver.generic import AsyncGenericDriver
 
 from pages.locators import EthernetLocators as EL, NetworkLocators as NL, UITimeouts
+from traffic.packet_capture import icmp_payload_for_mtu
 from utils.gui_login import login_if_needed
 from utils.network_flows import navigate_to_ethernet
 from utils.parsers import ssh_scalar
@@ -178,6 +180,110 @@ async def _read_backend_mtus(root_ssh, lan_total: int) -> dict[str, str]:
     return mtus
 
 
+def _remote_dut_host_from_profile() -> str | None:
+    manager = get_active_recovery_manager()
+    if not manager:
+        return None
+    dut = manager.profile_bundle.active.get("dut", {})
+    ipv6_targets = dut.get("remote_ipv6s", [])
+    if ipv6_targets:
+        return str(ipv6_targets[0]).strip()
+    ipv4_targets = dut.get("remote_ips", [])
+    if ipv4_targets:
+        return str(ipv4_targets[0]).strip()
+    return None
+
+
+async def _set_backend_mtus_via_ssh(root_ssh, lan_total: int, mtu: str):
+    commands = []
+    for i in range(lan_total):
+        key = _eth_key(i)
+        commands.append(f"uci set ethernet.{key}.mtu={shlex.quote(mtu)}")
+        commands.append(f"ifconfig {key} mtu {shlex.quote(mtu)} || ip link set dev {key} mtu {shlex.quote(mtu)} || true")
+    commands.append("uci commit ethernet")
+    commands.append(f"ifconfig br-lan mtu {shlex.quote(mtu)} || ip link set dev br-lan mtu {shlex.quote(mtu)} || true")
+    for command in commands:
+        await root_ssh.send_command(command)
+
+
+async def _restore_backend_mtus_via_ssh(root_ssh, original: dict[str, str]):
+    commands = []
+    for key, mtu in original.items():
+        commands.append(f"uci set ethernet.{key}.mtu={shlex.quote(mtu)}")
+        commands.append(f"ifconfig {key} mtu {shlex.quote(mtu)} || ip link set dev {key} mtu {shlex.quote(mtu)} || true")
+    commands.append("uci commit ethernet")
+    if original:
+        first_mtu = next(iter(original.values()))
+        commands.append(
+            f"ifconfig br-lan mtu {shlex.quote(first_mtu)} || ip link set dev br-lan mtu {shlex.quote(first_mtu)} || true"
+        )
+    for command in commands:
+        await root_ssh.send_command(command)
+
+
+async def _open_remote_cpe_ssh(device_creds):
+    remote_host = _remote_dut_host_from_profile()
+    if not remote_host:
+        return None
+    return await _open_temp_root_ssh(remote_host, device_creds["pass"])
+
+
+async def _read_backend_mtu_map(root_ssh) -> dict[str, str]:
+    result = await root_ssh.send_command("uci show ethernet")
+    text = str(result.result or "")
+    keys = sorted(set(re.findall(r"ethernet\.(eth\d+)\.mtu=", text)))
+    mtus: dict[str, str] = {}
+    for key in keys:
+        mtu = ssh_scalar((await root_ssh.send_command(f"uci get ethernet.{key}.mtu")).result)
+        if mtu:
+            mtus[key] = mtu
+    return mtus
+
+
+async def _configure_remote_cpe_mtus_via_ssh(remote_ssh, mtu: str) -> int:
+    current = await _read_backend_mtu_map(remote_ssh)
+    if not current:
+        raise RuntimeError("Unable to discover remote CPE ethernet MTU keys over SSH.")
+    for key in current:
+        await remote_ssh.send_command(f"ucidyn set ethernet.{key}.mtu {shlex.quote(mtu)}")
+    await remote_ssh.send_command("ucidyn apply")
+    return len(current)
+
+
+async def _restore_remote_cpe_mtus_via_ssh(remote_ssh, original: dict[str, str]):
+    for key, mtu in original.items():
+        await remote_ssh.send_command(f"ucidyn set ethernet.{key}.mtu {shlex.quote(mtu)}")
+    await remote_ssh.send_command("ucidyn apply")
+
+
+async def _backup_local_and_remote_mtus(root_ssh, gui_page, bsu_ip, device_creds):
+    lan_total, local_original = await _backup_and_enter_ethernet(root_ssh, gui_page, bsu_ip, device_creds)
+    remote_ssh = await _open_remote_cpe_ssh(device_creds)
+    remote_original = None
+    if remote_ssh is not None:
+        remote_original = await _read_backend_mtu_map(remote_ssh)
+    return lan_total, local_original, remote_ssh, remote_original
+
+
+async def _restore_local_and_remote_mtus(
+    root_ssh,
+    gui_page,
+    bsu_ip,
+    device_creds,
+    local_original: dict[str, str],
+    remote_ssh,
+    remote_original: dict[str, str] | None,
+):
+    try:
+        if remote_ssh is not None and remote_original:
+            await _restore_remote_cpe_mtus_via_ssh(remote_ssh, remote_original)
+            await _assert_backend_all(remote_ssh, len(remote_original), next(iter(remote_original.values())))
+    finally:
+        if remote_ssh is not None:
+            await remote_ssh.close()
+    await _restore_mtus(root_ssh, gui_page, bsu_ip, device_creds, local_original)
+
+
 def _extract_ifconfig_mtu(ifconfig_output: str) -> str:
     text = str(ifconfig_output or "")
     # BusyBox ifconfig format usually includes "MTU:1500"
@@ -222,23 +328,34 @@ def _icmp_target_from_profile() -> str | None:
     return None
 
 
-async def _icmp_jumbo_check(root_ssh, payload_size: int, *, count: int = 5):
-    target = _icmp_target_from_profile()
-    if not target:
-        pytest.skip("No remote target found in profile for ICMP jumbo validation.")
-    if ":" in target:
-        cmd = f"ping -6 -c {count} -s {payload_size} {target}"
+async def _icmp_jumbo_check(root_ssh, configured_mtu: int, *, count: int = 5, case_id: str = "JUMBO"):
+    _ = case_id
+    target_host = _icmp_target_from_profile()
+    assert target_host, "Remote DUT IP is not defined in the active profile."
+    payload_size = icmp_payload_for_mtu(configured_mtu, target_host)
+    if ":" in target_host:
+        command = f"ping -6 -c {count} -s {payload_size} {shlex.quote(target_host)}"
     else:
-        cmd = f"ping -c {count} -s {payload_size} {target}"
-    print(f"[JUMBO][ICMP] cmd={cmd}")
-    res = await root_ssh.send_command(cmd)
-    out = (res.result or "").lower()
+        command = f"ping -c {count} -s {payload_size} {shlex.quote(target_host)}"
+    result = await root_ssh.send_command(command)
+    output = str(result.result or "")
+    out = output.lower()
+    print(f"[JUMBO][ICMP] cmd={command}")
     print("[JUMBO][ICMP] raw output start")
-    print((res.result or "").rstrip())
+    print(output.rstrip())
     print("[JUMBO][ICMP] raw output end")
-    assert "100% packet loss" not in out, f"ICMP failed for payload {payload_size}. Output: {res.result}"
-    assert "message too long" not in out, f"MTU insufficient for payload {payload_size}. Output: {res.result}"
-    assert "bytes from" in out, f"No successful ICMP replies for payload {payload_size}. Output: {res.result}"
+    assert "100% packet loss" not in out, (
+        f"Device-to-device ICMP failed for MTU {configured_mtu} payload {payload_size}. "
+        f"Output: {output}"
+    )
+    assert "message too long" not in out, (
+        f"Endpoint MTU insufficient for configured MTU {configured_mtu} payload {payload_size}. "
+        f"Output: {output}"
+    )
+    assert "bytes from" in out, (
+        f"No successful device-to-device ICMP replies for MTU {configured_mtu} payload {payload_size}. "
+        f"Output: {output}"
+    )
 
 
 async def _backup_and_enter_ethernet(root_ssh, gui_page, bsu_ip, device_creds):
@@ -281,48 +398,71 @@ async def assert_jmb_01_configure_and_disable(root_ssh, gui_page, bsu_ip, device
 
 async def assert_jmb_02_configure_9000(root_ssh, gui_page, bsu_ip, device_creds):
     _log_case("JMB_02", "Starting test flow.")
-    lan_total, original = await _backup_and_enter_ethernet(root_ssh, gui_page, bsu_ip, device_creds)
+    lan_total, original, remote_ssh, remote_original = await _backup_local_and_remote_mtus(
+        root_ssh, gui_page, bsu_ip, device_creds
+    )
     try:
+        if remote_ssh is not None:
+            _log_case("JMB_02", "Setting remote CPE LAN MTU to 9000 first.")
+            remote_lan_total = await _configure_remote_cpe_mtus_via_ssh(remote_ssh, "9000")
+            await _assert_backend_all(remote_ssh, remote_lan_total, "9000")
         _log_case("JMB_02", "Setting all LAN MTU to 9000.")
         await _set_mtu_all_lans(gui_page, "9000")
         await _apply(gui_page)
         await _assert_backend_all(root_ssh, lan_total, "9000")
     finally:
         _log_case("JMB_02", "Restoring original MTU values.")
-        await _restore_mtus(root_ssh, gui_page, bsu_ip, device_creds, original)
+        await _restore_local_and_remote_mtus(
+            root_ssh, gui_page, bsu_ip, device_creds, original, remote_ssh, remote_original
+        )
 
 
 async def assert_jmb_03_min_mid_mtu(root_ssh, gui_page, bsu_ip, device_creds):
     _log_case("JMB_03", "Starting test flow.")
-    lan_total, original = await _backup_and_enter_ethernet(root_ssh, gui_page, bsu_ip, device_creds)
+    lan_total, original, remote_ssh, remote_original = await _backup_local_and_remote_mtus(
+        root_ssh, gui_page, bsu_ip, device_creds
+    )
     try:
         for mtu in ("2000", "5000"):
             _log_case("JMB_03", f"Applying MTU={mtu} on all LAN interfaces.")
+            if remote_ssh is not None:
+                _log_case("JMB_03", f"Setting remote CPE LAN MTU={mtu} first.")
+                remote_lan_total = await _configure_remote_cpe_mtus_via_ssh(remote_ssh, mtu)
+                await _assert_backend_all(remote_ssh, remote_lan_total, mtu)
             await _ensure_ethernet_ready(gui_page)
             await _set_mtu_all_lans(gui_page, mtu)
             await _apply(gui_page, settle_seconds=8)
             await _assert_backend_all(root_ssh, lan_total, mtu)
-            # ICMP payload reserves header space under configured MTU.
-            _log_case("JMB_03", f"Running ICMP validation for MTU={mtu}.")
-            await _icmp_jumbo_check(root_ssh, payload_size=int(mtu) - 42)
+            _log_case("JMB_03", f"Running device-to-device ICMP validation for MTU={mtu}.")
+            await _icmp_jumbo_check(root_ssh, configured_mtu=int(mtu), case_id="JMB_03")
     finally:
         _log_case("JMB_03", "Restoring original MTU values.")
-        await _restore_mtus(root_ssh, gui_page, bsu_ip, device_creds, original)
+        await _restore_local_and_remote_mtus(
+            root_ssh, gui_page, bsu_ip, device_creds, original, remote_ssh, remote_original
+        )
 
 
 async def assert_jmb_04_max_mtu_9000(root_ssh, gui_page, bsu_ip, device_creds):
     _log_case("JMB_04", "Starting test flow.")
-    lan_total, original = await _backup_and_enter_ethernet(root_ssh, gui_page, bsu_ip, device_creds)
+    lan_total, original, remote_ssh, remote_original = await _backup_local_and_remote_mtus(
+        root_ssh, gui_page, bsu_ip, device_creds
+    )
     try:
+        if remote_ssh is not None:
+            _log_case("JMB_04", "Setting remote CPE LAN MTU to 9000 first.")
+            remote_lan_total = await _configure_remote_cpe_mtus_via_ssh(remote_ssh, "9000")
+            await _assert_backend_all(remote_ssh, remote_lan_total, "9000")
         _log_case("JMB_04", "Setting all LAN MTU to 9000.")
         await _set_mtu_all_lans(gui_page, "9000")
         await _apply(gui_page)
         await _assert_backend_all(root_ssh, lan_total, "9000")
-        _log_case("JMB_04", "Running ICMP validation for MTU=9000.")
-        await _icmp_jumbo_check(root_ssh, payload_size=8958)
+        _log_case("JMB_04", "Running device-to-device ICMP validation for MTU=9000.")
+        await _icmp_jumbo_check(root_ssh, configured_mtu=9000, case_id="JMB_04")
     finally:
         _log_case("JMB_04", "Restoring original MTU values.")
-        await _restore_mtus(root_ssh, gui_page, bsu_ip, device_creds, original)
+        await _restore_local_and_remote_mtus(
+            root_ssh, gui_page, bsu_ip, device_creds, original, remote_ssh, remote_original
+        )
 
 
 async def assert_jmb_05_mgmt_vlan_mtu(root_ssh, gui_page, bsu_ip, device_creds):
@@ -347,17 +487,25 @@ async def assert_jmb_05_mgmt_vlan_mtu(root_ssh, gui_page, bsu_ip, device_creds):
 
 async def assert_jmb_06_jumbo_with_p2mp(root_ssh, gui_page, bsu_ip, device_creds):
     _log_case("JMB_06", "Starting test flow.")
-    lan_total, original = await _backup_and_enter_ethernet(root_ssh, gui_page, bsu_ip, device_creds)
+    lan_total, original, remote_ssh, remote_original = await _backup_local_and_remote_mtus(
+        root_ssh, gui_page, bsu_ip, device_creds
+    )
     try:
+        if remote_ssh is not None:
+            _log_case("JMB_06", "Setting remote CPE LAN MTU to 9000 first.")
+            remote_lan_total = await _configure_remote_cpe_mtus_via_ssh(remote_ssh, "9000")
+            await _assert_backend_all(remote_ssh, remote_lan_total, "9000")
         _log_case("JMB_06", "Setting all LAN MTU to 9000.")
         await _set_mtu_all_lans(gui_page, "9000")
         await _apply(gui_page)
         await _assert_backend_all(root_ssh, lan_total, "9000")
-        _log_case("JMB_06", "Running ICMP validation for MTU=9000 (same as JMB_04).")
-        await _icmp_jumbo_check(root_ssh, payload_size=8958)
+        _log_case("JMB_06", "Running device-to-device ICMP validation for MTU=9000 (same as JMB_04).")
+        await _icmp_jumbo_check(root_ssh, configured_mtu=9000, case_id="JMB_06")
     finally:
         _log_case("JMB_06", "Restoring original MTU values.")
-        await _restore_mtus(root_ssh, gui_page, bsu_ip, device_creds, original)
+        await _restore_local_and_remote_mtus(
+            root_ssh, gui_page, bsu_ip, device_creds, original, remote_ssh, remote_original
+        )
 
 
 async def assert_jmb_07_reboot_persistence(root_ssh, gui_page, bsu_ip, device_creds, allow_destructive: bool):
@@ -394,15 +542,23 @@ async def assert_jmb_07_reboot_persistence(root_ssh, gui_page, bsu_ip, device_cr
 
 async def assert_jmb_08_mtu_1500(root_ssh, gui_page, bsu_ip, device_creds):
     _log_case("JMB_08", "Starting test flow.")
-    lan_total, original = await _backup_and_enter_ethernet(root_ssh, gui_page, bsu_ip, device_creds)
+    lan_total, original, remote_ssh, remote_original = await _backup_local_and_remote_mtus(
+        root_ssh, gui_page, bsu_ip, device_creds
+    )
     try:
+        if remote_ssh is not None:
+            _log_case("JMB_08", "Setting remote CPE LAN MTU to 1500 first.")
+            remote_lan_total = await _configure_remote_cpe_mtus_via_ssh(remote_ssh, "1500")
+            await _assert_backend_all(remote_ssh, remote_lan_total, "1500")
         _log_case("JMB_08", "Setting all LAN MTU to 1500.")
         await _set_mtu_all_lans(gui_page, "1500")
         await _apply(gui_page, settle_seconds=6)
         await _assert_backend_all(root_ssh, lan_total, "1500")
     finally:
         _log_case("JMB_08", "Restoring original MTU values.")
-        await _restore_mtus(root_ssh, gui_page, bsu_ip, device_creds, original)
+        await _restore_local_and_remote_mtus(
+            root_ssh, gui_page, bsu_ip, device_creds, original, remote_ssh, remote_original
+        )
 
 
 async def assert_jmb_09_boundary_values(root_ssh, gui_page, bsu_ip, device_creds):

@@ -26,3 +26,27 @@ RADIO_TEST_VALUES = {
     "MAX_CPE_INVALID": "34",
     "CHANNEL_BTS_VALUES": ["36", "149", "165"],
 }
+
+
+TRAFFIC_DEFAULTS = {
+    "trex": {
+        "host": "192.168.3.3",
+        "user": "root",
+        "password": "ubuntu",
+        "directory": "/opt/v3.06",
+        "pythonpath": "/opt/v3.06/automation/trex_control_plane/interactive/",
+        "client_script": "master_script_extended_16SU.py",
+        "ports": "0,1",
+        "server_cores": 4,
+    }
+}
+
+
+CAPTURE_DEFAULTS = {
+    "enabled": False,
+    "username": "root",
+    "password": "senao1234#",
+    "tool": "tcpdump",
+    "artifact_dir": "logs/jumbo_captures",
+    "remote_tmp_dir": "/tmp/ubr_jumbo_captures",
+}
