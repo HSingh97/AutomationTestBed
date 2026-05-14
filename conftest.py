@@ -226,11 +226,21 @@ async def gui_page(gui_browser, bsu_ip, device_creds, recovery_manager):
     await context.tracing.start(screenshots=True, snapshots=True, sources=True)
     page = await context.new_page()
 
-    # Go to the IP and log in
-    await page.goto(f"https://{format_http_host(bsu_ip)}")
-    await page.fill(LoginPageLocators.USERNAME_INPUT, device_creds["user"])
-    await page.fill(LoginPageLocators.PASSWORD_INPUT, device_creds["pass"])
-    await page.locator(LoginPageLocators.PASSWORD_INPUT).press("Enter")
+    # Go to the IP and log in, allowing for transient GUI reachability issues.
+    gui_errors = []
+    for wait_s in (0, 5, 10, 15):
+        if wait_s:
+            await asyncio.sleep(wait_s)
+        try:
+            await page.goto(f"https://{format_http_host(bsu_ip)}")
+            await page.fill(LoginPageLocators.USERNAME_INPUT, device_creds["user"])
+            await page.fill(LoginPageLocators.PASSWORD_INPUT, device_creds["pass"])
+            await page.locator(LoginPageLocators.PASSWORD_INPUT).press("Enter")
+            break
+        except Exception as exc:
+            gui_errors.append(str(exc))
+    else:
+        raise RuntimeError(f"Unable to open GUI to {bsu_ip} after retries: {' | '.join(gui_errors)}")
 
     print("    -> Waiting 3 seconds for Dashboard routing...")
     await page.wait_for_timeout(3000)

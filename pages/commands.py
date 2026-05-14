@@ -43,6 +43,12 @@ class RootCommands:
 
     # Optional: Command to check logs for the timestamp verify
     GET_LOGS = "logread | tail -n 20"
+    GET_BRIDGE_FDB = "brctl showmacs br-lan"
+    GET_ARP_TABLE = "arp"
+    GET_CONFIG_LOGS = "sed -n '1,200p' /etc/config_logs 2>/dev/null"
+    GET_DEVICE_LOGS = "sed -n '1,200p' /etc/device_logs 2>/dev/null"
+    GET_TEMPERATURE_LOGS = "sed -n '1,200p' /tmp/temp-log 2>/dev/null"
+    GET_SYSTEM_LOGS = "logread"
 
     # --- DYNAMIC LAN COMMANDS ---
     @staticmethod
@@ -151,3 +157,8 @@ class RootCommands:
     @staticmethod
     def remote_apply_all_su():
         return '/usr/sbin/remote_exec.sh 1 "ucidyn apply"'
+
+    @staticmethod
+    def emit_system_log_marker(marker: str):
+        safe_marker = str(marker).replace("'", "'\"'\"'")
+        return f"logger -t cursor_monitor '{safe_marker}'"

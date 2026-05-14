@@ -202,6 +202,128 @@ def parse_ifconfig_mac(ssh_str):
     return ""
 
 
+def normalize_mac_address(raw_mac):
+    match = re.search(r'([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})', str(raw_mac or ""))
+    return match.group(1).upper() if match else ""
+
+
+def normalize_monitor_interface_label(raw_label):
+    label = str(raw_label or "").strip().lower()
+    mapping = {
+        "eth0": "LAN 1",
+        "lan 1": "LAN 1",
+        "lan1": "LAN 1",
+        "eth1": "LAN 2",
+        "lan 2": "LAN 2",
+        "lan2": "LAN 2",
+        "ath1": "Radio 1",
+        "radio 1": "Radio 1",
+        "radio1": "Radio 1",
+        "ath0": "Radio 2",
+        "radio 2": "Radio 2",
+        "radio2": "Radio 2",
+        "br-lan": "Bridge",
+        "bridge": "Bridge",
+    }
+    if label in mapping:
+        return mapping[label]
+    if label.startswith("br-lan"):
+        return "Bridge"
+    return str(raw_label or "").strip()
+
+
+def _is_multicast_mac(mac):
+    mac = normalize_mac_address(mac)
+    if not mac:
+        return False
+    try:
+        return bool(int(mac.split(":")[0], 16) & 1)
+    except ValueError:
+        return False
+
+
+def parse_bridge_fdb_entries(raw_output):
+    text = str(raw_output or "").replace("\r", "")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    entries = []
+    seen = set()
+
+    port_map = {
+        "1": "LAN 1",
+        "2": "LAN 2",
+        "3": "Radio 1",
+        "4": "Radio 2",
+    }
+    for line in lines:
+        match = re.match(
+            r"^\s*(\d+)\s+([0-9A-Fa-f:]{17})\s+(\w+)\s+([\d.]+)\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            continue
+        port, mac, local_text, ageing_text = match.groups()
+        mac = normalize_mac_address(mac)
+        if not mac or _is_multicast_mac(mac):
+            continue
+        interface = port_map.get(port, f"Port {port}")
+        local = local_text.lower() in {"yes", "y", "true", "1"}
+        ageing_seconds = float(ageing_text)
+        signature = (interface, mac, local)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        entries.append(
+            {
+                "interface": interface,
+                "mac": mac,
+                "local": local,
+                "ageing_seconds": ageing_seconds,
+                "source_dev": port,
+            }
+        )
+    return entries
+
+
+def parse_arp_entries(raw_output):
+    text = str(raw_output or "").replace("\r", "")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    entries = []
+    seen = set()
+
+    for line in lines[1:]:
+        parts = re.split(r"\s+", line)
+        if len(parts) < 6:
+            continue
+        ip_text, _hw_type, _flags, mac_text, _mask, dev = parts[:6]
+        mac = normalize_mac_address(mac_text)
+        if not mac:
+            continue
+        signature = (normalize_monitor_interface_label(dev), mac, ip_text)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        entries.append(
+            {
+                "interface": normalize_monitor_interface_label(dev),
+                "mac": mac,
+                "ip": ip_text,
+                "state": "",
+            }
+        )
+    return entries
+
+
+def parse_monitor_log_lines(raw_output, *, newest_first=False, empty_placeholder=True):
+    text = str(raw_output or "").replace("\r", "")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if newest_first:
+        lines = list(reversed(lines))
+    if not lines and empty_placeholder:
+        return ["Log File is empty"]
+    return lines
+
+
 def parse_iwconfig_active_channel(ssh_str):
     """
     Parses iwconfig output to extract frequency and calculate the Wi-Fi channel.

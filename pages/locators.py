@@ -248,3 +248,30 @@ class ManagementLocators:
     LOCATION_PHONE_XPATH = '//*[@id="cusphone"]/div/input'
     LOCATION_DISTANCE_XPATH = '//*[@id="maincontent"]/div/div[1]/fieldset/form/div[8]/div/select'
 
+
+class MonitorLocators:
+    MENU_MONITOR = CommonLocators.MENU_MONITOR
+    SUBMENU_LEARN_TABLE = CommonLocators.submenu_by_href("/monitor/learntable")
+    SUBMENU_SYSTEM_LOGS = CommonLocators.submenu_by_href("/monitor/logs")
+
+    TABLE_TABS = "ul.cbi-tabmenu > li > a"
+    BRIDGE_TAB = "ul.cbi-tabmenu > li > a[href*='/monitor/learntable']:not([href*='arptbl'])"
+    ARP_TAB = "ul.cbi-tabmenu > li > a[href*='/monitor/learntable/arptbl']"
+    LOG_CONFIG_TAB = "li#Configuration > a"
+    LOG_DEVICE_TAB = "li#Device > a"
+    LOG_TEMPERATURE_TAB = "li#Temperature > a"
+    LOG_SYSTEM_TAB = "li#System > a"
+
+    INTERFACE_FILTER = "#intf_type"
+    REFRESH_BUTTON = "#refresh"
+    CLEAR_BUTTON = "#clear"
+    SPINNER = "#spin"
+    LOG_REFRESH_BUTTON = "input.cbi-button[value='Refresh']"
+    LOG_CLEAR_BUTTON = "#clr_button"
+    LOG_TEXTAREA = "#result"
+
+    BRIDGE_TABLE = "#brctl-list"
+    BRIDGE_ROWS = "#brctl-list tr"
+    ARP_TABLE = "#arp-list"
+    ARP_ROWS = "#arp-list tr"
+
