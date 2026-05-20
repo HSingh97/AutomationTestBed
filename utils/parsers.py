@@ -175,6 +175,41 @@ def parse_bandwidth(ssh_str):
     return str(ssh_str).strip()
 
 
+def parse_enable_disable_flag(ssh_str):
+    val = extract_uci_value(ssh_str)
+    if val == "1":
+        return "Enable"
+    if val == "0":
+        return "Disable"
+    return val
+
+
+def parse_dl_ul_ratio(ssh_str):
+    val = extract_uci_value(ssh_str)
+    if val == "0":
+        return "Auto"
+    if val.isdigit():
+        downlink = int(val)
+        uplink = max(0, 100 - downlink)
+        return f"{downlink}/{uplink}"
+    return val
+
+
+def parse_spatial_stream(ssh_str):
+    val = extract_uci_value(ssh_str)
+    mapping = {
+        "1": "Single",
+        "2": "Dual",
+        "3": "Auto",
+    }
+    return mapping.get(val, val)
+
+
+def parse_modulation_index(ssh_str):
+    val = extract_uci_value(ssh_str)
+    return f"MCS{val}" if str(val).isdigit() else val
+
+
 def parse_security(ssh_str):
     """Validates if security contains ccmp or psk"""
     val = extract_uci_value(ssh_str).lower()

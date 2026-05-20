@@ -30,6 +30,17 @@ recovery:
   allow_factory_reset: true
   factory_reset_command: firstboot && reboot
   reboot_wait_seconds: 150
+  restore_default_ip: "192.168.2.1"
+  bts_restore_archive: config/BTS.tar.gz
+
+regression:
+  iterations: 3
+  ping_count: 5
+  web_timeout_seconds: 20
+  reboot_wait_seconds: 150
+  network_reload_wait_seconds: 30
+  reboot_via_gui: false
+  firmware_image: ""
 
 traffic:
   benchmark_backend: ixia

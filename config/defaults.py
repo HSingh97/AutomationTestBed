@@ -12,7 +12,13 @@ DEFAULT_VALUES = {
     "Radio Mode": "BTS",
     "SSID": "Senao_Default_SSID",
     "Bandwidth": "20 MHz",
+    "DL/UL Ratio": "Auto",
     "Maximum SUs": "16",
+    "DDRS Status": "Enable",
+    "Spatial Stream": "Auto",
+    "ATPC Status": "Disable",
+    "Transmit Power": "26",
+    "Maximum EIRP": "0",
 
     # You can expand this as you build out other pages!
     # "IP Address": "192.168.1.1",
@@ -25,6 +31,17 @@ RADIO_TEST_VALUES = {
     "MAX_CPE_VALID": "10",
     "MAX_CPE_INVALID": "34",
     "CHANNEL_BTS_VALUES": ["36", "149", "165"],
+    "DL_UL_RATIO_VALUES": ["50/50", "80/20"],
+    "DDRS_STATUS_VALUES": ["Disable", "Enable"],
+    "SPATIAL_STREAM_VALUES": ["Single", "Dual"],
+    "MODULATION_INDEX_VALUES": ["MCS12 ( 72 Mbps )", "MCS23 ( 1201 Mbps )"],
+    "TRANSMIT_POWER_VALUES": ["1", "26"],
+    "TRANSMIT_POWER_INVALID": "27",
+    "MAX_EIRP_VALID": "10",
+    "MAX_EIRP_INVALID": "101",
+    "TREX_BEHAVIOR_DURATION_S": 10,
+    "TREX_BEHAVIOR_DL_BW": "200M",
+    "TREX_BEHAVIOR_UL_BW": "200M",
 }
 
 

@@ -221,6 +221,95 @@ flowchart LR
 
 </details>
 
+<details>
+<summary><code>GUI_23</code> DL/UL Ratio</summary>
+
+```mermaid
+flowchart LR
+    A[Open Wireless > Radio 1 > DDRS/ATPC] --> B[Exercise DL/UL ratio dropdown lifecycle]
+    B --> C[Save and apply]
+    C --> D[Verify backend ath1qos.qoscfg.dlulratio via SSH]
+    D --> E[Restore baseline]
+```
+
+</details>
+
+<details>
+<summary><code>GUI_24</code> DDRS Status</summary>
+
+```mermaid
+flowchart LR
+    A[Open Wireless > Radio 1 > DDRS/ATPC] --> B[Toggle DDRS status in GUI]
+    B --> C[Save and apply]
+    C --> D[Verify txparam.ath1.ddrsstatus via SSH]
+    D --> E[Restore baseline]
+```
+
+</details>
+
+<details>
+<summary><code>GUI_25</code> Spatial Stream</summary>
+
+```mermaid
+flowchart LR
+    A[Open DDRS/ATPC on BTS and CPE] --> B[Spatial stream GUI lifecycle]
+    B --> C[TRex counter_check for non-zero DUT throughput]
+    C --> D[Restore spatial stream via backend ucidyn]
+```
+
+</details>
+
+<details>
+<summary><code>GUI_26</code> Modulation Index</summary>
+
+```mermaid
+flowchart LR
+    A[Open DDRS/ATPC on BTS and CPE] --> B[Modulation index GUI lifecycle]
+    B --> C[TRex counter_check for non-zero DUT throughput]
+    C --> D[Restore modulation via backend ucidyn]
+```
+
+</details>
+
+<details>
+<summary><code>GUI_27</code> ATPC Status</summary>
+
+```mermaid
+flowchart LR
+    A[Open DDRS/ATPC on remote CPE] --> B[ATPC status dropdown lifecycle]
+    B --> C[Save and apply]
+    C --> D[Verify txparam.ath1.atpcstatus via SSH]
+    D --> E[Restore baseline]
+```
+
+</details>
+
+<details>
+<summary><code>GUI_28</code> Transmit Power</summary>
+
+```mermaid
+flowchart LR
+    A[Open Wireless > Radio 1 > DDRS/ATPC] --> B[Exercise transmit power input lifecycle]
+    B --> C[Save and apply]
+    C --> D[Verify txparam.ath1.atpcpower via SSH]
+    D --> E[Restore baseline]
+```
+
+</details>
+
+<details>
+<summary><code>GUI_29</code> Maximum EIRP</summary>
+
+```mermaid
+flowchart LR
+    A[Open Wireless > Radio 1 > DDRS/ATPC] --> B[Exercise max EIRP input lifecycle]
+    B --> C[Save and apply]
+    C --> D[Verify txparam.ath1.maxeirp via SSH]
+    D --> E[Restore baseline]
+```
+
+</details>
+
 ## Network Flowcharts
 
 <details>

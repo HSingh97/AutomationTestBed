@@ -194,6 +194,7 @@ class RadioPropertiesLocators:
 
     
     SUBMENU_RADIO_1 = CommonLocators.submenu_by_href("/wireless/radio1")
+    TAB_DDRS_ATPC = "ul.cbi-tabmenu > li > a[href*='/ddrs1']"
 
     # --- Form Elements ---
     STATUS_DROPDOWN = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[1]/div/select"
@@ -210,6 +211,14 @@ class RadioPropertiesLocators:
     NETWORK_SECRET_INPUT = "input[id*='nwksec'], input[name*='nwksecret']"
     DISTANCE_INPUT = "//*[@name='wireless.wifi1.distance']"
     MAXIMUM_SU_INPUT = "//*[@name='wireless.@wifi-iface[1].maxsta']"
+    DL_UL_RATIO_DROPDOWN = "select[name='ath1qos.qoscfg.dlulratio']"
+
+    DDRS_STATUS_DROPDOWN = "#ddrsstatus"
+    SPATIAL_STREAM_DROPDOWN = "#spatial"
+    MODULATION_INDEX_DROPDOWN = "#rateid"
+    ATPC_STATUS_DROPDOWN = "#atpcstatus"
+    TRANSMIT_POWER_INPUT = "input[name='txparam.ath1.atpcpower']"
+    MAX_EIRP_INPUT = "input[name='txparam.ath1.maxeirp']"
 
 
 

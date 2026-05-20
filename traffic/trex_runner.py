@@ -9,7 +9,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from utils.net_utils import format_ssh_host
+from utils.net_utils import format_ssh_host, is_ipv6_literal, normalize_ip
 
 SSH_OPTIONS = [
     "-o",
@@ -74,10 +74,14 @@ def _strip_ansi(text: str) -> str:
 
 
 def _to_float(value: str) -> float:
-    cleaned = (value or "").strip().replace(",", "")
+    """Parse a numeric string; never raise (DUT samples may contain SSH error text)."""
+    cleaned = (str(value) or "").strip().replace(",", "")
     if not cleaned or cleaned.upper() == "N/A":
         return 0.0
-    return float(cleaned)
+    try:
+        return float(cleaned)
+    except ValueError:
+        return 0.0
 
 
 def _avg(values: list[float]) -> float:
@@ -86,10 +90,17 @@ def _avg(values: list[float]) -> float:
 
 def _build_ssh_command(host: str, user: str, password: str, remote_script: str) -> list[str]:
     ssh_host = format_ssh_host(host)
+    ssh_target = normalize_ip(host)
     command: list[str] = []
     if password:
         command.extend(["sshpass", "-p", password])
-    command.extend(["ssh", *SSH_OPTIONS, f"{user}@{ssh_host}", f"bash -lc {shlex.quote(remote_script)}"])
+    ssh_command = ["ssh", *SSH_OPTIONS]
+    if is_ipv6_literal(ssh_target):
+        ssh_command.extend(["-6", "-l", user, ssh_target])
+    else:
+        ssh_command.append(f"{user}@{ssh_host}")
+    ssh_command.append(f"bash -lc {shlex.quote(remote_script)}")
+    command.extend(ssh_command)
     return command
 
 
@@ -177,6 +188,24 @@ def _stop_trex_server(
     return collector.tail()
 
 
+def _has_running_trex_server(
+    *,
+    trex_server: str,
+    trex_user: str,
+    trex_password: str,
+) -> bool:
+    result = _run_remote_command(
+        trex_server,
+        trex_user,
+        trex_password,
+        "pgrep -af 't-rex-64' || pgrep -af '_t-rex-64' || true",
+        timeout_s=15,
+        check=False,
+    )
+    output = "\n".join(part for part in [result.stdout, result.stderr] if part).strip()
+    return "t-rex-64" in output or "_t-rex-64" in output
+
+
 def _normalize_client_script(script_path: str) -> tuple[str, str]:
     clean = script_path.strip() or "master_script_extended_16SU.py"
     if "/" in clean:
@@ -210,7 +239,22 @@ def _sample_dut_counters(
             timeout_s=15,
             check=False,
         )
-        raw_value = (result.stdout or result.stderr or "").strip().splitlines()
+        combined = "\n".join(
+            part for part in (result.stdout, result.stderr) if part
+        ).strip()
+        if any(
+            err in combined
+            for err in (
+                "Could not resolve hostname",
+                "Permission denied",
+                "Connection refused",
+                "Connection timed out",
+                "No route to host",
+            )
+        ):
+            snapshot[key] = ""
+            continue
+        raw_value = combined.splitlines()
         snapshot[key] = raw_value[-1].strip() if raw_value else ""
     return snapshot
 
@@ -388,10 +432,12 @@ def run_trex_stats_check(
     dut_password: str = "",
     dut_radio_idx: int = 1,
     dut_sample_interval_s: int = 5,
+    reuse_existing_server: bool = False,
 ) -> dict[str, object]:
     server_process = None
     server_output = ""
     client_output = ""
+    server_reused = False
 
     client_dir, client_name = _normalize_client_script(trex_client_script)
     client_cd = "cd ~" if client_dir == "~" else f"cd {shlex.quote(client_dir)}"
@@ -445,16 +491,23 @@ def run_trex_stats_check(
     validation: dict[str, object]
 
     try:
-        server_process, server_collector = _start_trex_server(
+        if reuse_existing_server and _has_running_trex_server(
             trex_server=trex_server,
             trex_user=trex_user,
             trex_password=trex_password,
-            trex_dir=trex_dir,
-            server_cores=trex_server_cores,
-        )
-        time.sleep(max(1, trex_server_startup_s))
-        if server_process.poll() is not None:
-            raise RuntimeError(f"TRex server exited early: {server_collector.tail()}")
+        ):
+            server_reused = True
+        else:
+            server_process, server_collector = _start_trex_server(
+                trex_server=trex_server,
+                trex_user=trex_user,
+                trex_password=trex_password,
+                trex_dir=trex_dir,
+                server_cores=trex_server_cores,
+            )
+            time.sleep(max(1, trex_server_startup_s))
+            if server_process.poll() is not None:
+                raise RuntimeError(f"TRex server exited early: {server_collector.tail()}")
 
         dut_counters["pre"] = _sample_dut_counters(
             dut_host=dut_host,
@@ -554,6 +607,7 @@ def run_trex_stats_check(
                 "pythonpath": trex_pythonpath,
                 "client_script": trex_client_script,
                 "server_cores": trex_server_cores,
+                "reused_existing_server": server_reused,
             },
             "client_config": {
                 "su_count": trex_su_count,
@@ -596,7 +650,7 @@ def run_trex_stats_check(
             "server_output_tail": server_output,
         }
     finally:
-        if server_process is not None:
+        if server_process is not None and not server_reused:
             server_output = _stop_trex_server(
                 server_process,
                 server_collector,
