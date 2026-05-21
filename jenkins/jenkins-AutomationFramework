@@ -1,68 +1,107 @@
+// UBR GUI automation — runs on TARGET_STAND; generates Senao_Release_* customer HTML/CSV via report_generator.py
+
+def archiveArtifacts(pattern) {
+    step([$class: 'ArtifactArchiver', artifacts: pattern, fingerprint: true, onlyIfSuccessful: false])
+}
+
+def resolveUserEmail() {
+    def buildCauses = currentBuild.getBuildCauses()
+    def userCause = buildCauses.find { it._class == 'hudson.model.Cause$UserIdCause' }
+    def buildUserId = userCause?.userId ?: 'unknown'
+    def userEmails = [
+        'puneet': 'puneet.sharma@senao.com',
+        'harman': 'harmanjot.singh@senao.com',
+        'mahesh': 'mahesh.battala@senao.com',
+        'sandeep': 'sandeep.manchikanti@senao.com',
+        'sampath': 'sampath.marella@senao.com',
+        'jayanth': 'jayanth.munnaluru@senao.com',
+        'srilatha': 'srilatha.tadiboina@senao.com',
+        'phani': 'phani.darla@senao.com',
+        'dinesh': 'dinesh.redddy@senao.com'
+    ]
+    return [
+        name: userCause?.userName ?: 'Unknown User',
+        id: buildUserId,
+        email: userEmails.get(buildUserId, 'harmanjot.singh@senao.com')
+    ]
+}
+
 pipeline {
-    agent { node { label "${TARGET_STAND}" } } // Note: Ensure TARGET_STAND is defined globally or injected!
+    agent { node { label "${TARGET_STAND}" } }
 
     parameters {
-        string(name: 'TEST_FILTER', defaultValue: 'Summary, TopPanel, WirelessProperties', description: 'Enter test keyword (e.g., gui_0, gui_10) or comma-separated list')
-        string(name: 'Local IPv6 Address', defaultValue: 'fd00:2::230', description: 'IPv6 address of the target device')
-        string(name: 'PROFILE_NAME', defaultValue: 'default', description: 'Primary automation profile from profiles/<name>.yaml')
-        string(name: 'RECOVERY_PROFILE_NAME', defaultValue: 'link_formation', description: 'Recovery profile from profiles/<name>.yaml')
-        booleanParam(name: 'ENABLE_DESTRUCTIVE_JUMBO', defaultValue: false, description: 'Allow destructive jumbo tests (JMB_07/JMB_10)')
+        string(
+            name: 'TEST_FILTER',
+            defaultValue: 'Summary, TopPanel, WirelessProperties',
+            description: 'Pytest -k filter (comma-separated keywords, e.g. GUI_05, WirelessProperties)'
+        )
+        string(
+            name: 'Local IPv6 Address',
+            defaultValue: '',
+            description: 'BTS IPv6. Leave empty to use profiles/<PROFILE_NAME>.yaml default'
+        )
+        string(
+            name: 'PROFILE_NAME',
+            defaultValue: 'default',
+            description: 'Primary profile: profiles/<name>.yaml'
+        )
+        string(
+            name: 'RECOVERY_PROFILE_NAME',
+            defaultValue: 'link_formation',
+            description: 'Recovery profile: profiles/<name>.yaml'
+        )
+        booleanParam(
+            name: 'ENABLE_DESTRUCTIVE_JUMBO',
+            defaultValue: false,
+            description: 'Allow destructive jumbo tests (JMB_07/JMB_10)'
+        )
     }
 
     stages {
         stage('Prepare tests') {
             steps {
                 script {
-                    echo "----------------------------------------"
+                    echo '----------------------------------------'
+                    echo 'UBR GUI Automation (pytest)'
                     echo "--- TARGET STAND: ${TARGET_STAND}"
                     echo "--- TEST FILTER:  ${params.TEST_FILTER}"
-                    echo "----------------------------------------"
-                    if (!params['Local IPv6 Address']) {
-                        error "Missing required parameters: Local IPv6 Address"
-                    }
+                    echo "Local IPv6:     ${params['Local IPv6 Address'] ?: '(profile default)'}"
+                    echo "Profile:        ${params.PROFILE_NAME}"
+                    echo '----------------------------------------'
                 }
             }
         }
+
         stage('Install Dependencies') {
             steps {
-                script {
-                    echo "----------------------------------------"
-                    echo "Installing Dependencies"
-                    echo "----------------------------------------"
-                    sh """
-                        python3.10 -m venv venv
-                        venv/bin/pip install --upgrade pip
-                        venv/bin/pip install -r requirements.txt pytest-check pytest-json-report
-                        venv/bin/playwright install chromium
-                    """
-                }
+                sh '''
+                    python3 -m venv venv
+                    venv/bin/pip install --upgrade pip
+                    venv/bin/pip install -r requirements.txt
+                    venv/bin/playwright install chromium
+                '''
             }
         }
+
         stage('Execute Pytest Suite') {
             steps {
                 script {
-                    def localIP = params['Local IPv6 Address']
+                    def localIP = (params['Local IPv6 Address'] ?: '').trim()
                     def profileName = params.PROFILE_NAME
                     def recoveryProfileName = params.RECOVERY_PROFILE_NAME
                     def destructiveFlag = params.ENABLE_DESTRUCTIVE_JUMBO ? '--allow-destructive-jumbo' : ''
+                    def formattedFilter = params.TEST_FILTER.replaceAll(',', ' or ')
+                    def ipv6Arg = localIP ? "--local-ipv6 \"${localIP}\"" : ''
 
-                    // CRITICAL FIX: Automatically convert commas to ' or ' for Pytest
-                    def formattedFilter = params.TEST_FILTER.replaceAll(",", " or ")
-
-                    echo "Local IPv6 Address: ${localIP}"
-                    echo "✅ Cleared old workspace"
-                    echo "----------------------------------------"
-                    echo "Testing GUI with Filter: [ ${formattedFilter} ]"
-                    echo "Profile: [ ${profileName} ] | Recovery Profile: [ ${recoveryProfileName} ]"
-                    echo "Destructive Jumbo Enabled: [ ${params.ENABLE_DESTRUCTIVE_JUMBO} ]"
-                    echo "----------------------------------------"
+                    echo "Testing with filter: [ ${formattedFilter} ]"
+                    sh 'rm -f report.json Senao_Release_*.html Senao_Release_*.csv || true'
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                         sh """
                             venv/bin/python -m pytest tests/GUI/ -v -k "${formattedFilter}" \
-                            --local-ipv6 "${localIP}" \
                             --profile "${profileName}" \
                             --recovery-profile "${recoveryProfileName}" \
+                            ${ipv6Arg} \
                             ${destructiveFlag} \
                             --json-report --json-report-file=report.json
                         """
@@ -70,72 +109,100 @@ pipeline {
                 }
             }
         }
+
         stage('Generate Customer Report') {
             steps {
                 script {
-                    def localIP = params['Local IPv6 Address']
+                    def localIP = (params['Local IPv6 Address'] ?: 'profile-default').trim()
                     def buildNo = env.BUILD_ID
-                    def dateStr = new Date().format("yyyyMMdd")
+                    def dateStr = new Date().format('yyyyMMdd')
 
-                    echo "Building detailed HTML & CSV reports..."
+                    if (!fileExists('report.json')) {
+                        unstable('report.json missing — skipping customer report generation')
+                        return
+                    }
+
+                    echo 'Building Senao customer HTML & CSV (report_generator.py)...'
                     sh "venv/bin/python utils/report_generator.py ${buildNo} ${localIP} ${dateStr}"
+
+                    def htmlFile = "Senao_Release_${buildNo}_Report_${dateStr}.html"
+                    if (!fileExists(htmlFile)) {
+                        error("Customer report not created: ${htmlFile}")
+                    }
+                    env.CUSTOMER_REPORT = htmlFile
+                    echo "Customer report: ${htmlFile}"
+                }
+            }
+        }
+
+        stage('Archive Report') {
+            steps {
+                script {
+                    def dateStr = new Date().format('yyyyMMdd')
+                    archiveArtifacts "Senao_Release_${env.BUILD_ID}_Report_${dateStr}.html"
+                    archiveArtifacts "Senao_Release_${env.BUILD_ID}_Report_${dateStr}.csv,allowEmptyArchive:true"
                 }
             }
         }
     }
+
     post {
         always {
             script {
-                def dateStr = new Date().format("yyyyMMdd")
-                def htmlFileName = "Senao_Release_${env.BUILD_ID}_Report_${dateStr}.html"
+                def dateStr = new Date().format('yyyyMMdd')
+                def htmlFileName = env.CUSTOMER_REPORT ?: "Senao_Release_${env.BUILD_ID}_Report_${dateStr}.html"
                 def csvFileName = "Senao_Release_${env.BUILD_ID}_Report_${dateStr}.csv"
+                def hasReport = fileExists(htmlFileName)
 
-                publishHTML(target: [
-                    allowMissing: true,
-                    alwaysLinkToLastBuild: true,
-                    keepAll: true,
-                    reportDir: '.',
-                    reportFiles: htmlFileName,
-                    reportName: 'Senao Customer Report'
-                ])
+                if (hasReport) {
+                    publishHTML(target: [
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: '.',
+                        reportFiles: htmlFileName,
+                        reportName: "Senao Customer Report - Build ${env.BUILD_NUMBER}"
+                    ])
+                }
 
-                def buildCauses = currentBuild.getBuildCauses()
-                def userCause = buildCauses.find { it._class == 'hudson.model.Cause$UserIdCause' }
-                def buildUserName = userCause?.userName ?: "Unknown User"
-                def buildUserId = userCause?.userId ?: "unknown"
+                def user = resolveUserEmail()
+                def mailDate = new Date().format('dd MMM yyyy, HH:mm:ss z', TimeZone.getTimeZone('Asia/Kolkata'))
+                def resultColor = currentBuild.currentResult == 'SUCCESS' ? 'green' : 'orange'
+                def reportSection = hasReport
+                    ? """<p><strong>Customer report:</strong>
+                        <a href="${env.BUILD_URL}artifact/${htmlFileName}">Download HTML</a>
+                        &nbsp;|&nbsp;
+                        <a href="${env.BUILD_URL}">Open build in Jenkins</a></p>"""
+                    : '<p><strong>Customer report:</strong> not generated (see console log).</p>'
 
-                def userEmails = [
-                    "puneet": "puneet.sharma@senao.com",
-                    "harman": "harmanjot.singh@senao.com"
-                ]
-                def userEmail = userEmails.get(buildUserId, "puneet.sharma@senao.com")
-
-                emailext(
-                    // CRITICAL FIX: Changed TEST_MARKER to TEST_FILTER
-                    subject: "Test Automation Report [Filter: ${params.TEST_FILTER}] - ${currentBuild.currentResult}",
-                    body: """
-                        <html>
-                        <body style="font-family: Arial, sans-serif; color: #333;">
-                            <h2 style="color: #2e6c80;">Jenkins Automated Test Run</h2>
-                            <table style="border-collapse: collapse; width: 100%; max-width: 600px;">
-                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Filter Executed:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params.TEST_FILTER}</td></tr>
-                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Target IPv6:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params['Local IPv6 Address']}</td></tr>
-                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Profile:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params.PROFILE_NAME}</td></tr>
-                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Recovery Profile:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params.RECOVERY_PROFILE_NAME}</td></tr>
-                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Destructive Jumbo:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${params.ENABLE_DESTRUCTIVE_JUMBO}</td></tr>
-                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Status:</strong></td><td style="padding: 8px; border: 1px solid #ddd; color:${currentBuild.currentResult == 'SUCCESS' ? 'green' : 'red'}; font-weight:bold;">${currentBuild.currentResult}</td></tr>
-                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Started By:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${buildUserName}</td></tr>
-                                <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Console Log:</strong></td><td style="padding: 8px; border: 1px solid #ddd;"><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td></tr>
-                            </table>
-                            <br/>
-                            <p><strong>The official HTML Customer Report and CSV data sheet are attached to this email.</strong></p>
-                        </body>
-                        </html>
-                    """,
-                    to: userEmail,
-                    mimeType: 'text/html',
-                    attachmentsPattern: "${htmlFileName},${csvFileName}"
-                )
+                try {
+                    emailext(
+                        subject: "UBR GUI Automation — ${currentBuild.fullDisplayName} — ${currentBuild.currentResult}",
+                        body: """\
+                            <html><body style="font-family:Segoe UI,sans-serif;color:#334155;">
+                                <h2 style="color:#1e3a8a;">Senao UBR Validation Execution Report</h2>
+                                <p><strong>Build:</strong> ${currentBuild.fullDisplayName}</p>
+                                <p><strong>Status:</strong> <span style="color:${resultColor};">${currentBuild.currentResult}</span></p>
+                                <p><strong>Started by:</strong> ${user.name} (${user.id})</p>
+                                <p><strong>Time:</strong> ${mailDate}</p>
+                                <p><strong>Target stand:</strong> ${TARGET_STAND}</p>
+                                <hr/>
+                                <p><strong>Test filter:</strong> ${params.TEST_FILTER}</p>
+                                <p><strong>Target IPv6:</strong> ${params['Local IPv6 Address'] ?: '(profile default)'}</p>
+                                <p><strong>Profile:</strong> ${params.PROFILE_NAME}</p>
+                                <p><strong>Recovery profile:</strong> ${params.RECOVERY_PROFILE_NAME}</p>
+                                <p><strong>Destructive jumbo:</strong> ${params.ENABLE_DESTRUCTIVE_JUMBO}</p>
+                                ${reportSection}
+                                <p style="color:#64748b;font-size:12px;">HTML + CSV attached when generated.</p>
+                            </body></html>
+                        """,
+                        to: user.email,
+                        mimeType: 'text/html',
+                        attachmentsPattern: hasReport ? "${htmlFileName},${csvFileName}" : ''
+                    )
+                } catch (Exception exc) {
+                    echo "Email notification failed: ${exc.message}"
+                }
             }
         }
     }
