@@ -77,7 +77,7 @@ pipeline {
         string(
             name: 'BTS IP',
             defaultValue: '',
-            description: 'BTS (local DUT) IPv4/IPv6. Leave empty to use profiles/<PROFILE_NAME>.yaml'
+            description: 'BTS (local DUT) IPv4/IPv6. Leave empty to use profile default (profiles/default.yaml)'
         )
         string(
             name: 'CPE IP',
@@ -114,26 +114,6 @@ pipeline {
             defaultValue: '192.168.3.3',
             description: 'TRex host IP (default from config/defaults.py)'
         )
-        string(
-            name: 'PROFILE_NAME',
-            defaultValue: 'default',
-            description: 'Primary profile: profiles/<name>.yaml'
-        )
-        string(
-            name: 'RECOVERY_PROFILE_NAME',
-            defaultValue: 'link_formation',
-            description: 'Recovery profile: profiles/<name>.yaml'
-        )
-        string(
-            name: 'Link Wait (s)',
-            defaultValue: '90',
-            description: 'SNMP poll timeout for operating rate to stabilize'
-        )
-        string(
-            name: 'Radio Settle (s)',
-            defaultValue: '12',
-            description: 'Wait after radio config before traffic'
-        )
     }
 
     stages {
@@ -151,7 +131,6 @@ pipeline {
                     echo "Ratio:      ${params['DL:UL Ratio']}"
                     echo "Duration:   ${params['Throughput Test Time']}s"
                     echo "TRex:       ${params['TRex Server']}"
-                    echo "Profile:    ${params.PROFILE_NAME}"
                     echo '------------------------------------------'
                 }
             }
@@ -176,10 +155,6 @@ pipeline {
                     def ratio = (params['DL:UL Ratio'] ?: '75:25').trim()
                     def testTime = (params['Throughput Test Time'] ?: '30').trim()
                     def trexServer = (params['TRex Server'] ?: '192.168.3.3').trim()
-                    def profileName = (params.PROFILE_NAME ?: 'default').trim()
-                    def recoveryProfile = (params.RECOVERY_PROFILE_NAME ?: 'link_formation').trim()
-                    def linkWait = (params['Link Wait (s)'] ?: '90').trim()
-                    def radioSettle = (params['Radio Settle (s)'] ?: '12').trim()
                     def packetRaw = (params['Packet Size'] ?: '1500').trim()
                     if (!(packetRaw ==~ /^\d+$/)) {
                         error("Packet Size must be numeric bytes (e.g. 1500), got: ${packetRaw}")
@@ -188,8 +163,6 @@ pipeline {
                     sh 'rm -rf logs/performance_* logs/Performance_Report_*.html || true'
 
                     def cmd = new StringBuilder('PYTHONPATH=. python3 traffic/performance_matrix.py')
-                    cmd.append(" --profile '${profileName}'")
-                    cmd.append(" --recovery-profile '${recoveryProfile}'")
                     cmd.append(" --bandwidths '${bandwidths}'")
                     cmd.append(" --mcs '${mcsList}'")
                     cmd.append(" --ratios '${ratio}'")
@@ -198,8 +171,6 @@ pipeline {
                     cmd.append(" --packet-size ${packetRaw}")
                     cmd.append(" --trex-server '${trexServer}'")
                     cmd.append(' --deploy-client-script')
-                    cmd.append(" --link-wait-s ${linkWait}")
-                    cmd.append(" --radio-settle-s ${radioSettle}")
                     if (btsIp) {
                         cmd.append(" --local-ip '${btsIp}'")
                     }
