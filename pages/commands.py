@@ -20,6 +20,16 @@ class RootCommands:
     GET_NET_GW = "uci get network.lan.gateway"
     GET_NET_IP6 = "uci get network.lan.ip6addr"
     GET_NET_GW6 = "uci get network.lan.ip6gw"
+    GET_FALLBACK_IP = "uci get fallback.lan.ipaddr"
+    GET_FALLBACK_MASK = "uci get fallback.lan.netmask"
+    GET_DHCP_IGNORE = "uci get dhcp.lan.ignore"
+    GET_DHCP_LEASE = "uci get dhcp.lan.leasetime"
+    GET_LAN24_IP = "uci get network.lan24.ipaddr"
+    GET_LAN24_MASK = "uci get network.lan24.netmask"
+    GET_LAN24_DHCP_IGNORE = "uci get dhcp.lan24.ignore"
+    GET_LAN24_START = "uci get dhcp.lan24.start"
+    GET_LAN24_LIMIT = "uci get dhcp.lan24.limit"
+    GET_LAN24_LEASE = "uci get dhcp.lan24.leasetime"
 
     # --- NETWORK DYNAMIC STATUS (Used for Summary Pages) ---
     # These 'ucidyn' commands fetch live/assigned status
