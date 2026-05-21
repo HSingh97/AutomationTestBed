@@ -1,19 +1,79 @@
-// UBR TRex performance matrix — configurable BTS/CPE IPs, bandwidth, MCS, packet size.
+// UBR TRex performance matrix — runs on TARGET_STAND agent (same as GUI automation jobs).
 // Generates logs/Performance_Report_<timestamp>.html and emails the triggering user.
 
 def archiveArtifacts(pattern) {
     step([$class: 'ArtifactArchiver', artifacts: pattern, fingerprint: true, onlyIfSuccessful: false])
 }
 
+def resolveUserEmail() {
+    def buildCauses = currentBuild.getBuildCauses()
+    def userCause = buildCauses.find { it._class == 'hudson.model.Cause$UserIdCause' }
+    def buildUserId = userCause?.userId ?: 'unknown'
+    def userEmails = [
+        'puneet': 'puneet.sharma@senao.com',
+        'harman': 'harmanjot.singh@senao.com',
+        'mahesh': 'mahesh.battala@senao.com',
+        'sandeep': 'sandeep.manchikanti@senao.com',
+        'sampath': 'sampath.marella@senao.com',
+        'jayanth': 'jayanth.munnaluru@senao.com',
+        'srilatha': 'srilatha.tadiboina@senao.com',
+        'phani': 'phani.darla@senao.com',
+        'dinesh': 'dinesh.redddy@senao.com'
+    ]
+    return [
+        name: userCause?.userName ?: 'Unknown User',
+        id: buildUserId,
+        email: userEmails.get(buildUserId, 'harmanjot.singh@senao.com')
+    ]
+}
+
+def sendBuildEmail(String reportFile, boolean hasReport) {
+    def user = resolveUserEmail()
+    def dateStr = new Date().format('dd MMM yyyy, HH:mm:ss z', TimeZone.getTimeZone('Asia/Kolkata'))
+    def resultColor = currentBuild.currentResult == 'SUCCESS' ? 'green' : 'orange'
+    def reportSection = hasReport
+        ? """<p><strong>HTML report:</strong>
+            <a href="${env.BUILD_URL}artifact/${reportFile}">Download detailed report</a>
+            &nbsp;|&nbsp;
+            <a href="${env.BUILD_URL}">Open build in Jenkins</a></p>"""
+        : """<p><strong>HTML report:</strong> not generated.
+            Check the <a href="${env.BUILD_URL}console">build console</a>.</p>"""
+
+    def mailParams = [
+        subject: "UBR Performance Throughput — ${currentBuild.fullDisplayName} — ${currentBuild.currentResult}",
+        body: """\
+            <html><body style="font-family:Segoe UI,sans-serif;color:#334155;">
+                <h2 style="color:#1e3a8a;">UBR Performance Throughput Report</h2>
+                <p><strong>Build:</strong> ${currentBuild.fullDisplayName}</p>
+                <p><strong>Status:</strong> <span style="color:${resultColor};">${currentBuild.currentResult}</span></p>
+                <p><strong>Started by:</strong> ${user.name} (${user.id})</p>
+                <p><strong>Time:</strong> ${dateStr}</p>
+                <p><strong>Target stand:</strong> ${TARGET_STAND}</p>
+                <hr/>
+                <p><strong>BTS IP:</strong> ${params['BTS IP'] ?: '(profile default)'}</p>
+                <p><strong>CPE IP:</strong> ${params['CPE IP'] ?: '(profile default)'}</p>
+                <p><strong>Bandwidth:</strong> ${params.Bandwidth}</p>
+                <p><strong>MCS:</strong> ${params.MCS}</p>
+                <p><strong>Packet size:</strong> ${params['Packet Size']} bytes</p>
+                <p><strong>DL:UL ratio:</strong> ${params['DL:UL Ratio']}</p>
+                <p><strong>Duration:</strong> ${params['Throughput Test Time']}s per iteration</p>
+                ${reportSection}
+                <p style="color:#64748b;font-size:12px;">Senao UBR Automation — TRex performance matrix</p>
+            </body></html>
+        """,
+        to: user.email,
+        mimeType: 'text/html'
+    ]
+    if (hasReport) {
+        mailParams.attachmentsPattern = reportFile
+    }
+    emailext(mailParams)
+}
+
 pipeline {
-    agent { node { label "${params['Local PC']}" } }
+    agent { node { label "${TARGET_STAND}" } }
 
     parameters {
-        string(
-            name: 'Local PC',
-            defaultValue: 'linux',
-            description: 'Jenkins agent label (testbed runner)'
-        )
         string(
             name: 'BTS IP',
             defaultValue: '',
@@ -76,18 +136,13 @@ pipeline {
         )
     }
 
-    environment {
-        REPORT_GLOB = 'logs/Performance_Report_*.html'
-        ARTIFACT_GLOB = 'logs/performance_*/**'
-    }
-
     stages {
         stage('Prepare Testbed') {
             steps {
                 script {
                     echo '------------------------------------------'
                     echo 'UBR Performance Throughput (TRex matrix)'
-                    echo "Agent:      ${params['Local PC']}"
+                    echo "--- TARGET STAND: ${TARGET_STAND}"
                     echo "BTS IP:     ${params['BTS IP'] ?: '(profile default)'}"
                     echo "CPE IP:     ${params['CPE IP'] ?: '(profile default)'}"
                     echo "Bandwidth:  ${params.Bandwidth}"
@@ -104,13 +159,10 @@ pipeline {
 
         stage('Install Dependencies') {
             steps {
-                script {
-                    echo 'Installing Python dependencies...'
-                    sh '''
-                        python3 -m pip install --upgrade pip
-                        python3 -m pip install -r requirements.txt
-                    '''
-                }
+                sh '''
+                    python3 -m pip install --upgrade pip
+                    python3 -m pip install -r requirements.txt
+                '''
             }
         }
 
@@ -159,7 +211,7 @@ pipeline {
                     env.PERF_MATRIX_EXIT = "${exitCode}"
 
                     def reportPath = sh(
-                        script: "ls -t ${env.REPORT_GLOB} 2>/dev/null | head -1",
+                        script: 'ls -t logs/Performance_Report_*.html 2>/dev/null | head -1',
                         returnStdout: true
                     ).trim()
                     if (!reportPath) {
@@ -176,10 +228,8 @@ pipeline {
 
         stage('Archive Report') {
             steps {
-                script {
-                    archiveArtifacts "${env.REPORT_GLOB}"
-                    archiveArtifacts "${env.ARTIFACT_GLOB},allowEmptyArchive:true"
-                }
+                archiveArtifacts 'logs/Performance_Report_*.html'
+                archiveArtifacts 'logs/performance_*/**,allowEmptyArchive:true'
             }
         }
     }
@@ -187,72 +237,29 @@ pipeline {
     post {
         always {
             script {
-                def reportFile = env.PERFORMANCE_REPORT ?: 'logs/Performance_Report_unknown.html'
-                def reportName = reportFile.contains('/') ? reportFile.tokenize('/').last() : reportFile
-
-                publishHTML(target: [
-                    allowMissing: true,
-                    alwaysLinkToLastBuild: true,
-                    keepAll: true,
-                    reportDir: 'logs',
-                    reportFiles: reportName,
-                    reportName: "Performance Report - Build ${env.BUILD_NUMBER}"
-                ])
-
-                def buildCauses = currentBuild.getBuildCauses()
-                def userCause = buildCauses.find { it._class == 'hudson.model.Cause$UserIdCause' }
-                def buildUserName = userCause?.userName ?: 'Unknown User'
-                def buildUserId = userCause?.userId ?: 'unknown'
-
-                def userEmails = [
-                    'puneet': 'puneet.sharma@senao.com',
-                    'harman': 'harmanjot.singh@senao.com',
-                    'mahesh': 'mahesh.battala@senao.com',
-                    'sandeep': 'sandeep.manchikanti@senao.com',
-                    'sampath': 'sampath.marella@senao.com',
-                    'jayanth': 'jayanth.munnaluru@senao.com',
-                    'srilatha': 'srilatha.tadiboina@senao.com',
-                    'phani': 'phani.darla@senao.com',
-                    'dinesh': 'dinesh.reddy@senao.com'
-                ]
-                def userEmail = userEmails.get(buildUserId, 'harmanjot.singh@senao.com')
-                def dateStr = new Date().format('dd MMM yyyy, HH:mm:ss z', TimeZone.getTimeZone('Asia/Kolkata'))
-                def resultColor = currentBuild.currentResult == 'SUCCESS' ? 'green' : 'orange'
-
-                emailext(
-                    subject: "UBR Performance Throughput — ${currentBuild.fullDisplayName} — ${currentBuild.currentResult}",
-                    body: """\
-                        <html><body style="font-family:Segoe UI,sans-serif;color:#334155;">
-                            <h2 style="color:#1e3a8a;">UBR Performance Throughput Report</h2>
-                            <p><strong>Build:</strong> ${currentBuild.fullDisplayName}</p>
-                            <p><strong>Status:</strong> <span style="color:${resultColor};">${currentBuild.currentResult}</span></p>
-                            <p><strong>Started by:</strong> ${buildUserName} (${buildUserId})</p>
-                            <p><strong>Time:</strong> ${dateStr}</p>
-                            <hr/>
-                            <p><strong>BTS IP:</strong> ${params['BTS IP'] ?: '(profile default)'}</p>
-                            <p><strong>CPE IP:</strong> ${params['CPE IP'] ?: '(profile default)'}</p>
-                            <p><strong>Bandwidth:</strong> ${params.Bandwidth}</p>
-                            <p><strong>MCS:</strong> ${params.MCS}</p>
-                            <p><strong>Packet size:</strong> ${params['Packet Size']} bytes</p>
-                            <p><strong>DL:UL ratio:</strong> ${params['DL:UL Ratio']}</p>
-                            <p><strong>Duration:</strong> ${params['Throughput Test Time']}s per iteration</p>
-                            <p><strong>HTML report:</strong>
-                                <a href="${env.BUILD_URL}artifact/${reportFile}">Download detailed report</a>
-                                &nbsp;|&nbsp;
-                                <a href="${env.BUILD_URL}">Open build in Jenkins</a>
-                            </p>
-                            <p style="color:#64748b;font-size:12px;">Senao UBR Automation — TRex performance matrix</p>
-                        </body></html>
-                    """,
-                    to: userEmail,
-                    mimeType: 'text/html',
-                    attachmentsPattern: reportFile
-                )
+                def reportFile = env.PERFORMANCE_REPORT ?: ''
+                def hasReport = reportFile && fileExists(reportFile)
+                if (hasReport) {
+                    def reportName = reportFile.tokenize('/').last()
+                    publishHTML(target: [
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'logs',
+                        reportFiles: reportName,
+                        reportName: "Performance Report - Build ${env.BUILD_NUMBER}"
+                    ])
+                }
+                try {
+                    sendBuildEmail(reportFile, hasReport)
+                } catch (Exception exc) {
+                    echo "Email notification failed: ${exc.message}"
+                }
+                echo '-----------------------------------------'
+                echo 'Throughput pipeline complete.'
+                echo "Report: ${reportFile ?: 'not generated'}"
+                echo '-----------------------------------------'
             }
-            echo '-----------------------------------------'
-            echo 'Throughput pipeline complete.'
-            echo "Report: ${env.PERFORMANCE_REPORT ?: 'not generated'}"
-            echo '-----------------------------------------'
         }
     }
 }
