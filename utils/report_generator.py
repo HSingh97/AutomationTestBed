@@ -4,6 +4,10 @@ import sys
 import re
 from datetime import datetime
 
+SENAO_LOGO_URL = (
+    "https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png"
+)
+
 
 def get_group_marker(keywords):
     """
@@ -186,23 +190,36 @@ def generate():
     for g in sorted(groups.keys()):
         group_options += f'<option value="{g}">{g}</option>\n'
 
+    report_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
     # Generate Professional HTML
     html = f"""
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
         <title>Senao Quality Assurance Report</title>
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-            body {{ font-family: 'Inter', sans-serif; background-color: #f1f5f9; color: #334155; margin: 0; padding: 40px 20px; }}
-            .container {{ max-width: 1100px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03); overflow: hidden; }}
-            .header {{ background-color: #ffffff; padding: 30px 40px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; }}
-            .logo-title {{ display: flex; align-items: center; gap: 24px; }}
-            .logo-title img {{ height: 45px; }}
-            .logo-text h1 {{ margin: 0; color: #0f172a; font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }}
-            .logo-text p {{ margin: 4px 0 0 0; color: #64748b; font-size: 14px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }}
-            .meta-info {{ background: #f8fafc; padding: 12px 20px; border-radius: 8px; border: 1px solid #e2e8f0; text-align: right; font-size: 13px; color: #475569; line-height: 1.6; }}
-            .meta-info strong {{ color: #0f172a; }}
+            body {{ font-family: 'Inter', sans-serif; background-color: #eef2f7; color: #334155; margin: 0; padding: 28px 18px; }}
+            .wrap {{ max-width: 1100px; margin: 0 auto; }}
+            .hero {{
+              background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #2563eb 100%);
+              color: #fff; border-radius: 14px; padding: 22px 26px; margin-bottom: 18px;
+              display: flex; justify-content: space-between; align-items: center; gap: 20px;
+            }}
+            .hero-main {{ flex: 1; min-width: 0; }}
+            .hero h1 {{ margin: 0 0 8px; font-size: 24px; }}
+            .hero-date {{ margin: 0; font-size: 14px; opacity: 0.92; font-weight: 500; }}
+            .hero-logo {{
+              flex-shrink: 0; background: #fff; border-radius: 10px; padding: 10px 14px;
+              box-shadow: 0 2px 8px rgba(15,23,42,0.15);
+            }}
+            .hero-logo img {{ display: block; height: 42px; width: auto; }}
+            .container {{ background: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03); overflow: hidden; border: 1px solid #cbd5e1; }}
+            .panel-top {{ padding: 20px 40px; border-bottom: 1px solid #e2e8f0; background: #fff; }}
+            .panel-top h2 {{ margin: 0 0 12px; font-size: 17px; color: #0f172a; }}
+            .run-meta {{ display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; color: #475569; }}
+            .run-meta strong {{ color: #0f172a; }}
 
             .summary-cards {{ display: flex; padding: 30px 40px; gap: 20px; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
             .card {{ flex: 1; padding: 20px; border-radius: 10px; text-align: center; border: 1px solid #e2e8f0; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.02); cursor: pointer; transition: all 0.2s ease; }}
@@ -283,21 +300,25 @@ def generate():
         </script>
     </head>
     <body>
-        <div class="container">
-            <div class="header">
-                <div class="logo-title">
-                    <img src="https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png" alt="Senao Networks">
-                    <div class="logo-text">
-                        <h1>Validation Execution Report</h1>
-                        <p>Automation Test Case Execution Report</p>
-                    </div>
+        <div class="wrap">
+            <header class="hero">
+                <div class="hero-main">
+                    <h1>Senao UBR Validation Execution Report</h1>
+                    <p class="hero-date">{report_timestamp}</p>
                 </div>
-                <div class="meta-info">
-                    <strong>Build Release:</strong> #{build_no}<br>
-                    <strong>Target Device IP:</strong> {ip_addr}<br>
-                    <strong>Timestamp:</strong> {datetime.now().strftime('%d %b %Y, %H:%M:%S')}
+                <div class="hero-logo">
+                    <img src="{SENAO_LOGO_URL}" alt="Senao Networks"/>
                 </div>
-            </div>
+            </header>
+
+            <div class="container">
+            <section class="panel-top">
+                <h2>Run Summary</h2>
+                <div class="run-meta">
+                    <span><strong>Build release:</strong> #{build_no}</span>
+                    <span><strong>Target device:</strong> {ip_addr}</span>
+                </div>
+            </section>
 
             <div class="summary-cards">
                 <div class="card active" style="border-bottom: 4px solid #64748b;" onclick="setStatusFilter('ALL', this)">
@@ -356,6 +377,7 @@ def generate():
     html += """
                     </tbody>
                 </table>
+            </div>
             </div>
         </div>
     </body>

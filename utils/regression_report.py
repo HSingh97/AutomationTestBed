@@ -9,6 +9,10 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+SENAO_LOGO_URL = (
+    "https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png"
+)
+
 
 @dataclass
 class HealthCheckResult:
@@ -256,9 +260,16 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
     .hero {{
       background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #2563eb 100%);
       color: #fff; border-radius: 14px; padding: 22px 26px; margin-bottom: 18px;
+      display: flex; justify-content: space-between; align-items: center; gap: 20px;
     }}
-    .hero h1 {{ margin: 0 0 6px; font-size: 24px; }}
-    .hero p {{ margin: 0; font-size: 13px; opacity: 0.92; }}
+    .hero-main {{ flex: 1; min-width: 0; }}
+    .hero h1 {{ margin: 0 0 8px; font-size: 24px; }}
+    .hero-date {{ margin: 0; font-size: 14px; opacity: 0.92; font-weight: 500; }}
+    .hero-logo {{
+      flex-shrink: 0; background: #fff; border-radius: 10px; padding: 10px 14px;
+      box-shadow: 0 2px 8px rgba(15,23,42,0.15);
+    }}
+    .hero-logo img {{ display: block; height: 42px; width: auto; }}
     .panel-top {{
       background: var(--card); border: 1px solid var(--border); border-radius: 14px;
       padding: 20px 22px; margin-bottom: 16px;
@@ -338,15 +349,19 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
 <body>
   <div class="wrap">
     <header class="hero">
-      <h1>UBR Stability Regression Report</h1>
-      <p>Network reload / reboot cycles — ping and web access on BTS and CPE (iterations only)</p>
+      <div class="hero-main">
+        <h1>UBR Stability Regression Report</h1>
+        <p class="hero-date">{executed_at}</p>
+      </div>
+      <div class="hero-logo">
+        <img src="{SENAO_LOGO_URL}" alt="Senao Networks"/>
+      </div>
     </header>
 
     <section class="panel-top">
       <h2>Testbed Summary</h2>
       {testbed_table}
       <div class="run-meta">
-        <span><strong>Executed:</strong> {executed_at}</span>
         <span><strong>Target cycles:</strong> {iterations_target}</span>
       </div>
     </section>
