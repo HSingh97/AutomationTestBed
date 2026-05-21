@@ -231,6 +231,7 @@ Reports:
 - Regression dashboard: `reports/Regression_Report_<timestamp>.html`  
 - Pytest HTML (auto when `--allow-regression`): `reports/regression_pytest_<timestamp>.html`  
 - Customer CSV: `reports/Customer_Summary_<timestamp>.csv`  
+- Performance matrix: `logs/Performance_Report_<timestamp>.html` (artifacts in `logs/performance_<timestamp>/`)  
 
 ### Throughput (IXIA example)
 
@@ -242,6 +243,51 @@ python3.10 traffic/throughput_runner.py \
   --profile default --recovery-profile link_formation \
   --traffic-mode benchmark
 ```
+
+### Throughput (TRex stats-check)
+
+The TRex client script lives in `traffic/scripts/master_script_extended_16SU.py`. Deploy it once, then run stats-check mode (server + client over SSH, ports via `TREX_PORTS`):
+
+```bash
+# Deploy bundled script to the TRex host (192.168.3.3 by default)
+python3 traffic/deploy_trex_script.py --trex-server 192.168.3.3 --trex-password '<password>'
+
+# Lightweight throughput / counter validation
+TREX_PASSWORD='<password>' python3 traffic/throughput_runner.py \
+  --traffic-mode stats_check \
+  --trex-server 192.168.3.3 \
+  --trex-ports 0,1 \
+  --cpes 1 --ratio 50:50 --target 400 --time 30 \
+  --trex-run-mode counter_check \
+  --output-json trex_results.json
+
+# Or deploy + run in one step
+python3 traffic/trex_stats_check.py --deploy-client-script --time 30 --expected-min-mbps 0
+```
+
+`trex_runner.py` exports `TREX_PORTS` to the remote script; use `--ports 0,1` on the script directly when running manually.
+
+### Performance matrix (bandwidth × MCS × DL/UL ratio)
+
+Sweeps all bandwidth/MCS/ratio combinations. **BTS** gets bandwidth + DL/UL ratio + MCS over SSH; **CPE** gets MCS only (direct SSH to `remote_ipv6s`). Then TRex runs per case. Outputs: JSON + CSV under `logs/performance_<timestamp>/`, HTML at `logs/Performance_Report_<timestamp>.html`.
+
+**Dynamic targets (default):** rates come from the product spec sheet (`traffic/operating_rate_table.py`, Dual column). Example: HT20 + MCS23 → **286 Mbps** operating rate; at 75% efficiency and 75:25 → **~215 Mbps** → **161M DL + 54M UL**.
+
+**Report:** fetches SNMP link stats (Tx/Rx rate, SNR) and renders the benchmark table layout. Rows turn **red** when operating rate ≠ spec for the configured MCS.
+
+```bash
+# Preview the full matrix (no traffic)
+PYTHONPATH=. python3 traffic/performance_matrix.py --dry-run
+
+# Full matrix (default: HT20–HT160, MCS0–MCS11, DL/UL/Uplink/Bidi ratios)
+PYTHONPATH=. python3 traffic/performance_matrix.py --profile default --time 30
+
+# Subset example
+PYTHONPATH=. python3 traffic/performance_matrix.py \
+  --bandwidths HT80,HT160 --mcs MCS5,MCS7,MCS9 --ratios 80:20 --time 15
+```
+
+Each run produces `Throughput_<BW>_<MCS>_<Mode>_<ratio>.json`, `performance_matrix_summary.json/csv` under `logs/performance_<timestamp>/`, and `logs/Performance_Report_<timestamp>.html` (testbed summary, pass/fail chips, per-iteration cards — same style as regression).
 
 ---
 

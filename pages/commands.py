@@ -175,16 +175,30 @@ class RootCommands:
 
     @staticmethod
     def set_mcs_sequence_commands(radio_idx, mcs_rate, spatial_stream, ddrs_rate):
+        """ddrs_rate should be the numeric UCI index (e.g. 23 for MCS23)."""
+        modulation_rate = ddrs_rate if ddrs_rate is not None else mcs_rate
         return [
             f"ucidyn set txparam.ath{radio_idx}.ddrsstatus 0",
             f"ucidyn set txparam.ath{radio_idx}.spatialstream {spatial_stream}",
-            f"ucidyn set txparam.ath{radio_idx}.ddrsrate {ddrs_rate}",            
+            f"ucidyn set txparam.ath{radio_idx}.ddrsrate {modulation_rate}",
             "ucidyn apply",
         ]
 
     @staticmethod
+    def set_dl_ul_ratio_commands(radio_idx, dl_ul_percent: str):
+        return [
+            f"ucidyn set ath{radio_idx}qos.qoscfg.dlulratio {dl_ul_percent}",
+            "ucidyn apply",
+        ]
+
+    @staticmethod
+    def remote_exec_command(su_index: int, command: str) -> str:
+        safe = str(command).replace('"', '\\"')
+        return f'/usr/sbin/remote_exec.sh {su_index} "{safe}"'
+
+    @staticmethod
     def remote_apply_all_su():
-        return '/usr/sbin/remote_exec.sh 1 "ucidyn apply"'
+        return RootCommands.remote_exec_command(1, "ucidyn apply")
 
     @staticmethod
     def emit_system_log_marker(marker: str):

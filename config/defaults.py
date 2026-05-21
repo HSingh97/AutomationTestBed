@@ -52,10 +52,50 @@ TRAFFIC_DEFAULTS = {
         "password": "ubuntu",
         "directory": "/opt/v3.06",
         "pythonpath": "/opt/v3.06/automation/trex_control_plane/interactive/",
-        "client_script": "master_script_extended_16SU.py",
+        "client_script": "master_script_extended_16SU.py",  # bundled at traffic/scripts/
         "ports": "0,1",
-        "server_cores": 4,
+        "server_cores": 1,
+        "server_startup_s": 25,
     }
+}
+
+
+PERFORMANCE_DEFAULTS = {
+    "bandwidths": ["HT20", "HT40", "HT80", "HT160"],
+    "mcs_rates": [f"MCS{i}" for i in range(24)],
+    "ratios": ["80:20", "50:50", "70:30", "75:25"],
+    "target_mbps": 800,
+    "efficiency_factor": 0.75,
+    "use_dynamic_target": True,
+    "phy_max_rate_mbps": {},
+    "duration_s": 30,
+    "radio_index": 1,
+    "cpe_radio_index": 1,
+    "cpe_su_index": 1,
+    "snmp_radio_index": 2,
+    "link_wait_s": 45,
+    "su_count": 1,
+    "spatial_stream": "2",
+    "snmp_community": "ubr@rw123",
+    "noise_dbm": "-93",
+    "packet_size": 1500,
+    "profile": "default",
+    "recovery_profile": "link_formation",
+    "artifact_dir": "logs",
+    "mcs_traffic_cap_mbps": {
+        "MCS0": 80,
+        "MCS1": 120,
+        "MCS2": 180,
+        "MCS3": 260,
+        "MCS4": 350,
+        "MCS5": 450,
+        "MCS6": 550,
+        "MCS7": 650,
+        "MCS8": 780,
+        "MCS9": 900,
+        "MCS10": 1050,
+        "MCS11": 1200,
+    },
 }
 
 

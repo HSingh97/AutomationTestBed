@@ -66,18 +66,32 @@ def _validate_profile(profile_name: str, profile_data: dict[str, Any]) -> None:
         raise ValueError(f"Profile '{profile_name}' missing dut.password")
 
 
-def _apply_cli_overrides(profile_data: dict[str, Any], *, local_ip: str | None, username: str | None, password: str | None):
+def _apply_cli_overrides(
+    profile_data: dict[str, Any],
+    *,
+    local_ip: str | None,
+    remote_ip: str | None,
+    username: str | None,
+    password: str | None,
+) -> None:
+    dut = profile_data["dut"]
+    ipv6_mode = dut.get("ip_mode") == "ipv6" or dut.get("strict_ipv6")
     if local_ip:
-        if profile_data["dut"].get("ip_mode") == "ipv6" or profile_data["dut"].get("strict_ipv6"):
-            # In strict IPv6 mode, only accept IPv6-shaped CLI override values.
+        if ipv6_mode:
             if ":" in local_ip:
-                profile_data["dut"]["local_ipv6"] = local_ip
+                dut["local_ipv6"] = local_ip
         else:
-            profile_data["dut"]["local_ip"] = local_ip
+            dut["local_ip"] = local_ip
+    if remote_ip:
+        remote_hosts = [item.strip() for item in remote_ip.split(",") if item.strip()]
+        if ipv6_mode:
+            dut["remote_ipv6s"] = remote_hosts
+        else:
+            dut["remote_ips"] = remote_hosts
     if username:
-        profile_data["dut"]["username"] = username
+        dut["username"] = username
     if password:
-        profile_data["dut"]["password"] = password
+        dut["password"] = password
 
 
 def load_profile_bundle(
@@ -85,13 +99,26 @@ def load_profile_bundle(
     profile_name: str = "default",
     recovery_profile_name: str = "link_formation",
     local_ip: str | None = None,
+    remote_ip: str | None = None,
     username: str | None = None,
     password: str | None = None,
 ) -> ProfileBundle:
     active = _load_profile_file(profile_name)
     recovery = _load_profile_file(recovery_profile_name)
-    _apply_cli_overrides(active, local_ip=local_ip, username=username, password=password)
-    _apply_cli_overrides(recovery, local_ip=local_ip, username=username, password=password)
+    _apply_cli_overrides(
+        active,
+        local_ip=local_ip,
+        remote_ip=remote_ip,
+        username=username,
+        password=password,
+    )
+    _apply_cli_overrides(
+        recovery,
+        local_ip=local_ip,
+        remote_ip=remote_ip,
+        username=username,
+        password=password,
+    )
     return ProfileBundle(
         active_name=profile_name,
         recovery_name=recovery_profile_name,

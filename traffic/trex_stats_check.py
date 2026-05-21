@@ -29,9 +29,20 @@ def main():
     parser.add_argument("--trex-graph", action="store_true")
     parser.add_argument("--trex-packet-size", type=int, default=1500)
     parser.add_argument("--trex-su-count", type=int, default=1)
+    parser.add_argument("--trex-server-cores", type=int, default=trex_defaults["server_cores"])
+    parser.add_argument(
+        "--trex-server-startup-s",
+        type=int,
+        default=trex_defaults.get("server_startup_s", 25),
+    )
     parser.add_argument("--time", type=int, default=15)
     parser.add_argument("--expected-min-mbps", type=float, default=100.0)
     parser.add_argument("--output-json", default="trex_stats_check.json")
+    parser.add_argument(
+        "--deploy-client-script",
+        action="store_true",
+        help="SCP traffic/scripts/master_script_extended_16SU.py to the TRex host before running",
+    )
     args = parser.parse_args()
     result = run_trex_stats_check(
         trex_server=args.trex_server,
@@ -55,9 +66,12 @@ def main():
         trex_enable_graph=args.trex_graph,
         trex_packet_size=args.trex_packet_size,
         trex_su_count=args.trex_su_count,
+        trex_server_cores=args.trex_server_cores,
+        trex_server_startup_s=args.trex_server_startup_s,
         duration_s=args.time,
         expected_min_mbps=args.expected_min_mbps,
         output_json=args.output_json,
+        deploy_client_script=args.deploy_client_script,
     )
     print(json.dumps(result, indent=2))
 

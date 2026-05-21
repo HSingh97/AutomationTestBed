@@ -8,6 +8,7 @@ import subprocess
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from utils.net_utils import format_ssh_host, is_ipv6_literal, normalize_ip
 
@@ -38,6 +39,7 @@ SUMMARY_ROW_RE = re.compile(
     r"\s*(?P<max_rx>[\d,.]+|N/A)\s*\|$"
 )
 CONSOLIDATED_ROW_RE = re.compile(r"^\|\s*(?P<pkt_size>\d+)\s*\|\s*(?P<bidi_mbps>[\d,.]+)\s*\|$")
+TREX_PORT_LINK_RE = re.compile(r"\(link\s+(UP|DOWN)\)\s*(\d+)", re.IGNORECASE)
 
 
 class _OutputCollector:
@@ -188,6 +190,116 @@ def _stop_trex_server(
     return collector.tail()
 
 
+def parse_trex_server_port_states(server_output: str) -> dict[int, str]:
+    """Parse TRex server per-port link state from interactive stats table output."""
+    states: dict[int, str] = {}
+    clean = _strip_ansi(server_output)
+    for match in TREX_PORT_LINK_RE.finditer(clean):
+        states[int(match.group(2))] = match.group(1).upper()
+
+    # Header row often mixes plain port ids (UP) and "(link DOWN) N" cells.
+    for line in clean.splitlines():
+        lower = line.lower()
+        if "ports |" not in lower or "-----" in line:
+            continue
+        for cell in line.split("|")[1:]:
+            cell = cell.strip()
+            down_match = re.match(r"\(link\s+DOWN\)\s*(\d+)", cell, flags=re.IGNORECASE)
+            up_match = re.match(r"\(link\s+UP\)\s*(\d+)", cell, flags=re.IGNORECASE)
+            if down_match:
+                states[int(down_match.group(1))] = "DOWN"
+            elif up_match:
+                states[int(up_match.group(1))] = "UP"
+            elif cell.isdigit():
+                port = int(cell)
+                if port not in states:
+                    states[port] = "UP"
+    return states
+
+
+def _check_trex_ports_via_api(
+    *,
+    trex_server: str,
+    trex_user: str,
+    trex_password: str,
+    trex_pythonpath: str,
+    trex_ports: str,
+) -> dict[int, str]:
+    ports = [int(item.strip()) for item in trex_ports.split(",") if item.strip()]
+    port_literal = ", ".join(str(port) for port in ports)
+    remote_script = "\n".join(
+        [
+            "set -euo pipefail",
+            f"export PYTHONPATH={shlex.quote(trex_pythonpath)}",
+            "python3 - <<'PY'",
+            "from trex.stl.api import STLClient",
+            f"ports = [{port_literal}]",
+            "states = {}",
+            "client = STLClient(server='127.0.0.1')",
+            "client.connect()",
+            "try:",
+            "    for port in ports:",
+            "        info = client.get_port_info(port)",
+            "        link = str(info.get('link', 'down')).upper()",
+            "        states[port] = 'UP' if 'UP' in link else 'DOWN'",
+            "finally:",
+            "    client.disconnect()",
+            "for port, state in sorted(states.items()):",
+            "    print(f'TREX_PORT_STATUS {port} {state}')",
+            "PY",
+        ]
+    )
+    result = _run_remote_command(
+        trex_server,
+        trex_user,
+        trex_password,
+        remote_script,
+        timeout_s=45,
+        check=False,
+    )
+    output = "\n".join(part for part in [result.stdout, result.stderr] if part)
+    states: dict[int, str] = {}
+    for line in output.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 3 and parts[0] == "TREX_PORT_STATUS":
+            states[int(parts[1])] = parts[2].upper()
+    return states
+
+
+def assert_trex_ports_link_up(
+    *,
+    trex_server: str,
+    trex_user: str,
+    trex_password: str,
+    trex_pythonpath: str,
+    trex_ports: str,
+    server_output: str = "",
+) -> None:
+    """Raise if any requested TRex port is not link UP (do not start traffic)."""
+    required = [int(item.strip()) for item in trex_ports.split(",") if item.strip()]
+    states = parse_trex_server_port_states(server_output)
+    if not all(port in states for port in required):
+        api_states = _check_trex_ports_via_api(
+            trex_server=trex_server,
+            trex_user=trex_user,
+            trex_password=trex_password,
+            trex_pythonpath=trex_pythonpath,
+            trex_ports=trex_ports,
+        )
+        states.update(api_states)
+
+    down_ports = [port for port in required if states.get(port) != "UP"]
+    if down_ports:
+        readable = ", ".join(
+            f"{port}={states.get(port, 'UNKNOWN')}" for port in required
+        )
+        raise RuntimeError(
+            f"TRex port(s) {down_ports} are not link UP ({readable}). "
+            "Aborting test — fix NIC cabling/link before re-running."
+        )
+    print(f"[TRex] Port link check passed: {', '.join(f'{p}=UP' for p in required)}")
+
+
 def _has_running_trex_server(
     *,
     trex_server: str,
@@ -206,11 +318,82 @@ def _has_running_trex_server(
     return "t-rex-64" in output or "_t-rex-64" in output
 
 
+BUNDLED_CLIENT_SCRIPT = (
+    Path(__file__).resolve().parent / "scripts" / "master_script_extended_16SU.py"
+)
+
+
+def bundled_client_script_path() -> str:
+    return str(BUNDLED_CLIENT_SCRIPT)
+
+
 def _normalize_client_script(script_path: str) -> tuple[str, str]:
     clean = script_path.strip() or "master_script_extended_16SU.py"
     if "/" in clean:
         return os.path.dirname(clean) or "~", os.path.basename(clean)
     return "~", clean
+
+
+def _build_scp_command(host: str, user: str, password: str, local_path: str, remote_path: str) -> list[str]:
+    ssh_host = format_ssh_host(host)
+    ssh_target = normalize_ip(host)
+    command: list[str] = []
+    if password:
+        command.extend(["sshpass", "-p", password])
+    scp_command = ["scp", *SSH_OPTIONS]
+    if is_ipv6_literal(ssh_target):
+        scp_command.extend(["-6"])
+    scp_command.extend([local_path, f"{user}@{ssh_host}:{remote_path}"])
+    command.extend(scp_command)
+    return command
+
+
+def deploy_trex_client_script(
+    *,
+    trex_server: str,
+    trex_user: str = "root",
+    trex_password: str = "",
+    local_script: str | None = None,
+    remote_script: str = "~/master_script_extended_16SU.py",
+) -> str:
+    """Copy the bundled TRex client script to the remote TRex host."""
+    source = Path(local_script or bundled_client_script_path())
+    if not source.is_file():
+        raise FileNotFoundError(f"TRex client script not found: {source}")
+
+    remote_dir, remote_name = _normalize_client_script(remote_script)
+    if remote_dir != "~":
+        _run_remote_command(
+            trex_server,
+            trex_user,
+            trex_password,
+            f"mkdir -p {shlex.quote(remote_dir)}",
+            timeout_s=20,
+            check=True,
+        )
+    remote_target = remote_script if remote_dir == "~" else f"{remote_dir.rstrip('/')}/{remote_name}"
+
+    result = subprocess.run(
+        _build_scp_command(trex_server, trex_user, trex_password, str(source), remote_target),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Failed to deploy TRex client script to {trex_server}: "
+            f"{(result.stderr or result.stdout).strip()}"
+        )
+    _run_remote_command(
+        trex_server,
+        trex_user,
+        trex_password,
+        f"chmod +x {shlex.quote(remote_target)}",
+        timeout_s=15,
+        check=False,
+    )
+    return remote_target
 
 
 def _sample_dut_counters(
@@ -433,11 +616,21 @@ def run_trex_stats_check(
     dut_radio_idx: int = 1,
     dut_sample_interval_s: int = 5,
     reuse_existing_server: bool = False,
+    deploy_client_script: bool = False,
 ) -> dict[str, object]:
     server_process = None
     server_output = ""
     client_output = ""
     server_reused = False
+
+    if deploy_client_script:
+        deployed_path = deploy_trex_client_script(
+            trex_server=trex_server,
+            trex_user=trex_user,
+            trex_password=trex_password,
+            remote_script=trex_client_script,
+        )
+        trex_client_script = deployed_path
 
     client_dir, client_name = _normalize_client_script(trex_client_script)
     client_cd = "cd ~" if client_dir == "~" else f"cd {shlex.quote(client_dir)}"
@@ -497,6 +690,14 @@ def run_trex_stats_check(
             trex_password=trex_password,
         ):
             server_reused = True
+            assert_trex_ports_link_up(
+                trex_server=trex_server,
+                trex_user=trex_user,
+                trex_password=trex_password,
+                trex_pythonpath=trex_pythonpath,
+                trex_ports=trex_ports,
+                server_output="",
+            )
         else:
             server_process, server_collector = _start_trex_server(
                 trex_server=trex_server,
@@ -508,6 +709,14 @@ def run_trex_stats_check(
             time.sleep(max(1, trex_server_startup_s))
             if server_process.poll() is not None:
                 raise RuntimeError(f"TRex server exited early: {server_collector.tail()}")
+            assert_trex_ports_link_up(
+                trex_server=trex_server,
+                trex_user=trex_user,
+                trex_password=trex_password,
+                trex_pythonpath=trex_pythonpath,
+                trex_ports=trex_ports,
+                server_output=server_collector.text(),
+            )
 
         dut_counters["pre"] = _sample_dut_counters(
             dut_host=dut_host,
@@ -633,6 +842,9 @@ def run_trex_stats_check(
             "server_output_tail": "",
         }
     except Exception as exc:
+        err_text = str(exc)
+        if "TRex port" in err_text and "not link UP" in err_text:
+            raise
         result = {
             "backend": "trex",
             "mode": run_mode,
@@ -642,7 +854,7 @@ def run_trex_stats_check(
             "downlink": {"tx_mbps": 0.0, "rx_mbps": 0.0, "loss_pct": 0.0, "latency_ms": 0.0},
             "uplink": {"tx_mbps": 0.0, "rx_mbps": 0.0, "loss_pct": 0.0, "latency_ms": 0.0},
             "dut_counters": dut_counters,
-            "validation": {"passed": False, "reason": str(exc), "expected_min_mbps": expected_min_mbps, "run_mode": run_mode},
+            "validation": {"passed": False, "reason": err_text, "expected_min_mbps": expected_min_mbps, "run_mode": run_mode},
             "live_samples": [],
             "summary_by_device": {},
             "consolidated_summary": [],
