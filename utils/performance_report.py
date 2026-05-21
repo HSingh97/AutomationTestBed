@@ -8,6 +8,7 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+from traffic.operating_rate_table import lookup_spec
 from utils.regression_report import _render_testbed_summary_table
 
 SENAO_LOGO_URL = (
@@ -27,17 +28,55 @@ def _rate_actual_cell(actual: float | None, ok: bool | None) -> str:
     return escape(text)
 
 
-def _throughput_pct_of_rate(measured: float, data_rate_mbps: float) -> float:
-    if data_rate_mbps <= 0:
+def _parse_dl_ul_fractions(ratio: str) -> tuple[float, float]:
+    try:
+        dl_part, ul_part = str(ratio).split(":")
+        total = float(dl_part) + float(ul_part)
+        if total <= 0:
+            return 0.5, 0.5
+        return float(dl_part) / total, float(ul_part) / total
+    except (TypeError, ValueError):
+        return 0.5, 0.5
+
+
+def _throughput_pct_of_rate(measured: float, target_mbps: float) -> float:
+    if target_mbps <= 0:
         return 0.0
-    return (measured / data_rate_mbps) * 100.0
+    return (measured / target_mbps) * 100.0
 
 
-def _throughput_cell(measured: float, data_rate_mbps: float) -> str:
-    """Color throughput vs data rate; zero throughput is always flagged."""
+def _direction_targets(data_rate_mbps: float, ratio: str) -> tuple[float, float, float]:
+    """Split spec data rate by DL:UL ratio for per-direction throughput coloring."""
+    dl_frac, ul_frac = _parse_dl_ul_fractions(ratio)
+    dl_target = data_rate_mbps * dl_frac
+    ul_target = data_rate_mbps * ul_frac
+    return dl_target, ul_target, data_rate_mbps
+
+
+def _resolve_row_spec(record: dict[str, Any]) -> tuple[dict[str, Any], float]:
+    link = record.get("link_validation") or {}
+    spec = link.get("spec") or {}
+    expected = float(
+        link.get("expected_operating_rate_mbps") or spec.get("operating_rate_mbps") or 0
+    )
+    if expected > 0 and spec:
+        return spec, expected
+    bandwidth = str(record.get("bandwidth") or "")
+    mcs = str(record.get("mcs") or "")
+    if not bandwidth or not mcs:
+        return spec, expected
+    try:
+        spec = lookup_spec(mcs, bandwidth, spatial_streams=2)
+        return spec, float(spec.get("operating_rate_mbps") or 0)
+    except (TypeError, ValueError):
+        return {}, 0.0
+
+
+def _throughput_cell(measured: float, target_mbps: float) -> str:
+    """Color throughput vs direction target (DL/UL share of data rate); zero is flagged."""
     if measured <= 0:
         return "<span class='tput-zero'>0.0</span> <span class='muted'>(no traffic)</span>"
-    pct = _throughput_pct_of_rate(measured, data_rate_mbps)
+    pct = _throughput_pct_of_rate(measured, target_mbps)
     if pct >= 70:
         css = "tput-good"
     elif pct >= 50:
@@ -50,12 +89,11 @@ def _throughput_cell(measured: float, data_rate_mbps: float) -> str:
 def _render_result_row(record: dict[str, Any]) -> str:
     stats = record.get("stats") or {}
     link = record.get("link_validation") or {}
-    spec = link.get("spec") or {}
-    expected_rate = float(
-        link.get("expected_operating_rate_mbps") or spec.get("operating_rate_mbps") or 0
-    )
+    spec, expected_rate = _resolve_row_spec(record)
     clients = link.get("clients") or []
     primary = clients[0] if clients else {}
+    ratio = str(record.get("ratio") or "50:50")
+    dl_target, ul_target, bidi_target = _direction_targets(expected_rate, ratio)
 
     combined = stats.get("combined") or {}
     downlink = stats.get("downlink") or {}
@@ -67,19 +105,24 @@ def _render_result_row(record: dict[str, Any]) -> str:
     row_class = ""
     if link.get("operating_rate_mismatch"):
         row_class = "rate-mismatch"
+    if record.get("error"):
+        row_class = "rate-mismatch" if row_class else "run-error"
+
+    modulation = spec.get("modulation") or "—"
+    data_rate_cell = f"{expected_rate:.0f}" if expected_rate > 0 else "—"
 
     return f"""
         <tr class="{row_class}">
           <td>{escape(str(record.get('bandwidth', '—')))}</td>
           <td>{escape(str(record.get('mcs', '—')))}</td>
           <td>{escape(str(record.get('ratio', '—')))}</td>
-          <td>{escape(str(spec.get('modulation', '—')))}</td>
-          <td>{expected_rate:.0f}</td>
+          <td>{escape(str(modulation))}</td>
+          <td>{data_rate_cell}</td>
           <td>{_rate_actual_cell(primary.get('tx_rate_mbps'), primary.get('tx_rate_ok'))}</td>
           <td>{_rate_actual_cell(primary.get('rx_rate_mbps'), primary.get('rx_rate_ok'))}</td>
-          <td>{_throughput_cell(dl_mbps, expected_rate)}</td>
-          <td>{_throughput_cell(ul_mbps, expected_rate)}</td>
-          <td>{_throughput_cell(bidi_mbps, expected_rate)}</td>
+          <td>{_throughput_cell(dl_mbps, dl_target)}</td>
+          <td>{_throughput_cell(ul_mbps, ul_target)}</td>
+          <td>{_throughput_cell(bidi_mbps, bidi_target)}</td>
           <td>{escape(str(primary.get('l_snr1', '—')))}</td>
           <td>{escape(str(primary.get('l_snr2', '—')))}</td>
           <td>{escape(str(primary.get('r_snr1', '—')))}</td>
@@ -106,7 +149,7 @@ def _render_results_table(records: list[dict[str, Any]]) -> str:
           <th rowspan="2">Modulation</th>
           <th rowspan="2">Data Rate<br/><span class="muted">(Mbps)</span></th>
           <th colspan="2">Rate (Mbps)</th>
-          <th colspan="3">Throughput (Mbps)<br/><span class="muted">% of data rate</span></th>
+          <th colspan="3">Throughput (Mbps)<br/><span class="muted">% of DL/UL share</span></th>
           <th colspan="2">Local SNR (dB)</th>
           <th colspan="2">Remote SNR (dB)</th>
           <th rowspan="2">Noise<br/>(dBm)</th>
@@ -151,9 +194,11 @@ def write_summary_csv(records: list[dict[str, Any]], path: Path) -> None:
             combined = stats.get("combined") or {}
             downlink = stats.get("downlink") or {}
             uplink = stats.get("uplink") or {}
+            _, expected = _resolve_row_spec(record)
             link = record.get("link_validation") or {}
             primary = (link.get("clients") or [{}])[0]
-            expected = float(link.get("expected_operating_rate_mbps") or 0)
+            ratio = str(record.get("ratio") or "50:50")
+            dl_target, ul_target, bidi_target = _direction_targets(expected, ratio)
             bidi = float(combined.get("rx_mbps") or 0)
             writer.writerow(
                 {
@@ -169,9 +214,9 @@ def write_summary_csv(records: list[dict[str, Any]], path: Path) -> None:
                     "downlink_rx_mbps": downlink.get("rx_mbps", 0),
                     "uplink_rx_mbps": uplink.get("rx_mbps", 0),
                     "throughput_pct_of_data_rate": round(
-                        _throughput_pct_of_rate(bidi, expected), 1
+                        _throughput_pct_of_rate(bidi, bidi_target), 1
                     )
-                    if expected > 0
+                    if bidi_target > 0
                     else "",
                     "error": record.get("error", ""),
                     "artifact": record.get("artifact", ""),
@@ -283,6 +328,7 @@ def write_html_report(
     }}
     table.sheet tbody tr:nth-child(even) td {{ background: #fafcff; }}
     table.sheet tbody tr.rate-mismatch td {{ background: #fff8f8; }}
+    table.sheet tbody tr.run-error td {{ background: #fff5f5; }}
     .muted {{ color: #64748b; font-size: 11px; }}
     .tput-good {{
       color: #166534; font-weight: 700; background: #dcfce7;
@@ -332,13 +378,14 @@ def write_html_report(
       <h2>Performance Results</h2>
       {results_table}
       <p class="footnote">
-        <strong>Throughput</strong> is colored vs spec data rate (no pass/fail):
+        <strong>Throughput</strong> % uses each direction&apos;s share of spec data rate
+        (e.g. 75:25 → DL vs 75%, UL vs 25%; Bi-Di vs 100%):
         <span class="tput-good">green ≥70%</span>,
         <span class="tput-warn">orange 50–70%</span>,
         <span class="tput-bad">red &lt;50%</span>,
         <span class="tput-zero">zero = no traffic</span>.
         <strong>Data rate</strong> is from the spec sheet; <strong>Tx/Rx</strong> are SNMP operating rates (green = match).
-        Rows with pink background had operating-rate mismatch.
+        Pink rows: operating-rate mismatch or run error (no TRex result).
       </p>
     </section>
   </div>

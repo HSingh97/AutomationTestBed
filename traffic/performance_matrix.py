@@ -320,6 +320,20 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                     )
                 except Exception as exc:
                     print(f"[ERROR] Failed to configure DUT for {bandwidth}/{mcs}/{ratio}: {exc}")
+                    try:
+                        failed_spec = lookup_spec(
+                            mcs, bandwidth, spatial_streams=int(args.spatial_stream)
+                        )
+                        link_validation = {
+                            "configured_mcs": mcs,
+                            "spec": failed_spec,
+                            "expected_operating_rate_mbps": failed_spec["operating_rate_mbps"],
+                            "clients": [],
+                            "operating_rate_ok": False,
+                            "operating_rate_mismatch": True,
+                        }
+                    except Exception:
+                        link_validation = {}
                     records.append(
                         {
                             "bandwidth": bandwidth,
@@ -330,6 +344,8 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             "passed": False,
                             "error": f"DUT config failed: {exc}",
                             "stats": {},
+                            "link_validation": link_validation,
+                            "noise_dbm": args.noise_dbm,
                         }
                     )
                     continue
@@ -487,6 +503,33 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                     err_text = str(exc)
                     record["error"] = err_text
                     record["stats"] = {}
+                    record["noise_dbm"] = args.noise_dbm
+                    try:
+                        clients = fetch_link_clients(
+                            dut_ip,
+                            snmp_community=args.snmp_community,
+                            radio_idx=args.snmp_radio_index,
+                        )
+                        record["link_validation"] = validate_operating_rates(
+                            bandwidth=bandwidth,
+                            configured_mcs=mcs,
+                            clients=clients,
+                            spatial_streams=int(args.spatial_stream),
+                            tolerance_mbps=args.rate_tolerance_mbps,
+                            tolerance_pct=args.rate_tolerance_pct,
+                        )
+                    except Exception:
+                        failed_spec = lookup_spec(
+                            mcs, bandwidth, spatial_streams=int(args.spatial_stream)
+                        )
+                        record["link_validation"] = {
+                            "configured_mcs": mcs,
+                            "spec": failed_spec,
+                            "expected_operating_rate_mbps": failed_spec["operating_rate_mbps"],
+                            "clients": [],
+                            "operating_rate_ok": False,
+                            "operating_rate_mismatch": True,
+                        }
                     record["finished_at"] = datetime.now(timezone.utc).isoformat()
                     with artifact.open("w", encoding="utf-8") as handle:
                         json.dump(record, handle, indent=2)

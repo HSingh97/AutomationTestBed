@@ -681,7 +681,7 @@ def run_trex_stats_check(
 
     dut_counters: dict[str, object] = {"pre": None, "samples": [], "post": None}
     started_at = _utc_now()
-    validation: dict[str, object]
+    result: dict[str, object] | None = None
 
     try:
         if reuse_existing_server and _has_running_trex_server(
@@ -845,6 +845,13 @@ def run_trex_stats_check(
         err_text = str(exc)
         if "TRex port" in err_text and "not link UP" in err_text:
             raise
+        validation = {
+            "passed": False,
+            "reason": err_text,
+            "expected_min_mbps": expected_min_mbps,
+            "observed_rx_mbps": 0.0,
+            "run_mode": run_mode,
+        }
         result = {
             "backend": "trex",
             "mode": run_mode,
@@ -854,7 +861,7 @@ def run_trex_stats_check(
             "downlink": {"tx_mbps": 0.0, "rx_mbps": 0.0, "loss_pct": 0.0, "latency_ms": 0.0},
             "uplink": {"tx_mbps": 0.0, "rx_mbps": 0.0, "loss_pct": 0.0, "latency_ms": 0.0},
             "dut_counters": dut_counters,
-            "validation": {"passed": False, "reason": err_text, "expected_min_mbps": expected_min_mbps, "run_mode": run_mode},
+            "validation": validation,
             "live_samples": [],
             "summary_by_device": {},
             "consolidated_summary": [],
@@ -870,7 +877,11 @@ def run_trex_stats_check(
                 trex_user=trex_user,
                 trex_password=trex_password,
             )
-            result["server_output_tail"] = server_output
+            if result is not None:
+                result["server_output_tail"] = server_output
+
+    if result is None:
+        raise RuntimeError("TRex stats check failed before a result payload was produced.")
 
     if output_json:
         with open(output_json, "w", encoding="utf-8") as handle:
