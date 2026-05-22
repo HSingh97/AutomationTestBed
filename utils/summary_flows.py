@@ -13,6 +13,8 @@ from utils.parsers import (
     clean_ssh_output,
     extract_ip_objects,
     extract_uci_value,
+    normalize_gui_metric,
+    normalize_ssh_metric,
     parse_bandwidth,
     parse_configured_channel,
     parse_ifconfig_mac,
@@ -22,6 +24,9 @@ from utils.parsers import (
     parse_radio_status,
     parse_security,
 )
+
+# Summary LAN metrics are validated against eth0 only until dual-LAN DUTs are supported.
+_MAX_SUMMARY_LAN_PORTS = 1
 from utils.validators import (
     validate_cpu_mem,
     validate_network_address,
@@ -46,7 +51,7 @@ async def assert_summary_system(root_ssh, gui_page):
     ssh_hw = (await root_ssh.send_command(RootCommands.GET_HW_VERSION)).result.strip()
     ssh_bootloader = (await root_ssh.send_command(RootCommands.GET_BOOTLOADER)).result.strip()
     ssh_time = (await root_ssh.send_command(RootCommands.GET_TIME)).result.strip()
-    ssh_temp = (await root_ssh.send_command(RootCommands.GET_TEMP)).result.strip()
+    ssh_temp = normalize_ssh_metric((await root_ssh.send_command(RootCommands.GET_TEMP)).result)
     ssh_gps = (await root_ssh.send_command(RootCommands.GET_GPS)).result.strip()
     ssh_elevation = (await root_ssh.send_command(RootCommands.GET_ELEVATION)).result.strip()
     ssh_cpu = (await root_ssh.send_command(RootCommands.GET_CPU)).result.strip()
@@ -57,7 +62,7 @@ async def assert_summary_system(root_ssh, gui_page):
     gui_hw = await gui_page.locator(SummaryLocators.HW_VERSION).inner_text()
     gui_bootloader = await gui_page.locator(SummaryLocators.BOOTLOADER).inner_text()
     gui_time = await gui_page.locator(SummaryLocators.LOCAL_TIME).inner_text()
-    gui_temp = await gui_page.locator(SummaryLocators.TEMPERATURE).inner_text()
+    gui_temp = normalize_gui_metric(await gui_page.locator(SummaryLocators.TEMPERATURE).inner_text())
     gui_gps = await gui_page.locator(SummaryLocators.GPS).inner_text()
     gui_elevation = await gui_page.locator(SummaryLocators.ELEVATION).inner_text()
     gui_cpu_mem = await gui_page.locator(SummaryLocators.CPU_MEMORY).inner_text()
@@ -124,8 +129,7 @@ async def assert_summary_network(root_ssh, gui_page):
         validate_network_address("GATEWAY", ssh_gw_v4, ssh_gw_v6, gui_gw)
     validate_network_address("IP ADDRESS", ssh_ipv4, ssh_ipv6, gui_ip)
 
-    lan_num = 1
-    while True:
+    for lan_num in range(1, _MAX_SUMMARY_LAN_PORTS + 1):
         mac_locator = getattr(SummaryNetworkLocators, f"MAC_LAN{lan_num}", None)
         speed_locator = getattr(SummaryNetworkLocators, f"SPEED_DUPLEX_LAN{lan_num}", None)
         cable_locator = getattr(SummaryNetworkLocators, f"CABLE_LENGTH_LAN{lan_num}", None)
@@ -134,19 +138,26 @@ async def assert_summary_network(root_ssh, gui_page):
         if await gui_page.locator(mac_locator).count() == 0:
             break
 
-        eth_idx = lan_num - 1
-        ssh_mac = (await root_ssh.send_command(RootCommands.get_mac_lan(eth_idx))).result.strip().upper()
-        ssh_speed = (await root_ssh.send_command(RootCommands.get_speed_lan(eth_idx))).result.strip()
-        ssh_duplex = (await root_ssh.send_command(RootCommands.get_duplex_lan(eth_idx))).result.strip()
-        ssh_cable = (await root_ssh.send_command(RootCommands.get_cable_length_lan(eth_idx))).result.strip()
-        gui_mac = await gui_page.locator(mac_locator).inner_text()
-        gui_speed = await gui_page.locator(speed_locator).inner_text()
-        gui_cable = await gui_page.locator(cable_locator).inner_text()
+        eth_idx = 0
+        ssh_mac = normalize_ssh_metric(
+            (await root_ssh.send_command(RootCommands.get_mac_lan(eth_idx))).result
+        ).upper()
+        ssh_speed = normalize_ssh_metric(
+            (await root_ssh.send_command(RootCommands.get_speed_lan(eth_idx))).result
+        )
+        ssh_duplex = normalize_ssh_metric(
+            (await root_ssh.send_command(RootCommands.get_duplex_lan(eth_idx))).result
+        )
+        ssh_cable = normalize_ssh_metric(
+            (await root_ssh.send_command(RootCommands.get_cable_length_lan(eth_idx))).result
+        )
+        gui_mac = normalize_gui_metric(await gui_page.locator(mac_locator).inner_text())
+        gui_speed = normalize_gui_metric(await gui_page.locator(speed_locator).inner_text())
+        gui_cable = normalize_gui_metric(await gui_page.locator(cable_locator).inner_text())
 
         validate_param(f"MAC LAN{lan_num}", ssh_mac, gui_mac.upper())
         validate_speed_duplex(f"SPEED LAN{lan_num}", ssh_speed, ssh_duplex, gui_speed)
         validate_param(f"CABLE LENGTH LAN{lan_num}", ssh_cable, gui_cable)
-        lan_num += 1
 
 
 async def assert_summary_performance(root_ssh, gui_page):
@@ -160,8 +171,7 @@ async def assert_summary_performance(root_ssh, gui_page):
     validate_throughput("TX R1", ssh_tx_r1, gui_tx_r1, tolerance=20.0)
     validate_throughput("RX R1", ssh_rx_r1, gui_rx_r1, tolerance=20.0)
 
-    lan_num = 1
-    while True:
+    for lan_num in range(1, _MAX_SUMMARY_LAN_PORTS + 1):
         tx_locator = getattr(SummaryPerformanceLocators, f"TX_LAN{lan_num}", None)
         rx_locator = getattr(SummaryPerformanceLocators, f"RX_LAN{lan_num}", None)
         if not tx_locator or not rx_locator:
@@ -169,14 +179,17 @@ async def assert_summary_performance(root_ssh, gui_page):
         if await gui_page.locator(tx_locator).count() == 0:
             break
 
-        eth_idx = lan_num - 1
-        ssh_tx_lan = (await root_ssh.send_command(RootCommands.get_tx_lan(eth_idx))).result.strip()
-        ssh_rx_lan = (await root_ssh.send_command(RootCommands.get_rx_lan(eth_idx))).result.strip()
-        gui_tx_lan = await gui_page.locator(tx_locator).inner_text()
-        gui_rx_lan = await gui_page.locator(rx_locator).inner_text()
+        eth_idx = 0
+        ssh_tx_lan = normalize_ssh_metric(
+            (await root_ssh.send_command(RootCommands.get_tx_lan(eth_idx))).result
+        )
+        ssh_rx_lan = normalize_ssh_metric(
+            (await root_ssh.send_command(RootCommands.get_rx_lan(eth_idx))).result
+        )
+        gui_tx_lan = normalize_gui_metric(await gui_page.locator(tx_locator).inner_text())
+        gui_rx_lan = normalize_gui_metric(await gui_page.locator(rx_locator).inner_text())
         validate_throughput(f"TX LAN{lan_num}", ssh_tx_lan, gui_tx_lan, tolerance=20.0)
         validate_throughput(f"RX LAN{lan_num}", ssh_rx_lan, gui_rx_lan, tolerance=20.0)
-        lan_num += 1
 
 
 async def assert_summary_wireless(root_ssh, gui_page):

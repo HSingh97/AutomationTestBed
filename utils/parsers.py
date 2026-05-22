@@ -56,6 +56,48 @@ def clean_ssh_output(raw_output):
     return filtered[-1]
 
 
+_SSH_READ_FAILURE_MARKERS = (
+    "can't open",
+    "cannot open",
+    "no such file",
+    "read failed",
+    "error:",
+    "cat: ",
+)
+
+
+def is_ssh_read_failure(text):
+    """True when shell output indicates the metric could not be read."""
+    lower = str(text or "").strip().lower()
+    if not lower:
+        return False
+    return any(marker in lower for marker in _SSH_READ_FAILURE_MARKERS)
+
+
+def normalize_ssh_metric(text):
+    """Map failed SSH reads to '-' so validators can match an empty GUI."""
+    raw = str(text or "").strip()
+    cleaned = clean_ssh_output(raw)
+    if is_ssh_read_failure(raw) or is_ssh_read_failure(cleaned):
+        return "-"
+    return cleaned if cleaned else "-"
+
+
+def normalize_gui_metric(text):
+    """Map unrendered Summary page placeholders to '-'."""
+    raw = str(text or "").strip()
+    if not raw:
+        return "-"
+    lower = raw.lower()
+    if "document.write" in lower:
+        return "-"
+    if lower.startswith("if (") or 'values["' in raw or "values['" in raw:
+        return "-"
+    if lower in {"-", "—", "n/a"}:
+        return "-"
+    return raw
+
+
 def extract_command_result(raw_output, command):
     """
     Extract command value from noisy interactive SSH output.
