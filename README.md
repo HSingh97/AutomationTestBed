@@ -72,9 +72,9 @@ Automation framework for UBR P2MP validation:
 - `GUI_21` – Encryption  
 - `GUI_22` – Max CPE  
 - `GUI_23` – DL/UL Ratio  
-- `GUI_24` – DDRS Status  
-- `GUI_25` – Spatial Stream (GUI/CLI configuration)  
-- `GUI_26` – Modulation Index (GUI/CLI configuration)  
+- `GUI_24` – DDRS Status (Enable/Disable options + dependent dropdown visibility/MCS ranges; Save per step)  
+- `GUI_25` – Spatial Stream configure Single/Dual + SSH  
+- `GUI_26` – Modulation Index configure sample MCS + SSH  
 - `GUI_27` – ATPC Status (remote CPE)  
 - `GUI_28` – Transmit Power  
 - `GUI_29` – Maximum EIRP  

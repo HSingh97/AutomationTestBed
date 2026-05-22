@@ -239,11 +239,24 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A[Open Wireless > Radio 1 > DDRS/ATPC] --> B[Toggle DDRS status in GUI]
-    B --> C[Save and apply]
-    C --> D[Verify txparam.ath1.ddrsstatus via SSH]
-    D --> E[Restore baseline]
+    A[Open DDRS/ATPC on CPE] --> B[Assert Enable/Disable options]
+    B --> C[For each DDRS+spatial: Save and check visible dropdowns]
+    C --> D[One triple-apply restore at end]
 ```
+
+**DDRS page checks** (GUI_24 only — not repeated in GUI_25/26):
+
+| DDRS | Spatial | Visible fields | MCS range |
+|------|---------|----------------|-----------|
+| Enable | Auto | Max Data rate – Single, Max Data rate – Dual | MCS0–11, MCS12–23 |
+| Enable | Single | Min / Max Modulation Index | MCS0–11 each |
+| Enable | Dual | Min / Max Modulation Index | MCS12–23 each |
+| Disable | Single | Modulation Index | MCS0–11 |
+| Disable | Dual | Modulation Index | MCS12–23 |
+
+Spatial stream with **DDRS Disable** must not offer **Auto**.
+
+Each DDRS/spatial dropdown change is followed by **form Save** (not full Apply) so dependent fields become visible before MCS-range checks.
 
 </details>
 
@@ -252,9 +265,9 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A[Open DDRS/ATPC on CPE] --> B[Spatial stream dropdown GUI lifecycle]
-    B --> C[Apply and verify via SSH uci]
-    C --> D[Restore baseline from profile defaults]
+    A[Open DDRS/ATPC on CPE] --> B[Apply Single then Dual + triple-apply]
+    B --> C[SSH verify spatialstream]
+    C --> D[Restore Auto]
 ```
 
 </details>
@@ -264,9 +277,8 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A[Open DDRS/ATPC on CPE] --> B[Modulation index dropdown GUI lifecycle]
-    B --> C[Apply and verify via SSH uci]
-    C --> D[Restore baseline from profile defaults]
+    A[DDRS Disable + Dual spatial, Save] --> B[Apply sample MCS + triple-apply]
+    B --> C[SSH verify ddrsrate]
 ```
 
 </details>

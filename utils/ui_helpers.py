@@ -20,40 +20,35 @@ def attach_dialog_handler(gui_page):
 
 
 # =====================================================================
-# UNIVERSAL HELPER: The Triple-Apply Sequence
+# UNIVERSAL HELPER: Form Save (refresh dependent fields on same page)
 # =====================================================================
-async def execute_triple_apply(gui_page, fallback_url):
-    """Executes the sequence: Form Save -> Top Apply -> Super Apply"""
-    print("    -> Executing Triple-Apply sequence...")
-
-    # 1. Form Save (Universal)
+async def execute_form_save(gui_page):
+    """Click the page Save button so LuCI reveals/hides dependent dropdowns."""
+    attach_dialog_handler(gui_page)
     form_save = gui_page.locator(TopPanelLocators.FORM_SAVE_BUTTON).first
     await form_save.scroll_into_view_if_needed()
     await form_save.wait_for(state="visible", timeout=5000)
 
-    try:
-        btn_text = await form_save.evaluate("el => el.value || el.innerText || el.textContent")
-        print(f"    -> [DEBUG] About to click Save target: '{btn_text.strip()}'")
-    except Exception:
-        pass
-
     if await form_save.evaluate("el => el.disabled"):
-        print("    -> [DEBUG] Target was DISABLED! Stripping attribute...")
         await form_save.evaluate("el => el.removeAttribute('disabled')")
 
-    print("    -> [DEBUG] Waiting 1 second before Save click...")
     await gui_page.wait_for_timeout(1000)
-
-    # NATIVE FORM SUBMISSION
-    print("    -> [DEBUG] Firing click on Save target...")
     await form_save.click(force=True)
 
     try:
         await gui_page.wait_for_load_state("domcontentloaded", timeout=6000)
     except Exception:
         pass
+    await gui_page.wait_for_timeout(2000)
 
-    await gui_page.wait_for_timeout(3000)
+
+# =====================================================================
+# UNIVERSAL HELPER: The Triple-Apply Sequence
+# =====================================================================
+async def execute_triple_apply(gui_page, fallback_url):
+    """Executes the sequence: Form Save -> Top Apply -> Super Apply"""
+    print("    -> Executing Triple-Apply sequence...")
+    await execute_form_save(gui_page)
 
     # 2. Top Panel Apply (Goes to pending changes screen)
     top_apply = gui_page.locator(TopPanelLocators.APPLY_BUTTON).first

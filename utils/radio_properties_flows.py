@@ -8,7 +8,7 @@ import pytest
 from playwright.async_api import async_playwright
 from scrapli.driver.generic import AsyncGenericDriver
 
-from config.defaults import RADIO_TEST_VALUES
+from config.defaults import DEFAULT_VALUES, RADIO_TEST_VALUES
 from pages.commands import RootCommands
 from pages.locators import RadioPropertiesLocators, TopPanelLocators, UITimeouts
 from pages.radio_properties_page import RadioPropertiesPage
@@ -28,6 +28,7 @@ from utils.ui_helpers import (
     validate_dropdown_value_lifecycle,
     validate_input_lifecycle,
 )
+from utils.ddrs_ui_validation import validate_ddrs_page
 from utils.validators import validate_param
 
 DL_UL_RATIO_OPTIONS = ["Auto", "50/50", "60/40", "70/30", "75/25", "80/20"]
@@ -495,51 +496,66 @@ async def _assert_dl_ul_ratio_for_target(target):
 
 
 async def _assert_ddrs_status_for_target(target):
-    _log(target["role"], "Validating DDRS Status lifecycle.")
-    await target["radio_page"].open_ddrs_atpc()
-    await validate_dropdown_value_lifecycle(
-        target["page"],
-        target["ssh"],
-        locator=RadioPropertiesLocators.DDRS_STATUS_DROPDOWN,
-        uci_cmd=RootCommands.get_ddrs_status(1),
-        param_name="DDRS Status",
-        fallback_url=target["radio_page"].RADIO_1_DDRS_URL_CHUNK,
-        expected_options=RADIO_TEST_VALUES["DDRS_STATUS_VALUES"],
-        test_options=RADIO_TEST_VALUES["DDRS_STATUS_VALUES"],
-    )
+    """Enable/Disable options, configure via Save, verify dependent dropdowns (GUI_24)."""
+    await validate_ddrs_page(target)
 
 
 async def _assert_spatial_stream_for_targets(targets: list[dict[str, Any]]):
-    """GUI + SSH configuration validation only (no TRex throughput)."""
+    """Apply Single/Dual spatial stream once each and verify SSH (GUI_25)."""
     for target in targets:
-        _log(target["role"], "Validating Spatial Stream lifecycle (GUI/CLI).")
+        _log(target["role"], "Configuring Spatial Stream (Single/Dual).")
         await target["radio_page"].open_ddrs_atpc()
-        await validate_dropdown_value_lifecycle(
-            target["page"],
-            target["ssh"],
-            locator=RadioPropertiesLocators.SPATIAL_STREAM_DROPDOWN,
-            uci_cmd=RootCommands.get_spatial_stream(1),
-            param_name="Spatial Stream",
-            fallback_url=target["radio_page"].RADIO_1_DDRS_URL_CHUNK,
-            expected_options=["Single", "Dual", "Auto"],
-            test_options=RADIO_TEST_VALUES["SPATIAL_STREAM_VALUES"],
+        fallback = target["radio_page"].RADIO_1_DDRS_URL_CHUNK
+        for token in RADIO_TEST_VALUES["SPATIAL_STREAM_VALUES"]:
+            await _apply_dropdown_for_target(
+                target,
+                RadioPropertiesLocators.SPATIAL_STREAM_DROPDOWN,
+                RootCommands.get_spatial_stream(1),
+                "Spatial Stream",
+                token,
+                fallback,
+            )
+        await _apply_dropdown_for_target(
+            target,
+            RadioPropertiesLocators.SPATIAL_STREAM_DROPDOWN,
+            RootCommands.get_spatial_stream(1),
+            "Spatial Stream",
+            DEFAULT_VALUES["Spatial Stream"],
+            fallback,
         )
 
 
 async def _assert_modulation_index_for_targets(targets: list[dict[str, Any]]):
-    """GUI + SSH configuration validation only (no TRex throughput)."""
+    """Apply sample MCS values on Modulation Index and verify SSH (GUI_26)."""
+    from utils.ddrs_ui_validation import _set_dropdown_and_save, find_mcs_option_text
+
     for target in targets:
-        _log(target["role"], "Validating Modulation Index lifecycle (GUI/CLI).")
+        _log(target["role"], "Configuring Modulation Index (DDRS Disable + Dual).")
         await target["radio_page"].open_ddrs_atpc()
-        await validate_dropdown_value_lifecycle(
-            target["page"],
-            target["ssh"],
-            locator=RadioPropertiesLocators.MODULATION_INDEX_DROPDOWN,
-            uci_cmd=RootCommands.get_ddrs_rate(1),
-            param_name="Modulation Index",
-            fallback_url=target["radio_page"].RADIO_1_DDRS_URL_CHUNK,
-            test_options=RADIO_TEST_VALUES["MODULATION_INDEX_VALUES"],
+        fallback = target["radio_page"].RADIO_1_DDRS_URL_CHUNK
+        await _set_dropdown_and_save(
+            target["page"], RadioPropertiesLocators.DDRS_STATUS_DROPDOWN, "Disable"
         )
+        await _set_dropdown_and_save(
+            target["page"], RadioPropertiesLocators.SPATIAL_STREAM_DROPDOWN, "Dual"
+        )
+        mod_options = await _dropdown_options(
+            target["page"], RadioPropertiesLocators.MODULATION_INDEX_DROPDOWN
+        )
+        for mcs_num in (12, 23):
+            token = find_mcs_option_text(mod_options, mcs_num)
+            assert token, (
+                f"MCS{mcs_num} not found in Modulation Index dropdown "
+                f"(DDRS Disable + Dual); options: {[o['text'] for o in mod_options]}"
+            )
+            await _apply_dropdown_for_target(
+                target,
+                RadioPropertiesLocators.MODULATION_INDEX_DROPDOWN,
+                RootCommands.get_ddrs_rate(1),
+                "Modulation Index",
+                token,
+                fallback,
+            )
 
 
 async def _assert_atpc_status_for_target(target):
