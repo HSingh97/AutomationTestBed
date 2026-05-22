@@ -153,6 +153,10 @@ async def root_ssh(bsu_ip, device_creds, recovery_manager):
     else:
         raise RuntimeError(f"Unable to open root SSH to {bsu_ip} after retries: {' | '.join(open_errors)}")
     await recovery_manager.ensure_link_or_recover(bsu_ip=bsu_ip, device_creds=device_creds, root_ssh=conn)
+    from utils.link_ssid import ensure_bts_link_ssid_ssh, resolve_link_ssid
+
+    link_ssid = resolve_link_ssid(recovery_manager.profile_bundle)
+    await ensure_bts_link_ssid_ssh(conn, ssid=link_ssid)
     yield conn
     await conn.close()
 
@@ -315,7 +319,7 @@ async def gui_browser():
 # 6. GLOBAL AUTHENTICATION ENGINE (LIVE TAB)
 # =====================================================================
 @pytest.fixture(scope="session")
-async def gui_page(gui_browser, bsu_ip, device_creds, recovery_manager):
+async def gui_page(gui_browser, bsu_ip, device_creds, recovery_manager, root_ssh):
     """
     Logs into the GUI once per test run and yields the LIVE authenticated page.
     This safely bypasses the strict URL-token security on Senao devices.
@@ -380,6 +384,14 @@ async def gui_page(gui_browser, bsu_ip, device_creds, recovery_manager):
 
     print("    -> Waiting 3 seconds for Dashboard routing...")
     await page.wait_for_timeout(3000)
+
+    from utils.link_ssid import ensure_bts_link_ssid_gui, resolve_link_ssid
+
+    link_ssid = resolve_link_ssid(recovery_manager.profile_bundle)
+    try:
+        await ensure_bts_link_ssid_gui(page, root_ssh, ssid=link_ssid)
+    except Exception as exc:
+        print(f"[link] GUI SSID restore after login skipped: {exc}")
 
     # Hand the LIVE, logged-in page to the tests!
     yield page

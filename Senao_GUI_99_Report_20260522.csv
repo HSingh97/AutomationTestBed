@@ -1,0 +1,16 @@
+Test Group,Module ID,Module Name,Status,Execution Details
+Summary,GUI_01,System-Summary,PARTIAL,"Discrepancies Detected:
+- CPU Spike! ↳ Drift Analysis: Detected deviation of 18.00% (Allowed: 5.0%)"
+Summary,GUI_02,Network-Summary,PASSED,"Successfully Verified (8 parameters):
+GATEWAY, IP ADDRESS, MAC LAN1, SPEED LAN1, CABLE LENGTH LAN1, MAC LAN2, SPEED LAN2, CABLE LENGTH LAN2"
+Summary,GUI_03,Performance-Summary,PASSED,"Successfully Verified (6 parameters):
+TX R1, RX R1, TX LAN1, RX LAN1, TX LAN2, RX LAN2"
+Summary,GUI_04,Wireless-Summary,PASSED,"Successfully Verified (21 parameters):
+R0 RADIO STATUS, R0 MAC ADDRESS, R0 LINK TYPE, R0 RADIO MODE, R0 BANDWIDTH, R0 SSID, R0 CONFIGURED CHANNEL, R0 ACTIVE CHANNEL, R0 SECURITY, R0 REMOTE PARTNERS, R1 RADIO STATUS, R1 MAC ADDRESS, R1 LINK TYPE, R1 RADIO MODE, R1 BANDWIDTH, R1 SSID, R1 CONFIGURED CHANNEL, R1 ACTIVE CHANNEL, R1 SECURITY, R1 RTX PERCENTAGE, R1 REMOTE PARTNERS"
+Toppanel,GUI_05,Top-Panel-Logo,PASSED,All telemetry and backend parameters successfully matched the GUI.
+Toppanel,GUI_06,Top-Panel-Parameters,PASSED,"Successfully Verified (3 parameters):
+SYSNAME, SW VERSION, SERIAL NO."
+Toppanel,GUI_07,Top-Panel-Radio-Redirect,PASSED,All telemetry and backend parameters successfully matched the GUI.
+Toppanel,GUI_08,Home-And-Apply-Buttons,PASSED,All telemetry and backend parameters successfully matched the GUI.
+Toppanel,GUI_09,Reboot-Device,PASSED,All telemetry and backend parameters successfully matched the GUI.
+Toppanel,GUI_10,Logout,PASSED,All telemetry and backend parameters successfully matched the GUI.

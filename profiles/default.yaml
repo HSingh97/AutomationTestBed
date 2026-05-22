@@ -14,6 +14,7 @@ dut:
   password: Sen@0ubRNwk$
 
 link:
+  ssid: ATUMNAWJ
   expected_mode: linked
   min_connected_clients: 1
   health_check_timeout_s: 20

@@ -5,12 +5,15 @@ Single Source of Truth for all device factory default values.
 The keys here MUST match the 'param_name' passed into the UI helpers.
 """
 
+# Lab P2MP link SSID — BTS and CPE must match or the link drops between GUI tests.
+LINK_SSID = "ATUMNAWJ"
+
 DEFAULT_VALUES = {
     # Wireless -> Radio Properties
     "Status": "Enable",
     "Link Type": "PTMP",
     "Radio Mode": "BTS",
-    "SSID": "Senao_Default_SSID",
+    "SSID": LINK_SSID,
     "Bandwidth": "20 MHz",
     "DL/UL Ratio": "Auto",
     "Maximum SUs": "16",

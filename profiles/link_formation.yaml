@@ -14,6 +14,7 @@ dut:
   password: Sen@0ubRNwk$
 
 link:
+  ssid: ATUMNAWJ
   expected_mode: bootstrap
   target_bandwidth: HT80
   target_mcs_rate: MCS7

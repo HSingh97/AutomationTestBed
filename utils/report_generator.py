@@ -7,6 +7,10 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from utils.regression_report import _render_testbed_summary_table
 
 SENAO_LOGO_URL = (

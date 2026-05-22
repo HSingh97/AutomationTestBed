@@ -143,22 +143,25 @@ async def _open_radio_targets(gui_page, bsu_ip: str, device_creds: dict[str, str
 
     remote_host = _remote_dut_host_from_profile()
     if remote_host:
-        remote_page, remote_ssh, remote_context, remote_browser, remote_playwright = await _open_remote_radio_target(
-            remote_host, device_creds
-        )
-        targets.append(
-            {
-                "role": "CPE",
-                "host": remote_host,
-                "page": remote_page,
-                "ssh": remote_ssh,
-                "radio_page": RadioPropertiesPage(remote_page, local_ip=remote_host),
-                "context": remote_context,
-                "browser": remote_browser,
-                "playwright": remote_playwright,
-                "owns_resources": True,
-            }
-        )
+        try:
+            remote_page, remote_ssh, remote_context, remote_browser, remote_playwright = await _open_remote_radio_target(
+                remote_host, device_creds
+            )
+            targets.append(
+                {
+                    "role": "CPE",
+                    "host": remote_host,
+                    "page": remote_page,
+                    "ssh": remote_ssh,
+                    "radio_page": RadioPropertiesPage(remote_page, local_ip=remote_host),
+                    "context": remote_context,
+                    "browser": remote_browser,
+                    "playwright": remote_playwright,
+                    "owns_resources": True,
+                }
+            )
+        except Exception as exc:
+            print(f"    -> [WARN] CPE {remote_host} unreachable; BTS-only radio tests will run: {exc}")
     return targets
 
 
@@ -346,6 +349,9 @@ async def assert_radio_status_lifecycle(radio_page, root_ssh):
 
 
 async def assert_ssid_lifecycle(radio_page, root_ssh):
+    from config.defaults import LINK_SSID
+    from utils.link_ssid import ensure_bts_link_ssid_ssh
+
     await radio_page.navigate()
     await validate_input_lifecycle(
         radio_page.page,
@@ -358,6 +364,7 @@ async def assert_ssid_lifecycle(radio_page, root_ssh):
         fallback_url=radio_page.RADIO_1_URL_CHUNK,
         parser=extract_uci_value,
     )
+    await ensure_bts_link_ssid_ssh(root_ssh, ssid=LINK_SSID)
 
 
 async def assert_bandwidth_lifecycle(radio_page, root_ssh):
@@ -372,6 +379,7 @@ async def assert_bandwidth_lifecycle(radio_page, root_ssh):
         fallback_url=radio_page.RADIO_1_URL_CHUNK,
         parser=parse_bandwidth,
         test_all_options=True,
+        use_gui_options=True,
     )
 
 
@@ -683,10 +691,17 @@ async def _assert_max_eirp_for_target(target):
     )
 
 
+def _require_cpe_targets(targets: list[dict[str, Any]], case_id: str) -> list[dict[str, Any]]:
+    cpe_targets = [target for target in targets if target["role"] == "CPE"]
+    if not cpe_targets:
+        pytest.skip(f"{case_id} requires a reachable CPE (check profile remote_ipv6s / lab link).")
+    return cpe_targets
+
+
 async def assert_gui_23_dl_ul_ratio(gui_page, bsu_ip: str, device_creds: dict[str, str]):
     targets = await _open_radio_targets(gui_page, bsu_ip, device_creds)
     try:
-        for target in targets:
+        for target in _require_cpe_targets(targets, "GUI_23"):
             await _assert_dl_ul_ratio_for_target(target)
     finally:
         await _close_radio_targets(targets)
@@ -695,7 +710,7 @@ async def assert_gui_23_dl_ul_ratio(gui_page, bsu_ip: str, device_creds: dict[st
 async def assert_gui_24_ddrs_status(gui_page, bsu_ip: str, device_creds: dict[str, str]):
     targets = await _open_radio_targets(gui_page, bsu_ip, device_creds)
     try:
-        for target in targets:
+        for target in _require_cpe_targets(targets, "GUI_24"):
             await _assert_ddrs_status_for_target(target)
     finally:
         await _close_radio_targets(targets)
@@ -704,7 +719,8 @@ async def assert_gui_24_ddrs_status(gui_page, bsu_ip: str, device_creds: dict[st
 async def assert_gui_25_spatial_stream(gui_page, bsu_ip: str, device_creds: dict[str, str]):
     targets = await _open_radio_targets(gui_page, bsu_ip, device_creds)
     try:
-        await _assert_spatial_stream_for_targets(targets, bsu_ip, device_creds)
+        cpe_targets = _require_cpe_targets(targets, "GUI_25")
+        await _assert_spatial_stream_for_targets(cpe_targets, bsu_ip, device_creds)
     finally:
         await _close_radio_targets(targets)
 
@@ -712,7 +728,8 @@ async def assert_gui_25_spatial_stream(gui_page, bsu_ip: str, device_creds: dict
 async def assert_gui_26_modulation_index(gui_page, bsu_ip: str, device_creds: dict[str, str]):
     targets = await _open_radio_targets(gui_page, bsu_ip, device_creds)
     try:
-        await _assert_modulation_index_for_targets(targets, bsu_ip, device_creds)
+        cpe_targets = _require_cpe_targets(targets, "GUI_26")
+        await _assert_modulation_index_for_targets(cpe_targets, bsu_ip, device_creds)
     finally:
         await _close_radio_targets(targets)
 
@@ -732,7 +749,7 @@ async def assert_gui_27_atpc_status(gui_page, bsu_ip: str, device_creds: dict[st
 async def assert_gui_28_transmit_power(gui_page, bsu_ip: str, device_creds: dict[str, str]):
     targets = await _open_radio_targets(gui_page, bsu_ip, device_creds)
     try:
-        for target in targets:
+        for target in _require_cpe_targets(targets, "GUI_28"):
             await _assert_transmit_power_for_target(target)
     finally:
         await _close_radio_targets(targets)
@@ -741,7 +758,7 @@ async def assert_gui_28_transmit_power(gui_page, bsu_ip: str, device_creds: dict
 async def assert_gui_29_maximum_eirp(gui_page, bsu_ip: str, device_creds: dict[str, str]):
     targets = await _open_radio_targets(gui_page, bsu_ip, device_creds)
     try:
-        for target in targets:
+        for target in _require_cpe_targets(targets, "GUI_29"):
             await _assert_max_eirp_for_target(target)
     finally:
         await _close_radio_targets(targets)

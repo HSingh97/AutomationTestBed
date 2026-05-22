@@ -69,7 +69,10 @@ pipeline {
                     def profileName = params.PROFILE_NAME
                     def recoveryProfileName = params.RECOVERY_PROFILE_NAME
                     def destructiveFlag = params.ENABLE_DESTRUCTIVE_JUMBO ? '--allow-destructive-jumbo' : ''
-                    def formattedFilter = params.TEST_FILTER.replaceAll(',', ' or ')
+                    def formattedFilter = params.TEST_FILTER.split(',')
+                        .collect { it.trim() }
+                        .findAll { it }
+                        .join(' or ')
                     def ipv6Arg = localIP ? "--local-ipv6 \"${localIP}\"" : ''
 
                     echo "Testing with filter: [ ${formattedFilter} ]"
@@ -77,7 +80,7 @@ pipeline {
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                         sh """
-                            venv/bin/python -m pytest tests/GUI/ -v -k "${formattedFilter}" \
+                            PYTHONPATH=. venv/bin/python -m pytest tests/GUI/ -v -k "${formattedFilter}" \
                             --profile "${profileName}" \
                             --recovery-profile "${recoveryProfileName}" \
                             ${ipv6Arg} \
@@ -104,7 +107,7 @@ pipeline {
                     }
 
                     echo 'Building Senao GUI HTML & CSV (report_generator.py)...'
-                    sh "venv/bin/python utils/report_generator.py ${env.BUILD_ID} ${localIP} ${new Date().format('yyyyMMdd')} --profile ${params.PROFILE_NAME} --output-prefix Senao_GUI"
+                    sh "PYTHONPATH=. venv/bin/python utils/report_generator.py ${env.BUILD_ID} ${localIP} ${new Date().format('yyyyMMdd')} --profile ${params.PROFILE_NAME} --output-prefix Senao_GUI"
 
                     if (!fileExists(htmlFile)) {
                         error("Customer report not created: ${htmlFile}")

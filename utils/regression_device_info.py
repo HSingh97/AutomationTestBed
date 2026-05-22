@@ -154,7 +154,11 @@ async def collect_testbed_summary(
     cpe_host = cpe_hosts[0] if cpe_hosts else ""
     bts = await collect_device_summary(bts_host, password, fallback_ip=bts_host)
     if cpe_host:
-        cpe = await collect_device_summary(cpe_host, password, fallback_ip=cpe_host)
+        try:
+            cpe = await collect_device_summary(cpe_host, password, fallback_ip=cpe_host)
+        except Exception as exc:
+            print(f"[testbed] CPE summary unavailable ({cpe_host}): {exc}")
+            cpe = DeviceSummary(ip=cpe_host)
     else:
         cpe = DeviceSummary(ip="—")
     return {"bts": bts.as_dict(), "cpe": cpe.as_dict()}

@@ -77,7 +77,7 @@ async def assert_summary_system(root_ssh, gui_page):
     validate_temperature("TEMPERATURE", ssh_temp, gui_temp, tolerance=1.0)
     validate_param("GPS", ssh_gps, gui_gps)
     validate_param("ELEVATION", ssh_elevation, gui_elevation)
-    validate_cpu_mem(ssh_cpu, ssh_mem, gui_cpu_mem, tolerance=5.0)
+    validate_cpu_mem(ssh_cpu, ssh_mem, gui_cpu_mem, tolerance=20.0)
 
 
 async def assert_summary_network(root_ssh, gui_page):

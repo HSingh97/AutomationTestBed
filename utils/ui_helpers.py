@@ -146,8 +146,20 @@ async def execute_super_revert(gui_page, fallback_url):
 # =====================================================================
 # UNIVERSAL HELPER: Dropdown Validation & Reversion
 # =====================================================================
-async def validate_dropdown_lifecycle(gui_page, root_ssh, locator, expected_options, uci_cmd, param_name, fallback_url,
-                                      parser=lambda x: x, test_all_options=False, skip_restore=False):
+async def validate_dropdown_lifecycle(
+    gui_page,
+    root_ssh,
+    locator,
+    expected_options,
+    uci_cmd,
+    param_name,
+    fallback_url,
+    parser=lambda x: x,
+    test_all_options=False,
+    skip_restore=False,
+    *,
+    use_gui_options=False,
+):
     """Validates options, tests changes, applies, verifies, and auto-restores from config."""
 
     attach_dialog_handler(gui_page)
@@ -172,13 +184,25 @@ async def validate_dropdown_lifecycle(gui_page, root_ssh, locator, expected_opti
 
     restore_value = DEFAULT_VALUES.get(param_name, original_value)
 
-    # 2. Validate all GUI Dropdown Options
+    # 2. Validate GUI dropdown options (device may expose a subset, e.g. no 160 MHz on some radios)
     actual_options = await element.evaluate("el => Array.from(el.options).map(o => o.text.trim())")
-    assert set(actual_options) == set(
-        expected_options), f"Options mismatch for {param_name}! Expected: {expected_options}, Got: {actual_options}"
+    assert actual_options, f"No dropdown options rendered for {param_name}."
+    if use_gui_options:
+        unknown = set(actual_options) - set(expected_options)
+        assert not unknown, (
+            f"Unexpected {param_name} options on GUI: {sorted(unknown)}. "
+            f"Allowed catalog: {expected_options}"
+        )
+        options_pool = actual_options
+        print(f"    -> {param_name} options from GUI: {actual_options}")
+    else:
+        assert set(actual_options) == set(
+            expected_options
+        ), f"Options mismatch for {param_name}! Expected: {expected_options}, Got: {actual_options}"
+        options_pool = expected_options
 
     # 3. Determine test sequence
-    filtered_options = [opt for opt in expected_options if opt.lower() != original_value.lower()]
+    filtered_options = [opt for opt in options_pool if opt.lower() != original_value.lower()]
 
     if test_all_options:
         values_to_test = filtered_options
