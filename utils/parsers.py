@@ -185,6 +185,30 @@ def parse_radio_status(ssh_str):
     return val
 
 
+def parse_ddrs_status(ssh_str):
+    """Normalize txparam.athN.ddrsstatus (0/1) to enable/disable tokens."""
+    val = extract_uci_value(ssh_str).strip().lower()
+    if val in ("0", "disable", "disabled"):
+        return "disable"
+    if val in ("1", "enable", "enabled"):
+        return "enable"
+    return val
+
+
+def parse_spatial_stream_uci(ssh_str):
+    """Normalize txparam.athN.spatialstream UCI to single/dual/auto."""
+    val = extract_uci_value(ssh_str).strip().lower()
+    mapping = {
+        "0": "single",
+        "1": "dual",
+        "2": "auto",
+        "single": "single",
+        "dual": "dual",
+        "auto": "auto",
+    }
+    return mapping.get(val, val)
+
+
 def parse_link_type(ssh_str):
     val = extract_uci_value(ssh_str)
     if val == "0": return "WI-FI"

@@ -16,6 +16,26 @@ def is_empty_or_unknown(val):
                                           "not found", "-", "down"]
 
 
+def validate_backend_param(param_name, expected, actual):
+    """Compare two backend/UCI values without GUI placeholder normalization."""
+    expected_clean = str(expected).strip()
+    actual_clean = str(actual).strip()
+    if is_empty_or_unknown(actual_clean):
+        print(f"    -> {param_name}: FAILED (backend read empty: '{actual_clean}')")
+        check.fail(f"{param_name} Mismatch! Backend read empty or missing.")
+        return
+    if (
+        expected_clean.lower() == actual_clean.lower()
+        or expected_clean.lower() in actual_clean.lower()
+        or actual_clean.lower() in expected_clean.lower()
+    ):
+        print(f"    -> {param_name}: PASSED")
+        check.is_true(True)
+        return
+    print(f"    -> {param_name}: FAILED (expected '{expected_clean}' | got '{actual_clean}')")
+    check.fail(f"{param_name} Mismatch! expected '{expected_clean}' | got '{actual_clean}'")
+
+
 def validate_param(param_name, ssh_val, gui_val):
     ssh_val_clean = normalize_ssh_metric(ssh_val)
     gui_val_clean = normalize_gui_metric(gui_val)

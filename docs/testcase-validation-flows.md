@@ -252,9 +252,9 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A[Open DDRS/ATPC on BTS and CPE] --> B[Spatial stream GUI lifecycle]
-    B --> C[TRex counter_check for non-zero DUT throughput]
-    C --> D[Restore spatial stream via backend ucidyn]
+    A[Open DDRS/ATPC on CPE] --> B[Spatial stream dropdown GUI lifecycle]
+    B --> C[Apply and verify via SSH uci]
+    C --> D[Restore baseline from profile defaults]
 ```
 
 </details>
@@ -264,9 +264,9 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A[Open DDRS/ATPC on BTS and CPE] --> B[Modulation index GUI lifecycle]
-    B --> C[TRex counter_check for non-zero DUT throughput]
-    C --> D[Restore modulation via backend ucidyn]
+    A[Open DDRS/ATPC on CPE] --> B[Modulation index dropdown GUI lifecycle]
+    B --> C[Apply and verify via SSH uci]
+    C --> D[Restore baseline from profile defaults]
 ```
 
 </details>

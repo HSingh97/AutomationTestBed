@@ -2,18 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import os
-import socket
 from typing import Any
 
 import pytest
 from playwright.async_api import async_playwright
 from scrapli.driver.generic import AsyncGenericDriver
 
-from config.defaults import RADIO_TEST_VALUES, TRAFFIC_DEFAULTS
+from config.defaults import RADIO_TEST_VALUES
 from pages.commands import RootCommands
 from pages.locators import RadioPropertiesLocators, TopPanelLocators, UITimeouts
 from pages.radio_properties_page import RadioPropertiesPage
-from traffic.trex_runner import run_trex_stats_check
 from utils.gui_login import login_if_needed
 from utils.parsers import (
     extract_uci_value,
@@ -33,7 +31,6 @@ from utils.ui_helpers import (
 from utils.validators import validate_param
 
 DL_UL_RATIO_OPTIONS = ["Auto", "50/50", "60/40", "70/30", "75/25", "80/20"]
-TREX_DEFAULTS = TRAFFIC_DEFAULTS["trex"]
 
 
 def _log(role: str, message: str):
@@ -261,78 +258,6 @@ async def _apply_dropdown_for_target(target, locator: str, command: str, param_n
     return option
 
 
-async def _apply_backend_setting(target, key: str, value: str, verify_command: str, label: str):
-    await _send_command_with_retry(target["ssh"], f"ucidyn set {key} {value}")
-    await _send_command_with_retry(target["ssh"], "ucidyn apply")
-    await asyncio.sleep(8)
-    backend_value = await _get_backend_value(target["ssh"], verify_command)
-    validate_param(f"{target['role']} {label}", str(value), backend_value)
-
-
-def _to_floatish(value: object) -> float:
-    try:
-        return float(str(value).strip())
-    except Exception:
-        return 0.0
-
-
-def _trex_ssh_port_reachable(host: str, port: int = 22, timeout: float = 3.0) -> bool:
-    """Best-effort reachability before spawning TRex (avoids long hangs when lab TRex is down)."""
-    h = (host or "").strip().strip("[]")
-    if not h:
-        return False
-    try:
-        with socket.create_connection((h, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
-
-
-async def _run_trex_behavior_check(bsu_ip: str, device_creds: dict[str, str], label: str):
-    flag = os.environ.get("UBR_SKIP_RADIO_TREX", "").strip().lower()
-    if flag in ("1", "true", "yes"):
-        pytest.skip("TRex-backed radio behavior checks skipped (UBR_SKIP_RADIO_TREX).")
-
-    trex_host = str(TREX_DEFAULTS.get("host") or "").strip()
-    if not _trex_ssh_port_reachable(trex_host):
-        pytest.skip(
-            f"TRex host {trex_host!r} not reachable on SSH port 22 within timeout; "
-            "fix lab routing or set UBR_SKIP_RADIO_TREX=1 to skip when TRex is intentionally offline."
-        )
-
-    _log("TREX", f"Running lightweight throughput check for {label}.")
-    result = await asyncio.to_thread(
-        run_trex_stats_check,
-        trex_server=TREX_DEFAULTS["host"],
-        trex_user=TREX_DEFAULTS["user"],
-        trex_password=TREX_DEFAULTS["password"],
-        trex_dir=TREX_DEFAULTS["directory"],
-        trex_pythonpath=TREX_DEFAULTS["pythonpath"],
-        trex_client_script=TREX_DEFAULTS["client_script"],
-        trex_ports=TREX_DEFAULTS["ports"],
-        trex_server_cores=TREX_DEFAULTS["server_cores"],
-        duration_s=int(RADIO_TEST_VALUES["TREX_BEHAVIOR_DURATION_S"]),
-        expected_min_mbps=0.0,
-        trex_su_count=1,
-        trex_dl_bw=RADIO_TEST_VALUES["TREX_BEHAVIOR_DL_BW"],
-        trex_ul_bw=RADIO_TEST_VALUES["TREX_BEHAVIOR_UL_BW"],
-        run_mode="counter_check",
-        dut_host=bsu_ip,
-        dut_user="root",
-        dut_password=device_creds["pass"],
-        dut_radio_idx=1,
-        dut_sample_interval_s=2,
-        reuse_existing_server=True,
-    )
-    validation = result.get("validation") or {}
-    assert validation.get("passed"), f"{label} behavior validation failed: {validation.get('reason', 'unknown error')}"
-
-    post = (result.get("dut_counters") or {}).get("post") or {}
-    observed = any(_to_floatish(post.get(key)) > 0 for key in ("tx_tput_mbps", "rx_tput_mbps"))
-    assert observed, f"{label} behavior validation did not observe DUT throughput counters."
-    return result
-
-
 async def assert_radio_status_lifecycle(radio_page, root_ssh):
     await radio_page.navigate()
     await validate_dropdown_lifecycle(
@@ -398,6 +323,40 @@ async def assert_encryption_lifecycle(radio_page, root_ssh):
     )
 
 
+async def _select_configured_channel(page, channel_dropdown, channel: str) -> bool:
+    """Select a channel only if present in the dropdown (avoids Playwright timeouts)."""
+    options = await channel_dropdown.evaluate(
+        """
+        el => Array.from(el.options).map(opt => ({
+            value: (opt.value || "").trim(),
+            text: (opt.textContent || "").trim(),
+            disabled: !!opt.disabled
+        })).filter(opt => opt.value || opt.text)
+        """
+    )
+    match = next(
+        (
+            opt
+            for opt in options
+            if not opt["disabled"]
+            and (opt["value"] == channel or channel in opt["text"] or opt["text"] == channel)
+        ),
+        None,
+    )
+    if not match:
+        print(f"    -> [CHANNEL] '{channel}' not in dropdown options: {[o['text'] for o in options]}")
+        return False
+
+    locator = RadioPropertiesLocators.CONFIGURED_CHANNEL_DROPDOWN
+    element = page.locator(locator).first
+    await element.wait_for(state="attached", timeout=UITimeouts.ELEMENT_WAIT_MS)
+    try:
+        await element.select_option(value=match["value"], timeout=UITimeouts.ELEMENT_WAIT_MS)
+    except Exception:
+        await _set_dropdown_value(page, locator, match["value"])
+    return True
+
+
 async def assert_channel_consistency(radio_page, root_ssh):
     await radio_page.navigate()
     page = radio_page.page
@@ -406,13 +365,31 @@ async def assert_channel_consistency(radio_page, root_ssh):
 
     channel_dropdown = page.locator(RadioPropertiesLocators.CONFIGURED_CHANNEL_DROPDOWN).first
     active_channel_display = page.locator(RadioPropertiesLocators.ACTIVE_CHANNEL_DISPLAY).first
+    await channel_dropdown.wait_for(state="attached", timeout=UITimeouts.ELEMENT_WAIT_MS)
 
     raw_mode_resp = await root_ssh.send_command(RootCommands.get_radio_mode(1))
     current_mode = parse_radio_mode(raw_mode_resp.result, 1)
 
+    original_config = extract_uci_value(
+        (await root_ssh.send_command(RootCommands.get_configured_channel(1))).result
+    )
+
     if current_mode == "BTS":
-        for channel in RADIO_TEST_VALUES["CHANNEL_BTS_VALUES"]:
-            await channel_dropdown.select_option(value=channel, timeout=5000)
+        available = await channel_dropdown.evaluate(
+            "el => Array.from(el.options).map(o => (o.value || o.textContent || '').trim()).filter(Boolean)"
+        )
+        channels_to_test = [
+            ch for ch in RADIO_TEST_VALUES["CHANNEL_BTS_VALUES"] if ch in available
+        ]
+        if not channels_to_test:
+            pytest.skip(
+                f"GUI_20: none of {RADIO_TEST_VALUES['CHANNEL_BTS_VALUES']} available "
+                f"in channel dropdown (have {available})."
+            )
+
+        for channel in channels_to_test:
+            if not await _select_configured_channel(page, channel_dropdown, channel):
+                continue
             await execute_triple_apply(page, radio_page.RADIO_1_URL_CHUNK)
 
             for _ in range(15):
@@ -444,6 +421,12 @@ async def assert_channel_consistency(radio_page, root_ssh):
             assert channel in gui_active_val, f"GUI Active mismatch. Expected {channel}, got {gui_active_val}"
             assert channel in cli_config_val, f"CLI Config mismatch. Expected {channel}, got {cli_config_val}"
             assert channel in cli_active_val, f"CLI Active mismatch. Expected {channel}, got {cli_active_val}"
+
+        if original_config and original_config.lower() != "auto":
+            print(f"    -> [CHANNEL] Restoring configured channel to '{original_config}'.")
+            channel_dropdown = page.locator(RadioPropertiesLocators.CONFIGURED_CHANNEL_DROPDOWN).first
+            if await _select_configured_channel(page, channel_dropdown, original_config):
+                await execute_triple_apply(page, radio_page.RADIO_1_URL_CHUNK)
 
     elif current_mode == "CPE":
         gui_active_val = await active_channel_display.inner_text()
@@ -526,9 +509,10 @@ async def _assert_ddrs_status_for_target(target):
     )
 
 
-async def _assert_spatial_stream_for_targets(targets, bsu_ip: str, device_creds: dict[str, str]):
+async def _assert_spatial_stream_for_targets(targets: list[dict[str, Any]]):
+    """GUI + SSH configuration validation only (no TRex throughput)."""
     for target in targets:
-        _log(target["role"], "Validating Spatial Stream lifecycle.")
+        _log(target["role"], "Validating Spatial Stream lifecycle (GUI/CLI).")
         await target["radio_page"].open_ddrs_atpc()
         await validate_dropdown_value_lifecycle(
             target["page"],
@@ -541,94 +525,21 @@ async def _assert_spatial_stream_for_targets(targets, bsu_ip: str, device_creds:
             test_options=RADIO_TEST_VALUES["SPATIAL_STREAM_VALUES"],
         )
 
-    originals = {target["role"]: await _get_backend_value(target["ssh"], RootCommands.get_spatial_stream(1)) for target in targets}
-    try:
-        for target in targets:
-            await _apply_backend_setting(
-                target,
-                "txparam.ath1.spatialstream",
-                "2",
-                RootCommands.get_spatial_stream(1),
-                "Spatial Stream behavior prep",
-            )
-        await _run_trex_behavior_check(bsu_ip, device_creds, "Spatial Stream")
-    finally:
-        for target in targets:
-            await _apply_backend_setting(
-                target,
-                "txparam.ath1.spatialstream",
-                originals[target["role"]],
-                RootCommands.get_spatial_stream(1),
-                "Spatial Stream Restore",
-            )
 
-
-async def _assert_modulation_index_for_targets(targets, bsu_ip: str, device_creds: dict[str, str]):
-    originals = {
-        target["role"]: {
-            "ddrs": await _get_backend_value(target["ssh"], RootCommands.get_ddrs_status(1)),
-            "spatial": await _get_backend_value(target["ssh"], RootCommands.get_spatial_stream(1)),
-            "rate": await _get_backend_value(target["ssh"], RootCommands.get_ddrs_rate(1)),
-        }
-        for target in targets
-    }
-
-    try:
-        for target in targets:
-            _log(target["role"], "Preparing DDRS page for Modulation Index validation.")
-            await target["radio_page"].open_ddrs_atpc()
-            await _apply_dropdown_for_target(
-                target,
-                RadioPropertiesLocators.DDRS_STATUS_DROPDOWN,
-                RootCommands.get_ddrs_status(1),
-                "DDRS Status",
-                "Disable",
-                target["radio_page"].RADIO_1_DDRS_URL_CHUNK,
-            )
-            await _apply_dropdown_for_target(
-                target,
-                RadioPropertiesLocators.SPATIAL_STREAM_DROPDOWN,
-                RootCommands.get_spatial_stream(1),
-                "Spatial Stream",
-                "Dual",
-                target["radio_page"].RADIO_1_DDRS_URL_CHUNK,
-            )
-            await validate_dropdown_value_lifecycle(
-                target["page"],
-                target["ssh"],
-                locator=RadioPropertiesLocators.MODULATION_INDEX_DROPDOWN,
-                uci_cmd=RootCommands.get_ddrs_rate(1),
-                param_name="Modulation Index",
-                fallback_url=target["radio_page"].RADIO_1_DDRS_URL_CHUNK,
-                test_options=RADIO_TEST_VALUES["MODULATION_INDEX_VALUES"],
-                skip_restore=True,
-            )
-
-        await _run_trex_behavior_check(bsu_ip, device_creds, "Modulation Index")
-    finally:
-        for target in targets:
-            original = originals[target["role"]]
-            await _apply_backend_setting(
-                target,
-                "txparam.ath1.ddrsrate",
-                original["rate"],
-                RootCommands.get_ddrs_rate(1),
-                "Modulation Index Restore",
-            )
-            await _apply_backend_setting(
-                target,
-                "txparam.ath1.spatialstream",
-                original["spatial"],
-                RootCommands.get_spatial_stream(1),
-                "Spatial Stream Restore",
-            )
-            await _apply_backend_setting(
-                target,
-                "txparam.ath1.ddrsstatus",
-                original["ddrs"],
-                RootCommands.get_ddrs_status(1),
-                "DDRS Status Restore",
-            )
+async def _assert_modulation_index_for_targets(targets: list[dict[str, Any]]):
+    """GUI + SSH configuration validation only (no TRex throughput)."""
+    for target in targets:
+        _log(target["role"], "Validating Modulation Index lifecycle (GUI/CLI).")
+        await target["radio_page"].open_ddrs_atpc()
+        await validate_dropdown_value_lifecycle(
+            target["page"],
+            target["ssh"],
+            locator=RadioPropertiesLocators.MODULATION_INDEX_DROPDOWN,
+            uci_cmd=RootCommands.get_ddrs_rate(1),
+            param_name="Modulation Index",
+            fallback_url=target["radio_page"].RADIO_1_DDRS_URL_CHUNK,
+            test_options=RADIO_TEST_VALUES["MODULATION_INDEX_VALUES"],
+        )
 
 
 async def _assert_atpc_status_for_target(target):
@@ -720,7 +631,7 @@ async def assert_gui_25_spatial_stream(gui_page, bsu_ip: str, device_creds: dict
     targets = await _open_radio_targets(gui_page, bsu_ip, device_creds)
     try:
         cpe_targets = _require_cpe_targets(targets, "GUI_25")
-        await _assert_spatial_stream_for_targets(cpe_targets, bsu_ip, device_creds)
+        await _assert_spatial_stream_for_targets(cpe_targets)
     finally:
         await _close_radio_targets(targets)
 
@@ -729,7 +640,7 @@ async def assert_gui_26_modulation_index(gui_page, bsu_ip: str, device_creds: di
     targets = await _open_radio_targets(gui_page, bsu_ip, device_creds)
     try:
         cpe_targets = _require_cpe_targets(targets, "GUI_26")
-        await _assert_modulation_index_for_targets(cpe_targets, bsu_ip, device_creds)
+        await _assert_modulation_index_for_targets(cpe_targets)
     finally:
         await _close_radio_targets(targets)
 

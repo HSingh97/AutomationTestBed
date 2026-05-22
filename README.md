@@ -73,8 +73,8 @@ Automation framework for UBR P2MP validation:
 - `GUI_22` – Max CPE  
 - `GUI_23` – DL/UL Ratio  
 - `GUI_24` – DDRS Status  
-- `GUI_25` – Spatial Stream (TRex throughput check)  
-- `GUI_26` – Modulation Index (TRex throughput check)  
+- `GUI_25` – Spatial Stream (GUI/CLI configuration)  
+- `GUI_26` – Modulation Index (GUI/CLI configuration)  
 - `GUI_27` – ATPC Status (remote CPE)  
 - `GUI_28` – Transmit Power  
 - `GUI_29` – Maximum EIRP  
@@ -162,7 +162,7 @@ These product IDs are **not** present under `tests/GUI/` (gaps in numbering vs a
 | Case | Status |
 |------|--------|
 | `GUI_01` | CPU vs GUI tolerance can fail under load; may need tuning |
-| `GUI_25`, `GUI_26` | Require TRex lab host; skip with `UBR_SKIP_RADIO_TREX=1` |
+| `GUI_25`, `GUI_26` | CPE DDRS page; GUI dropdown vs SSH only (no TRex in GUI job) |
 | `GUI_27` | Requires reachable remote CPE |
 | `JMB_07`, `JMB_10` | Destructive; skipped unless `--allow-destructive-jumbo` |
 | `REG_03` | Implemented; needs firmware file path and reserved bench run |
@@ -306,8 +306,6 @@ Each run produces `Throughput_<BW>_<MCS>_<Mode>_<ratio>.json`, `performance_matr
 | `--allow-regression` | Enable `REG_01`–`REG_03` |
 | `--regression-iterations N` | Cycle count (default from profile: 3) |
 | `--firmware-image PATH` | Image for `REG_03` |
-| `UBR_SKIP_RADIO_TREX=1` | Skip TRex checks in `GUI_25`/`GUI_26` |
-
 Profile regression block (`profiles/default.yaml`):
 
 ```yaml
