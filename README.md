@@ -30,7 +30,10 @@ Automation framework for UBR P2MP validation:
 | `pages/` | Locators and SSH command templates |
 | `profiles/` | `default.yaml`, `link_formation.yaml` |
 | `docs/testcase-validation-flows.md` | Per-case validation flowcharts |
-| `jenkins/jenkins-AutomationFramework` | GUI Jenkins pipeline |
+| `jenkins/jenkins-AutomationFramework` | GUI test-case Jenkins pipeline |
+| `jenkins/jenkins-Regression` | Stability regression Jenkins pipeline |
+| `jenkins/jenkins-Throughput` | TRex throughput Jenkins pipeline |
+| `jenkins/jenkins-common.groovy` | Shared email/HTML publish helpers |
 
 ## Test Case Status Summary
 
@@ -326,18 +329,33 @@ regression:
 
 ---
 
-## Jenkins (GUI)
+## Jenkins (three pipelines)
 
-- Pipeline: `jenkins/jenkins-AutomationFramework`  
-- Parameters: `TEST_FILTER`, `Local IPv6 Address`, `PROFILE_NAME`, `RECOVERY_PROFILE_NAME`, `ENABLE_DESTRUCTIVE_JUMBO`  
+All jobs run on agent label **`TARGET_STAND`** (lab bench). Reports share the same layout: Senao hero header, logo, **Testbed Summary** (BTS/CPE model/FW/IP/VLAN/QoS), then run-specific results.
 
-Example:
+| Job file | Purpose | Standard HTML artifact |
+|----------|---------|------------------------|
+| `jenkins/jenkins-AutomationFramework` | GUI test cases (`tests/GUI/`) | `Senao_GUI_<build>_Report_<date>.html` (+ CSV) |
+| `jenkins/jenkins-Regression` | Stability regression (`tests/Regression/`, `--allow-regression`) | `Senao_Regression_<build>_Report_<date>.html` |
+| `jenkins/jenkins-Throughput` | TRex performance matrix (`traffic/performance_matrix.py`) | `Senao_Performance_<build>_Report_<date>.html` |
 
-```text
-TEST_FILTER=Regression and REG_02
-```
+Shared helpers: `jenkins/jenkins-common.groovy` (email, `publishHTML`, report copy/rename).
 
-(Regression tests still require `--allow-regression` in the pytest invocation inside the pipeline if wired.)
+### 1. GUI test cases
+
+- **Filter:** `TEST_FILTER` (comma = OR), e.g. `Summary, TopPanel, WirelessProperties` or `test_gui`
+- **Profile:** `PROFILE_NAME`, `RECOVERY_PROFILE_NAME`, optional `Local IPv6 Address`
+
+### 2. Regression
+
+- **Filter:** `REGRESSION_FILTER` — `REG_01` (reboot), `REG_02` (network reload), `REG_03` (firmware), or `Regression` (all)
+- **Optional:** `REGRESSION_ITERATIONS`, `FIRMWARE_IMAGE` (required for `REG_03`)
+
+### 3. Throughput
+
+- **Params:** BTS IP, CPE IP, Bandwidth, MCS, packet size, DL:UL ratio, duration, TRex server
+
+Create three separate Jenkins jobs, each pointing at the matching pipeline file above.
 
 ---
 

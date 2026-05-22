@@ -1,29 +1,8 @@
-// UBR GUI automation — runs on TARGET_STAND; generates Senao_Release_* customer HTML/CSV via report_generator.py
+// UBR GUI test cases — runs on TARGET_STAND.
+// Report: Senao_GUI_<build>_Report_<date>.html + CSV (hero + testbed summary + test results).
 
 def archiveArtifacts(pattern) {
     step([$class: 'ArtifactArchiver', artifacts: pattern, fingerprint: true, onlyIfSuccessful: false])
-}
-
-def resolveUserEmail() {
-    def buildCauses = currentBuild.getBuildCauses()
-    def userCause = buildCauses.find { it._class == 'hudson.model.Cause$UserIdCause' }
-    def buildUserId = userCause?.userId ?: 'unknown'
-    def userEmails = [
-        'puneet': 'puneet.sharma@senao.com',
-        'harman': 'harmanjot.singh@senao.com',
-        'mahesh': 'mahesh.battala@senao.com',
-        'sandeep': 'sandeep.manchikanti@senao.com',
-        'sampath': 'sampath.marella@senao.com',
-        'jayanth': 'jayanth.munnaluru@senao.com',
-        'srilatha': 'srilatha.tadiboina@senao.com',
-        'phani': 'phani.darla@senao.com',
-        'dinesh': 'dinesh.redddy@senao.com'
-    ]
-    return [
-        name: userCause?.userName ?: 'Unknown User',
-        id: buildUserId,
-        email: userEmails.get(buildUserId, 'harmanjot.singh@senao.com')
-    ]
 }
 
 pipeline {
@@ -53,7 +32,7 @@ pipeline {
         booleanParam(
             name: 'ENABLE_DESTRUCTIVE_JUMBO',
             defaultValue: false,
-            description: 'Allow destructive jumbo tests (JMB_07/JMB_10)'
+            description: 'Allow destructive jumbo tests (JMB_07/JMB_10) when filter includes JumboFrames'
         )
     }
 
@@ -62,7 +41,7 @@ pipeline {
             steps {
                 script {
                     echo '----------------------------------------'
-                    echo 'UBR GUI Automation (pytest)'
+                    echo 'UBR GUI Test Cases (pytest)'
                     echo "--- TARGET STAND: ${TARGET_STAND}"
                     echo "--- TEST FILTER:  ${params.TEST_FILTER}"
                     echo "Local IPv6:     ${params['Local IPv6 Address'] ?: '(profile default)'}"
@@ -94,7 +73,7 @@ pipeline {
                     def ipv6Arg = localIP ? "--local-ipv6 \"${localIP}\"" : ''
 
                     echo "Testing with filter: [ ${formattedFilter} ]"
-                    sh 'rm -f report.json Senao_Release_*.html Senao_Release_*.csv || true'
+                    sh 'rm -f report.json testbed_summary.json Senao_GUI_*.html Senao_GUI_*.csv || true'
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                         sh """
@@ -113,35 +92,36 @@ pipeline {
         stage('Generate Customer Report') {
             steps {
                 script {
+                    def senao = load 'jenkins/jenkins-common.groovy'
                     def localIP = (params['Local IPv6 Address'] ?: 'profile-default').trim()
-                    def buildNo = env.BUILD_ID
-                    def dateStr = new Date().format('yyyyMMdd')
+                    def basename = senao.standardReportBasename('Senao_GUI')
+                    def htmlFile = "${basename}.html"
+                    def csvFile = "${basename}.csv"
 
                     if (!fileExists('report.json')) {
-                        unstable('report.json missing — skipping customer report generation')
+                        unstable('report.json missing — skipping report generation')
                         return
                     }
 
-                    echo 'Building Senao customer HTML & CSV (report_generator.py)...'
-                    sh "venv/bin/python utils/report_generator.py ${buildNo} ${localIP} ${dateStr}"
+                    echo 'Building Senao GUI HTML & CSV (report_generator.py)...'
+                    sh "venv/bin/python utils/report_generator.py ${env.BUILD_ID} ${localIP} ${new Date().format('yyyyMMdd')} --profile ${params.PROFILE_NAME} --output-prefix Senao_GUI"
 
-                    def htmlFile = "Senao_Release_${buildNo}_Report_${dateStr}.html"
                     if (!fileExists(htmlFile)) {
                         error("Customer report not created: ${htmlFile}")
                     }
                     env.CUSTOMER_REPORT = htmlFile
-                    echo "Customer report: ${htmlFile}"
+                    env.CUSTOMER_REPORT_CSV = csvFile
+                    echo "GUI report: ${htmlFile}"
                 }
             }
         }
 
         stage('Archive Report') {
             steps {
-                script {
-                    def dateStr = new Date().format('yyyyMMdd')
-                    archiveArtifacts "Senao_Release_${env.BUILD_ID}_Report_${dateStr}.html"
-                    archiveArtifacts "Senao_Release_${env.BUILD_ID}_Report_${dateStr}.csv,allowEmptyArchive:true"
-                }
+                archiveArtifacts 'Senao_GUI_*.html'
+                archiveArtifacts 'Senao_GUI_*.csv,allowEmptyArchive:true'
+                archiveArtifacts 'report.json,allowEmptyArchive:true'
+                archiveArtifacts 'testbed_summary.json,allowEmptyArchive:true'
             }
         }
     }
@@ -149,57 +129,33 @@ pipeline {
     post {
         always {
             script {
-                def dateStr = new Date().format('yyyyMMdd')
-                def htmlFileName = env.CUSTOMER_REPORT ?: "Senao_Release_${env.BUILD_ID}_Report_${dateStr}.html"
-                def csvFileName = "Senao_Release_${env.BUILD_ID}_Report_${dateStr}.csv"
-                def hasReport = fileExists(htmlFileName)
+                def senao = load 'jenkins/jenkins-common.groovy'
+                def basename = senao.standardReportBasename('Senao_GUI')
+                def htmlFile = env.CUSTOMER_REPORT ?: "${basename}.html"
+                def csvFile = env.CUSTOMER_REPORT_CSV ?: "${basename}.csv"
+                def hasReport = fileExists(htmlFile)
 
                 if (hasReport) {
-                    publishHTML(target: [
-                        allowMissing: false,
-                        alwaysLinkToLastBuild: true,
-                        keepAll: true,
-                        reportDir: '.',
-                        reportFiles: htmlFileName,
-                        reportName: "Senao Customer Report - Build ${env.BUILD_NUMBER}"
-                    ])
+                    senao.publishSenaoHtmlReport(htmlFile, "Senao GUI Test Report - Build ${env.BUILD_NUMBER}")
                 }
 
-                def user = resolveUserEmail()
-                def mailDate = new Date().format('dd MMM yyyy, HH:mm:ss z', TimeZone.getTimeZone('Asia/Kolkata'))
-                def resultColor = currentBuild.currentResult == 'SUCCESS' ? 'green' : 'orange'
-                def reportSection = hasReport
-                    ? """<p><strong>Customer report:</strong>
-                        <a href="${env.BUILD_URL}artifact/${htmlFileName}">Download HTML</a>
-                        &nbsp;|&nbsp;
-                        <a href="${env.BUILD_URL}">Open build in Jenkins</a></p>"""
-                    : '<p><strong>Customer report:</strong> not generated (see console log).</p>'
+                def detailsHtml = """\
+                    <p><strong>Test filter:</strong> ${params.TEST_FILTER}</p>
+                    <p><strong>Target IPv6:</strong> ${params['Local IPv6 Address'] ?: '(profile default)'}</p>
+                    <p><strong>Profile:</strong> ${params.PROFILE_NAME}</p>
+                    <p><strong>Recovery profile:</strong> ${params.RECOVERY_PROFILE_NAME}</p>
+                    <p><strong>Destructive jumbo:</strong> ${params.ENABLE_DESTRUCTIVE_JUMBO}</p>
+                """
 
                 try {
-                    emailext(
-                        subject: "UBR GUI Automation — ${currentBuild.fullDisplayName} — ${currentBuild.currentResult}",
-                        body: """\
-                            <html><body style="font-family:Segoe UI,sans-serif;color:#334155;">
-                                <h2 style="color:#1e3a8a;">Senao UBR Validation Execution Report</h2>
-                                <p><strong>Build:</strong> ${currentBuild.fullDisplayName}</p>
-                                <p><strong>Status:</strong> <span style="color:${resultColor};">${currentBuild.currentResult}</span></p>
-                                <p><strong>Started by:</strong> ${user.name} (${user.id})</p>
-                                <p><strong>Time:</strong> ${mailDate}</p>
-                                <p><strong>Target stand:</strong> ${TARGET_STAND}</p>
-                                <hr/>
-                                <p><strong>Test filter:</strong> ${params.TEST_FILTER}</p>
-                                <p><strong>Target IPv6:</strong> ${params['Local IPv6 Address'] ?: '(profile default)'}</p>
-                                <p><strong>Profile:</strong> ${params.PROFILE_NAME}</p>
-                                <p><strong>Recovery profile:</strong> ${params.RECOVERY_PROFILE_NAME}</p>
-                                <p><strong>Destructive jumbo:</strong> ${params.ENABLE_DESTRUCTIVE_JUMBO}</p>
-                                ${reportSection}
-                                <p style="color:#64748b;font-size:12px;">HTML + CSV attached when generated.</p>
-                            </body></html>
-                        """,
-                        to: user.email,
-                        mimeType: 'text/html',
-                        attachmentsPattern: hasReport ? "${htmlFileName},${csvFileName}" : ''
-                    )
+                    senao.sendSenaoPipelineEmail([
+                        subjectPrefix: 'UBR GUI Test Cases',
+                        reportTitle: 'Senao UBR Validation Execution Report',
+                        footerNote: 'GUI vs SSH validation with BTS/CPE testbed summary',
+                        reportFile: hasReport ? htmlFile : '',
+                        csvFile: fileExists(csvFile) ? csvFile : '',
+                        detailsHtml: detailsHtml
+                    ])
                 } catch (Exception exc) {
                     echo "Email notification failed: ${exc.message}"
                 }

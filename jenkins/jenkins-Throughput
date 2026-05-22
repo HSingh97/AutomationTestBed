@@ -1,73 +1,8 @@
-// UBR TRex performance matrix — runs on TARGET_STAND agent (same as GUI automation jobs).
-// Generates logs/Performance_Report_<timestamp>.html and emails the triggering user.
+// UBR TRex performance matrix — runs on TARGET_STAND.
+// Report: Senao_Performance_<build>_Report_<date>.html (hero + testbed summary + throughput table).
 
 def archiveArtifacts(pattern) {
     step([$class: 'ArtifactArchiver', artifacts: pattern, fingerprint: true, onlyIfSuccessful: false])
-}
-
-def resolveUserEmail() {
-    def buildCauses = currentBuild.getBuildCauses()
-    def userCause = buildCauses.find { it._class == 'hudson.model.Cause$UserIdCause' }
-    def buildUserId = userCause?.userId ?: 'unknown'
-    def userEmails = [
-        'puneet': 'puneet.sharma@senao.com',
-        'harman': 'harmanjot.singh@senao.com',
-        'mahesh': 'mahesh.battala@senao.com',
-        'sandeep': 'sandeep.manchikanti@senao.com',
-        'sampath': 'sampath.marella@senao.com',
-        'jayanth': 'jayanth.munnaluru@senao.com',
-        'srilatha': 'srilatha.tadiboina@senao.com',
-        'phani': 'phani.darla@senao.com',
-        'dinesh': 'dinesh.redddy@senao.com'
-    ]
-    return [
-        name: userCause?.userName ?: 'Unknown User',
-        id: buildUserId,
-        email: userEmails.get(buildUserId, 'harmanjot.singh@senao.com')
-    ]
-}
-
-def sendBuildEmail(String reportFile, boolean hasReport) {
-    def user = resolveUserEmail()
-    def dateStr = new Date().format('dd MMM yyyy, HH:mm:ss z', TimeZone.getTimeZone('Asia/Kolkata'))
-    def resultColor = currentBuild.currentResult == 'SUCCESS' ? 'green' : 'orange'
-    def reportSection = hasReport
-        ? """<p><strong>HTML report:</strong>
-            <a href="${env.BUILD_URL}artifact/${reportFile}">Download detailed report</a>
-            &nbsp;|&nbsp;
-            <a href="${env.BUILD_URL}">Open build in Jenkins</a></p>"""
-        : """<p><strong>HTML report:</strong> not generated.
-            Check the <a href="${env.BUILD_URL}console">build console</a>.</p>"""
-
-    def mailParams = [
-        subject: "UBR Performance Throughput — ${currentBuild.fullDisplayName} — ${currentBuild.currentResult}",
-        body: """\
-            <html><body style="font-family:Segoe UI,sans-serif;color:#334155;">
-                <h2 style="color:#1e3a8a;">UBR Performance Throughput Report</h2>
-                <p><strong>Build:</strong> ${currentBuild.fullDisplayName}</p>
-                <p><strong>Status:</strong> <span style="color:${resultColor};">${currentBuild.currentResult}</span></p>
-                <p><strong>Started by:</strong> ${user.name} (${user.id})</p>
-                <p><strong>Time:</strong> ${dateStr}</p>
-                <p><strong>Target stand:</strong> ${TARGET_STAND}</p>
-                <hr/>
-                <p><strong>BTS IP:</strong> ${params['BTS IP'] ?: '(profile default)'}</p>
-                <p><strong>CPE IP:</strong> ${params['CPE IP'] ?: '(profile default)'}</p>
-                <p><strong>Bandwidth:</strong> ${params.Bandwidth}</p>
-                <p><strong>MCS:</strong> ${params.MCS}</p>
-                <p><strong>Packet size:</strong> ${params['Packet Size']} bytes</p>
-                <p><strong>DL:UL ratio:</strong> ${params['DL:UL Ratio']}</p>
-                <p><strong>Duration:</strong> ${params['Throughput Test Time']}s per iteration</p>
-                ${reportSection}
-                <p style="color:#64748b;font-size:12px;">Senao UBR Automation — TRex performance matrix</p>
-            </body></html>
-        """,
-        to: user.email,
-        mimeType: 'text/html'
-    ]
-    if (hasReport) {
-        mailParams.attachmentsPattern = reportFile
-    }
-    emailext(mailParams)
 }
 
 pipeline {
@@ -160,7 +95,7 @@ pipeline {
                         error("Packet Size must be numeric bytes (e.g. 1500), got: ${packetRaw}")
                     }
 
-                    sh 'rm -rf logs/performance_* logs/Performance_Report_*.html || true'
+                    sh 'rm -rf logs/performance_* logs/Performance_Report_*.html Senao_Performance_*.html || true'
 
                     def cmd = new StringBuilder('PYTHONPATH=. python3 traffic/performance_matrix.py')
                     cmd.append(" --bandwidths '${bandwidths}'")
@@ -188,8 +123,8 @@ pipeline {
                     if (!reportPath) {
                         error('Performance matrix finished but no HTML report found under logs/')
                     }
-                    env.PERFORMANCE_REPORT = reportPath
-                    echo "HTML report: ${reportPath}"
+                    env.PERFORMANCE_REPORT_RAW = reportPath
+                    echo "HTML report (raw): ${reportPath}"
                     if (exitCode != 0) {
                         unstable("Performance matrix completed with failures (exit ${exitCode})")
                     }
@@ -197,9 +132,22 @@ pipeline {
             }
         }
 
+        stage('Finalize Report') {
+            steps {
+                script {
+                    def senao = load 'jenkins/jenkins-common.groovy'
+                    def destFile = "${senao.standardReportBasename('Senao_Performance')}.html"
+                    senao.copyLatestPerformanceReport(destFile)
+                    env.PERFORMANCE_REPORT = destFile
+                    echo "Standard report: ${destFile}"
+                }
+            }
+        }
+
         stage('Archive Report') {
             steps {
-                archiveArtifacts 'logs/Performance_Report_*.html'
+                archiveArtifacts 'Senao_Performance_*.html'
+                archiveArtifacts 'logs/Performance_Report_*.html,allowEmptyArchive:true'
                 archiveArtifacts 'logs/performance_*/**,allowEmptyArchive:true'
             }
         }
@@ -208,27 +156,39 @@ pipeline {
     post {
         always {
             script {
-                def reportFile = env.PERFORMANCE_REPORT ?: ''
-                def hasReport = reportFile && fileExists(reportFile)
+                def senao = load 'jenkins/jenkins-common.groovy'
+                def reportFile = env.PERFORMANCE_REPORT ?: "${senao.standardReportBasename('Senao_Performance')}.html"
+                def hasReport = fileExists(reportFile)
+
                 if (hasReport) {
-                    def reportName = reportFile.tokenize('/').last()
-                    publishHTML(target: [
-                        allowMissing: false,
-                        alwaysLinkToLastBuild: true,
-                        keepAll: true,
-                        reportDir: 'logs',
-                        reportFiles: reportName,
-                        reportName: "Performance Report - Build ${env.BUILD_NUMBER}"
-                    ])
+                    senao.publishSenaoHtmlReport(reportFile, "Senao Performance Report - Build ${env.BUILD_NUMBER}")
                 }
+
+                def detailsHtml = """\
+                    <p><strong>BTS IP:</strong> ${params['BTS IP'] ?: '(profile default)'}</p>
+                    <p><strong>CPE IP:</strong> ${params['CPE IP'] ?: '(profile default)'}</p>
+                    <p><strong>Bandwidth:</strong> ${params.Bandwidth}</p>
+                    <p><strong>MCS:</strong> ${params.MCS}</p>
+                    <p><strong>Packet size:</strong> ${params['Packet Size']} bytes</p>
+                    <p><strong>DL:UL ratio:</strong> ${params['DL:UL Ratio']}</p>
+                    <p><strong>Duration:</strong> ${params['Throughput Test Time']}s per iteration</p>
+                    <p><strong>TRex server:</strong> ${params['TRex Server']}</p>
+                """
+
                 try {
-                    sendBuildEmail(reportFile, hasReport)
+                    senao.sendSenaoPipelineEmail([
+                        subjectPrefix: 'UBR Performance Throughput',
+                        reportTitle: 'UBR Performance Throughput Report',
+                        footerNote: 'TRex performance matrix with BTS/CPE testbed summary',
+                        reportFile: hasReport ? reportFile : '',
+                        detailsHtml: detailsHtml
+                    ])
                 } catch (Exception exc) {
                     echo "Email notification failed: ${exc.message}"
                 }
                 echo '-----------------------------------------'
                 echo 'Throughput pipeline complete.'
-                echo "Report: ${reportFile ?: 'not generated'}"
+                echo "Report: ${hasReport ? reportFile : 'not generated'}"
                 echo '-----------------------------------------'
             }
         }

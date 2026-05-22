@@ -1,5 +1,6 @@
 import pytest
 import csv
+import json
 import os
 import asyncio
 from datetime import datetime
@@ -201,9 +202,52 @@ def pytest_runtest_makereport(item, call):
     report.extra = extra
 
 
+def _resolve_testbed_hosts(config):
+    """BTS and CPE hosts/password using the same rules as bsu_ip / cpe_ips fixtures."""
+    local_override = config.getoption("--local-ipv6") or config.getoption("--local-ip")
+    bundle = load_profile_bundle(
+        profile_name=config.getoption("--profile"),
+        recovery_profile_name=config.getoption("--recovery-profile"),
+        local_ip=local_override,
+        username=config.getoption("--username"),
+        password=config.getoption("--password"),
+    )
+    dut = bundle.active["dut"]
+    password = config.getoption("--password")
+    if dut.get("ip_mode") == "ipv6" or dut.get("strict_ipv6"):
+        bsu_host = normalize_ip(str(dut["local_ipv6"]))
+        cli_remote_v6 = config.getoption("--remote-ipv6")
+        if cli_remote_v6:
+            cpe_hosts = [normalize_ip(ip.strip()) for ip in cli_remote_v6.split(",") if ip.strip()]
+        else:
+            cpe_hosts = [normalize_ip(str(ip)) for ip in dut.get("remote_ipv6s", []) if str(ip).strip()]
+    else:
+        bsu_host = config.getoption("--local-ip")
+        raw = config.getoption("--remote-ip")
+        cpe_hosts = [normalize_ip(ip.strip()) for ip in raw.split(",") if ip.strip()]
+    return bsu_host, cpe_hosts, password
+
+
+def _write_testbed_summary(config) -> None:
+    """Persist BTS/CPE model, FW, IP, VLAN, QoS for customer HTML report generation."""
+    if not os.path.isfile("report.json"):
+        return
+    try:
+        from utils.regression_device_info import collect_testbed_summary
+
+        bsu_host, cpe_hosts, password = _resolve_testbed_hosts(config)
+        summary = asyncio.run(collect_testbed_summary(bsu_host, cpe_hosts, password))
+        with open("testbed_summary.json", "w", encoding="utf-8") as handle:
+            json.dump(summary, handle, indent=2)
+        print(f"\n[report] Testbed summary written (BTS={bsu_host}, CPE={cpe_hosts[:1] or ['—']})")
+    except Exception as exc:
+        print(f"\n[report] Testbed summary collection skipped: {exc}")
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_sessionfinish(session, exitstatus):
     """Generates customer CSV and regression HTML summaries at end of run."""
+    _write_testbed_summary(session.config)
     reports_dir = "reports"
     os.makedirs(reports_dir, exist_ok=True)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')

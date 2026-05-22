@@ -1,0 +1,164 @@
+// UBR stability regression — runs on TARGET_STAND.
+// REG_01 soft reboot | REG_02 network reload | REG_03 firmware upgrade (with image path).
+// Report: Senao_Regression_<build>_Report_<date>.html (hero + testbed summary + iteration matrices).
+
+def archiveArtifacts(pattern) {
+    step([$class: 'ArtifactArchiver', artifacts: pattern, fingerprint: true, onlyIfSuccessful: false])
+}
+
+pipeline {
+    agent { node { label "${TARGET_STAND}" } }
+
+    parameters {
+        string(
+            name: 'REGRESSION_FILTER',
+            defaultValue: 'REG_01',
+            description: 'Pytest -k filter: REG_01, REG_02, REG_03, or Regression (all — long/destructive)'
+        )
+        string(
+            name: 'Local IPv6 Address',
+            defaultValue: '',
+            description: 'BTS IPv6. Leave empty to use profiles/<PROFILE_NAME>.yaml default'
+        )
+        string(
+            name: 'PROFILE_NAME',
+            defaultValue: 'default',
+            description: 'Primary profile: profiles/<name>.yaml'
+        )
+        string(
+            name: 'RECOVERY_PROFILE_NAME',
+            defaultValue: 'link_formation',
+            description: 'Recovery profile: profiles/<name>.yaml'
+        )
+        string(
+            name: 'REGRESSION_ITERATIONS',
+            defaultValue: '',
+            description: 'Cycle count override (empty = profile regression.iterations, usually 3)'
+        )
+        string(
+            name: 'FIRMWARE_IMAGE',
+            defaultValue: '',
+            description: 'Firmware image path on agent for REG_03 (required when filter includes REG_03)'
+        )
+    }
+
+    stages {
+        stage('Prepare regression') {
+            steps {
+                script {
+                    echo '----------------------------------------'
+                    echo 'UBR Stability Regression (pytest)'
+                    echo "--- TARGET STAND: ${TARGET_STAND}"
+                    echo "--- FILTER:       ${params.REGRESSION_FILTER}"
+                    echo "Local IPv6:     ${params['Local IPv6 Address'] ?: '(profile default)'}"
+                    echo "Profile:        ${params.PROFILE_NAME}"
+                    echo "Iterations:     ${params.REGRESSION_ITERATIONS ?: '(profile default)'}"
+                    echo "Firmware image: ${params.FIRMWARE_IMAGE ?: '(profile / not set)'}"
+                    echo '----------------------------------------'
+                }
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh '''
+                    python3 -m venv venv
+                    venv/bin/pip install --upgrade pip
+                    venv/bin/pip install -r requirements.txt
+                    venv/bin/playwright install chromium
+                '''
+            }
+        }
+
+        stage('Execute Regression Suite') {
+            steps {
+                script {
+                    def senao = load 'jenkins/jenkins-common.groovy'
+                    def localIP = (params['Local IPv6 Address'] ?: '').trim()
+                    def profileName = params.PROFILE_NAME
+                    def recoveryProfileName = params.RECOVERY_PROFILE_NAME
+                    def formattedFilter = params.REGRESSION_FILTER.replaceAll(',', ' or ')
+                    def ipv6Arg = localIP ? "--local-ipv6 \"${localIP}\"" : ''
+                    def iterArg = params.REGRESSION_ITERATIONS?.trim()
+                        ? "--regression-iterations ${params.REGRESSION_ITERATIONS.trim()}"
+                        : ''
+                    def fwArg = params.FIRMWARE_IMAGE?.trim()
+                        ? "--firmware-image \"${params.FIRMWARE_IMAGE.trim()}\""
+                        : ''
+
+                    sh 'rm -rf reports/Regression_Report_*.html reports/regression_pytest_*.html Senao_Regression_*.html || true'
+
+                    catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                        sh """
+                            venv/bin/python -m pytest tests/Regression/ -v -k "${formattedFilter}" \
+                            --allow-regression \
+                            --profile "${profileName}" \
+                            --recovery-profile "${recoveryProfileName}" \
+                            ${ipv6Arg} \
+                            ${iterArg} \
+                            ${fwArg}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Finalize Report') {
+            steps {
+                script {
+                    def senao = load 'jenkins/jenkins-common.groovy'
+                    def destFile = "${senao.standardReportBasename('Senao_Regression')}.html"
+                    try {
+                        senao.copyLatestRegressionReport(destFile)
+                        env.REGRESSION_REPORT = destFile
+                    } catch (Exception exc) {
+                        unstable("Regression HTML report not produced: ${exc.message}")
+                    }
+                }
+            }
+        }
+
+        stage('Archive Report') {
+            steps {
+                archiveArtifacts 'Senao_Regression_*.html,allowEmptyArchive:true'
+                archiveArtifacts 'reports/Regression_Report_*.html,allowEmptyArchive:true'
+                archiveArtifacts 'reports/regression_pytest_*.html,allowEmptyArchive:true'
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                def senao = load 'jenkins/jenkins-common.groovy'
+                def destFile = env.REGRESSION_REPORT ?: "${senao.standardReportBasename('Senao_Regression')}.html"
+                def hasReport = fileExists(destFile)
+
+                if (hasReport) {
+                    senao.publishSenaoHtmlReport(destFile, "Senao Regression Report - Build ${env.BUILD_NUMBER}")
+                }
+
+                def detailsHtml = """\
+                    <p><strong>Regression filter:</strong> ${params.REGRESSION_FILTER}</p>
+                    <p><strong>Target IPv6:</strong> ${params['Local IPv6 Address'] ?: '(profile default)'}</p>
+                    <p><strong>Profile:</strong> ${params.PROFILE_NAME}</p>
+                    <p><strong>Recovery profile:</strong> ${params.RECOVERY_PROFILE_NAME}</p>
+                    <p><strong>Iterations:</strong> ${params.REGRESSION_ITERATIONS ?: '(profile default)'}</p>
+                    <p><strong>Firmware image:</strong> ${params.FIRMWARE_IMAGE ?: '(not set)'}</p>
+                """
+
+                try {
+                    senao.sendSenaoPipelineEmail([
+                        subjectPrefix: 'UBR Stability Regression',
+                        reportTitle: 'UBR Stability Regression Report',
+                        footerNote: 'BTS/CPE ping and web checks per iteration',
+                        reportFile: hasReport ? destFile : '',
+                        detailsHtml: detailsHtml
+                    ])
+                } catch (Exception exc) {
+                    echo "Email notification failed: ${exc.message}"
+                }
+            }
+        }
+    }
+}

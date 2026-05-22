@@ -113,6 +113,18 @@ def _all_pass(values: list[bool]) -> bool | None:
     return all(values)
 
 
+def _pytest_stat_chips(total, passed, failed) -> str:
+    if total is None:
+        return ""
+    failed_count = failed if failed is not None else 0
+    passed_count = passed if passed is not None else 0
+    return f"""
+      <div class="chip"><strong>{total}</strong><span>Pytest cases</span></div>
+      <div class="chip pass"><strong>{passed_count}</strong><span>Cases passed</span></div>
+      <div class="chip fail"><strong>{failed_count}</strong><span>Cases failed</span></div>
+    """
+
+
 def _iteration_matrix(record: IterationRecord) -> dict[str, bool | None]:
     return {
         "ping_bts": _all_pass(
@@ -207,8 +219,17 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
     meta = collector.meta
     executed_at = escape(str(meta.get("executed_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     iterations_target = escape(str(meta.get("iterations", "—")))
+    bts_host = escape(str(meta.get("bts_host", "—")))
+    cpe_hosts = meta.get("cpe_hosts") or []
+    cpe_label = escape(", ".join(str(h) for h in cpe_hosts) if cpe_hosts else "—")
     testbed_summary = meta.get("testbed_summary", {})
     testbed_table = _render_testbed_summary_table(testbed_summary)
+
+    pytest_total = pytest_passed = pytest_failed = None
+    if pytest_stats:
+        pytest_total = pytest_stats.get("total")
+        pytest_passed = pytest_stats.get("passed")
+        pytest_failed = pytest_stats.get("failed")
 
     visible_iterations = [it for it in collector.iterations if it.phase.lower() != "baseline"]
     total_iters = len(visible_iterations)
@@ -256,7 +277,8 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
       margin: 0; padding: 28px 18px; font-family: 'Inter', sans-serif;
       background: var(--bg); color: var(--text);
     }}
-    .wrap {{ max-width: 920px; margin: 0 auto; }}
+    .wrap {{ max-width: 1100px; margin: 0 auto; }}
+    table.summary-top {{ max-width: 100%; }}
     .hero {{
       background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #2563eb 100%);
       color: #fff; border-radius: 14px; padding: 22px 26px; margin-bottom: 18px;
@@ -361,15 +383,19 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
     <section class="panel-top">
       <h2>Testbed Summary</h2>
       {testbed_table}
+      <h3 style="margin:18px 0 12px;font-size:15px;color:var(--title);">Run Summary</h3>
       <div class="run-meta">
+        <span><strong>BTS:</strong> {bts_host}</span>
+        <span><strong>CPE:</strong> {cpe_label}</span>
         <span><strong>Target cycles:</strong> {iterations_target}</span>
       </div>
     </section>
 
     <section class="summary">
-      <div class="chip"><strong>{total_iters}</strong><span>Iterations</span></div>
-      <div class="chip pass"><strong>{passed_iters}</strong><span>Passed</span></div>
-      <div class="chip fail"><strong>{failed_iters}</strong><span>Failed</span></div>
+      <div class="chip"><strong>{total_iters}</strong><span>Health iterations</span></div>
+      <div class="chip pass"><strong>{passed_iters}</strong><span>Iterations passed</span></div>
+      <div class="chip fail"><strong>{failed_iters}</strong><span>Iterations failed</span></div>
+      {_pytest_stat_chips(pytest_total, pytest_passed, pytest_failed)}
     </section>
 
     <section class="panel">

@@ -1,8 +1,13 @@
+import argparse
+import asyncio
 import json
 import csv
 import sys
 import re
 from datetime import datetime
+from pathlib import Path
+
+from utils.regression_report import _render_testbed_summary_table
 
 SENAO_LOGO_URL = (
     "https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png"
@@ -67,14 +72,61 @@ def clean_failure_message(raw_failure):
     return clean_msg
 
 
-def generate():
-    if len(sys.argv) < 4:
-        print("Usage: python report_generator.py <build_no> <ip_address> <date_str>")
-        sys.exit(1)
+def _load_testbed_summary(profile_name: str | None, local_ip: str) -> dict:
+    summary_path = Path("testbed_summary.json")
+    if summary_path.is_file():
+        try:
+            with summary_path.open(encoding="utf-8") as handle:
+                return json.load(handle)
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"Warning: could not read {summary_path}: {exc}")
 
-    build_no = sys.argv[1]
-    ip_addr = sys.argv[2]
-    date_str = sys.argv[3]
+    if not profile_name:
+        return {}
+
+    try:
+        from utils.net_utils import normalize_ip
+        from utils.profile_manager import load_profile_bundle
+        from utils.regression_device_info import collect_testbed_summary
+
+        bundle = load_profile_bundle(profile_name=profile_name, local_ip=local_ip or None)
+        dut = bundle.active["dut"]
+        password = str(dut.get("password") or "")
+        if dut.get("ip_mode") == "ipv6" or dut.get("strict_ipv6"):
+            bsu_host = normalize_ip(str(dut["local_ipv6"]))
+            cpe_hosts = [normalize_ip(str(ip)) for ip in dut.get("remote_ipv6s", []) if str(ip).strip()]
+        else:
+            bsu_host = normalize_ip(str(dut.get("local_ip") or local_ip))
+            cpe_hosts = [normalize_ip(str(ip)) for ip in dut.get("remote_ips", []) if str(ip).strip()]
+        print(f"Collecting testbed summary (BTS={bsu_host})...")
+        return asyncio.run(collect_testbed_summary(bsu_host, cpe_hosts, password))
+    except Exception as exc:
+        print(f"Warning: testbed summary collection failed: {exc}")
+        return {}
+
+
+def generate():
+    parser = argparse.ArgumentParser(description="Generate Senao customer HTML/CSV from report.json")
+    parser.add_argument("build_no")
+    parser.add_argument("ip_address", help="BTS/local target label for run metadata")
+    parser.add_argument("date_str")
+    parser.add_argument(
+        "--profile",
+        default="",
+        help="Profile name (profiles/<name>.yaml) used to collect BTS/CPE info if testbed_summary.json is missing",
+    )
+    parser.add_argument(
+        "--output-prefix",
+        default="Senao_GUI",
+        help="Report filename prefix (e.g. Senao_GUI_<build>_Report_<date>.html)",
+    )
+    args = parser.parse_args()
+
+    build_no = args.build_no
+    ip_addr = args.ip_address
+    date_str = args.date_str
+    profile_name = (args.profile or "").strip() or None
+    output_prefix = (args.output_prefix or "Senao_GUI").strip()
 
     try:
         with open('report.json', 'r') as f:
@@ -174,8 +226,8 @@ def generate():
             groups[group_name] = []
         groups[group_name].append(record)
 
-    html_filename = f"Senao_Release_{build_no}_Report_{date_str}.html"
-    csv_filename = f"Senao_Release_{build_no}_Report_{date_str}.csv"
+    html_filename = f"{output_prefix}_{build_no}_Report_{date_str}.html"
+    csv_filename = f"{output_prefix}_{build_no}_Report_{date_str}.csv"
 
     # Generate CSV
     with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
@@ -191,6 +243,8 @@ def generate():
         group_options += f'<option value="{g}">{g}</option>\n'
 
     report_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    testbed_summary = _load_testbed_summary(profile_name, ip_addr)
+    testbed_table = _render_testbed_summary_table(testbed_summary)
 
     # Generate Professional HTML
     html = f"""
@@ -218,8 +272,28 @@ def generate():
             .container {{ background: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03); overflow: hidden; border: 1px solid #cbd5e1; }}
             .panel-top {{ padding: 20px 40px; border-bottom: 1px solid #e2e8f0; background: #fff; }}
             .panel-top h2 {{ margin: 0 0 12px; font-size: 17px; color: #0f172a; }}
-            .run-meta {{ display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; color: #475569; }}
+            .run-meta {{ display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; color: #475569; margin-top: 14px; }}
             .run-meta strong {{ color: #0f172a; }}
+            .panel-top h3 {{ margin: 18px 0 12px; font-size: 15px; color: #0f172a; }}
+            table.summary-top {{ max-width: 100%; margin-bottom: 0; }}
+            .ip-cell {{ white-space: nowrap; font-family: Consolas, Monaco, monospace; font-size: 12px; }}
+            table.matrix {{
+              width: 100%; max-width: 100%; border-collapse: collapse; background: #fff;
+              border: 2px solid #cbd5e1; border-radius: 8px; overflow: hidden;
+              box-shadow: 0 1px 3px rgba(15,23,42,0.06);
+            }}
+            table.matrix th, table.matrix td {{
+              border: 1px solid #cbd5e1; padding: 12px 16px; text-align: center;
+            }}
+            table.matrix thead th {{
+              background: #f8fafc; color: #1e3a8a; font-size: 13px; font-weight: 700;
+              text-transform: uppercase; letter-spacing: 0.5px;
+            }}
+            table.matrix th.corner {{ background: #f1f5f9; width: 100px; }}
+            table.matrix th.row-label {{
+              text-align: left; background: #f8fafc; color: #0f172a;
+              font-size: 13px; font-weight: 600; padding-left: 14px;
+            }}
 
             .summary-cards {{ display: flex; padding: 30px 40px; gap: 20px; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
             .card {{ flex: 1; padding: 20px; border-radius: 10px; text-align: center; border: 1px solid #e2e8f0; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.02); cursor: pointer; transition: all 0.2s ease; }}
@@ -313,7 +387,9 @@ def generate():
 
             <div class="container">
             <section class="panel-top">
-                <h2>Run Summary</h2>
+                <h2>Testbed Summary</h2>
+                {testbed_table}
+                <h3>Run Summary</h3>
                 <div class="run-meta">
                     <span><strong>Build release:</strong> #{build_no}</span>
                     <span><strong>Target device:</strong> {ip_addr}</span>
