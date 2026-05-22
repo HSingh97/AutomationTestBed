@@ -77,6 +77,7 @@ async def test_gui_23_dl_ul_ratio(gui_page, bsu_ip, device_creds):
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_24
 @pytest.mark.WirelessProperties
+@pytest.mark.DDRS
 async def test_gui_24_ddrs_status(gui_page, bsu_ip, device_creds):
     await assert_gui_24_ddrs_status(gui_page, bsu_ip, device_creds)
 
@@ -84,6 +85,7 @@ async def test_gui_24_ddrs_status(gui_page, bsu_ip, device_creds):
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_25
 @pytest.mark.WirelessProperties
+@pytest.mark.DDRS
 async def test_gui_25_spatial_stream(gui_page, bsu_ip, device_creds):
     await assert_gui_25_spatial_stream(gui_page, bsu_ip, device_creds)
 
@@ -91,6 +93,7 @@ async def test_gui_25_spatial_stream(gui_page, bsu_ip, device_creds):
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_26
 @pytest.mark.WirelessProperties
+@pytest.mark.DDRS
 async def test_gui_26_modulation_index(gui_page, bsu_ip, device_creds):
     await assert_gui_26_modulation_index(gui_page, bsu_ip, device_creds)
 
@@ -98,6 +101,7 @@ async def test_gui_26_modulation_index(gui_page, bsu_ip, device_creds):
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_27
 @pytest.mark.WirelessProperties
+@pytest.mark.DDRS
 async def test_gui_27_atpc_status(gui_page, bsu_ip, device_creds):
     await assert_gui_27_atpc_status(gui_page, bsu_ip, device_creds)
 
@@ -105,6 +109,7 @@ async def test_gui_27_atpc_status(gui_page, bsu_ip, device_creds):
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.GUI_28
 @pytest.mark.WirelessProperties
+@pytest.mark.DDRS
 async def test_gui_28_transmit_power(gui_page, bsu_ip, device_creds):
     await assert_gui_28_transmit_power(gui_page, bsu_ip, device_creds)
 
