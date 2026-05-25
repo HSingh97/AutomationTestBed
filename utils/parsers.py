@@ -257,6 +257,87 @@ def parse_uptime_to_seconds(gui_uptime_str):
 
     return total_seconds
 
+def parse_link_test_results(text: str) -> dict[str, str]:
+    """Parse Link Test Tool GUI result block into metric -> value strings."""
+    clean = " ".join(str(text or "").split())
+    patterns = {
+        "ul_throughput": r"UL\s+Throughput\s*:\s*([^\s]+(?:\s*Mbps)?)",
+        "dl_throughput": r"DL\s+Throughput\s*:\s*([^\s]+(?:\s*Mbps)?)",
+        "ul_latency": r"UL\s+Avg\s+Latency\s*:\s*([^\s]+(?:\s*ms)?)",
+        "dl_latency": r"DL\s+Avg\s+Latency\s*:\s*([^\s]+(?:\s*ms)?)",
+    }
+    parsed: dict[str, str] = {}
+    for key, pattern in patterns.items():
+        match = re.search(pattern, clean, re.IGNORECASE)
+        if match:
+            parsed[key] = match.group(1).strip()
+    return parsed
+
+
+def format_assoc_uptime(total_seconds: int | str) -> str:
+    """Match KWN.get_assoctime (dd:hh:mm:ss)."""
+    try:
+        total = int(float(str(total_seconds).strip()))
+    except (TypeError, ValueError):
+        return ""
+    days, rem = divmod(total, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, seconds = divmod(rem, 60)
+    return f"{days:02d}:{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def sysfs_tput_to_mbps(raw_value: str) -> str:
+    """Convert raw tx_tput/rx_tput sysfs counter to GUI Mbps string."""
+    try:
+        raw = float(str(raw_value).strip())
+    except (TypeError, ValueError):
+        return "0"
+    if raw > 1000 * 10:
+        return f"{raw / (1000 * 1000):.2f}"
+    return "0"
+
+
+def parse_rate_mbps_cell(text: str) -> tuple[str, str]:
+    """Parse '960 (21)   960 (21)' style Rate cell into out/in strings."""
+    clean = " ".join(str(text or "").split())
+    matches = re.findall(r"(\d+)\s*\(\s*([^)]+)\s*\)", clean)
+    if len(matches) >= 2:
+        return f"{matches[0][0]} ({matches[0][1]})", f"{matches[1][0]} ({matches[1][1]})"
+    if len(matches) == 1:
+        return f"{matches[0][0]} ({matches[0][1]})", ""
+    return clean, ""
+
+
+def parse_throughput_cell(text: str) -> tuple[str, str]:
+    """Parse throughput cell into out/in Mbps strings."""
+    nums = re.findall(r"[\d.]+", str(text or ""))
+    if len(nums) >= 2:
+        return nums[0], nums[1]
+    if len(nums) == 1:
+        return nums[0], nums[0]
+    return "", ""
+
+
+def parse_comb_snr_cell(text: str) -> tuple[str, str]:
+    """Parse combined SNR cell into local and remote values."""
+    nums = re.findall(r"\d+", str(text or ""))
+    if len(nums) >= 2:
+        return nums[0], nums[1]
+    if len(nums) == 1:
+        return nums[0], nums[0]
+    return "", ""
+
+
+def parse_numeric_metric(value: str) -> float | None:
+    match = re.search(r"[\d.]+", str(value or ""))
+    if not match:
+        return None
+    try:
+        return float(match.group())
+    except ValueError:
+        return None
+
+
 def parse_desc_info(desc_str):
     """
     Parses a combined description string like '0.0.0.0   SNo. 2411XC813HCK'

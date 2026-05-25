@@ -8,6 +8,7 @@ from playwright.async_api import async_playwright
 from pages.locators import LoginPageLocators
 from scrapli.driver.generic import AsyncGenericDriver
 from utils.net_utils import format_http_host, normalize_ip
+from utils.link_test_config import resolve_link_test_config
 from utils.profile_manager import load_profile_bundle
 from utils.recovery_manager import RecoveryManager, set_active_recovery_manager
 
@@ -57,6 +58,36 @@ def pytest_addoption(parser):
         default="link_formation",
         help="Recovery profile name from profiles/<name>.yaml",
     )
+    group.addoption(
+        "--link-test-vlan",
+        action="store",
+        default=None,
+        help="Link Test Tool VLAN ID override (0-4094). Profile/CLI priority: CLI > profile > default.",
+    )
+    group.addoption(
+        "--link-test-duration",
+        action="store",
+        default=None,
+        help="Link Test Tool duration in seconds (override).",
+    )
+    group.addoption(
+        "--link-test-bw-min",
+        action="store",
+        default=None,
+        help="Link Test Tool minimum random bandwidth in Mbps (override).",
+    )
+    group.addoption(
+        "--link-test-bw-max",
+        action="store",
+        default=None,
+        help="Link Test Tool maximum random bandwidth in Mbps (override).",
+    )
+    group.addoption(
+        "--link-test-reference-json",
+        action="store",
+        default=None,
+        help="Optional JSON file with external tester throughput/latency for GUI_130 comparison.",
+    )
 
 # =====================================================================
 # 2. PARAMETER FIXTURES
@@ -105,6 +136,12 @@ def recovery_manager(profile_bundle):
     set_active_recovery_manager(manager)
     return manager
 
+
+@pytest.fixture(scope="session")
+def link_test_config(request, profile_bundle):
+    """Monitor Link Test Tool settings (CLI overrides profile link_test section)."""
+    return resolve_link_test_config(profile_bundle.active, request)
+
 # =====================================================================
 # 3. SSH ENGINES
 # =====================================================================
@@ -135,6 +172,7 @@ async def root_ssh(bsu_ip, device_creds, recovery_manager):
     await recovery_manager.ensure_link_or_recover(bsu_ip=bsu_ip, device_creds=device_creds, root_ssh=conn)
     yield conn
     await conn.close()
+
 
 @pytest.fixture(scope="session")
 async def bsu_admin_cli(bsu_ip, device_creds):

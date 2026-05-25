@@ -1,15 +1,12 @@
-name: default
-description: Baseline testbed profile for regular GUI/link test execution.
+name: ipv4_lab
+description: IPv4 lab testbed for GUI link test (BTS 192.168.2.10, CPE 192.168.2.11).
 
 dut:
-  ip_mode: ipv6
-  strict_ipv6: true
-  local_ipv6: "2401:4900:d0:40d4:0:17b8:0:330"
-  remote_ipv6s:
-    - "2401:4900:d0:40d4::17b8:0:331"
-  bts_pc_ipv6: "2401:4900:d0:40d4::17b8:0:301"
-  cpe_pc_ipv6: "2401:4900:d0:40d4::17b8:0:302"
-  mgmt_oob_ipv6: "2401:4900:d0:40d4::17b8:0:301"
+  ip_mode: ipv4
+  strict_ipv6: false
+  local_ip: "192.168.2.10"
+  remote_ips:
+    - "192.168.2.11"
   username: root
   password: Sen@0ubRNwk$
 
@@ -23,7 +20,7 @@ recovery:
   retry_backoff_seconds:
     - 3
     - 8
-  allow_factory_reset: true
+  allow_factory_reset: false
   factory_reset_command: firstboot && reboot
   reboot_wait_seconds: 120
 

@@ -52,6 +52,7 @@ class SummaryLocators:
 class SummaryNetworkLocators:
     """CSS selectors for the Network Summary"""
     IP_ADDRESS = "//*[@id='ipv4']"
+    IPV6_ADDRESS = "//*[@id='ip6addr']"
     GATEWAY = "//*[@id='gatewayv4']"
     MAC_LAN1 = "//*[@id='eth0_mac']"
     MAC_LAN2 = "//*[@id='eth1_mac']"
@@ -247,4 +248,156 @@ class ManagementLocators:
     LOCATION_EMAIL_XPATH = '//*[@id="cusemail"]/div/input'
     LOCATION_PHONE_XPATH = '//*[@id="cusphone"]/div/input'
     LOCATION_DISTANCE_XPATH = '//*[@id="maincontent"]/div/div[1]/fieldset/form/div[8]/div/select'
+
+
+class MonitorLocators:
+    MENU_MONITOR = CommonLocators.MENU_MONITOR
+    SUBMENU_RADIO_1_STATS = CommonLocators.submenu_by_href("/monitor/radio1")
+    SUBMENU_RADIO_0_STATS = CommonLocators.submenu_by_href("/monitor/radio0")
+    SUBMENU_LEARN_TABLE = CommonLocators.submenu_by_href("/monitor/learntable")
+    SUBMENU_TOOLS = CommonLocators.submenu_by_href("/monitor/tools")
+    TAB_DIAGNOSTICS = "ul.cbi-tabmenu > li > a[href*='/monitor/tools']:not([href*='testtool']):not([href*='spectrum']):not([href*='scans']):not([href*='survey'])"
+    TAB_LINK_TEST_TOOL = "ul.cbi-tabmenu > li > a[href*='/monitor/tools/testtool']"
+    TAB_LINK_STATS = "ul.cbi-tabmenu > li > a[href*='/monitor/radio']:not([href*='rtx']):not([href*='interface']):not([href*='logs']):not([href*='idu'])"
+
+    # Radio 1 (5 GHz) link table — intf id "5" in firmware JS
+    RADIO1_LINK_TABLE = "#linkstats5-tbl"
+    RADIO1_LINK_ROWS = "#linkstats5-tbl tr.cbi-section-table-row"
+    RADIO1_LINK_IP_ANCHOR = "#linkstats5-tbl tr.cbi-section-table-row td[data-col='ipaddr'] a"
+
+    # Radio 1 Link -> Detailed Statistics (GUI_88–GUI_90)
+    DETAILED_STATS_HEADING = "h2.dia-head:has-text('DETAILED STATISTICS')"
+    DETAILED_STATS_BACK = "input[value='Back']"
+    DETAILED_STATS_DISCONNECT = "input[value='Disconnect']"
+    DETAILED_STATS_CLEAR = "input[value='Clear']"
+    DETAILED_TX_TPUT = "#tx_tput"
+    DETAILED_RX_TPUT = "#rx_tput"
+
+    # Detailed Statistics — Local / Remote fields (GUI_91, GUI_92)
+    DETAIL_LOCAL_IP = "#l_ip"
+    DETAIL_REMOTE_IP = "#ip"
+    DETAIL_LOCAL_IPV6 = "#l_ipv6"
+    DETAIL_REMOTE_IPV6 = "#ipv6"
+    DETAIL_REMOTE_MAC = "#mac"
+    DETAIL_LOCAL_NAME = "#l_custname"
+    DETAIL_REMOTE_NAME = "#r_custname"
+    DETAIL_LOCAL_GPS = "#l_lat_lon"
+    DETAIL_REMOTE_GPS = "#r_lat_lon"
+    DETAIL_LOCAL_SNRA1 = "#l_snra1"
+    DETAIL_LOCAL_SNRA2 = "#l_snra2"
+    DETAIL_REMOTE_SNRA1 = "#r_snra1"
+    DETAIL_REMOTE_SNRA2 = "#r_snra2"
+    DETAIL_LOCAL_SIGA1 = "#l_siga1"
+    DETAIL_LOCAL_SIGA2 = "#l_siga2"
+    DETAIL_REMOTE_SIGA1 = "#r_siga1"
+    DETAIL_REMOTE_SIGA2 = "#r_siga2"
+    DETAIL_LOCAL_NOISE = "#l_noise"
+    DETAIL_REMOTE_NOISE = "#r_noise"
+    DETAIL_LOCAL_POWER = "#l_power"
+    DETAIL_REMOTE_POWER = "#r_power"
+    DETAIL_TX_RATE = "#tx_rate"
+    DETAIL_RX_RATE = "#rx_rate"
+    DETAIL_LOCAL_TXDATA = "#l_txdata"
+    DETAIL_REMOTE_TXDATA = "#r_txdata"
+    DETAIL_LOCAL_RXDATA = "#l_rxdata"
+    DETAIL_REMOTE_RXDATA = "#r_rxdata"
+    DETAIL_LOCAL_RETRIES = "#l_retries"
+    DETAIL_REMOTE_RETRIES = "#r_retries"
+    DETAIL_LOCAL_DROP = "#l_drop"
+    DETAIL_REMOTE_DROP = "#r_drop"
+    DETAIL_LOCAL_RTX = "#l_rtx"
+    DETAIL_REMOTE_RTX = "#r_rtx"
+    DETAIL_REMOTE_FW = "#r_buildno"
+
+
+class LearnTableLocators:
+    """Monitor -> Learn Table (Bridge + ARP tabs)."""
+
+    PAGE_HEADING = "role=heading[name='LEARN TABLE']"
+    PAGE_READY = "#refresh"
+    TAB_BRIDGE = "ul.cbi-tabmenu > li > a[href*='/monitor/learntable']:not([href*='arptbl'])"
+    TAB_ARP = "ul.cbi-tabmenu > li > a[href*='/monitor/learntable/arptbl']"
+
+    REFRESH_BUTTON = "#refresh"
+    CLEAR_BUTTON = "#clear"
+    INTERFACE_FILTER = "#intf_type"
+
+    BRIDGE_TABLE = "table"
+    BRIDGE_ROWS = "table tr:has(td)"
+    ARP_TABLE = "table"
+    ARP_ROWS = "table tr:has(td)"
+
+
+class DiagnosticsLocators:
+    """Monitor -> Tools -> Diagnostics tab (Network Utilities)."""
+
+    PAGE_HEADING = "h2.dia-head:has-text('TOOLS')"
+    NETWORK_UTILITIES_HEADING = "text=Network Utilities"
+
+    TAB_DIAGNOSTICS = MonitorLocators.TAB_DIAGNOSTICS
+    TAB_SPECTRUM = "ul.cbi-tabmenu > li > a[href*='/monitor/tools/spectrum']"
+    TAB_ACS_DCS = "ul.cbi-tabmenu > li > a[href*='/monitor/tools/scans']"
+    TAB_SITE_SURVEY = "ul.cbi-tabmenu > li > a[href*='/monitor/tools/survey']"
+    TAB_LINK_TEST = MonitorLocators.TAB_LINK_TEST_TOOL
+
+    # Utility radio buttons (name=tool)
+    UTIL_PING = "#pg"
+    UTIL_TRACEROUTE = "#tr"
+    UTIL_PACKET_CAPTURE = "#pc"
+    UTIL_CONSOLE = "#con"
+    UTIL_CABLE_LENGTH = "#cb"
+    UTIL_TWAMP = "#tp"
+    UTIL_LLDP = "#lp"
+
+    PING_ADDRESS = "input[name='ping']"
+    PING_COUNT = "input[name='cnt']"
+    PING_SIZE = "input[name='sze']"
+    PING_BUTTON = "#pg_btn"
+
+    TRACEROUTE_ADDRESS = "input[name='traceroute']"
+    TRACEROUTE_BUTTON = "input[value='Traceroute']"
+
+    PCAP_INTERFACE = "#intf"
+    PCAP_TIME = "input[name='time']"
+    PCAP_CAPTURE_BUTTON = "#pkt_btn"
+    PCAP_DOWNLOAD = "#capture"
+    PCAP_STATUS = "#packet"
+
+    CONSOLE_COMMAND = "#console_cmd"
+    CONSOLE_EXECUTE = "#console_btn"
+    CONSOLE_OUTPUT = "#diag-console-output"
+    CONSOLE_LEGEND = "#diag-console-legend"
+
+    RC_OUTPUT = "#diag-rc-output"
+    RC_LEGEND = "#diag-rc-legend"
+    CABLE_BUTTON = "#cable_btn"
+
+    LLDP_TABLE = "#lldp_neighbor_table"
+    LLDP_OUTPUT = "#lldp_output"
+    LLDP_ROWS = "#lldp_neighbor_table tbody tr:has(td)"
+
+
+class LinkTestToolLocators:
+    """Monitor -> Tools -> Link Test Tool page (admin_monitor/testtool.htm)."""
+
+    PAGE_HEADING = "h2.dia-head:has-text('Link Test Tool')"
+    TAB_LINK_TEST = MonitorLocators.TAB_LINK_TEST_TOOL
+
+    BANDWIDTH_INPUT = "#pkt_bw"
+    TIME_DURATION_INPUT = "#time_dur"
+    VLAN_ID_INPUT = "#vlan_id"
+    PACKET_SIZE_INPUT = "#pkt_size"
+    BIDIRECTION_CHECKBOX = "xpath=//*[normalize-space()='Bidirection']/following::input[@type='checkbox'][1]"
+
+    CPE_DROPDOWN = "#ipaddr"
+    ADD_CPE_BUTTON = "#add_btn"
+    CPE_TABLE = "#ip-list"
+    CPE_TABLE_ROWS = "#ip-list tr"
+
+    START_BUTTON = "#start_btn"
+    STOP_BUTTON = "#stop_btn"
+    PROGRESS_MESSAGE = "#msg"
+    RESULTS_CONTAINER = "#testtool_results"
+
+    LINK_TEST_FORM = "form[name='formTable'], #test_tool"
 

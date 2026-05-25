@@ -151,3 +151,77 @@ class RootCommands:
     @staticmethod
     def remote_apply_all_su():
         return '/usr/sbin/remote_exec.sh 1 "ucidyn apply"'
+
+    # --- LINK TEST TOOL (Monitor -> Tools -> Link Test Tool) ---
+    @staticmethod
+    def get_tool_bw(radio_idx: int = 1):
+        return f"uci get tool.ath{radio_idx}.bw"
+
+    @staticmethod
+    def get_tool_duration(radio_idx: int = 1):
+        return f"uci get tool.ath{radio_idx}.dur"
+
+    @staticmethod
+    def get_tool_vlan(radio_idx: int = 1):
+        return f"uci get tool.ath{radio_idx}.vlanid"
+
+    @staticmethod
+    def get_tool_direction(radio_idx: int = 1):
+        return f"uci get tool.ath{radio_idx}.dir"
+
+    @staticmethod
+    def get_tool_iplist(radio_idx: int = 1):
+        return f"uci get tool.ath{radio_idx}.iplist"
+
+    @staticmethod
+    def get_link_test_active(radio_idx: int = 1):
+        return f"cfg80211tool ath{radio_idx} g_kwn_tput_test"
+
+    @staticmethod
+    def clear_tool_cpe_list(radio_idx: int = 1):
+        return (
+            f"uci -q delete tool.ath{radio_idx}.iplist; "
+            f"uci -q delete tool.ath{radio_idx}.associdlist; "
+            f"uci set tool.ath{radio_idx}.start=0; uci commit tool"
+        )
+
+    @staticmethod
+    def get_active_link_count(radio_idx: int = 1):
+        return f"cfg80211tool ath{radio_idx} g_kwnlinks"
+
+    @staticmethod
+    def get_link_stat_field(radio_idx: int, assoc_idx: int, field: str):
+        prefix = "sub" if radio_idx == 2 else "sua"
+        return f"cat /sys/class/kwn/{prefix}{assoc_idx}/statistics/{field} 2>/dev/null"
+
+    @staticmethod
+    def get_link_stat_associd(radio_idx: int, assoc_idx: int):
+        return RootCommands.get_link_stat_field(radio_idx, assoc_idx, "associd")
+
+    GET_BRCTL_SHOWMACS = "brctl showmacs br-lan 2>/dev/null"
+    GET_ARP_TABLE = "ip neigh show 2>/dev/null"
+    GET_ARP_TABLE_PROC = "cat /proc/net/arp 2>/dev/null"
+    GET_IP6_NEIGH = "ip -6 neigh show 2>/dev/null"
+
+    @staticmethod
+    def find_pcap_files():
+        return "ls -lt /tmp/*.pcap /var/*.pcap /var/pcap/*.pcap 2>/dev/null | head -3"
+
+    @staticmethod
+    def pcap_size_bytes(path: str):
+        return f"wc -c < {path} 2>/dev/null"
+
+    @staticmethod
+    def pcap_magic_hex(path: str):
+        return f"head -c 4 {path} 2>/dev/null | hexdump -v -e '1/1 \"%.2x\"' 2>/dev/null"
+
+    @staticmethod
+    def get_link_test_stats(radio_idx: int = 1, assoc_idx: int = 1):
+        prefix = "sub" if radio_idx == 2 else "sua"
+        base = f"/sys/class/kwn/{prefix}{assoc_idx}/statistics"
+        return {
+            "ul_throughput": f"cat {base}/tool_txtput 2>/dev/null",
+            "dl_throughput": f"cat {base}/tool_rxtput 2>/dev/null",
+            "ul_latency": f"cat {base}/tool_l_lat 2>/dev/null",
+            "dl_latency": f"cat {base}/tool_r_lat 2>/dev/null",
+        }

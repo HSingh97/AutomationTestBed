@@ -1,5 +1,5 @@
-name: default
-description: Baseline testbed profile for regular GUI/link test execution.
+name: ipv6_lab
+description: IPv6 lab testbed for Monitor GUI tests (same structure as default, explicit lab profile name).
 
 dut:
   ip_mode: ipv6
@@ -23,7 +23,7 @@ recovery:
   retry_backoff_seconds:
     - 3
     - 8
-  allow_factory_reset: true
+  allow_factory_reset: false
   factory_reset_command: firstboot && reboot
   reboot_wait_seconds: 120
 

@@ -25,6 +25,7 @@ Automation framework for UBR validation with:
   - `test_radio_properties.py`
   - `test_network.py`
   - `test_management.py`
+  - `test_monitor.py` (GUI_83 Radio Stats, GUI_127/128/130 Link Test Tool)
 - `tests/JumboFrames/`
   Jumbo frame suite:
   - `test_jumbo_frames.py` (JMB_01 ... JMB_10)
@@ -124,6 +125,26 @@ These values are now defaulted in profiles and CLI for consistent runs:
 - `GUI_91` - Management Logging IP/Port
 - `GUI_92` - Management Temperature Logging Cycle
 - `GUI_93` - Management Location Configuration
+- `GUI_83` - Monitor Radio 1 Statistics Link (Index, System Name, IP/IPv6, Uptime, SNR, Rate, Throughput)
+- `GUI_84` - Monitor Radio 1 Statistics Link CPE IP hyperlink opens CPE web GUI in new tab
+- `GUI_88` - Monitor Radio 1 Link Detailed Statistics Back button returns to RF Link Statistics
+- `GUI_89` - Monitor Radio 1 Link Detailed Statistics Disconnect briefly drops RF link
+- `GUI_90` - Monitor Radio 1 Link Detailed Statistics Clear resets link traffic counters
+- `GUI_91` - Monitor Radio 1 Link Detailed Statistics identity (IP, MAC, Name, GPS, SNR, Noise)
+- `GUI_92` - Monitor Radio 1 Link Detailed Statistics performance (Power, Rate, Throughput, Packets, RTX, Firmware)
+- `GUI_105` - Monitor Learn Table Bridge (MAC/local/age vs brctl; All/LAN1/LAN2/Radio1 filters)
+- `GUI_106` - Monitor Learn Table Bridge Refresh and Clear
+- `GUI_107` - Monitor Learn Table ARP vs /proc/net/arp
+- `GUI_108` - Monitor Learn Table ARP Refresh and Clear
+- `GUI_113` - Monitor Tools Diagnostics Ping (reachable CPE + unreachable IP)
+- `GUI_114` - Monitor Tools Diagnostics Traceroute to CPE
+- `GUI_115` - Monitor Tools Diagnostics Packet Capture (Radio 1, pcap file)
+- `GUI_116` - Monitor Tools Diagnostics Console (help command)
+- `GUI_117` - Monitor Tools Diagnostics Cable Length vs backend
+- `GUI_118` - Monitor Tools Diagnostics LLDP neighbors table
+- `GUI_127` - Monitor Tools Link Test Tool (bandwidth, duration, VLAN range + GUI/UCI verify)
+- `GUI_128` - Monitor Tools Link Test Tool (add CPE from dropdown)
+- `GUI_130` - Monitor Tools Link Test Tool (start test, validate results vs backend/tester)
 
 ### Throughput Automation
 
@@ -180,6 +201,84 @@ Run only top panel tests:
 
 ```bash
 venv/bin/python -m pytest tests/GUI/ -v -k "TopPanel"
+```
+
+Run Monitor cases (IPv4 lab, ordered 83 → 84 → 127 → 128 → 130):
+
+```bash
+python3 -m pytest tests/GUI/test_monitor.py -m GUI_83 --profile=ipv4_lab \
+  --local-ip=192.168.2.10 --remote-ip=192.168.2.11 -v
+```
+
+**IPv6 lab** (BTS/CPE on IPv6 only — use `default`, `ipv6_lab`, or `--profile=default` with `--local-ipv6` / `--remote-ipv6`):
+
+```bash
+python3 -m pytest tests/GUI/test_monitor.py -m "GUI_83 or GUI_84" \
+  --profile=ipv6_lab \
+  --local-ipv6=2401:4900:d0:40d4:0:17b8:0:330 \
+  --remote-ipv6=2401:4900:d0:40d4::17b8:0:331 \
+  --recovery-profile=link_formation -v
+
+# Full Monitor suite on IPv6
+python3 -m pytest tests/GUI/test_monitor.py \
+  --profile=ipv6_lab \
+  --local-ipv6=2401:4900:d0:40d4:0:17b8:0:330 \
+  --remote-ipv6=2401:4900:d0:40d4::17b8:0:331 \
+  --recovery-profile=link_formation -v
+```
+
+Monitor flows auto-detect IPv6 (profile `ip_mode: ipv6`, bracketed LuCI URLs, compressed address matching). **GUI_107 ARP** is IPv4-oriented; on IPv6-only stacks the CPE may appear in the **Bridge** table only (ARP check is informational).
+
+### Monitor scope (BTS only)
+
+All Monitor GUI cases run on the **BTS** (`--local-ip` / `gui_page` + `root_ssh`). Use `--remote-ip` (or profile `remote_ips`) as the **linked peer CPE** for link stats, ping, ARP, link test, etc. **GUI_84** briefly opens the CPE web UI in a new browser tab to verify the hyperlink — that is not a separate CPE device test pass.
+
+Run Monitor Link Test Tool cases (ordered 127 → 128 → 130):
+
+```bash
+# All three in sequence (~6 min)
+python3 -m pytest tests/GUI/test_monitor.py -m "GUI_84" \
+  --profile=ipv4_lab --local-ip=192.168.2.10 --remote-ip=192.168.2.11 -v
+
+python3 -m pytest tests/GUI/test_monitor.py -m "GUI_88 or GUI_89 or GUI_90" \
+  --profile=ipv4_lab --local-ip=192.168.2.10 --remote-ip=192.168.2.11 -v
+
+python3 -m pytest tests/GUI/test_monitor.py -m "GUI_91 or GUI_92" \
+  --profile=ipv4_lab --local-ip=192.168.2.10 --remote-ip=192.168.2.11 -v
+
+python3 -m pytest tests/GUI/test_monitor.py -m "GUI_105 or GUI_106 or GUI_107 or GUI_108" \
+  --profile=ipv4_lab --local-ip=192.168.2.10 --remote-ip=192.168.2.11 -v
+
+python3 -m pytest tests/GUI/test_monitor.py -m "GUI_113 or GUI_114 or GUI_115 or GUI_116 or GUI_117 or GUI_118" \
+  --profile=ipv4_lab --local-ip=192.168.2.10 --remote-ip=192.168.2.11 -v
+
+python3 -m pytest tests/GUI/test_monitor.py -m "GUI_127 or GUI_128 or GUI_130" \
+  --profile=ipv4_lab --local-ip=192.168.2.10 --remote-ip=192.168.2.11 -v
+
+# Individual cases
+python3 -m pytest tests/GUI/test_monitor.py -m GUI_127 --profile=ipv4_lab --local-ip=192.168.2.10 -v
+python3 -m pytest tests/GUI/test_monitor.py -m GUI_128 --profile=ipv4_lab \
+  --local-ip=192.168.2.10 --remote-ip=192.168.2.11 -v
+python3 -m pytest tests/GUI/test_monitor.py -m GUI_130 --profile=ipv4_lab \
+  --local-ip=192.168.2.10 --remote-ip=192.168.2.11 -v
+```
+
+Link Test settings: **CLI > profile `link_test` > defaults**. Optional external tester JSON for GUI_130:
+
+```bash
+python3 -m pytest tests/GUI/test_monitor.py -m GUI_130 --profile=ipv4_lab \
+  --link-test-reference-json=reports/tester_link_results.json ...
+```
+
+Example `tester_link_results.json`:
+
+```json
+{
+  "ul_throughput": 100,
+  "dl_throughput": 120,
+  "ul_latency": 3,
+  "dl_latency": 25
+}
 ```
 
 Run only wireless properties tests:
