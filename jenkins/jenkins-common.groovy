@@ -30,16 +30,20 @@ def standardReportBasename(String prefix) {
     return "${prefix}_${env.BUILD_ID}_Report_${dateStr}"
 }
 
-def copyLatestRegressionReport(String destFile) {
+def copyRegressionReport(String destFile) {
     sh """
         set -e
-        latest=\$(ls -t reports/Regression_Report_*.html 2>/dev/null | head -1 || true)
-        if [ -z "\$latest" ]; then
-          echo "No reports/Regression_Report_*.html found"
-          exit 1
+        src='reports/Regression_Report.html'
+        if [ ! -f "\$src" ]; then
+          latest=\$(ls -t reports/Regression_Report_*.html 2>/dev/null | head -1 || true)
+          if [ -z "\$latest" ]; then
+            echo "No reports/Regression_Report.html (or legacy timestamped copy) found"
+            exit 1
+          fi
+          src="\$latest"
         fi
-        cp "\$latest" "${destFile}"
-        echo "Copied \$latest -> ${destFile}"
+        cp "\$src" "${destFile}"
+        echo "Copied \$src -> ${destFile}"
     """
 }
 

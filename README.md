@@ -136,7 +136,7 @@ Automation framework for UBR P2MP validation:
 - `REG_02` – N-cycle **network soft reset** (`/etc/init.d/network reload` on CPE then BTS); same health checks  
 - `REG_03` – N-cycle **firmware upgrade** (GUI flash); same health checks; requires `--firmware-image`  
 
-Regression reports (`reports/Regression_Report_*.html`):
+Regression reports (default single file `reports/Regression_Report.html`; all runs/iterations append unless `--regression-fresh`):
 
 - Fixed **Testbed Summary** table (Model, FW Version, IP, VLAN, QoS for BTS/CPE)  
 - **Iteration 1+** only (baseline hidden)  
@@ -218,21 +218,27 @@ venv/bin/python -m pytest tests/JumboFrames/ -v --allow-destructive-jumbo -k "JM
 ### Stability Regression
 
 ```bash
-# Soft reboot (1 cycle)
-venv/bin/python -m pytest tests/Regression/ -v --allow-regression --regression-iterations 1 -k REG_01
+# Soft reboot (2 cycles)
+venv/bin/python -m pytest tests/Regression/ -v --allow-regression --regression-fresh \
+  -k REG_01 --regression-iterations-reg01 2
 
-# Network reload soft reset (1 cycle)
-venv/bin/python -m pytest tests/Regression/ -v --allow-regression --regression-iterations 1 -k REG_02
+# Network soft reset (2 cycles)
+venv/bin/python -m pytest tests/Regression/ -v --allow-regression --regression-fresh \
+  -k REG_02 --regression-iterations-reg02 2
+
+# Reboot + soft reset in one merged report (different iteration counts)
+venv/bin/python -m pytest tests/Regression/ -v --allow-regression --regression-fresh \
+  -k "REG_01 or REG_02" --regression-iterations-reg01 2 --regression-iterations-reg02 5
 
 # Firmware upgrade (provide image)
-venv/bin/python -m pytest tests/Regression/ -v --allow-regression --regression-iterations 1 -k REG_03 \
-  --firmware-image /path/to/firmware.bin
+venv/bin/python -m pytest tests/Regression/ -v --allow-regression --regression-fresh \
+  -k REG_03 --regression-iterations-reg03 1 --firmware-image /path/to/firmware.bin
 ```
 
 Reports:
 
-- Regression dashboard: `reports/Regression_Report_<timestamp>.html`  
-- Pytest HTML (auto when `--allow-regression`): `reports/regression_pytest_<timestamp>.html`  
+- Regression dashboard: `reports/Regression_Report.html` (one merged file per `--regression-fresh` run; append without `--regression-fresh`)  
+- Pytest HTML (auto when `--allow-regression`): `reports/regression_pytest.html`  
 - Customer CSV: `reports/Customer_Summary_<timestamp>.csv`  
 - Performance matrix: `logs/Performance_Report_<timestamp>.html` (artifacts in `logs/performance_<timestamp>/`)  
 
@@ -304,7 +310,12 @@ Each run produces `Throughput_<BW>_<MCS>_<Mode>_<ratio>.json`, `performance_matr
 | `--recovery-profile` | Recovery profile (`link_formation`) |
 | `--allow-destructive-jumbo` | Enable `JMB_07`, `JMB_10` |
 | `--allow-regression` | Enable `REG_01`–`REG_03` |
-| `--regression-iterations N` | Cycle count (default from profile: 3) |
+| `--regression-iterations N` | Default cycle count when per-case options unset |
+| `--regression-iterations-reg01 N` | Soft reboot cycles |
+| `--regression-iterations-reg02 N` | Network soft reset cycles |
+| `--regression-iterations-reg03 N` | Firmware upgrade cycles |
+| `--regression-report PATH` | Single HTML report (default `reports/Regression_Report.html`) |
+| `--regression-fresh` | Clear shared state; one new merged report for this run |
 | `--firmware-image PATH` | Image for `REG_03` |
 Profile regression block (`profiles/default.yaml`):
 
@@ -346,8 +357,10 @@ Shared helpers: `jenkins/jenkins-common.groovy` (email, `publishHTML`, report co
 
 ### 2. Regression
 
-- **Filter:** `REGRESSION_FILTER` — `REG_01` (reboot), `REG_02` (network reload), `REG_03` (firmware), or `Regression` (all)
-- **Optional:** `REGRESSION_ITERATIONS`, `FIRMWARE_IMAGE` (required for `REG_03`)
+- **Checkboxes:** Soft Reboot (`REG_01`), Network Soft Reset (`REG_02`), Firmware Upgrade (`REG_03`)
+- **Iterations:** separate count per enabled test (`ITERATIONS_SOFT_REBOOT`, `ITERATIONS_SOFT_RESET`, `ITERATIONS_FIRMWARE`)
+- **Report:** one merged `reports/Regression_Report.html` per build (`--regression-fresh`); Jenkins copies to `Senao_Regression_<build>_Report_<date>.html`
+- **Optional:** `Local IPv6 Address`, `FIRMWARE_IMAGE` (required when firmware upgrade is enabled)
 
 ### 3. Throughput
 

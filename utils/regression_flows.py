@@ -68,6 +68,20 @@ async def _close_ssh(conn: AsyncGenericDriver | None) -> None:
         pass
 
 
+async def _ensure_ssh_open(ssh: AsyncGenericDriver) -> None:
+    """Re-open scrapli session after reboot or network reload drops the channel."""
+    try:
+        await ssh.send_command("echo ok", timeout_ops=15)
+        return
+    except Exception:
+        pass
+    try:
+        await ssh.close()
+    except Exception:
+        pass
+    await ssh.open()
+
+
 async def _wait_for_ssh(host: str, password: str, *, timeout_s: int, interval_s: int = 5) -> AsyncGenericDriver:
     deadline = time.monotonic() + timeout_s
     last_error = ""
@@ -357,6 +371,7 @@ async def _trigger_soft_reboot(gui_page, root_ssh: AsyncGenericDriver | None, *,
         await confirm_btn.click()
         return
     assert root_ssh is not None, "SSH reboot requested but root_ssh is unavailable."
+    await _ensure_ssh_open(root_ssh)
     await root_ssh.send_command("reboot")
 
 
@@ -385,6 +400,7 @@ async def _trigger_network_soft_reset(
             await _send_network_reload(cpe_ssh, label=f"CPE {cpe_host}", case_id=case_id)
         finally:
             await _close_ssh(cpe_ssh)
+    await _ensure_ssh_open(bts_ssh)
     await _send_network_reload(bts_ssh, label="BTS", case_id=case_id)
 
 
@@ -405,6 +421,7 @@ async def run_soft_reboot_regression(
     reg = _regression_cfg(profile_bundle)
     use_gui_reboot = bool(reg.get("reboot_via_gui", False))
     wait_s = _reboot_wait_s(profile_bundle)
+    await _ensure_ssh_open(root_ssh)
 
     await verify_iteration_health(
         case_id=case_id,
@@ -432,6 +449,7 @@ async def run_soft_reboot_regression(
             device_creds=device_creds,
             root_ssh=root_ssh,
         )
+        await _ensure_ssh_open(root_ssh)
         await login_if_needed(gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.LONG_WAIT_MS, skip_recovery=True)
         await verify_iteration_health(
             case_id=case_id,
@@ -461,6 +479,7 @@ async def run_soft_reset_regression(
     """N-cycle network interface soft reset (BTS + CPE) via /etc/init.d/network reload."""
     _log(case_id, f"Starting {iterations} network soft-reset cycle(s) ({NETWORK_RELOAD_CMD}).")
     settle_s = _network_reload_wait_s(profile_bundle)
+    await _ensure_ssh_open(root_ssh)
 
     await verify_iteration_health(
         case_id=case_id,
@@ -474,6 +493,7 @@ async def run_soft_reset_regression(
 
     for cycle in range(1, iterations + 1):
         _log(case_id, f"Cycle {cycle}/{iterations}: network reload on BTS and CPE.")
+        await _ensure_ssh_open(root_ssh)
         try:
             await _trigger_network_soft_reset(
                 bts_ssh=root_ssh,
@@ -509,6 +529,7 @@ async def run_soft_reset_regression(
             device_creds=device_creds,
             root_ssh=root_ssh,
         )
+        await _ensure_ssh_open(root_ssh)
         await login_if_needed(gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.LONG_WAIT_MS, skip_recovery=True)
         await verify_iteration_health(
             case_id=case_id,

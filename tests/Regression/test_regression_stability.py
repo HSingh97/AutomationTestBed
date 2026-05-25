@@ -22,11 +22,28 @@ def _require_regression(request):
 
 
 def _iterations(request, profile_bundle):
+    case_id = _case_id(request)
+    per_case_option = {
+        "REG_01": "--regression-iterations-reg01",
+        "REG_02": "--regression-iterations-reg02",
+        "REG_03": "--regression-iterations-reg03",
+    }.get(case_id)
+    if per_case_option is not None:
+        case_value = request.config.getoption(per_case_option)
+        if case_value is not None:
+            return int(case_value)
     cli_value = request.config.getoption("--regression-iterations")
     if cli_value is not None:
         return int(cli_value)
     reg = profile_bundle.active.get("regression", {})
     return int(reg.get("iterations", 3))
+
+
+def _case_id(request) -> str:
+    for marker in ("REG_01", "REG_02", "REG_03"):
+        if request.node.get_closest_marker(marker):
+            return marker
+    return request.node.name.split("[")[-1].replace("]", "") or "Regression"
 
 
 async def _prime_collector(request, bsu_ip, cpe_ips, profile_bundle, device_creds):
@@ -39,9 +56,9 @@ async def _prime_collector(request, bsu_ip, cpe_ips, profile_bundle, device_cred
         executed_at=request.config._regression_report_ts,
         bts_host=bsu_ip,
         cpe_hosts=cpe_ips,
-        iterations=_iterations(request, profile_bundle),
         testbed_summary=summary,
     )
+    collector.register_run_case(_case_id(request), _iterations(request, profile_bundle))
 
 
 @pytest.mark.asyncio(scope="session")

@@ -69,13 +69,46 @@ def pytest_addoption(parser):
         action="store",
         default=None,
         type=int,
-        help="Number of cycles for regression tests (default from profile or 3).",
+        help="Default cycle count for all regression tests when per-case options are unset.",
+    )
+    group.addoption(
+        "--regression-iterations-reg01",
+        action="store",
+        default=None,
+        type=int,
+        help="Cycle count for REG_01 soft reboot.",
+    )
+    group.addoption(
+        "--regression-iterations-reg02",
+        action="store",
+        default=None,
+        type=int,
+        help="Cycle count for REG_02 network soft reset.",
+    )
+    group.addoption(
+        "--regression-iterations-reg03",
+        action="store",
+        default=None,
+        type=int,
+        help="Cycle count for REG_03 firmware upgrade.",
     )
     group.addoption(
         "--firmware-image",
         action="store",
         default="",
         help="Firmware image path for REG_03 firmware upgrade regression.",
+    )
+    group.addoption(
+        "--regression-report",
+        action="store",
+        default="reports/Regression_Report.html",
+        help="Single HTML report path for all regression iterations/runs (append when state file exists).",
+    )
+    group.addoption(
+        "--regression-fresh",
+        action="store_true",
+        default=False,
+        help="Clear shared regression state and overwrite the report (default: append to same file).",
     )
 
 # =====================================================================
@@ -294,11 +327,23 @@ def pytest_sessionfinish(session, exitstatus):
         from pathlib import Path
         from utils.regression_report import get_regression_collector
 
+        from utils.regression_report import RegressionReportCollector
+
+        state_path = getattr(session.config, "_regression_state_path", None)
         collector = get_regression_collector()
-        regression_html = Path(reports_dir) / f"Regression_Report_{timestamp}.html"
+        if state_path and Path(state_path).is_file():
+            merged = RegressionReportCollector.load_from_state_file(state_path)
+            collector.iterations = merged.iterations
+            collector.meta = merged.meta
+        elif collector._state_path:
+            collector._persist_state()
+        regression_html = Path(
+            getattr(session.config, "_regression_report_path", None)
+            or session.config.getoption("--regression-report")
+        )
         collector.render_html(regression_html, pytest_stats=pytest_stats)
-        session.config._regression_html_report = str(regression_html)
-        print(f"\n[REGRESSION] Detailed HTML report: {regression_html}")
+        session.config._regression_html_report = str(regression_html.resolve())
+        print(f"\n[REGRESSION] Detailed HTML report: {regression_html.resolve()}")
         pytest_html = getattr(session.config, "_regression_pytest_html", None)
         if pytest_html:
             print(f"[REGRESSION] Pytest HTML report: {pytest_html}")
@@ -408,16 +453,28 @@ def pytest_configure(config):
     config._regression_report_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     if regression_mode:
-        from utils.regression_report import get_regression_collector, reset_regression_collector
+        from pathlib import Path
 
-        reset_regression_collector()
-        config._regression_collector = get_regression_collector()
+        from utils.regression_report import init_regression_collector_for_session
 
-        reports_dir = os.path.join(os.path.dirname(__file__), "reports")
-        os.makedirs(reports_dir, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        repo_root = Path(os.path.dirname(__file__))
+        reports_dir = repo_root / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        report_path = Path(config.getoption("--regression-report"))
+        if not report_path.is_absolute():
+            report_path = repo_root / report_path
+        state_path = report_path.parent / "regression_collector_state.json"
+
+        append = not config.getoption("--regression-fresh") and state_path.is_file()
+        collector = init_regression_collector_for_session(state_path=state_path, append=append)
+        config._regression_collector = collector
+        config._regression_report_path = str(report_path)
+        config._regression_state_path = str(state_path)
+        if append:
+            print(f"[REGRESSION] Appending to shared report: {report_path}")
+
         if not getattr(config.option, "htmlpath", None):
-            config.option.htmlpath = os.path.join(reports_dir, f"regression_pytest_{ts}.html")
+            config.option.htmlpath = str(reports_dir / "regression_pytest.html")
             config.option.self_contained_html = True
         config._regression_pytest_html = config.option.htmlpath
 

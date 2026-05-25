@@ -1,6 +1,5 @@
 // UBR stability regression — runs on TARGET_STAND.
-// REG_01 soft reboot | REG_02 network reload | REG_03 firmware upgrade (with image path).
-// Report: Senao_Regression_<build>_Report_<date>.html (hero + testbed summary + iteration matrices).
+// Select tests via checkboxes; per-test iteration counts; one merged HTML report.
 
 def archiveArtifacts(pattern) {
     step([$class: 'ArtifactArchiver', artifacts: pattern, fingerprint: true, onlyIfSuccessful: false])
@@ -10,35 +9,45 @@ pipeline {
     agent { node { label "${TARGET_STAND}" } }
 
     parameters {
-        string(
-            name: 'REGRESSION_FILTER',
-            defaultValue: 'REG_01',
-            description: 'Pytest -k filter: REG_01, REG_02, REG_03, or Regression (all — long/destructive)'
+        booleanParam(
+            name: 'RUN_SOFT_REBOOT',
+            defaultValue: true,
+            description: 'REG_01 — BTS soft reboot with BTS↔CPE ping and web checks each cycle'
         )
         string(
-            name: 'Local IPv6 Address',
-            defaultValue: '',
-            description: 'BTS IPv6. Leave empty to use profiles/<PROFILE_NAME>.yaml default'
+            name: 'ITERATIONS_SOFT_REBOOT',
+            defaultValue: '3',
+            description: 'Cycle count when Soft Reboot is enabled'
+        )
+        booleanParam(
+            name: 'RUN_SOFT_RESET',
+            defaultValue: false,
+            description: 'REG_02 — Network soft reset (/etc/init.d/network reload on CPE then BTS)'
         )
         string(
-            name: 'PROFILE_NAME',
-            defaultValue: 'default',
-            description: 'Primary profile: profiles/<name>.yaml'
+            name: 'ITERATIONS_SOFT_RESET',
+            defaultValue: '3',
+            description: 'Cycle count when Network Soft Reset is enabled'
+        )
+        booleanParam(
+            name: 'RUN_FIRMWARE_UPGRADE',
+            defaultValue: false,
+            description: 'REG_03 — Firmware upgrade regression (requires firmware image path)'
         )
         string(
-            name: 'RECOVERY_PROFILE_NAME',
-            defaultValue: 'link_formation',
-            description: 'Recovery profile: profiles/<name>.yaml'
-        )
-        string(
-            name: 'REGRESSION_ITERATIONS',
-            defaultValue: '',
-            description: 'Cycle count override (empty = profile regression.iterations, usually 3)'
+            name: 'ITERATIONS_FIRMWARE',
+            defaultValue: '1',
+            description: 'Cycle count when Firmware Upgrade is enabled'
         )
         string(
             name: 'FIRMWARE_IMAGE',
             defaultValue: '',
-            description: 'Firmware image path on agent for REG_03 (required when filter includes REG_03)'
+            description: 'Firmware image path on agent (required when Firmware Upgrade is enabled)'
+        )
+        string(
+            name: 'Local IPv6 Address',
+            defaultValue: '',
+            description: 'BTS IPv6 override. Leave empty for profiles/default.yaml'
         )
     }
 
@@ -46,14 +55,49 @@ pipeline {
         stage('Prepare regression') {
             steps {
                 script {
+                    def selected = []
+                    if (params.RUN_SOFT_REBOOT) {
+                        selected << "Soft Reboot × ${params.ITERATIONS_SOFT_REBOOT.trim()}"
+                    }
+                    if (params.RUN_SOFT_RESET) {
+                        selected << "Network Soft Reset × ${params.ITERATIONS_SOFT_RESET.trim()}"
+                    }
+                    if (params.RUN_FIRMWARE_UPGRADE) {
+                        selected << "Firmware Upgrade × ${params.ITERATIONS_FIRMWARE.trim()}"
+                    }
+                    if (selected.isEmpty()) {
+                        error('Select at least one regression test (Soft Reboot, Soft Reset, or Firmware Upgrade).')
+                    }
+                    if (params.RUN_FIRMWARE_UPGRADE && !(params.FIRMWARE_IMAGE ?: '').trim()) {
+                        error('FIRMWARE_IMAGE is required when Firmware Upgrade is enabled.')
+                    }
+
+                    def filterParts = []
+                    def iterArgs = []
+                    if (params.RUN_SOFT_REBOOT) {
+                        filterParts << 'REG_01'
+                        iterArgs << "--regression-iterations-reg01 ${params.ITERATIONS_SOFT_REBOOT.trim()}"
+                    }
+                    if (params.RUN_SOFT_RESET) {
+                        filterParts << 'REG_02'
+                        iterArgs << "--regression-iterations-reg02 ${params.ITERATIONS_SOFT_RESET.trim()}"
+                    }
+                    if (params.RUN_FIRMWARE_UPGRADE) {
+                        filterParts << 'REG_03'
+                        iterArgs << "--regression-iterations-reg03 ${params.ITERATIONS_FIRMWARE.trim()}"
+                    }
+
+                    env.REGRESSION_SELECTED_SUMMARY = selected.join(', ')
+                    env.REGRESSION_K_FILTER = filterParts.join(' or ')
+                    env.REGRESSION_ITER_ARGS = iterArgs.join(' ')
+
                     echo '----------------------------------------'
                     echo 'UBR Stability Regression (pytest)'
                     echo "--- TARGET STAND: ${TARGET_STAND}"
-                    echo "--- FILTER:       ${params.REGRESSION_FILTER}"
+                    echo "--- TESTS:        ${env.REGRESSION_SELECTED_SUMMARY}"
                     echo "Local IPv6:     ${params['Local IPv6 Address'] ?: '(profile default)'}"
-                    echo "Profile:        ${params.PROFILE_NAME}"
-                    echo "Iterations:     ${params.REGRESSION_ITERATIONS ?: '(profile default)'}"
-                    echo "Firmware image: ${params.FIRMWARE_IMAGE ?: '(profile / not set)'}"
+                    echo "Firmware image: ${params.FIRMWARE_IMAGE ?: '(not used)'}"
+                    echo 'Report:         single merged reports/Regression_Report.html'
                     echo '----------------------------------------'
                 }
             }
@@ -73,29 +117,29 @@ pipeline {
         stage('Execute Regression Suite') {
             steps {
                 script {
-                    def senao = load 'jenkins/jenkins-common.groovy'
                     def localIP = (params['Local IPv6 Address'] ?: '').trim()
-                    def profileName = params.PROFILE_NAME
-                    def recoveryProfileName = params.RECOVERY_PROFILE_NAME
-                    def formattedFilter = params.REGRESSION_FILTER.replaceAll(',', ' or ')
                     def ipv6Arg = localIP ? "--local-ipv6 \"${localIP}\"" : ''
-                    def iterArg = params.REGRESSION_ITERATIONS?.trim()
-                        ? "--regression-iterations ${params.REGRESSION_ITERATIONS.trim()}"
-                        : ''
-                    def fwArg = params.FIRMWARE_IMAGE?.trim()
+                    def fwArg = (params.FIRMWARE_IMAGE ?: '').trim()
                         ? "--firmware-image \"${params.FIRMWARE_IMAGE.trim()}\""
                         : ''
 
-                    sh 'rm -rf reports/Regression_Report_*.html reports/regression_pytest_*.html Senao_Regression_*.html || true'
+                    sh '''
+                        rm -f reports/regression_collector_state.json \
+                              reports/Regression_Report.html \
+                              reports/regression_pytest.html \
+                              Senao_Regression_*.html || true
+                    '''
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                         sh """
-                            venv/bin/python -m pytest tests/Regression/ -v -k "${formattedFilter}" \
+                            venv/bin/python -m pytest tests/Regression/ -v \
+                            -k "${env.REGRESSION_K_FILTER}" \
                             --allow-regression \
-                            --profile "${profileName}" \
-                            --recovery-profile "${recoveryProfileName}" \
+                            --regression-fresh \
+                            --profile default \
+                            --recovery-profile link_formation \
                             ${ipv6Arg} \
-                            ${iterArg} \
+                            ${env.REGRESSION_ITER_ARGS} \
                             ${fwArg}
                         """
                     }
@@ -109,7 +153,7 @@ pipeline {
                     def senao = load 'jenkins/jenkins-common.groovy'
                     def destFile = "${senao.standardReportBasename('Senao_Regression')}.html"
                     try {
-                        senao.copyLatestRegressionReport(destFile)
+                        senao.copyRegressionReport(destFile)
                         env.REGRESSION_REPORT = destFile
                     } catch (Exception exc) {
                         unstable("Regression HTML report not produced: ${exc.message}")
@@ -121,8 +165,8 @@ pipeline {
         stage('Archive Report') {
             steps {
                 archiveArtifacts 'Senao_Regression_*.html,allowEmptyArchive:true'
-                archiveArtifacts 'reports/Regression_Report_*.html,allowEmptyArchive:true'
-                archiveArtifacts 'reports/regression_pytest_*.html,allowEmptyArchive:true'
+                archiveArtifacts 'reports/Regression_Report.html,allowEmptyArchive:true'
+                archiveArtifacts 'reports/regression_pytest.html,allowEmptyArchive:true'
             }
         }
     }
@@ -139,19 +183,17 @@ pipeline {
                 }
 
                 def detailsHtml = """\
-                    <p><strong>Regression filter:</strong> ${params.REGRESSION_FILTER}</p>
+                    <p><strong>Tests run:</strong> ${env.REGRESSION_SELECTED_SUMMARY ?: '—'}</p>
                     <p><strong>Target IPv6:</strong> ${params['Local IPv6 Address'] ?: '(profile default)'}</p>
-                    <p><strong>Profile:</strong> ${params.PROFILE_NAME}</p>
-                    <p><strong>Recovery profile:</strong> ${params.RECOVERY_PROFILE_NAME}</p>
-                    <p><strong>Iterations:</strong> ${params.REGRESSION_ITERATIONS ?: '(profile default)'}</p>
-                    <p><strong>Firmware image:</strong> ${params.FIRMWARE_IMAGE ?: '(not set)'}</p>
+                    <p><strong>Firmware image:</strong> ${params.FIRMWARE_IMAGE ?: '(not used)'}</p>
+                    <p><strong>Report:</strong> one merged HTML (all selected tests and cycles)</p>
                 """
 
                 try {
                     senao.sendSenaoPipelineEmail([
                         subjectPrefix: 'UBR Stability Regression',
                         reportTitle: 'UBR Stability Regression Report',
-                        footerNote: 'BTS/CPE ping and web checks per iteration',
+                        footerNote: 'Merged BTS/CPE ping and web checks per cycle',
                         reportFile: hasReport ? destFile : '',
                         detailsHtml: detailsHtml
                     ])
