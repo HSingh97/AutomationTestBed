@@ -27,7 +27,6 @@ pytestmark = [pytest.mark.sanity, pytest.mark.Monitor]
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(0)
 @pytest.mark.GUI_83
 @pytest.mark.Monitor
 async def test_gui_83_radio_link_statistics(gui_page, root_ssh, cpe_ips, bsu_ip, device_creds):
@@ -42,7 +41,6 @@ async def test_gui_83_radio_link_statistics(gui_page, root_ssh, cpe_ips, bsu_ip,
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(1)
 @pytest.mark.GUI_84
 @pytest.mark.Monitor
 async def test_gui_84_cpe_ip_hyperlink(gui_page, cpe_ips, device_creds, bsu_ip):
@@ -51,7 +49,6 @@ async def test_gui_84_cpe_ip_hyperlink(gui_page, cpe_ips, device_creds, bsu_ip):
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(2)
 @pytest.mark.GUI_88
 @pytest.mark.Monitor
 async def test_gui_88_detailed_statistics_back(gui_page, cpe_ips, bsu_ip, device_creds):
@@ -64,7 +61,6 @@ async def test_gui_88_detailed_statistics_back(gui_page, cpe_ips, bsu_ip, device
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(3)
 @pytest.mark.GUI_89
 @pytest.mark.Monitor
 async def test_gui_89_detailed_statistics_disconnect(gui_page, root_ssh, cpe_ips, bsu_ip, device_creds):
@@ -78,7 +74,6 @@ async def test_gui_89_detailed_statistics_disconnect(gui_page, root_ssh, cpe_ips
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(4)
 @pytest.mark.GUI_90
 @pytest.mark.Monitor
 async def test_gui_90_detailed_statistics_clear(gui_page, root_ssh, cpe_ips, bsu_ip, device_creds):
@@ -92,7 +87,6 @@ async def test_gui_90_detailed_statistics_clear(gui_page, root_ssh, cpe_ips, bsu
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(5)
 @pytest.mark.GUI_91
 @pytest.mark.Monitor
 async def test_gui_91_detailed_statistics_identity(gui_page, root_ssh, cpe_ips, bsu_ip, device_creds):
@@ -106,7 +100,6 @@ async def test_gui_91_detailed_statistics_identity(gui_page, root_ssh, cpe_ips, 
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(6)
 @pytest.mark.GUI_92
 @pytest.mark.Monitor
 async def test_gui_92_detailed_statistics_performance(gui_page, root_ssh, cpe_ips, bsu_ip, device_creds):
@@ -120,7 +113,6 @@ async def test_gui_92_detailed_statistics_performance(gui_page, root_ssh, cpe_ip
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(11)
 @pytest.mark.GUI_113
 @pytest.mark.Monitor
 async def test_gui_113_ping(gui_page, cpe_ips, bsu_ip, device_creds):
@@ -133,7 +125,6 @@ async def test_gui_113_ping(gui_page, cpe_ips, bsu_ip, device_creds):
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(12)
 @pytest.mark.GUI_114
 @pytest.mark.Monitor
 async def test_gui_114_traceroute(gui_page, cpe_ips, bsu_ip, device_creds):
@@ -146,7 +137,6 @@ async def test_gui_114_traceroute(gui_page, cpe_ips, bsu_ip, device_creds):
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(13)
 @pytest.mark.GUI_115
 @pytest.mark.Monitor
 async def test_gui_115_packet_capture(gui_page, root_ssh, cpe_ips, device_creds):
@@ -159,7 +149,6 @@ async def test_gui_115_packet_capture(gui_page, root_ssh, cpe_ips, device_creds)
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(14)
 @pytest.mark.GUI_116
 @pytest.mark.Monitor
 async def test_gui_116_console(gui_page, cpe_ips, device_creds):
@@ -167,7 +156,6 @@ async def test_gui_116_console(gui_page, cpe_ips, device_creds):
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(15)
 @pytest.mark.GUI_117
 @pytest.mark.Monitor
 async def test_gui_117_cable_length(gui_page, root_ssh, cpe_ips, device_creds):
@@ -180,7 +168,6 @@ async def test_gui_117_cable_length(gui_page, root_ssh, cpe_ips, device_creds):
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(16)
 @pytest.mark.GUI_118
 @pytest.mark.Monitor
 async def test_gui_118_lldp(gui_page, root_ssh, cpe_ips, bsu_ip, device_creds):
@@ -194,7 +181,6 @@ async def test_gui_118_lldp(gui_page, root_ssh, cpe_ips, bsu_ip, device_creds):
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(17)
 @pytest.mark.GUI_127
 @pytest.mark.Monitor
 async def test_gui_127_link_test_parameters(gui_page, root_ssh, cpe_ips, link_test_config, bsu_ip, device_creds):
@@ -209,7 +195,6 @@ async def test_gui_127_link_test_parameters(gui_page, root_ssh, cpe_ips, link_te
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(18)
 @pytest.mark.GUI_128
 @pytest.mark.Monitor
 async def test_gui_128_link_test_cpe(gui_page, root_ssh, cpe_ips, link_test_config, bsu_ip, device_creds):
@@ -224,7 +209,6 @@ async def test_gui_128_link_test_cpe(gui_page, root_ssh, cpe_ips, link_test_conf
 
 
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.order(19)
 @pytest.mark.GUI_130
 @pytest.mark.Monitor
 async def test_gui_130_link_test_results(gui_page, root_ssh, cpe_ips, link_test_config, bsu_ip, device_creds):
