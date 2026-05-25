@@ -18,6 +18,14 @@ NETWORK_RELOAD_CMD = "/etc/init.d/network reload"
 from utils.net_utils import format_http_host
 from utils.recovery_manager import RecoveryManager
 from utils.regression_report import HealthCheckResult, get_regression_collector
+from utils.regression_validation import (
+    capture_device_snapshot,
+    regression_timeouts,
+    capture_soft_reboot_snapshot,
+    validate_reboot_iteration,
+    validate_soft_reboot_iteration,
+    validate_soft_reset_iteration,
+)
 
 
 def _log(case_id: str, message: str) -> None:
@@ -242,6 +250,16 @@ def _format_failure_summary(case_id: str, phase: str, checks: list[HealthCheckRe
     return "\n".join(lines)
 
 
+def _fail_case_if_iterations_failed(case_id: str, failed_phases: list[str]) -> None:
+    if not failed_phases:
+        return
+    pytest.fail(
+        f"{case_id}: {len(failed_phases)} iteration(s) failed — "
+        + ", ".join(failed_phases)
+        + ". See Regression_Report.html for per-iteration validation logs."
+    )
+
+
 async def verify_iteration_health(
     *,
     case_id: str,
@@ -251,17 +269,17 @@ async def verify_iteration_health(
     device_creds: dict[str, str],
     profile_bundle,
     gui_browser,
-) -> None:
+    validation: dict | None = None,
+    stop_on_fail: bool = False,
+) -> bool:
     """
-    After each regression iteration, verify:
-      - BTS -> CPE ping
-      - CPE -> BTS ping
-      - BTS web (HTTPS + login)
-      - CPE web (HTTPS + login)
-  Pass/fail for the iteration requires every check to pass.
+    After each regression iteration, verify BTS↔CPE ping and web login.
+    Records results always; returns False on failure unless stop_on_fail triggers pytest.fail.
     """
     if not cpe_hosts:
-        pytest.fail(f"{case_id}: no CPE targets configured for health validation.")
+        if stop_on_fail:
+            pytest.fail(f"{case_id}: no CPE targets configured for health validation.")
+        return False
 
     count = _ping_count(profile_bundle)
     web_timeout = _web_timeout_s(profile_bundle)
@@ -323,11 +341,35 @@ async def verify_iteration_health(
         await _close_ssh(bts_ssh)
 
     collector = get_regression_collector()
-    collector.record_iteration(case_id, phase, checks)
+    collector.record_iteration(case_id, phase, checks, validation=validation)
 
     failures = [check for check in checks if not check.passed]
-    if failures:
-        pytest.fail(_format_failure_summary(case_id, phase, checks))
+    val_partial = bool(validation) and validation.get("partial")
+    val_failed = bool(validation) and not validation.get("passed", True) and not val_partial
+    connectivity_ok = not failures
+    passed = connectivity_ok and not val_failed
+    if val_partial and connectivity_ok:
+        summary = (validation or {}).get("summary", "")
+        _log(
+            case_id,
+            f"{phase} recorded as PARTIAL (link validation)"
+            + (f" — {summary}" if summary else "")
+            + " — continuing remaining iterations.",
+        )
+        return True
+    if not passed:
+        summary = (validation or {}).get("summary", "")
+        _log(
+            case_id,
+            f"{phase} recorded as FAIL"
+            + (f" — {summary}" if summary else "")
+            + " — continuing remaining iterations.",
+        )
+        print(_format_failure_summary(case_id, phase, checks))
+        if stop_on_fail:
+            extra = f"\n  Validation: {summary}" if summary else ""
+            pytest.fail(_format_failure_summary(case_id, phase, checks) + extra)
+    return passed
 
 
 async def _navigate_to_flashops(gui_page) -> None:
@@ -417,10 +459,10 @@ async def run_soft_reboot_regression(
     iterations: int,
     case_id: str = "REG_01",
 ) -> None:
-    _log(case_id, f"Starting {iterations} soft reboot cycle(s).")
+    _log(case_id, f"Starting {iterations} soft reboot iteration(s).")
     reg = _regression_cfg(profile_bundle)
     use_gui_reboot = bool(reg.get("reboot_via_gui", False))
-    wait_s = _reboot_wait_s(profile_bundle)
+    timeouts = regression_timeouts(profile_bundle)
     await _ensure_ssh_open(root_ssh)
 
     await verify_iteration_health(
@@ -431,36 +473,72 @@ async def run_soft_reboot_regression(
         device_creds=device_creds,
         profile_bundle=profile_bundle,
         gui_browser=gui_browser,
+        stop_on_fail=True,
     )
 
-    for cycle in range(1, iterations + 1):
-        _log(case_id, f"Cycle {cycle}/{iterations}: triggering soft reboot.")
-        await login_if_needed(gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.MEDIUM_WAIT_MS, skip_recovery=True)
-        await _trigger_soft_reboot(gui_page, root_ssh, use_gui=use_gui_reboot)
-        _log(case_id, f"Cycle {cycle}/{iterations}: waiting {wait_s}s for boot.")
-        await asyncio.sleep(wait_s)
+    failed_phases: list[str] = []
+    for iteration in range(1, iterations + 1):
+        phase = f"iteration-{iteration}"
+        _log(case_id, f"Iteration {iteration}/{iterations}: capture state, trigger soft reboot.")
         try:
-            await root_ssh.close()
-        except Exception:
-            pass
-        await recovery_manager.ensure_link_or_recover(
-            gui_page=gui_page,
-            bsu_ip=bsu_ip,
-            device_creds=device_creds,
-            root_ssh=root_ssh,
-        )
-        await _ensure_ssh_open(root_ssh)
-        await login_if_needed(gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.LONG_WAIT_MS, skip_recovery=True)
-        await verify_iteration_health(
-            case_id=case_id,
-            phase=f"cycle-{cycle}",
-            bts_host=bsu_ip,
-            cpe_hosts=cpe_ips,
-            device_creds=device_creds,
-            profile_bundle=profile_bundle,
-            gui_browser=gui_browser,
-        )
-    _log(case_id, "All soft reboot cycles completed.")
+            await _ensure_ssh_open(root_ssh)
+            snapshot_before = await capture_soft_reboot_snapshot(
+                root_ssh, case_id=case_id, label=f"Before {phase}"
+            )
+            await login_if_needed(
+                gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.MEDIUM_WAIT_MS, skip_recovery=True
+            )
+            await _trigger_soft_reboot(gui_page, root_ssh, use_gui=use_gui_reboot)
+            try:
+                await root_ssh.close()
+            except Exception:
+                pass
+
+            validation = await validate_soft_reboot_iteration(
+                bts_host=bsu_ip,
+                cpe_hosts=cpe_ips,
+                password=device_creds["pass"],
+                ping_timeout_s=timeouts["soft_reboot_ping_s"],
+                snapshot_before=snapshot_before,
+            )
+
+            await recovery_manager.ensure_link_or_recover(
+                gui_page=gui_page,
+                bsu_ip=bsu_ip,
+                device_creds=device_creds,
+                root_ssh=root_ssh,
+            )
+            await _ensure_ssh_open(root_ssh)
+            await login_if_needed(
+                gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.LONG_WAIT_MS, skip_recovery=True
+            )
+            if not await verify_iteration_health(
+                case_id=case_id,
+                phase=phase,
+                bts_host=bsu_ip,
+                cpe_hosts=cpe_ips,
+                device_creds=device_creds,
+                profile_bundle=profile_bundle,
+                gui_browser=gui_browser,
+                validation=validation.to_dict(),
+            ):
+                failed_phases.append(phase)
+        except Exception as exc:
+            _log(case_id, f"{phase} error: {exc}")
+            get_regression_collector().record_iteration(
+                case_id,
+                phase,
+                [],
+                validation={
+                    "passed": False,
+                    "summary": str(exc),
+                    "events": [{"time": "", "step": "Exception", "detail": str(exc)}],
+                },
+            )
+            failed_phases.append(phase)
+
+    _log(case_id, f"Soft reboot finished ({iterations} iteration(s), {len(failed_phases)} failed).")
+    _fail_case_if_iterations_failed(case_id, failed_phases)
 
 
 async def run_soft_reset_regression(
@@ -477,8 +555,9 @@ async def run_soft_reset_regression(
     case_id: str = "REG_02",
 ) -> None:
     """N-cycle network interface soft reset (BTS + CPE) via /etc/init.d/network reload."""
-    _log(case_id, f"Starting {iterations} network soft-reset cycle(s) ({NETWORK_RELOAD_CMD}).")
-    settle_s = _network_reload_wait_s(profile_bundle)
+    _log(case_id, f"Starting {iterations} network soft-reset iteration(s) ({NETWORK_RELOAD_CMD}).")
+    timeouts = regression_timeouts(profile_bundle)
+    radio_idx = timeouts["radio_idx"]
     await _ensure_ssh_open(root_ssh)
 
     await verify_iteration_health(
@@ -489,58 +568,90 @@ async def run_soft_reset_regression(
         device_creds=device_creds,
         profile_bundle=profile_bundle,
         gui_browser=gui_browser,
+        stop_on_fail=True,
     )
 
-    for cycle in range(1, iterations + 1):
-        _log(case_id, f"Cycle {cycle}/{iterations}: network reload on BTS and CPE.")
-        await _ensure_ssh_open(root_ssh)
+    failed_phases: list[str] = []
+    for iteration in range(1, iterations + 1):
+        phase = f"iteration-{iteration}"
+        _log(case_id, f"Iteration {iteration}/{iterations}: network reload on BTS and CPE.")
         try:
-            await _trigger_network_soft_reset(
-                bts_ssh=root_ssh,
+            await _ensure_ssh_open(root_ssh)
+            snapshot_before = await capture_device_snapshot(
+                root_ssh, radio_idx=radio_idx, case_id=case_id, label=f"Before {phase}"
+            )
+            reload_started = time.monotonic()
+            try:
+                await _trigger_network_soft_reset(
+                    bts_ssh=root_ssh,
+                    cpe_hosts=cpe_ips,
+                    device_creds=device_creds,
+                    case_id=case_id,
+                )
+            except Exception as exc:
+                _log(case_id, f"Network reload command error ({exc}); reopening BTS SSH.")
+                try:
+                    await root_ssh.close()
+                except Exception:
+                    pass
+                await root_ssh.open()
+
+            try:
+                await root_ssh.send_command("echo ok")
+            except Exception:
+                _log(case_id, "BTS SSH stale after network reload; reopening session.")
+                try:
+                    await root_ssh.close()
+                except Exception:
+                    pass
+                await root_ssh.open()
+
+            validation = await validate_soft_reset_iteration(
+                ssh=root_ssh,
+                radio_idx=radio_idx,
+                case_id=case_id,
+                snapshot_before=snapshot_before,
+                reload_started_at=reload_started,
+                max_link_restore_s=timeouts["soft_reset_link_uptime_s"],
+            )
+
+            await recovery_manager.ensure_link_or_recover(
+                gui_page=gui_page,
+                bsu_ip=bsu_ip,
+                device_creds=device_creds,
+                root_ssh=root_ssh,
+            )
+            await _ensure_ssh_open(root_ssh)
+            await login_if_needed(
+                gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.LONG_WAIT_MS, skip_recovery=True
+            )
+            if not await verify_iteration_health(
+                case_id=case_id,
+                phase=phase,
+                bts_host=bsu_ip,
                 cpe_hosts=cpe_ips,
                 device_creds=device_creds,
-                case_id=case_id,
-            )
+                profile_bundle=profile_bundle,
+                gui_browser=gui_browser,
+                validation=validation.to_dict(),
+            ):
+                failed_phases.append(phase)
         except Exception as exc:
-            _log(case_id, f"Network reload command error ({exc}); reopening BTS SSH.")
-            try:
-                await root_ssh.close()
-            except Exception:
-                pass
-            await root_ssh.open()
-            raise
+            _log(case_id, f"{phase} error: {exc}")
+            get_regression_collector().record_iteration(
+                case_id,
+                phase,
+                [],
+                validation={
+                    "passed": False,
+                    "summary": str(exc),
+                    "events": [{"time": "", "step": "Exception", "detail": str(exc)}],
+                },
+            )
+            failed_phases.append(phase)
 
-        _log(case_id, f"Cycle {cycle}/{iterations}: waiting {settle_s}s for interfaces to settle.")
-        await asyncio.sleep(settle_s)
-
-        try:
-            await root_ssh.send_command("echo ok")
-        except Exception:
-            _log(case_id, "BTS SSH stale after network reload; reopening session.")
-            try:
-                await root_ssh.close()
-            except Exception:
-                pass
-            await root_ssh.open()
-
-        await recovery_manager.ensure_link_or_recover(
-            gui_page=gui_page,
-            bsu_ip=bsu_ip,
-            device_creds=device_creds,
-            root_ssh=root_ssh,
-        )
-        await _ensure_ssh_open(root_ssh)
-        await login_if_needed(gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.LONG_WAIT_MS, skip_recovery=True)
-        await verify_iteration_health(
-            case_id=case_id,
-            phase=f"cycle-{cycle}",
-            bts_host=bsu_ip,
-            cpe_hosts=cpe_ips,
-            device_creds=device_creds,
-            profile_bundle=profile_bundle,
-            gui_browser=gui_browser,
-        )
-    _log(case_id, "All network soft-reset cycles completed.")
+    _log(case_id, f"Network soft-reset finished ({iterations} iteration(s), {len(failed_phases)} failed).")
+    _fail_case_if_iterations_failed(case_id, failed_phases)
 
 
 async def run_firmware_upgrade_regression(
@@ -561,8 +672,9 @@ async def run_firmware_upgrade_regression(
     if not image_path.is_file():
         pytest.fail(f"{case_id}: firmware image not found: {image_path}")
 
-    _log(case_id, f"Starting {iterations} firmware upgrade cycle(s) using {image_path}.")
-    wait_s = _reboot_wait_s(profile_bundle)
+    _log(case_id, f"Starting {iterations} firmware upgrade iteration(s) using {image_path}.")
+    timeouts = regression_timeouts(profile_bundle)
+    radio_idx = timeouts["radio_idx"]
 
     await verify_iteration_health(
         case_id=case_id,
@@ -572,51 +684,96 @@ async def run_firmware_upgrade_regression(
         device_creds=device_creds,
         profile_bundle=profile_bundle,
         gui_browser=gui_browser,
+        stop_on_fail=True,
     )
 
-    for cycle in range(1, iterations + 1):
-        _log(case_id, f"Cycle {cycle}/{iterations}: uploading firmware and flashing.")
-        await login_if_needed(gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.MEDIUM_WAIT_MS, skip_recovery=True)
-        await _navigate_to_flashops(gui_page)
-        await _open_upgrade_tab(gui_page)
-
-        file_input = gui_page.locator("input[type='file']").first
-        await file_input.wait_for(state="visible", timeout=15000)
-        await file_input.set_input_files(str(image_path))
-
-        async def _accept_dialog(dialog):
-            await dialog.accept()
-
-        gui_page.once("dialog", _accept_dialog)
-        flash_btn = gui_page.locator(
-            "input[value*='Flash' i]:visible, "
-            "input[value*='Upgrade' i]:visible, "
-            "button:has-text('Flash'):visible, "
-            "button:has-text('Upgrade'):visible"
-        ).first
-        await flash_btn.wait_for(state="visible", timeout=15000)
-        await flash_btn.click()
-
-        _log(case_id, f"Cycle {cycle}/{iterations}: waiting {wait_s}s for upgrade reboot.")
-        await asyncio.sleep(wait_s)
+    failed_phases: list[str] = []
+    for iteration in range(1, iterations + 1):
+        phase = f"iteration-{iteration}"
+        _log(case_id, f"Iteration {iteration}/{iterations}: uploading firmware and flashing.")
         try:
-            await root_ssh.close()
-        except Exception:
-            pass
-        await recovery_manager.ensure_link_or_recover(
-            gui_page=gui_page,
-            bsu_ip=bsu_ip,
-            device_creds=device_creds,
-            root_ssh=root_ssh,
-        )
-        await login_if_needed(gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.LONG_WAIT_MS, skip_recovery=True)
-        await verify_iteration_health(
-            case_id=case_id,
-            phase=f"cycle-{cycle}",
-            bts_host=bsu_ip,
-            cpe_hosts=cpe_ips,
-            device_creds=device_creds,
-            profile_bundle=profile_bundle,
-            gui_browser=gui_browser,
-        )
-    _log(case_id, "All firmware upgrade cycles completed.")
+            await _ensure_ssh_open(root_ssh)
+            snapshot_before = await capture_device_snapshot(
+                root_ssh, radio_idx=radio_idx, case_id=case_id, label=f"Before {phase}"
+            )
+            await login_if_needed(
+                gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.MEDIUM_WAIT_MS, skip_recovery=True
+            )
+            await _navigate_to_flashops(gui_page)
+            await _open_upgrade_tab(gui_page)
+
+            file_input = gui_page.locator("input[type='file']").first
+            await file_input.wait_for(state="visible", timeout=15000)
+            await file_input.set_input_files(str(image_path))
+
+            async def _accept_dialog(dialog):
+                await dialog.accept()
+
+            gui_page.once("dialog", _accept_dialog)
+            flash_btn = gui_page.locator(
+                "input[value*='Flash' i]:visible, "
+                "input[value*='Upgrade' i]:visible, "
+                "button:has-text('Flash'):visible, "
+                "button:has-text('Upgrade'):visible"
+            ).first
+            await flash_btn.wait_for(state="visible", timeout=15000)
+            await flash_btn.click()
+
+            try:
+                await root_ssh.close()
+            except Exception:
+                pass
+
+            validation = await validate_reboot_iteration(
+                ssh=root_ssh,
+                bts_host=bsu_ip,
+                cpe_hosts=cpe_ips,
+                password=device_creds["pass"],
+                profile_bundle=profile_bundle,
+                case_id=case_id,
+                radio_idx=radio_idx,
+                ping_timeout_s=timeouts["firmware_ping_s"],
+                snapshot_before=snapshot_before,
+            )
+            if "upgrade" not in (validation.device_log_excerpt + validation.system_log_excerpt).lower():
+                validation.add_event(
+                    "Firmware log",
+                    "No explicit upgrade keyword in device/system logs (uptime + reboot markers still checked)",
+                )
+
+            await recovery_manager.ensure_link_or_recover(
+                gui_page=gui_page,
+                bsu_ip=bsu_ip,
+                device_creds=device_creds,
+                root_ssh=root_ssh,
+            )
+            await login_if_needed(
+                gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.LONG_WAIT_MS, skip_recovery=True
+            )
+            if not await verify_iteration_health(
+                case_id=case_id,
+                phase=phase,
+                bts_host=bsu_ip,
+                cpe_hosts=cpe_ips,
+                device_creds=device_creds,
+                profile_bundle=profile_bundle,
+                gui_browser=gui_browser,
+                validation=validation.to_dict(),
+            ):
+                failed_phases.append(phase)
+        except Exception as exc:
+            _log(case_id, f"{phase} error: {exc}")
+            get_regression_collector().record_iteration(
+                case_id,
+                phase,
+                [],
+                validation={
+                    "passed": False,
+                    "summary": str(exc),
+                    "events": [{"time": "", "step": "Exception", "detail": str(exc)}],
+                },
+            )
+            failed_phases.append(phase)
+
+    _log(case_id, f"Firmware upgrade finished ({iterations} iteration(s), {len(failed_phases)} failed).")
+    _fail_case_if_iterations_failed(case_id, failed_phases)

@@ -32,17 +32,16 @@ pipeline {
         booleanParam(
             name: 'RUN_FIRMWARE_UPGRADE',
             defaultValue: false,
-            description: 'REG_03 — Firmware upgrade regression (requires firmware image path)'
+            description: 'REG_03 — Firmware upgrade regression (upload image below)'
         )
         string(
             name: 'ITERATIONS_FIRMWARE',
             defaultValue: '1',
             description: 'Cycle count when Firmware Upgrade is enabled'
         )
-        string(
+        file(
             name: 'FIRMWARE_IMAGE',
-            defaultValue: '',
-            description: 'Firmware image path on agent (required when Firmware Upgrade is enabled)'
+            description: 'Upload firmware image (.bin) — required when Firmware Upgrade is enabled'
         )
         string(
             name: 'Local IPv6 Address',
@@ -69,7 +68,7 @@ pipeline {
                         error('Select at least one regression test (Soft Reboot, Soft Reset, or Firmware Upgrade).')
                     }
                     if (params.RUN_FIRMWARE_UPGRADE && !(params.FIRMWARE_IMAGE ?: '').trim()) {
-                        error('FIRMWARE_IMAGE is required when Firmware Upgrade is enabled.')
+                        error('Upload a firmware image when Firmware Upgrade is enabled.')
                     }
 
                     def filterParts = []
@@ -90,13 +89,24 @@ pipeline {
                     env.REGRESSION_SELECTED_SUMMARY = selected.join(', ')
                     env.REGRESSION_K_FILTER = filterParts.join(' or ')
                     env.REGRESSION_ITER_ARGS = iterArgs.join(' ')
+                    env.FIRMWARE_IMAGE_ARG = ''
+
+                    if (params.RUN_FIRMWARE_UPGRADE) {
+                        def uploadedName = params.FIRMWARE_IMAGE.trim()
+                        def uploadedPath = "${env.WORKSPACE}/${uploadedName}"
+                        sh """
+                            mkdir -p uploads
+                            cp \"${uploadedPath}\" uploads/firmware_upload.bin
+                        """
+                        env.FIRMWARE_IMAGE_ARG = '--firmware-image uploads/firmware_upload.bin'
+                    }
 
                     echo '----------------------------------------'
                     echo 'UBR Stability Regression (pytest)'
                     echo "--- TARGET STAND: ${TARGET_STAND}"
                     echo "--- TESTS:        ${env.REGRESSION_SELECTED_SUMMARY}"
                     echo "Local IPv6:     ${params['Local IPv6 Address'] ?: '(profile default)'}"
-                    echo "Firmware image: ${params.FIRMWARE_IMAGE ?: '(not used)'}"
+                    echo "Firmware:       ${params.RUN_FIRMWARE_UPGRADE ? 'uploaded image -> uploads/firmware_upload.bin' : '(not used)'}"
                     echo 'Report:         single merged reports/Regression_Report.html'
                     echo '----------------------------------------'
                 }
@@ -119,9 +129,6 @@ pipeline {
                 script {
                     def localIP = (params['Local IPv6 Address'] ?: '').trim()
                     def ipv6Arg = localIP ? "--local-ipv6 \"${localIP}\"" : ''
-                    def fwArg = (params.FIRMWARE_IMAGE ?: '').trim()
-                        ? "--firmware-image \"${params.FIRMWARE_IMAGE.trim()}\""
-                        : ''
 
                     sh '''
                         rm -f reports/regression_collector_state.json \
@@ -140,7 +147,7 @@ pipeline {
                             --recovery-profile link_formation \
                             ${ipv6Arg} \
                             ${env.REGRESSION_ITER_ARGS} \
-                            ${fwArg}
+                            ${env.FIRMWARE_IMAGE_ARG}
                         """
                     }
                 }
@@ -185,15 +192,15 @@ pipeline {
                 def detailsHtml = """\
                     <p><strong>Tests run:</strong> ${env.REGRESSION_SELECTED_SUMMARY ?: '—'}</p>
                     <p><strong>Target IPv6:</strong> ${params['Local IPv6 Address'] ?: '(profile default)'}</p>
-                    <p><strong>Firmware image:</strong> ${params.FIRMWARE_IMAGE ?: '(not used)'}</p>
-                    <p><strong>Report:</strong> one merged HTML (all selected tests and cycles)</p>
+                    <p><strong>Firmware:</strong> ${params.RUN_FIRMWARE_UPGRADE ? 'uploaded in build' : '(not used)'}</p>
+                    <p><strong>Report:</strong> one merged HTML (per test: Total Executed / Passed / Failed)</p>
                 """
 
                 try {
                     senao.sendSenaoPipelineEmail([
                         subjectPrefix: 'UBR Stability Regression',
                         reportTitle: 'UBR Stability Regression Report',
-                        footerNote: 'Merged BTS/CPE ping and web checks per cycle',
+                        footerNote: 'Merged regression results per test type',
                         reportFile: hasReport ? destFile : '',
                         detailsHtml: detailsHtml
                     ])

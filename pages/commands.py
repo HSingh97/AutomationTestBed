@@ -57,6 +57,22 @@ class RootCommands:
     GET_ARP_TABLE = "arp"
     GET_CONFIG_LOGS = "sed -n '1,200p' /etc/config_logs 2>/dev/null"
     GET_DEVICE_LOGS = "sed -n '1,200p' /etc/device_logs 2>/dev/null"
+    GET_DEVICE_LOGS_TAIL = "tail -n 150 /etc/device_logs 2>/dev/null"
+    GET_DEVICE_LOGS_REBOOT_GREP = (
+        "grep -iE 'reboot|restart|reset|power|boot|watchdog' /etc/device_logs 2>/dev/null | tail -n 60"
+    )
+    GET_LOGREAD_REBOOT_GREP = (
+        "logread 2>/dev/null | grep -iE "
+        "'reboot|restart|kernel|procd|init|jffs2|watchdog|sysinit|software reset|umount' | tail -n 60"
+    )
+    GET_LOGREAD_WIRELESS_GREP = (
+        "logread 2>/dev/null | grep -iE "
+        "'wifi|wireless|ath|link|network|reload|partner|disconnect|connect|kwn' | tail -n 60"
+    )
+    GET_DEVICE_LOGS_WIRELESS_GREP = (
+        "grep -iE 'wifi|wireless|ath|link|network|reload|partner|disconnect|connect|kwn' "
+        "/etc/device_logs 2>/dev/null | tail -n 60"
+    )
     GET_TEMPERATURE_LOGS = "sed -n '1,200p' /tmp/temp-log 2>/dev/null"
     GET_SYSTEM_LOGS = "logread"
 
@@ -130,6 +146,10 @@ class RootCommands:
     @staticmethod
     def get_remote_partners(radio_idx):
         return f"cat /sys/class/kwn/wifi{radio_idx}/statistics/links"
+
+    @staticmethod
+    def get_wifi_events_log(radio_idx: int) -> str:
+        return f"cat /tmp/kwn-wifi{radio_idx}-events.log 2>/dev/null"
 
     @staticmethod
     def get_encryption_key(radio_idx):

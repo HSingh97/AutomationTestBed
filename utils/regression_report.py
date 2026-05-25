@@ -22,17 +22,17 @@ SENAO_LOGO_URL = (
 CASE_CATALOG: dict[str, dict[str, str]] = {
     "REG_01": {
         "title": "Soft Reboot",
-        "description": "BTS reboot; after each cycle verify BTS↔CPE ping and web login",
+        "description": "BTS reboot; ping within 3 min; Device Init Success in /etc/device_logs",
         "badge_class": "badge-reboot",
     },
     "REG_02": {
         "title": "Network Soft Reset",
-        "description": "CPE then BTS /etc/init.d/network reload; same health checks",
+        "description": "Network reload; link terminate/re-establish from WiFi events log (max 90s)",
         "badge_class": "badge-reset",
     },
     "REG_03": {
         "title": "Firmware Upgrade",
-        "description": "Flash firmware image; verify link after upgrade reboot",
+        "description": "Firmware flash; reboot confirmed in logs; ping within 7 minutes",
         "badge_class": "badge-firmware",
     },
 }
@@ -55,10 +55,25 @@ class IterationRecord:
     case_id: str
     phase: str
     checks: list[HealthCheckResult] = field(default_factory=list)
+    validation: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def status(self) -> str:
+        """pass | partial | fail — partial = connectivity OK, link log validation not OK."""
+        checks_ok = bool(self.checks) and all(item.passed for item in self.checks)
+        if not checks_ok:
+            return "fail"
+        val = self.validation
+        if val:
+            if val.get("partial"):
+                return "partial"
+            if not val.get("passed", True):
+                return "fail"
+        return "pass"
 
     @property
     def passed(self) -> bool:
-        return bool(self.checks) and all(item.passed for item in self.checks)
+        return self.status == "pass"
 
 
 class RegressionReportCollector:
@@ -83,8 +98,20 @@ class RegressionReportCollector:
         cases.append({"case_id": case_id, "iterations": iterations})
         self._persist_state()
 
-    def record_iteration(self, case_id: str, phase: str, checks: list[HealthCheckResult]) -> IterationRecord:
-        record = IterationRecord(case_id=case_id, phase=phase, checks=list(checks))
+    def record_iteration(
+        self,
+        case_id: str,
+        phase: str,
+        checks: list[HealthCheckResult],
+        *,
+        validation: dict[str, Any] | None = None,
+    ) -> IterationRecord:
+        record = IterationRecord(
+            case_id=case_id,
+            phase=phase,
+            checks=list(checks),
+            validation=dict(validation or {}),
+        )
         self.iterations.append(record)
         self._persist_state()
         return record
@@ -114,7 +141,12 @@ class RegressionReportCollector:
         for row in data.get("iterations") or []:
             checks = [HealthCheckResult(**item) for item in row.get("checks") or []]
             collector.iterations.append(
-                IterationRecord(case_id=row["case_id"], phase=row["phase"], checks=checks)
+                IterationRecord(
+                    case_id=row["case_id"],
+                    phase=row["phase"],
+                    checks=checks,
+                    validation=dict(row.get("validation") or {}),
+                )
             )
         return collector
 
@@ -192,6 +224,7 @@ def _collector_to_dict(collector: RegressionReportCollector) -> dict[str, Any]:
                 "case_id": record.case_id,
                 "phase": record.phase,
                 "checks": [asdict(check) for check in record.checks],
+                "validation": dict(record.validation or {}),
             }
             for record in collector.iterations
         ],
@@ -224,6 +257,7 @@ def _save_collector_state(path: Path, collector: RegressionReportCollector) -> N
             case_id=row["case_id"],
             phase=row["phase"],
             checks=[HealthCheckResult(**item) for item in row.get("checks") or []],
+            validation=dict(row.get("validation") or {}),
         )
         for row in merged_rows
     ]
@@ -247,6 +281,8 @@ def init_regression_collector_for_session(
     """One shared collector for parallel/sequential runs writing the same report."""
     global _COLLECTOR
     path = Path(state_path)
+    if not append and path.is_file():
+        path.unlink()
     if append and path.is_file():
         _COLLECTOR = RegressionReportCollector.load_from_state_file(path)
     else:
@@ -266,17 +302,22 @@ def _case_info(case_id: str) -> dict[str, str]:
     )
 
 
+def _phase_number(phase: str) -> int | None:
+    match = re.search(r"(?:cycle|iteration)-(\d+)", phase, flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
 def _format_phase_label(phase: str) -> str:
-    match = re.search(r"cycle-(\d+)", phase, flags=re.IGNORECASE)
-    if match:
-        return f"Cycle {match.group(1)}"
+    number = _phase_number(phase)
+    if number is not None:
+        return f"Iteration {number}"
     return phase.replace("-", " ").title()
 
 
 def _iteration_sort_key(record: IterationRecord) -> tuple[str, int, str]:
-    match = re.search(r"cycle-(\d+)", record.phase, flags=re.IGNORECASE)
-    cycle_num = int(match.group(1)) if match else 9999
-    return (record.case_id, cycle_num, record.phase)
+    number = _phase_number(record.phase)
+    iter_num = number if number is not None else 9999
+    return (record.case_id, iter_num, record.phase)
 
 
 def _checkmark(ok: bool | None) -> str:
@@ -291,18 +332,6 @@ def _all_pass(values: list[bool]) -> bool | None:
     if not values:
         return None
     return all(values)
-
-
-def _pytest_stat_chips(total, passed, failed) -> str:
-    if total is None:
-        return ""
-    failed_count = failed if failed is not None else 0
-    passed_count = passed if passed is not None else 0
-    return f"""
-      <div class="chip"><strong>{total}</strong><span>Pytest cases</span></div>
-      <div class="chip pass"><strong>{passed_count}</strong><span>Cases passed</span></div>
-      <div class="chip fail"><strong>{failed_count}</strong><span>Cases failed</span></div>
-    """
 
 
 def _iteration_matrix(record: IterationRecord) -> dict[str, bool | None]:
@@ -368,19 +397,6 @@ def _render_testbed_summary_table(summary: dict[str, Any]) -> str:
     """
 
 
-def _compact_pass_summary(matrix: dict[str, bool | None]) -> str:
-    labels = []
-    if matrix.get("ping_bts"):
-        labels.append("BTS→CPE ping")
-    if matrix.get("ping_cpe"):
-        labels.append("CPE→BTS ping")
-    if matrix.get("web_bts"):
-        labels.append("BTS web")
-    if matrix.get("web_cpe"):
-        labels.append("CPE web")
-    return " · ".join(labels) if labels else "All checks passed"
-
-
 def _render_failure_notes(record: IterationRecord) -> str:
     failures = [c for c in record.checks if not c.passed]
     if not failures:
@@ -393,86 +409,244 @@ def _render_failure_notes(record: IterationRecord) -> str:
     return f"<ul class='fail-list'>{items}</ul>"
 
 
-def _render_run_types_overview(
-    cases: list[dict[str, Any]], visible_iterations: list[IterationRecord]
-) -> str:
-    """Summary table: which test type (reboot vs reset) and pass/fail per type."""
-    case_ids = [c.get("case_id") for c in cases if c.get("case_id")]
-    if not case_ids:
-        case_ids = sorted({r.case_id for r in visible_iterations})
+def _render_case_summary_cards(case_id: str, subset: list[IterationRecord]) -> str:
+    """GUI-style total / passed / partial / failed for one regression test type."""
+    total = len(subset)
+    passed_n = sum(1 for r in subset if r.status == "pass")
+    partial_n = sum(1 for r in subset if r.status == "partial")
+    failed_n = sum(1 for r in subset if r.status == "fail")
+    partial_card = ""
+    if partial_n:
+        partial_card = f"""
+      <div class="card stat-partial">
+        <h3>{partial_n}</h3><p style="color: var(--partial);">Partial</p>
+      </div>
+      """
+    return f"""
+    <div class="summary-cards{' has-partial' if partial_n else ''}">
+      <div class="card stat-total">
+        <h3>{total}</h3><p>Total Executed</p>
+      </div>
+      <div class="card stat-pass">
+        <h3>{passed_n}</h3><p style="color: var(--pass);">Passed</p>
+      </div>
+      {partial_card}
+      <div class="card stat-fail">
+        <h3>{failed_n}</h3><p style="color: var(--fail);">Failed</p>
+      </div>
+    </div>
+    """
+
+
+def _validation_row(label: str, value: str, *, ok: bool | None = None, warn: bool = False) -> str:
+    if warn:
+        mark = "<span class='val warn'>&#9888;</span>"
+    elif ok is True:
+        mark = "<span class='val pass'>&#10003;</span>"
+    elif ok is False:
+        mark = "<span class='val fail'>&#10007;</span>"
+    else:
+        mark = "<span class='val na'>&mdash;</span>"
+    return f"""
+    <tr>
+      <th>{escape(label)}</th>
+      <td>{mark} {escape(value)}</td>
+    </tr>
+    """
+
+
+def _render_validation_panel(record: IterationRecord) -> str:
+    val = record.validation or {}
+    if not val or not (
+        val.get("summary")
+        or val.get("events")
+        or val.get("log_excerpt")
+        or val.get("device_time_before")
+        or val.get("uptime_before_s") is not None
+    ):
+        return (
+            "<div class='validation-panel validation-missing'>"
+            "<p><em>Log validation was not stored for this iteration "
+            "(re-run regression after updating the testbed collector).</em></p></div>"
+        )
 
     rows = []
-    for case_id in case_ids:
-        info = _case_info(str(case_id))
-        subset = [r for r in visible_iterations if r.case_id == case_id]
-        passed_n = sum(1 for r in subset if r.passed)
-        failed_n = len(subset) - passed_n
-        target = next((c.get("iterations") for c in cases if c.get("case_id") == case_id), len(subset))
-        status = "pass" if subset and failed_n == 0 else ("fail" if failed_n else "na")
+    is_soft_reset_log = bool(val.get("wifi_events_log_path"))
+    is_soft_reboot_log = bool(val.get("device_logs_validation"))
+    is_simplified_log = is_soft_reset_log or is_soft_reboot_log
+    if val.get("summary"):
         rows.append(
-            f"""
-            <tr>
-              <td><span class="test-type-badge {info['badge_class']}">{escape(info['title'])}</span>
-                  <span class="test-id-inline">{escape(case_id)}</span></td>
-              <td>{escape(info['description'])}</td>
-              <td class="num">{escape(str(target))}</td>
-              <td class="num pass-cell">{passed_n}</td>
-              <td class="num fail-cell">{failed_n}</td>
-              <td><span class="status-pill {status}">{'PASS' if status == 'pass' else ('FAIL' if status == 'fail' else '—')}</span></td>
-            </tr>
-            """
+            f"<tr><th>Summary</th><td>{escape(str(val['summary']))}</td></tr>"
         )
-    if not rows:
-        return ""
+    if (val.get("device_time_before") or val.get("device_time_after")) and not is_simplified_log:
+        rows.append(
+            _validation_row(
+                "Device time",
+                f"before {val.get('device_time_before', '—')} → after {val.get('device_time_after', '—')}",
+            )
+        )
+    if (val.get("uptime_before_s") is not None or val.get("uptime_after_s") is not None) and not is_soft_reboot_log:
+        rows.append(
+            _validation_row(
+                "System uptime",
+                f"{val.get('uptime_before_s', '—')}s → {val.get('uptime_after_s', '—')}s",
+                ok=val.get("reboot_confirmed") if val.get("reboot_confirmed") is not None else None,
+            )
+        )
+    if val.get("reboot_confirmed") is not None and is_soft_reboot_log:
+        confirmed = bool(val.get("reboot_confirmed"))
+        rows.append(
+            _validation_row(
+                "Device init confirmed",
+                "Yes" if confirmed else "No",
+                ok=confirmed if confirmed or not val.get("partial") else None,
+                warn=bool(val.get("partial")) and not confirmed,
+            )
+        )
+    elif val.get("reboot_confirmed") is not None and not is_soft_reset_log:
+        rows.append(
+            _validation_row(
+                "Reboot confirmed (device logs + uptime)",
+                "Yes" if val.get("reboot_confirmed") else "No",
+                ok=bool(val.get("reboot_confirmed")),
+            )
+        )
+    if val.get("uptime_stable") is not None:
+        rows.append(
+            _validation_row(
+                "Uptime stable (no reboot)",
+                "Yes" if val.get("uptime_stable") else "No",
+                ok=bool(val.get("uptime_stable")),
+            )
+        )
+    if val.get("ping_recovery_seconds") is not None:
+        limit = val.get("ping_recovery_limit_s")
+        limit_txt = f" (max {limit}s)" if limit else ""
+        ping_ok = (
+            limit is None
+            or float(val["ping_recovery_seconds"]) <= float(limit)
+        )
+        rows.append(
+            _validation_row(
+                "Ping recovery",
+                f"{val['ping_recovery_seconds']}s{limit_txt}",
+                ok=ping_ok if ping_ok or not is_soft_reboot_log else None,
+                warn=bool(val.get("partial")) and not ping_ok,
+            )
+        )
+    if val.get("link_dropped") is not None:
+        dropped = bool(val.get("link_dropped"))
+        rows.append(
+            _validation_row(
+                "Link terminated",
+                "Yes" if dropped else "No",
+                ok=dropped if dropped or not val.get("partial") else None,
+                warn=bool(val.get("partial")) and not dropped,
+            )
+        )
+    if val.get("link_reestablished") is not None:
+        restored = bool(val.get("link_reestablished"))
+        rows.append(
+            _validation_row(
+                "Link re-established",
+                "Yes" if restored else "No",
+                ok=restored if restored or not val.get("partial") else None,
+                warn=bool(val.get("partial")) and not restored,
+            )
+        )
+    if val.get("link_restore_seconds") is not None:
+        max_s = val.get("link_uptime_max_s")
+        restore_ok = max_s is None or float(val["link_restore_seconds"]) <= float(max_s)
+        rows.append(
+            _validation_row(
+                "Link restore time",
+                f"{val['link_restore_seconds']}s"
+                + (f" (max {max_s}s)" if max_s else ""),
+                ok=restore_ok if restore_ok else None,
+                warn=bool(val.get("partial")) and not restore_ok,
+            )
+        )
+    if val.get("device_logs_ok") is not None and not is_simplified_log:
+        rows.append(
+            _validation_row(
+                "Device logs (/etc/device_logs)",
+                "Wireless/network activity found" if val.get("device_logs_ok") else "Not found in tail/grep",
+                ok=bool(val.get("device_logs_ok")),
+            )
+        )
+    if val.get("wireless_logs_ok") is not None and not is_simplified_log:
+        rows.append(
+            _validation_row(
+                "Wireless logread",
+                "Wireless/network activity found" if val.get("wireless_logs_ok") else "Not found",
+                ok=bool(val.get("wireless_logs_ok")),
+            )
+        )
+
+    events = val.get("events") or []
+    timeline = ""
+    if events and not is_simplified_log:
+        items = "".join(
+            f"<li><span class='evt-time'>{escape(e.get('time', ''))}</span> "
+            f"<strong>{escape(e.get('step', ''))}</strong> — {escape(e.get('detail', ''))}</li>"
+            for e in events
+        )
+        timeline = f"<ul class='evt-list'>{items}</ul>"
+
+    log_excerpt = str(val.get("log_excerpt") or "").strip()
+    if is_soft_reset_log:
+        log_label = "WiFi link events"
+    elif is_soft_reboot_log:
+        log_label = "Device logs"
+    else:
+        log_label = "Device log excerpt"
+    log_block = ""
+    if log_excerpt:
+        log_block = f"""
+        <details class="log-details"{' open' if record.status != 'pass' else ''}>
+          <summary>{escape(log_label)}</summary>
+          <pre class="log-pre">{escape(log_excerpt)}</pre>
+        </details>
+        """
+
+    if val.get("partial"):
+        val_pill = "partial"
+        val_label = "PARTIAL"
+    elif bool(val.get("passed", True)):
+        val_pill = "pass"
+        val_label = "PASS"
+    else:
+        val_pill = "fail"
+        val_label = "FAIL"
     return f"""
-    <h3 class="subhead">Regression test types in this report</h3>
-    <table class="data-table run-types">
-      <thead>
-        <tr>
-          <th>Test</th>
-          <th>Description</th>
-          <th>Target cycles</th>
-          <th>Passed</th>
-          <th>Failed</th>
-          <th>Overall</th>
-        </tr>
-      </thead>
-      <tbody>{''.join(rows)}</tbody>
-    </table>
+    <div class="validation-panel">
+      <h4>Log &amp; event validation <span class="mini-pill {val_pill}">
+        {val_label}</span></h4>
+      <table class="validation-table">{''.join(rows)}</table>
+      {timeline}
+      {log_block}
+    </div>
     """
 
 
 def _render_iteration_article(record: IterationRecord) -> str:
-    info = _case_info(record.case_id)
     matrix = _iteration_matrix(record)
-    passed = record.passed
-    status_class = "ok" if passed else "bad"
-    details_attr = "" if passed else " open"
-
-    compact = ""
-    if passed:
-        compact = f"""
-        <p class="pass-summary">
-          <span class="mark pass large">&#10003;</span>
-          <span>All checks passed — {_compact_pass_summary(matrix)}</span>
-        </p>
-        """
-
+    status = record.status
+    status_class = {"pass": "ok", "partial": "warn", "fail": "bad"}.get(status, "bad")
+    status_label = status.upper()
     failures_html = _render_failure_notes(record)
+    validation_html = _render_validation_panel(record)
+    connectivity_open = "" if status == "pass" else " open"
 
     return f"""
-    <article class="iteration {status_class} {info['badge_class']}">
+    <article class="iteration {status_class}">
       <div class="iteration-title">
-        <div class="iteration-head">
-          <span class="test-type-badge {info['badge_class']}">{escape(info['title'])}</span>
-          <span class="test-id-inline">{escape(record.case_id)}</span>
-        </div>
         <span class="phase">{escape(_format_phase_label(record.phase))}</span>
-        <span class="status-pill {'pass' if passed else 'fail'}">{'PASS' if passed else 'FAIL'}</span>
+        <span class="status-pill {status}">{status_label}</span>
       </div>
-      {compact}
-      <details class="check-details"{details_attr}>
-        <summary>{'Show ping &amp; web details' if passed else 'Ping &amp; web details (failures)'}</summary>
+      {validation_html}
+      <details class="check-details"{connectivity_open}>
+        <summary>Connectivity (ping &amp; web)</summary>
         {_render_check_table(matrix)}
         {failures_html}
       </details>
@@ -484,22 +658,35 @@ def _render_iteration_sections(visible_iterations: list[IterationRecord]) -> str
     sorted_rows = sorted(visible_iterations, key=_iteration_sort_key)
     blocks: list[str] = []
     last_case: str | None = None
+    case_subset: list[IterationRecord] = []
+
+    def flush_case(case_id: str, rows: list[IterationRecord]) -> None:
+        if not case_id or not rows:
+            return
+        info = _case_info(case_id)
+        cycle_blocks = "".join(_render_iteration_article(r) for r in rows)
+        blocks.append(
+            f"""
+            <section class="regression-type-block">
+              <div class="type-header">
+                <h3 class="test-section-title">
+                  <span class="test-type-badge {info['badge_class']}">{escape(info['title'])}</span>
+                  <span class="test-id-inline">{escape(case_id)}</span>
+                </h3>
+              </div>
+              {_render_case_summary_cards(case_id, rows)}
+              <div class="iterations-list">{cycle_blocks}</div>
+            </section>
+            """
+        )
+
     for record in sorted_rows:
         if record.case_id != last_case:
-            info = _case_info(record.case_id)
-            blocks.append(
-                f"""
-                <div class="test-section">
-                  <h3 class="test-section-title">
-                    <span class="test-type-badge {info['badge_class']}">{escape(info['title'])}</span>
-                    <span class="test-id-inline">{escape(record.case_id)}</span>
-                  </h3>
-                  <p class="test-section-desc">{escape(info['description'])}</p>
-                </div>
-                """
-            )
+            flush_case(last_case or "", case_subset)
+            case_subset = []
             last_case = record.case_id
-        blocks.append(_render_iteration_article(record))
+        case_subset.append(record)
+    flush_case(last_case or "", case_subset)
     return "".join(blocks)
 
 
@@ -530,7 +717,7 @@ def _render_check_table(matrix: dict[str, bool | None]) -> str:
     """
 
 
-def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str, int] | None) -> str:
+def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str, int] | None = None) -> str:
     meta = collector.meta
     executed_at = escape(str(meta.get("executed_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     cases = meta.get("cases") or []
@@ -549,18 +736,16 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
     testbed_summary = meta.get("testbed_summary", {})
     testbed_table = _render_testbed_summary_table(testbed_summary)
 
-    pytest_total = pytest_passed = pytest_failed = None
-    if pytest_stats:
-        pytest_total = pytest_stats.get("total")
-        pytest_passed = pytest_stats.get("passed")
-        pytest_failed = pytest_stats.get("failed")
-
-    visible_iterations = [it for it in collector.iterations if it.phase.lower() != "baseline"]
-    total_iters = len(visible_iterations)
-    passed_iters = sum(1 for it in visible_iterations if it.passed)
-    failed_iters = total_iters - passed_iters
-
-    run_types_table = _render_run_types_overview(cases, visible_iterations)
+    run_case_ids = {
+        str(c.get("case_id"))
+        for c in (meta.get("cases") or [])
+        if c.get("case_id")
+    }
+    visible_iterations = [
+        it
+        for it in collector.iterations
+        if it.phase.lower() != "baseline" and (not run_case_ids or it.case_id in run_case_ids)
+    ]
     iteration_body = _render_iteration_sections(visible_iterations)
     if not iteration_body:
         iteration_body = (
@@ -578,7 +763,8 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     :root {{
       --bg: #eef2f7; --card: #ffffff; --text: #334155; --title: #0f172a;
-      --border: #cbd5e1; --pass: #16a34a; --fail: #dc2626; --head: #1e3a8a;
+      --border: #cbd5e1; --pass: #16a34a; --fail: #dc2626; --partial: #d97706;
+      --head: #1e3a8a;
     }}
     * {{ box-sizing: border-box; }}
     html {{ width: 100%; }}
@@ -638,28 +824,90 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
     table.run-types th, table.run-types td {{ text-align: left; }}
     table.run-types .num {{ text-align: center; }}
     .ip-cell {{ white-space: nowrap; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px; }}
-    .summary {{
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 14px; margin-bottom: 18px; width: 100%;
-    }}
-    .chip {{
-      background: var(--card); border: 1px solid var(--border); border-radius: 10px;
-      padding: 14px 18px; text-align: center; width: 100%;
-    }}
-    .chip strong {{ display: block; font-size: 22px; color: var(--title); }}
-    .chip span {{ font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 600; }}
-    .chip.pass strong {{ color: var(--pass); }}
-    .chip.fail strong {{ color: var(--fail); }}
     .panel {{
       background: var(--card); border: 1px solid var(--border); border-radius: 14px;
       padding: 20px 22px;
     }}
     .panel > h2 {{ margin: 0 0 16px; font-size: 17px; color: var(--title); }}
-    .subhead {{ margin: 18px 0 10px; font-size: 15px; color: var(--title); }}
-    table.run-types {{ margin-bottom: 8px; font-size: 13px; }}
-    table.run-types .num {{ width: 8%; }}
-    .pass-cell {{ color: var(--pass); font-weight: 600; }}
-    .fail-cell {{ color: var(--fail); font-weight: 600; }}
+    .regression-type-block {{
+      margin-bottom: 28px; border: 1px solid var(--border); border-radius: 14px;
+      overflow: hidden; background: var(--card);
+    }}
+    .type-header {{
+      padding: 16px 20px 0; background: #fff;
+    }}
+    .summary-cards {{
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+      padding: 16px 20px 20px; background: #f8fafc; border-bottom: 1px solid var(--border);
+    }}
+    .summary-cards.has-partial {{
+      grid-template-columns: repeat(4, 1fr);
+    }}
+    .summary-cards .card {{
+      padding: 18px 16px; border-radius: 10px; text-align: center;
+      border: 1px solid var(--border); background: #fff;
+      box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+    }}
+    .summary-cards .card h3 {{
+      margin: 0; font-size: 32px; font-weight: 700; color: var(--title);
+    }}
+    .summary-cards .card p {{
+      margin: 8px 0 0; font-size: 12px; color: #64748b;
+      text-transform: uppercase; font-weight: 600; letter-spacing: 0.4px;
+    }}
+    .summary-cards .stat-pass h3 {{ color: var(--pass); }}
+    .summary-cards .stat-partial h3 {{ color: var(--partial); }}
+    .summary-cards .stat-fail h3 {{ color: var(--fail); }}
+    .iterations-list {{
+      padding: 12px 16px 20px;
+      display: flex; flex-direction: column; gap: 14px;
+    }}
+    .validation-panel {{
+      margin: 10px 0 12px; padding: 14px 16px; background: #f8fafc;
+      border: 1px solid var(--border); border-radius: 10px;
+    }}
+    .validation-panel h4 {{
+      margin: 0 0 10px; font-size: 14px; color: var(--title);
+      display: flex; align-items: center; gap: 10px;
+    }}
+    .mini-pill {{
+      font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 999px;
+    }}
+    .mini-pill.pass {{ background: #dcfce7; color: #166534; }}
+    .mini-pill.partial {{ background: #ffedd5; color: #9a3412; }}
+    .mini-pill.fail {{ background: #fee2e2; color: #991b1b; }}
+    table.validation-table {{
+      width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 13px;
+    }}
+    table.validation-table th {{
+      text-align: left; width: 34%; padding: 8px 10px; color: #475569;
+      font-weight: 600; vertical-align: top; border-bottom: 1px solid #e2e8f0;
+    }}
+    table.validation-table td {{
+      padding: 8px 10px; border-bottom: 1px solid #e2e8f0; color: var(--title);
+    }}
+    .val.pass {{ color: var(--pass); font-weight: 700; }}
+    .val.warn {{ color: var(--partial); font-weight: 700; }}
+    .val.fail {{ color: var(--fail); font-weight: 700; }}
+    .val.na {{ color: #94a3b8; }}
+    .evt-list {{
+      margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: #475569;
+    }}
+    .evt-list .evt-time {{
+      font-family: Consolas, Monaco, monospace; color: #64748b; margin-right: 6px;
+    }}
+    details.log-details {{
+      margin-top: 10px; border: 1px solid #e2e8f0; border-radius: 8px; background: #0f172a;
+    }}
+    details.log-details summary {{
+      cursor: pointer; padding: 10px 12px; font-size: 12px; font-weight: 600;
+      color: #e2e8f0; background: #1e293b; border-radius: 8px 8px 0 0;
+    }}
+    pre.log-pre {{
+      margin: 0; padding: 14px; font-size: 11px; line-height: 1.45;
+      color: #e2e8f0; white-space: pre-wrap; word-break: break-word;
+      max-height: 320px; overflow: auto;
+    }}
     .test-type-badge {{
       display: inline-block; font-size: 13px; font-weight: 700; padding: 4px 10px;
       border-radius: 6px; margin-right: 8px;
@@ -671,20 +919,16 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
     .test-id-inline {{
       font-size: 12px; color: #64748b; font-family: Consolas, Monaco, monospace;
     }}
-    .iterations-grid {{
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr));
-      gap: 12px; width: 100%;
-    }}
-    .iterations-grid .test-section {{ grid-column: 1 / -1; }}
-    .iterations-grid > .iteration {{ margin-bottom: 0; }}
-    .test-section {{ margin: 20px 0 10px; padding-top: 4px; }}
-    .test-section-title {{ margin: 0 0 6px; font-size: 17px; color: var(--title); }}
-    .test-section-desc {{ margin: 0 0 12px; font-size: 13px; color: #64748b; }}
+    .test-section-title {{ margin: 0; font-size: 17px; color: var(--title); }}
     .iteration {{
-      border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px;
-      margin-bottom: 10px; background: #fafcff;
+      border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+      background: #fafcff;
     }}
+    .iteration.compact {{ padding: 10px 14px; }}
     .iteration.ok {{ border-left: 5px solid var(--pass); }}
+    .iteration.warn {{
+      border-left: 5px solid var(--partial); background: #fffbeb;
+    }}
     .iteration.bad {{ border-left: 5px solid var(--fail); background: #fff8f8; }}
     .iteration-title {{
       display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap;
@@ -699,13 +943,9 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
       padding: 5px 12px; border-radius: 999px;
     }}
     .status-pill.pass {{ background: #dcfce7; color: #166534; }}
+    .status-pill.partial {{ background: #ffedd5; color: #9a3412; }}
     .status-pill.fail {{ background: #fee2e2; color: #991b1b; }}
     .status-pill.na {{ background: #f1f5f9; color: #64748b; }}
-    .pass-summary {{
-      display: flex; align-items: center; gap: 10px; margin: 0 0 8px;
-      font-size: 14px; color: #166534; font-weight: 500;
-    }}
-    .mark.large {{ width: 28px; height: 28px; font-size: 16px; }}
     details.check-details {{
       margin-top: 4px; border: 1px dashed var(--border); border-radius: 8px;
       padding: 0 14px 12px; background: #fff; width: 100%;
@@ -731,6 +971,7 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
       table.data-table {{ table-layout: auto; font-size: 12px; }}
       table.data-table th, table.data-table td {{ padding: 10px 8px; }}
       .hero {{ flex-direction: column; align-items: flex-start; }}
+      .summary-cards {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>
@@ -749,32 +990,21 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
     <section class="panel-top">
       <h2>Testbed Summary</h2>
       {testbed_table}
-      {run_types_table}
       <h3 style="margin:18px 0 12px;font-size:15px;color:var(--title);">Run Summary</h3>
       <div class="run-meta">
         <span><strong>BTS:</strong> {bts_host}</span>
         <span><strong>CPE:</strong> {cpe_label}</span>
-        <span><strong>Target cycles:</strong> {iterations_target}</span>
+        <span><strong>Target iterations:</strong> {iterations_target}</span>
       </div>
     </section>
 
-    <section class="summary">
-      <div class="chip"><strong>{total_iters}</strong><span>Health iterations</span></div>
-      <div class="chip pass"><strong>{passed_iters}</strong><span>Iterations passed</span></div>
-      <div class="chip fail"><strong>{failed_iters}</strong><span>Iterations failed</span></div>
-      {_pytest_stat_chips(pytest_total, pytest_passed, pytest_failed)}
-    </section>
-
     <section class="panel">
-      <h2>Iteration Results</h2>
-      <p class="footnote" style="margin-top:0;margin-bottom:14px;">
-        Each block shows the <strong>test type</strong> (Soft Reboot vs Network Soft Reset).
-        Passing cycles show a summary only; expand <em>Show ping &amp; web details</em> for the matrix.
-      </p>
-      <div class="iterations-grid">{iteration_body}</div>
+      <h2>Regression Results</h2>
+      {iteration_body}
       <p class="footnote">
-        &#10003; = passed &nbsp; &#10007; = failed.
-        Ping: BTS column = BTS&#8594;CPE; CPE column = CPE&#8594;BTS.
+        Report lists only test types executed in this run. Soft reboot: ping within 3 min and
+        Device Init Success in <code>/etc/device_logs</code>. Soft reset: link terminate/re-establish
+        (max 90s). Log-only gaps are <strong>partial</strong> (orange); ping/web failures fail the iteration.
       </p>
     </section>
   </div>

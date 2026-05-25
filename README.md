@@ -360,7 +360,7 @@ Shared helpers: `jenkins/jenkins-common.groovy` (email, `publishHTML`, report co
 - **Checkboxes:** Soft Reboot (`REG_01`), Network Soft Reset (`REG_02`), Firmware Upgrade (`REG_03`)
 - **Iterations:** separate count per enabled test (`ITERATIONS_SOFT_REBOOT`, `ITERATIONS_SOFT_RESET`, `ITERATIONS_FIRMWARE`)
 - **Report:** one merged `reports/Regression_Report.html` per build (`--regression-fresh`); Jenkins copies to `Senao_Regression_<build>_Report_<date>.html`
-- **Optional:** `Local IPv6 Address`, `FIRMWARE_IMAGE` (required when firmware upgrade is enabled)
+- **Optional:** `Local IPv6 Address`, **upload** `FIRMWARE_IMAGE` file (required when firmware upgrade is enabled)
 
 ### 3. Throughput
 

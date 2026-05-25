@@ -40,6 +40,10 @@ regression:
   web_timeout_seconds: 20
   reboot_wait_seconds: 150
   network_reload_wait_seconds: 30
+  soft_reboot_ping_timeout_seconds: 180
+  firmware_ping_timeout_seconds: 420
+  soft_reset_link_uptime_max_seconds: 90
+  radio_idx: 1
   reboot_via_gui: false
   firmware_image: ""
 
