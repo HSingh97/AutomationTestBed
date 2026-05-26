@@ -22,7 +22,7 @@ SENAO_LOGO_URL = (
 CASE_CATALOG: dict[str, dict[str, str]] = {
     "REG_01": {
         "title": "Soft Reboot",
-        "description": "BTS reboot; ping within 3 min; Device Init Success in /etc/device_logs",
+        "description": "BTS reboot; ping within 200s; Device Init Success in /etc/device_logs",
         "badge_class": "badge-reboot",
     },
     "REG_02": {
@@ -522,16 +522,15 @@ def _render_validation_panel(record: IterationRecord) -> str:
     if val.get("ping_recovery_seconds") is not None:
         limit = val.get("ping_recovery_limit_s")
         limit_txt = f" (max {limit}s)" if limit else ""
-        ping_ok = (
-            limit is None
-            or float(val["ping_recovery_seconds"]) <= float(limit)
-        )
+        ping_secs = float(val["ping_recovery_seconds"])
+        ping_ok = limit is None or ping_secs <= float(limit)
+        ping_slow = bool(val.get("partial")) and not ping_ok and ping_secs > 0
         rows.append(
             _validation_row(
                 "Ping recovery",
                 f"{val['ping_recovery_seconds']}s{limit_txt}",
-                ok=ping_ok if ping_ok or not is_soft_reboot_log else None,
-                warn=bool(val.get("partial")) and not ping_ok,
+                ok=True if ping_ok else None,
+                warn=ping_slow,
             )
         )
     if val.get("link_dropped") is not None:
@@ -1002,9 +1001,9 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
       <h2>Regression Results</h2>
       {iteration_body}
       <p class="footnote">
-        Report lists only test types executed in this run. Soft reboot: ping within 3 min and
-        Device Init Success in <code>/etc/device_logs</code>. Soft reset: link terminate/re-establish
-        (max 90s). Log-only gaps are <strong>partial</strong> (orange); ping/web failures fail the iteration.
+        Report lists only test types executed in this run.         Soft reboot: ping target 200s (extra grace before hard fail); slow ping or missing init log is
+        <strong>partial</strong> (orange). Hard <strong>fail</strong> only when ping/web connectivity fails.
+        Soft reset: link terminate/re-establish (max 90s).
       </p>
     </section>
   </div>

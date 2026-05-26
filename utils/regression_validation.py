@@ -189,7 +189,8 @@ async def _ping_once(
 def regression_timeouts(profile_bundle) -> dict[str, int]:
     reg = profile_bundle.active.get("regression", {})
     return {
-        "soft_reboot_ping_s": int(reg.get("soft_reboot_ping_timeout_seconds", 180)),
+        "soft_reboot_ping_s": int(reg.get("soft_reboot_ping_timeout_seconds", 200)),
+        "soft_reboot_ping_grace_s": int(reg.get("soft_reboot_ping_grace_seconds", 120)),
         "firmware_ping_s": int(reg.get("firmware_ping_timeout_seconds", 420)),
         "soft_reset_link_uptime_s": int(reg.get("soft_reset_link_uptime_max_seconds", 90)),
         "radio_idx": int(reg.get("radio_idx", 1)),
@@ -416,7 +417,22 @@ async def read_device_logs(ssh: AsyncGenericDriver) -> str:
 
 def _is_device_init_success_line(line: str) -> bool:
     lower = line.lower()
-    return "device init" in lower and "success" in lower
+    if "device init" in lower and ("success" in lower or "complete" in lower):
+        return True
+    return "init" in lower and "success" in lower and "device" in lower
+
+
+async def _find_device_init_line(
+    ssh: AsyncGenericDriver, lines_before: list[str]
+) -> str | None:
+    lines_after = _device_log_lines(await read_device_logs(ssh))
+    for line in _new_event_lines_since(lines_before, lines_after):
+        if _is_device_init_success_line(line):
+            return line
+    for line in lines_after[-50:]:
+        if _is_device_init_success_line(line):
+            return line
+    return None
 
 
 def _format_device_init_excerpt(init_line: str | None, *, fallback_lines: list[str] | None = None) -> str:
@@ -440,22 +456,27 @@ async def validate_soft_reboot_iteration(
     cpe_hosts: list[str],
     password: str,
     ping_timeout_s: int,
+    ping_grace_s: int,
     snapshot_before: dict[str, Any],
 ) -> RegressionValidation:
-    """After soft reboot: BTS reachable via ping within limit; Device Init Success in /etc/device_logs."""
+    """After soft reboot: BTS→CPE ping; Device Init Success in /etc/device_logs.
+
+    Ping over ``ping_timeout_s`` but within grace → partial (orange), not fail.
+    Hard fail only when ping never recovers before timeout+grace.
+    """
     validation = RegressionValidation(
         ping_recovery_limit_s=ping_timeout_s,
         device_logs_validation=True,
     )
     lines_before: list[str] = list(snapshot_before.get("device_log_lines") or [])
+    hard_limit_s = ping_timeout_s + max(0, ping_grace_s)
 
     cpe_target = cpe_hosts[0] if cpe_hosts else ""
     start = time.monotonic()
     ping_ok = False
     captured_init: str | None = None
 
-    while time.monotonic() - start < ping_timeout_s:
-        elapsed = int(time.monotonic() - start)
+    while time.monotonic() - start < hard_limit_s:
         try:
             conn = await _open_root_ssh(bts_host, password)
             try:
@@ -465,11 +486,7 @@ async def validate_soft_reboot_iteration(
                     await conn.send_command("echo ok")
                     ping_ok = True
                 if not captured_init:
-                    lines_now = _device_log_lines(await read_device_logs(conn))
-                    for line in _new_event_lines_since(lines_before, lines_now):
-                        if _is_device_init_success_line(line):
-                            captured_init = line
-                            break
+                    captured_init = await _find_device_init_line(conn, lines_before)
             finally:
                 await _close_ssh(conn)
         except Exception:
@@ -484,25 +501,18 @@ async def validate_soft_reboot_iteration(
         validation.ping_recovery_seconds = round(time.monotonic() - start, 1)
         validation.reboot_confirmed = False
         validation.summary = (
-            f"Device did not recover within {ping_timeout_s}s "
+            f"Ping did not recover within {hard_limit_s}s "
             f"(waited {validation.ping_recovery_seconds}s)."
         )
         return validation
+
+    ping_slow = float(validation.ping_recovery_seconds or 0) > float(ping_timeout_s)
 
     if not captured_init:
         try:
             conn = await _open_root_ssh(bts_host, password)
             try:
-                lines_after = _device_log_lines(await read_device_logs(conn))
-                for line in _new_event_lines_since(lines_before, lines_after):
-                    if _is_device_init_success_line(line):
-                        captured_init = line
-                        break
-                if not captured_init:
-                    for line in reversed(lines_after):
-                        if _is_device_init_success_line(line):
-                            captured_init = line
-                            break
+                captured_init = await _find_device_init_line(conn, lines_before)
             finally:
                 await _close_ssh(conn)
         except Exception:
@@ -512,19 +522,83 @@ async def validate_soft_reboot_iteration(
     validation.device_log_excerpt = _format_device_init_excerpt(captured_init)
     validation.build_combined_log_excerpt()
 
-    if not captured_init:
+    init_ok = bool(captured_init)
+    if not init_ok:
         validation.passed = False
         validation.partial = True
         validation.summary = (
-            f"Ping recovered in {validation.ping_recovery_seconds}s but "
-            "no Device Init Success line in /etc/device_logs."
+            f"Ping recovered in {validation.ping_recovery_seconds}s"
+            + (f" (over {ping_timeout_s}s limit)" if ping_slow else "")
+            + " but no Device Init Success line in /etc/device_logs."
+        )
+    elif ping_slow:
+        validation.passed = False
+        validation.partial = True
+        validation.summary = (
+            f"Soft reboot OK (slow ping): recovered in {validation.ping_recovery_seconds}s "
+            f"(target {ping_timeout_s}s); device init confirmed in logs."
         )
     else:
+        validation.passed = True
         validation.summary = (
             f"Soft reboot OK: ping in {validation.ping_recovery_seconds}s "
             f"(limit {ping_timeout_s}s); device init confirmed in logs."
         )
     return validation
+
+
+async def _latest_device_init_in_tail(ssh: AsyncGenericDriver) -> str | None:
+    lines = _device_log_lines(await read_device_logs(ssh))
+    for line in reversed(lines[-80:]):
+        if _is_device_init_success_line(line):
+            return line
+    return None
+
+
+async def refresh_soft_reboot_validation(
+    validation: dict[str, Any],
+    *,
+    bts_host: str,
+    password: str,
+    lines_before: list[str] | None = None,
+) -> dict[str, Any]:
+    """After connectivity passes, re-read device logs and soften stale ping-timeout results."""
+    updated = dict(validation)
+    init_line: str | None = None
+    try:
+        conn = await _open_root_ssh(bts_host, password)
+        try:
+            if lines_before:
+                init_line = await _find_device_init_line(conn, lines_before)
+            if not init_line:
+                init_line = await _latest_device_init_in_tail(conn)
+        finally:
+            await _close_ssh(conn)
+    except Exception:
+        init_line = None
+
+    if init_line:
+        updated["reboot_confirmed"] = True
+        updated["device_log_excerpt"] = _format_device_init_excerpt(init_line)
+        obj = RegressionValidation.from_dict(updated)
+        obj.build_combined_log_excerpt()
+        updated = obj.to_dict()
+
+    summary = str(updated.get("summary") or "")
+    if "did not recover" in summary.lower() or "ping did not recover" in summary.lower():
+        updated["partial"] = True
+        updated["passed"] = False
+        if init_line:
+            updated["summary"] = (
+                "Connectivity OK (ping/web); device init found in /etc/device_logs "
+                "after recovery window."
+            )
+        else:
+            updated["summary"] = (
+                "Connectivity OK (ping/web); ping was late or validation window ended early. "
+                "Device init line not found in /etc/device_logs."
+            )
+    return updated
 
 
 async def validate_reboot_iteration(

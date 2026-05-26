@@ -323,7 +323,10 @@ Profile regression block (`profiles/default.yaml`):
 regression:
   iterations: 3
   ping_count: 5
-  web_timeout_seconds: 20
+  web_timeout_seconds: 45
+  web_retry_count: 5
+  web_retry_interval_seconds: 12
+  web_post_ping_delay_seconds: 5
   network_reload_wait_seconds: 30
   reboot_wait_seconds: 150
   reboot_via_gui: false

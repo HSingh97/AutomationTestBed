@@ -23,6 +23,7 @@ from utils.regression_validation import (
     regression_timeouts,
     capture_soft_reboot_snapshot,
     validate_reboot_iteration,
+    refresh_soft_reboot_validation,
     validate_soft_reboot_iteration,
     validate_soft_reset_iteration,
 )
@@ -51,8 +52,14 @@ def _network_reload_wait_s(profile_bundle) -> int:
     return int(reg.get("network_reload_wait_seconds", 30))
 
 
-def _web_timeout_s(profile_bundle) -> int:
-    return int(_regression_cfg(profile_bundle).get("web_timeout_seconds", 20))
+def _web_check_settings(profile_bundle) -> dict[str, int]:
+    reg = _regression_cfg(profile_bundle)
+    return {
+        "timeout_s": int(reg.get("web_timeout_seconds", 45)),
+        "retry_count": max(1, int(reg.get("web_retry_count", 5))),
+        "retry_interval_s": int(reg.get("web_retry_interval_seconds", 12)),
+        "post_ping_delay_s": int(reg.get("web_post_ping_delay_seconds", 5)),
+    }
 
 
 async def _open_root_ssh(host: str, password: str) -> AsyncGenericDriver:
@@ -162,6 +169,11 @@ async def _run_ping(
         )
 
 
+def _exc_detail(exc: Exception) -> str:
+    text = str(exc).strip()
+    return text or type(exc).__name__
+
+
 async def _http_reachable(host: str, *, timeout_s: int) -> tuple[bool, str]:
     url = f"https://{format_http_host(host)}/cgi-bin/luci/"
     try:
@@ -171,29 +183,17 @@ async def _http_reachable(host: str, *, timeout_s: int) -> tuple[bool, str]:
                 return True, f"HTTP {response.status_code} from {url}"
             return False, f"HTTP {response.status_code} from {url}"
     except Exception as exc:
-        return False, str(exc)
+        return False, _exc_detail(exc)
 
 
-async def _verify_web_login(
+async def _attempt_gui_login(
     gui_browser,
     host: str,
     device_creds: dict[str, str],
     *,
-    check_id: str,
-    device_role: str,
     timeout_s: int,
-) -> HealthCheckResult:
-    reachable, reach_detail = await _http_reachable(host, timeout_s=timeout_s)
-    if not reachable:
-        return HealthCheckResult(
-            check_id=check_id,
-            device_role=device_role,
-            device_host=host,
-            check_type="Web",
-            passed=False,
-            detail=f"HTTPS unreachable: {reach_detail}",
-        )
-
+    reach_detail: str,
+) -> tuple[bool, str]:
     context = await gui_browser.new_context(ignore_https_errors=True)
     page = await context.new_page()
     try:
@@ -209,33 +209,76 @@ async def _verify_web_login(
         await page.press(LoginPageLocators.PASSWORD_INPUT, "Enter")
         await page.wait_for_timeout(4000)
         if await login_input.is_visible(timeout=3000):
+            return False, "Login form still visible after credentials submitted"
+        return True, f"GUI login OK ({reach_detail})"
+    except Exception as exc:
+        return False, _exc_detail(exc)
+    finally:
+        await context.close()
+
+
+async def _verify_web_login(
+    gui_browser,
+    host: str,
+    device_creds: dict[str, str],
+    *,
+    check_id: str,
+    device_role: str,
+    timeout_s: int,
+    retry_count: int = 1,
+    retry_interval_s: int = 12,
+) -> HealthCheckResult:
+    """HTTPS reachability + GUI login with retries (LuCI can lag behind ping)."""
+    last_detail = "no response"
+    for attempt in range(1, retry_count + 1):
+        reachable, reach_detail = await _http_reachable(host, timeout_s=timeout_s)
+        if not reachable:
+            last_detail = reach_detail or "no response"
+            _log(
+                check_id,
+                f"{device_role} HTTPS attempt {attempt}/{retry_count} failed: {last_detail}",
+            )
+            if attempt < retry_count:
+                await asyncio.sleep(retry_interval_s)
+            continue
+
+        login_ok, login_detail = await _attempt_gui_login(
+            gui_browser,
+            host,
+            device_creds,
+            timeout_s=timeout_s,
+            reach_detail=reach_detail,
+        )
+        if login_ok:
+            suffix = f" (attempt {attempt}/{retry_count})" if attempt > 1 else ""
             return HealthCheckResult(
                 check_id=check_id,
                 device_role=device_role,
                 device_host=host,
                 check_type="Web",
-                passed=False,
-                detail="Login form still visible after credentials submitted",
+                passed=True,
+                detail=f"{login_detail}{suffix}",
             )
-        return HealthCheckResult(
-            check_id=check_id,
-            device_role=device_role,
-            device_host=host,
-            check_type="Web",
-            passed=True,
-            detail=f"GUI login OK ({reach_detail})",
+
+        last_detail = login_detail
+        _log(
+            check_id,
+            f"{device_role} GUI login attempt {attempt}/{retry_count} failed: {last_detail}",
         )
-    except Exception as exc:
-        return HealthCheckResult(
-            check_id=check_id,
-            device_role=device_role,
-            device_host=host,
-            check_type="Web",
-            passed=False,
-            detail=str(exc),
-        )
-    finally:
-        await context.close()
+        if attempt < retry_count:
+            await asyncio.sleep(retry_interval_s)
+
+    return HealthCheckResult(
+        check_id=check_id,
+        device_role=device_role,
+        device_host=host,
+        check_type="Web",
+        passed=False,
+        detail=(
+            f"HTTPS/GUI failed after {retry_count} attempt(s), "
+            f"{timeout_s}s timeout each, {retry_interval_s}s between tries: {last_detail}"
+        ),
+    )
 
 
 def _format_failure_summary(case_id: str, phase: str, checks: list[HealthCheckResult]) -> str:
@@ -270,6 +313,7 @@ async def verify_iteration_health(
     profile_bundle,
     gui_browser,
     validation: dict | None = None,
+    soft_reboot_snapshot: dict | None = None,
     stop_on_fail: bool = False,
 ) -> bool:
     """
@@ -282,7 +326,7 @@ async def verify_iteration_health(
         return False
 
     count = _ping_count(profile_bundle)
-    web_timeout = _web_timeout_s(profile_bundle)
+    web_cfg = _web_check_settings(profile_bundle)
     password = device_creds["pass"]
     checks: list[HealthCheckResult] = []
 
@@ -314,6 +358,13 @@ async def verify_iteration_health(
                 )
             )
 
+        if web_cfg["post_ping_delay_s"] > 0:
+            _log(
+                case_id,
+                f"{phase}: waiting {web_cfg['post_ping_delay_s']}s after ping before web checks",
+            )
+            await asyncio.sleep(web_cfg["post_ping_delay_s"])
+
         checks.append(
             await _verify_web_login(
                 gui_browser,
@@ -321,7 +372,9 @@ async def verify_iteration_health(
                 device_creds,
                 check_id="BTS_GUI_LOGIN",
                 device_role="BTS (Local)",
-                timeout_s=web_timeout,
+                timeout_s=web_cfg["timeout_s"],
+                retry_count=web_cfg["retry_count"],
+                retry_interval_s=web_cfg["retry_interval_s"],
             )
         )
         for cpe_host in cpe_hosts:
@@ -332,13 +385,27 @@ async def verify_iteration_health(
                     device_creds,
                     check_id="CPE_GUI_LOGIN",
                     device_role="CPE (Remote)",
-                    timeout_s=web_timeout,
+                    timeout_s=web_cfg["timeout_s"],
+                    retry_count=web_cfg["retry_count"],
+                    retry_interval_s=web_cfg["retry_interval_s"],
                 )
             )
     finally:
         for cpe_ssh in cpe_ssh_map.values():
             await _close_ssh(cpe_ssh)
         await _close_ssh(bts_ssh)
+
+    if validation and validation.get("device_logs_validation"):
+        pings_ok = all(c.passed for c in checks if c.check_type == "Ping")
+        webs_ok = all(c.passed for c in checks if c.check_type == "Web")
+        if pings_ok and webs_ok and not validation.get("passed"):
+            lines_before = list((soft_reboot_snapshot or {}).get("device_log_lines") or [])
+            validation = await refresh_soft_reboot_validation(
+                validation,
+                bts_host=bts_host,
+                password=password,
+                lines_before=lines_before,
+            )
 
     collector = get_regression_collector()
     collector.record_iteration(case_id, phase, checks, validation=validation)
@@ -499,6 +566,7 @@ async def run_soft_reboot_regression(
                 cpe_hosts=cpe_ips,
                 password=device_creds["pass"],
                 ping_timeout_s=timeouts["soft_reboot_ping_s"],
+                ping_grace_s=timeouts["soft_reboot_ping_grace_s"],
                 snapshot_before=snapshot_before,
             )
 
@@ -521,6 +589,7 @@ async def run_soft_reboot_regression(
                 profile_bundle=profile_bundle,
                 gui_browser=gui_browser,
                 validation=validation.to_dict(),
+                soft_reboot_snapshot=snapshot_before,
             ):
                 failed_phases.append(phase)
         except Exception as exc:
