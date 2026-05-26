@@ -13,6 +13,8 @@ report.json
 .env.production.local
 reports/
 logs/
+vendor/vaunix_linux_sdk/lib/*.so
+**/.~lock.*
 .venv/lib64
 __pycache__
 utils/__pycache__

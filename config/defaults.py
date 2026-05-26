@@ -113,6 +113,22 @@ PERFORMANCE_DEFAULTS = {
 }
 
 
+ATTENUATOR_DEFAULTS = {
+    "enabled": False,
+    "backend": "auto",  # auto | dll | mock
+    "dll_path": "",
+    "settle_seconds": 3.0,
+    "min_attenuation_db": 0.0,
+    "max_attenuation_db": 63.0,
+    "su_index": 0,
+    "snmp_community": "ubr@rw123",
+    "snmp_radio_idx": 2,
+    "chains": [
+        {"chain": 0, "device_id": None, "serial": None, "lab_brick_id": None, "label": "MIMO chain 0"},
+        {"chain": 1, "device_id": None, "serial": None, "lab_brick_id": None, "label": "MIMO chain 1"},
+    ],
+}
+
 CAPTURE_DEFAULTS = {
     "enabled": False,
     "username": "root",

@@ -7,10 +7,10 @@
     "qos": "\u2014"
   },
   "cpe": {
-    "model": "UBR650-C23",
-    "fw_version": "0.0.0.689",
-    "ip": "2401:4900:d0:40d4:0:17b8:0:331/120",
-    "vlan": "Enabled ( Transparent )",
+    "model": "\u2014",
+    "fw_version": "\u2014",
+    "ip": "2401:4900:d0:40d4::17b8:0:331",
+    "vlan": "\u2014",
     "qos": "\u2014"
   }
 }

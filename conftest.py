@@ -110,6 +110,18 @@ def pytest_addoption(parser):
         default=False,
         help="Clear shared regression state and overwrite the report (default: append to same file).",
     )
+    group.addoption(
+        "--allow-attenuator-lab",
+        action="store_true",
+        default=False,
+        help="Run lab tests that drive Vaunix LDA-602 attenuators (RF path).",
+    )
+    group.addoption(
+        "--attenuator-backend",
+        action="store",
+        default="auto",
+        help="Vaunix LDA backend: auto | dll | mock (lab tests default to mock).",
+    )
 
 # =====================================================================
 # 2. PARAMETER FIXTURES

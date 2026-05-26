@@ -51,6 +51,31 @@ traffic:
   benchmark_backend: ixia
   stats_backend: trex
 
+# Vaunix LDA-602 (one unit per 2x2 RF chain on automation PC)
+attenuator:
+  enabled: false
+  backend: auto
+  dll_path: "vendor/vaunix_linux_sdk/lib"
+  settle_seconds: 3.0
+  min_attenuation_db: 0.0
+  max_attenuation_db: 63.0
+  su_index: 0
+  snmp:
+    community: "ubr@rw123"
+    radio_idx: 2
+  chains:
+    # Linux DEVID from GetDevInfo (1, 2). Windows Lab Brick UI may show different IDs (36831, 36832).
+    - chain: 0
+      device_id: 1
+      serial: 55102
+      lab_brick_id: 36831
+      label: "MIMO chain 0"
+    - chain: 1
+      device_id: 2
+      serial: 55602
+      lab_brick_id: 36832
+      label: "MIMO chain 1"
+
 capture:
   enabled: true
   username: root

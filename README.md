@@ -23,6 +23,10 @@ Automation framework for UBR P2MP validation:
 | `conftest.py` | Shared fixtures, CLI options, regression/GUI reporting hooks |
 | `tests/GUI/` | GUI suites (`GUI_01`–`GUI_112` where implemented, incl. `test_radio_24.py`) |
 | `scripts/generate_automation_coverage.py` | Build `reports/Automation_Coverage_May18.xlsx` from test plan |
+| `instruments/` | Vaunix LDA-602 control + SNMP SNR (`attenuator_snr.py`) |
+| `vendor/vaunix_linux_sdk/` | Vaunix `libLDAhid.so` + rebuild sources (`LDAhid.c`/`h` only) |
+| `scripts/attenuator_snr.py` | Lab CLI: sweep, verify, parallel streams, SNMP monitor |
+| `tests/Lab/` | Attenuator + SNR lab tests (`--allow-attenuator-lab`) |
 | `tests/JumboFrames/` | Jumbo suite (`JMB_01`–`JMB_10`) |
 | `tests/Regression/` | Stability regression (`REG_01`–`REG_03`) |
 | `tests/Throughput/` | TRex parser/unit helper (not a product GUI case) |
@@ -226,6 +230,43 @@ venv/bin/python -m pytest tests/GUI/test_radio_24.py -v
 venv/bin/python -m pytest tests/GUI/ -v -k "Wireless24"
 ```
 
+### Vaunix LDA-602 attenuator (2×2 chains) + SNR
+
+Two **LDA-602** units (one per MIMO chain) on the automation PC. Set attenuation and optional **Wi-Fi channel** (maps to LDA working frequency), then read **link SNR** from the BTS over SNMP (`traffic/link_stats.py`).
+
+**Profile** (`profiles/default.yaml` → `attenuator:`): enable, SDK path, per-chain serial numbers, settle time, SNMP radio index.
+
+**SDK:** `vendor/vaunix_linux_sdk/lib/libLDAhid.so` (build from `src/LDAhid.c` via `./scripts/build_vaunix_linux_sdk.sh`). USB control needs **sudo**. Without hardware, use `--backend mock`.
+
+```bash
+# Sweep 0→40 dB → CSV
+sudo PYTHONPATH=. python3 scripts/attenuator_snr.py sweep --start-db 0 --stop-db 40 --step-db 10
+
+# Live verify (step list + summary table)
+sudo PYTHONPATH=. python3 scripts/attenuator_snr.py verify --steps-db 0,10,20,30,40,0
+
+# Both MIMO streams (parallel chain control + per-stream SNR)
+sudo PYTHONPATH=. python3 scripts/attenuator_snr.py parallel --stream-att-db 40
+
+# Mock backend (no USB)
+PYTHONPATH=. python3 scripts/attenuator_snr.py sweep --backend mock --start-db 0 --stop-db 10 --step-db 5
+```
+
+**From Python:**
+
+```python
+from instruments import AttenuatorSnrController
+from utils.profile_manager import load_profile_bundle
+
+bundle = load_profile_bundle("default")
+with AttenuatorSnrController.from_profile(bundle.active) as att:
+    att.set_link(channel=36, att_chain0_db=0, att_chain1_db=0)
+    rows = att.sweep_attenuation(channel=36, start_db=0, stop_db=20, step_db=2)
+    att.assert_snr_decreases_with_attenuation(rows)
+```
+
+**Pytest (mock):** `PYTHONPATH=. pytest tests/Lab/ -v --allow-attenuator-lab --attenuator-backend mock`
+
 ### Automation coverage report (vs May18 test plan)
 
 ```bash
@@ -343,6 +384,8 @@ Each run produces `Throughput_<BW>_<MCS>_<Mode>_<ratio>.json`, `performance_matr
 | `--regression-report PATH` | Single HTML report (default `reports/Regression_Report.html`) |
 | `--regression-fresh` | Clear shared state; one new merged report for this run |
 | `--firmware-image PATH` | Image for `REG_03` |
+| `--allow-attenuator-lab` | Enable `tests/Lab/test_attenuator_snr.py` |
+| `--attenuator-backend` | `auto` \| `dll` \| `mock` for Vaunix LDA |
 Profile regression block (`profiles/default.yaml`):
 
 ```yaml
