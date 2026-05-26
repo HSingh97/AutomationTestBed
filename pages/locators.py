@@ -204,8 +204,8 @@ class RadioPropertiesLocators:
     SSID_INPUT = "//*[@id='edit_ssid']//input"
     BANDWIDTH_DROPDOWN = "//select[@name='wireless.wifi1.htmode']"
 
-    CONFIGURED_CHANNEL_DROPDOWN = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[5]/div/select"
-    ACTIVE_CHANNEL_DISPLAY = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[5]/div/span"
+    CONFIGURED_CHANNEL_DROPDOWN = "select[name='advwireless.ath1.channel'], #supp_chan"
+    ACTIVE_CHANNEL_DISPLAY = "#opchannel"
     ENCRYPTION_DROPDOWN = "//*[@name='wireless.@wifi-iface[1].encryption']"
     ENCRYPTION_KEY_INPUT = "//*[@name='wireless.@wifi-iface[1].key']"
     NETWORK_SECRET_INPUT = "input[id*='nwksec'], input[name*='nwksecret']"
