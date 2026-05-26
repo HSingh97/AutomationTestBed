@@ -99,12 +99,12 @@ Automation framework for UBR P2MP validation:
 
 #### Management (6)
 
-- `GUI_88` – Management Timezone Random Validation  
-- `GUI_89` – Management NTP Full Cycle  
-- `GUI_90` – Sync with Browser Time  
-- `GUI_91` – Management Logging IP and Port  
-- `GUI_92` – Management Temperature Logging Cycle  
-- `GUI_93` – Management Location Configuration  
+- `GUI_63` – Management Timezone Random Validation  
+- `GUI_64` – Management NTP Full Cycle  
+- `GUI_65` – Sync with Browser Time  
+- `GUI_66` – Management Logging IP and Port  
+- `GUI_67` – Management Temperature Logging Cycle  
+- `GUI_68` – Management Location Configuration  
 
 #### Monitor (8)
 

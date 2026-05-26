@@ -550,7 +550,7 @@ flowchart LR
 ## Management Flowcharts
 
 <details>
-<summary><code>GUI_88</code> Management Timezone Random Validation</summary>
+<summary><code>GUI_63</code> Management Timezone Random Validation</summary>
 
 ```mermaid
 flowchart LR
@@ -565,7 +565,7 @@ flowchart LR
 </details>
 
 <details>
-<summary><code>GUI_89</code> Management NTP Full Cycle</summary>
+<summary><code>GUI_64</code> Management NTP Full Cycle</summary>
 
 ```mermaid
 flowchart LR
@@ -580,7 +580,7 @@ flowchart LR
 </details>
 
 <details>
-<summary><code>GUI_90</code> Sync with Browser Time</summary>
+<summary><code>GUI_65</code> Sync with Browser Time</summary>
 
 ```mermaid
 flowchart LR
@@ -593,7 +593,7 @@ flowchart LR
 </details>
 
 <details>
-<summary><code>GUI_91</code> Management Logging IP and Port</summary>
+<summary><code>GUI_66</code> Management Logging IP and Port</summary>
 
 ```mermaid
 flowchart LR
@@ -608,7 +608,7 @@ flowchart LR
 </details>
 
 <details>
-<summary><code>GUI_92</code> Management Temperature Logging Cycle</summary>
+<summary><code>GUI_67</code> Management Temperature Logging Cycle</summary>
 
 ```mermaid
 flowchart LR
@@ -623,7 +623,7 @@ flowchart LR
 </details>
 
 <details>
-<summary><code>GUI_93</code> Management Location Configuration</summary>
+<summary><code>GUI_68</code> Management Location Configuration</summary>
 
 ```mermaid
 flowchart LR

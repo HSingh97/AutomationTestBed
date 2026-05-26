@@ -231,6 +231,7 @@ class ManagementLocators:
     MENU_MANAGEMENT = CommonLocators.MENU_MANAGEMENT
     SUBMENU_SYSTEM = CommonLocators.SUBMENU_MANAGEMENT_SYSTEM
     TAB_LOCATION_LINK_TEXT = "Location"
+    TAB_LOGGING_LINK_TEXT = "Logging"
     TAB_LOGGING_XPATH = '//*[@id="maincontent"]/div/ul/li[2]/a'
 
     # System Page - General Tab
@@ -255,7 +256,7 @@ class ManagementLocators:
     TEMP_STATUS_XPATH = '//*[@id="temlog_status"]'
     TEMP_INTERVAL_XPATH = '//*[@id="templog_int"]/div/input'
 
-    LOCATION_SYSTEM_NAME_XPATH = '//*[@id="cusname"]/div/input'
+    LOCATION_SYSTEM_NAME_XPATH = '#cusname input, [id="cusname"] input'
     LOCATION_ADDRESS_XPATH = '//*[@id="cusloc"]/div/input'
     LOCATION_EMAIL_XPATH = '//*[@id="cusemail"]/div/input'
     LOCATION_PHONE_XPATH = '//*[@id="cusphone"]/div/input'

@@ -23,6 +23,10 @@ DEFAULT_VALUES = {
     "Transmit Power": "26",
     "Maximum EIRP": "0",
 
+    "Syslog IP": "",
+    "Temp Log Interval": "30",
+    "Location Name": "UBR-Lab",
+
     # You can expand this as you build out other pages!
     # "IP Address": "192.168.1.1",
     # "Traffic Shaping Status": "Disable",

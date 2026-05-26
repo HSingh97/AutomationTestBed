@@ -6,10 +6,11 @@ from utils.apply_triple import apply_triple as _apply_triple
 
 
 async def _goto_admin_path(gui_page, path_fragment: str):
-    match = re.search(r"(https?://[^/]+/cgi-bin/luci/;stok=[^/]+)", gui_page.url or "")
-    if not match:
+    from utils.ui_helpers import luci_base_url
+
+    base = luci_base_url(gui_page.url or "")
+    if not base:
         return False
-    base = match.group(1)
     target = f"{base}/admin{path_fragment}"
     await gui_page.goto(target, timeout=UITimeouts.PAGE_LOAD_MS)
     await gui_page.wait_for_load_state("networkidle")

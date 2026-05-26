@@ -1,6 +1,6 @@
 import re
-from pages.locators import TopPanelLocators
-from utils.validators import validate_param
+from pages.locators import CommonLocators, TopPanelLocators, UITimeouts
+from utils.validators import is_empty_or_unknown, validate_backend_param, validate_param
 from utils.parsers import extract_uci_value
 from config.defaults import DEFAULT_VALUES
 
@@ -22,24 +22,100 @@ def attach_dialog_handler(gui_page):
 # =====================================================================
 # UNIVERSAL HELPER: Form Save (refresh dependent fields on same page)
 # =====================================================================
+async def _click_form_save(gui_page) -> None:
+    """LuCI Save varies by page (network footer vs management CBI button)."""
+    attach_dialog_handler(gui_page)
+    candidates = [
+        TopPanelLocators.FORM_SAVE_BUTTON,
+        CommonLocators.SAVE_BUTTON,
+        "input.cbi-button[value='Save']",
+    ]
+    last_error: Exception | None = None
+    for selector in candidates:
+        form_save = gui_page.locator(selector).first
+        try:
+            await form_save.scroll_into_view_if_needed()
+            await form_save.wait_for(state="visible", timeout=5000)
+            if await form_save.evaluate("el => el.disabled"):
+                await form_save.evaluate("el => el.removeAttribute('disabled')")
+            await gui_page.wait_for_timeout(1000)
+            await form_save.click(force=True)
+            try:
+                await gui_page.wait_for_load_state("domcontentloaded", timeout=6000)
+            except Exception:
+                pass
+            await gui_page.wait_for_timeout(2000)
+            return
+        except Exception as exc:
+            last_error = exc
+    raise TimeoutError(f"Save button not found on page: {last_error}")
+
+
 async def execute_form_save(gui_page):
     """Click the page Save button so LuCI reveals/hides dependent dropdowns."""
-    attach_dialog_handler(gui_page)
-    form_save = gui_page.locator(TopPanelLocators.FORM_SAVE_BUTTON).first
-    await form_save.scroll_into_view_if_needed()
-    await form_save.wait_for(state="visible", timeout=5000)
+    await _click_form_save(gui_page)
 
-    if await form_save.evaluate("el => el.disabled"):
-        await form_save.evaluate("el => el.removeAttribute('disabled')")
 
-    await gui_page.wait_for_timeout(1000)
-    await form_save.click(force=True)
-
+async def read_luci_input_value(gui_page, locator: str) -> str:
+    """Read a CBI text field; avoids mistaking uci error labels for input values."""
+    element = gui_page.locator(locator).first
+    await element.wait_for(state="attached", timeout=UITimeouts.ELEMENT_WAIT_MS)
+    values: list[str] = []
     try:
-        await gui_page.wait_for_load_state("domcontentloaded", timeout=6000)
+        values.append((await element.input_value()).strip())
     except Exception:
         pass
-    await gui_page.wait_for_timeout(2000)
+    nested = element.locator("input")
+    if await nested.count() > 0:
+        try:
+            values.append((await nested.first.input_value()).strip())
+        except Exception:
+            pass
+    for value in values:
+        lower = value.lower()
+        if value and "uci:" not in lower and "entry not found" not in lower:
+            return value
+    return values[0] if values else ""
+
+
+def luci_base_url(page_url: str) -> str | None:
+    """Extract a single LuCI base URL (handles IPv6 and duplicated navigation URLs)."""
+    match = re.search(
+        r"(https?://(?:\[[^\]]+\]|[^/]+)/cgi-bin/luci/;stok=[a-f0-9]+)",
+        page_url or "",
+    )
+    return match.group(1) if match else None
+
+
+async def uci_get_cmd_for_locator(gui_page, locator: str) -> str:
+    """Build ``uci get …`` from the input's ``name`` attribute (LuCI CBI)."""
+    element = gui_page.locator(locator).first
+    await element.wait_for(state="attached", timeout=UITimeouts.ELEMENT_WAIT_MS)
+    name = await element.get_attribute("name")
+    if not name:
+        raise AssertionError(f"Input at {locator} has no name= attribute for UCI mapping")
+    return f"uci get {name}"
+
+
+async def fill_luci_input(gui_page, locator: str, value: str) -> None:
+    """Fill CBI inputs that may be hidden until a tab/section is expanded."""
+    element = gui_page.locator(locator).first
+    await element.wait_for(state="attached", timeout=UITimeouts.ELEMENT_WAIT_MS)
+    try:
+        await element.fill(value, force=True)
+        return
+    except Exception:
+        pass
+    await element.evaluate(
+        """
+        (el, val) => {
+            el.value = val;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        """,
+        value,
+    )
 
 
 # =====================================================================
@@ -89,9 +165,8 @@ async def execute_triple_apply(gui_page, fallback_url):
         await gui_page.wait_for_url(f"**{fallback_url}*", timeout=25000)
     except Exception:
         print(f"    -> WARNING: Did not automatically return. Forcing navigation to {fallback_url}")
-        match = re.search(r'(https?://[^/]+/cgi-bin/luci/;stok=[^/]+)', gui_page.url)
-        if match:
-            base_url_with_token = match.group(1)
+        base_url_with_token = luci_base_url(gui_page.url or "")
+        if base_url_with_token:
             full_target_url = base_url_with_token + fallback_url
             last_exc = None
             for attempt in range(4):
@@ -423,42 +498,40 @@ async def validate_dropdown_value_lifecycle(
 # =====================================================================
 # UNIVERSAL HELPER: Input Range Validation & Reversion
 # =====================================================================
-async def validate_input_lifecycle(gui_page, root_ssh, locator, valid_val, invalid_val, uci_cmd, param_name,
-                                   fallback_url, parser=lambda x: x, skip_restore=False):
+async def validate_input_lifecycle(
+    gui_page,
+    root_ssh,
+    locator,
+    valid_val,
+    invalid_val,
+    uci_cmd,
+    param_name,
+    fallback_url,
+    parser=lambda x: x,
+    skip_restore=False,
+    after_apply=None,
+):
     """Tests invalid boundary, applies valid boundary, verifies, and auto-restores from config."""
 
     attach_dialog_handler(gui_page)
 
     element = gui_page.locator(locator).first
-    await element.wait_for(state="visible", timeout=15000)
+    await element.wait_for(state="attached", timeout=UITimeouts.ELEMENT_WAIT_MS)
 
     ssh_orig_raw = (await root_ssh.send_command(uci_cmd)).result.strip()
     original_value = parser(ssh_orig_raw)
+    if is_empty_or_unknown(original_value):
+        original_value = ""
 
     restore_value = DEFAULT_VALUES.get(param_name, original_value)
+    if is_empty_or_unknown(restore_value):
+        restore_value = original_value or valid_val
 
     # Test Invalid Boundary
     print(f"    -> Testing Invalid Boundary: '{invalid_val}'")
-    await element.clear()
+    await fill_luci_input(gui_page, locator, invalid_val)
 
-    await element.focus()
-    await gui_page.keyboard.type(invalid_val, delay=50)
-    await element.blur()
-
-    form_save = gui_page.locator(TopPanelLocators.FORM_SAVE_BUTTON).first
-    await form_save.scroll_into_view_if_needed()
-
-    if await form_save.evaluate("el => el.disabled"):
-        await form_save.evaluate("el => el.removeAttribute('disabled')")
-
-    await gui_page.wait_for_timeout(1000)
-    await form_save.click(force=True)
-
-    try:
-        await gui_page.wait_for_load_state("domcontentloaded", timeout=5000)
-    except Exception:
-        pass
-    await gui_page.wait_for_timeout(2000)
+    await _click_form_save(gui_page)
 
     if fallback_url not in gui_page.url:
         print("    -> WARNING: Invalid boundary allowed redirect to pending changes!")
@@ -467,53 +540,46 @@ async def validate_input_lifecycle(gui_page, root_ssh, locator, valid_val, inval
     else:
         print("    -> Invalid boundary correctly rejected by GUI.")
         await gui_page.reload()
-        await element.wait_for(state="visible", timeout=15000)
+        if after_apply:
+            await after_apply(gui_page)
+        await element.wait_for(state="attached", timeout=15000)
 
     # Test Valid Boundary
     print(f"    -> Applying and Verifying Valid Config: '{valid_val}'")
-    element = gui_page.locator(locator).first
-    await element.clear()
-
-    await element.focus()
-    await gui_page.keyboard.type(valid_val, delay=50)
-    await element.blur()
-
+    await fill_luci_input(gui_page, locator, valid_val)
     await gui_page.wait_for_timeout(1000)
 
     await execute_triple_apply(gui_page, fallback_url)
+
+    if after_apply:
+        await after_apply(gui_page)
 
     # Verify Backend
     ssh_new_raw = (await root_ssh.send_command(uci_cmd)).result.strip()
     print(f"    -> [DEBUG] Post-Apply Raw SSH Output: '{ssh_new_raw}'")
     new_backend_value = parser(ssh_new_raw)
-    validate_param(f"Backend {param_name} Change", valid_val, new_backend_value)
+    validate_backend_param(f"Backend {param_name} Change", valid_val, new_backend_value)
 
     # Verify Frontend
     print("    -> [DEBUG] Waiting 2 seconds for frontend UI to populate selection...")
     await gui_page.wait_for_timeout(2000)
-    element = gui_page.locator(locator).first
-    await element.wait_for(state="visible", timeout=15000)
-    gui_actual_value = await element.input_value()
+    gui_actual_value = await read_luci_input_value(gui_page, locator)
     validate_param(f"Frontend {param_name} Change", valid_val, gui_actual_value)
 
     # Restore Default State
     if skip_restore:
         print(f"    -> skip_restore=True. Leaving {param_name} at '{valid_val}'.")
-    elif valid_val != restore_value:
+    elif valid_val != restore_value and restore_value:
         print(f"    -> Restoring {param_name} to centralized default: '{restore_value}'")
-        element = gui_page.locator(locator).first
-        await element.clear()
-
-        await element.focus()
-        await gui_page.keyboard.type(restore_value, delay=50)
-        await element.blur()
-
+        await fill_luci_input(gui_page, locator, restore_value)
         await gui_page.wait_for_timeout(1000)
         await execute_triple_apply(gui_page, fallback_url)
+        if after_apply:
+            await after_apply(gui_page)
 
         ssh_restore_raw = (await root_ssh.send_command(uci_cmd)).result.strip()
         restored_backend_value = parser(ssh_restore_raw)
-        validate_param(f"Final Default Restore ({param_name})", restore_value, restored_backend_value)
+        validate_backend_param(f"Final Default Restore ({param_name})", restore_value, restored_backend_value)
     else:
         print(f"    -> {param_name} is already at centralized default '{restore_value}'. Skipping final apply.")
 

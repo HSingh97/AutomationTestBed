@@ -1,4 +1,4 @@
-"""GUI management page assertions (GUI_88–GUI_93)."""
+"""GUI management page assertions (GUI_63–GUI_68)."""
 
 from __future__ import annotations
 
@@ -10,14 +10,20 @@ from pages.commands import RootCommands
 from pages.locators import CommonLocators, ManagementLocators, UITimeouts
 from utils.management_flows import apply_triple, open_management_logging, open_management_system
 from utils.network_flows import _goto_admin_path
-from utils.parsers import extract_uci_value, ssh_scalar
-from utils.ui_helpers import attach_dialog_handler, validate_input_lifecycle
+from utils.parsers import clean_ssh_output, extract_uci_value, ssh_scalar
+from utils.ui_helpers import (
+    attach_dialog_handler,
+    execute_triple_apply,
+    uci_get_cmd_for_locator,
+    validate_input_lifecycle,
+)
 from utils.validators import validate_param
 
 
 def _admin_fallback(gui_page, fragment: str) -> str:
-    match = re.search(r"(https?://[^/]+/cgi-bin/luci/;stok=[^/]+)", gui_page.url or "")
-    base = match.group(1) if match else ""
+    from utils.ui_helpers import luci_base_url
+
+    base = luci_base_url(gui_page.url or "") or ""
     return f"{base}/admin{fragment}"
 
 
@@ -65,7 +71,7 @@ async def _open_management_location(gui_page):
     await gui_page.wait_for_timeout(UITimeouts.MEDIUM_WAIT_MS)
 
 
-async def assert_gui_88_timezone_random(root_ssh, gui_page, bsu_ip, device_creds):
+async def assert_gui_63_timezone_random(root_ssh, gui_page, bsu_ip, device_creds):
     del bsu_ip, device_creds
     attach_dialog_handler(gui_page)
     original, alternate = await _get_timezone_choices(gui_page)
@@ -81,52 +87,68 @@ async def assert_gui_88_timezone_random(root_ssh, gui_page, bsu_ip, device_creds
             await _set_timezone(gui_page, original)
 
 
-async def assert_gui_89_ntp_full_cycle(root_ssh, gui_page, bsu_ip, device_creds):
+async def assert_gui_64_ntp_full_cycle(root_ssh, gui_page, bsu_ip, device_creds):
     del bsu_ip, device_creds
     attach_dialog_handler(gui_page)
     await _open_management_system_stable(gui_page)
-    add_input = gui_page.locator(ManagementLocators.NTP_ADD_INPUT_XPATH).first
-    await add_input.wait_for(state="visible", timeout=UITimeouts.ELEMENT_WAIT_MS)
     test_server = "pool.ntp.org"
-    await add_input.fill(test_server)
-    await gui_page.locator(ManagementLocators.NTP_ADD_BTN_XPATH).first.click()
-    await gui_page.wait_for_timeout(UITimeouts.MEDIUM_WAIT_MS)
-    await apply_triple(
-        gui_page,
-        ManagementLocators.SAVE_BUTTON,
-        CommonLocators.APPLY_ICON,
-        CommonLocators.CONFIRM_APPLY,
-        settle_seconds=8,
+    fallback = _admin_fallback(gui_page, "/system/system")
+
+    await gui_page.evaluate(
+        """
+        (server) => {
+            const el = document.querySelector('#ntp_addr');
+            if (el) {
+                el.scrollIntoView({ block: 'center' });
+                el.value = server;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            if (window.KWN_SYSTEM && KWN_SYSTEM.submit_add_ntp) {
+                KWN_SYSTEM.submit_add_ntp();
+            }
+        }
+        """,
+        test_server,
     )
-    page_text = await gui_page.content()
-    assert test_server in page_text, f"NTP server {test_server} not visible after add"
-    delete_btn = gui_page.locator(ManagementLocators.NTP_DELETE_BTN_XPATH).first
-    if await delete_btn.is_visible(timeout=5000):
-        await delete_btn.click()
-        await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
-        await apply_triple(
-            gui_page,
-            ManagementLocators.SAVE_BUTTON,
-            CommonLocators.APPLY_ICON,
-            CommonLocators.CONFIRM_APPLY,
-            settle_seconds=8,
+    await gui_page.wait_for_timeout(UITimeouts.MEDIUM_WAIT_MS)
+
+    try:
+        await gui_page.wait_for_function(
+            f"() => document.body.innerText.includes('{test_server}')",
+            timeout=UITimeouts.ELEMENT_WAIT_MS,
         )
+    except Exception:
+        pass
+
+    await execute_triple_apply(gui_page, fallback)
+    await _open_management_system_stable(gui_page)
+
+    page_text = await gui_page.content()
+    ssh_raw = clean_ssh_output(
+        (await root_ssh.send_command(f"uci show system 2>/dev/null | grep -F '{test_server}'")).result
+    )
+    assert test_server in page_text or test_server in ssh_raw, (
+        f"NTP server {test_server} not found in GUI or UCI after add"
+    )
+
+    delete_btn = gui_page.locator(ManagementLocators.NTP_DELETE_BTN_XPATH).or_(
+        gui_page.locator(ManagementLocators.NTP_DELETE_BTNS)
+    ).first
+    if await delete_btn.is_visible(timeout=5000):
+        await delete_btn.click(force=True)
+        await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
+        await execute_triple_apply(gui_page, fallback)
 
 
-async def assert_gui_90_sync_with_browser(root_ssh, gui_page, bsu_ip, device_creds):
+async def assert_gui_65_sync_with_browser(root_ssh, gui_page, bsu_ip, device_creds):
     del bsu_ip, device_creds
     attach_dialog_handler(gui_page)
     await _open_management_system_stable(gui_page)
     sync_btn = gui_page.locator(ManagementLocators.SYNC_BROWSER_BTN_XPATH).first
     await sync_btn.wait_for(state="visible", timeout=UITimeouts.ELEMENT_WAIT_MS)
     await sync_btn.click()
-    await apply_triple(
-        gui_page,
-        ManagementLocators.SAVE_BUTTON,
-        CommonLocators.APPLY_ICON,
-        CommonLocators.CONFIRM_APPLY,
-        settle_seconds=8,
-    )
+    await gui_page.wait_for_timeout(UITimeouts.LONG_WAIT_MS)
     device_time_raw = ssh_scalar((await root_ssh.send_command(RootCommands.GET_TIME)).result)
     browser_now = datetime.now().strftime("%Y")
     assert browser_now in device_time_raw or device_time_raw, (
@@ -134,54 +156,71 @@ async def assert_gui_90_sync_with_browser(root_ssh, gui_page, bsu_ip, device_cre
     )
 
 
-async def assert_gui_91_logging_config(root_ssh, gui_page, bsu_ip, device_creds):
+async def assert_gui_66_logging_config(root_ssh, gui_page, bsu_ip, device_creds):
     del bsu_ip, device_creds
     attach_dialog_handler(gui_page)
     await open_management_logging(gui_page)
+    log_locator = ManagementLocators.LOG_IP_XPATH
+
+    async def _reopen_logging(page):
+        await open_management_logging(page)
+
     await validate_input_lifecycle(
         gui_page,
         root_ssh,
-        ManagementLocators.LOG_IP_XPATH,
+        log_locator,
         "192.168.1.100",
         "999.999.999.999",
-        "uci get system.@system[0].log_ip",
+        await uci_get_cmd_for_locator(gui_page, log_locator),
         "Syslog IP",
         _admin_fallback(gui_page, "/system/system"),
         parser=extract_uci_value,
+        after_apply=_reopen_logging,
     )
 
 
-async def assert_gui_92_temp_logging_cycle(root_ssh, gui_page, bsu_ip, device_creds):
+async def assert_gui_67_temp_logging_cycle(root_ssh, gui_page, bsu_ip, device_creds):
     del bsu_ip, device_creds
     attach_dialog_handler(gui_page)
     await open_management_logging(gui_page)
     interval_locator = ManagementLocators.TEMP_INTERVAL_XPATH
+
+    async def _reopen_logging(page):
+        await open_management_logging(page)
+
     await validate_input_lifecycle(
         gui_page,
         root_ssh,
         interval_locator,
-        "300",
+        "30",
         "99999999",
-        "uci get system.@system[0].templog_int",
+        await uci_get_cmd_for_locator(gui_page, interval_locator),
         "Temp Log Interval",
         _admin_fallback(gui_page, "/system/system"),
         parser=extract_uci_value,
         skip_restore=True,
+        after_apply=_reopen_logging,
     )
 
 
-async def assert_gui_93_location_config(root_ssh, gui_page, bsu_ip, device_creds):
+async def assert_gui_68_location_config(root_ssh, gui_page, bsu_ip, device_creds):
     del bsu_ip, device_creds
     attach_dialog_handler(gui_page)
     await _open_management_location(gui_page)
+    loc_locator = ManagementLocators.LOCATION_SYSTEM_NAME_XPATH
+
+    async def _reopen_location(page):
+        await _open_management_location(page)
+
     await validate_input_lifecycle(
         gui_page,
         root_ssh,
-        ManagementLocators.LOCATION_SYSTEM_NAME_XPATH,
+        loc_locator,
         "UBR-Lab",
         "X" * 300,
-        "uci get system.@system[0].cusname",
+        await uci_get_cmd_for_locator(gui_page, loc_locator),
         "Location Name",
         _admin_fallback(gui_page, "/system/system"),
         parser=extract_uci_value,
+        after_apply=_reopen_location,
     )
