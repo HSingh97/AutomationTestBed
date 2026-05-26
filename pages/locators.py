@@ -225,6 +225,21 @@ class RadioPropertiesLocators:
     MAX_EIRP_INPUT = "input[name='txparam.ath1.maxeirp']"
 
 
+class Radio24Locators:
+    """Wireless > 2.4 GHz Radio (radio0 / ath0)."""
+
+    MENU_WIRELESS = CommonLocators.MENU_WIRELESS
+    SUBMENU_RADIO_24 = CommonLocators.submenu_by_href("/wireless/radio0")
+    RADIO_0_URL_CHUNK = "/admin/wireless/radio0"
+
+    STATUS_DROPDOWN = "select[name='wireless.@wifi-iface[0].disabled']"
+    SSID_INPUT = "input[name='wireless.@wifi-iface[0].ssid']"
+    BANDWIDTH_DROPDOWN = "select[name='wireless.wifi0.htmode'], #supp_band"
+    CONFIGURED_CHANNEL_DROPDOWN = "select[name='advwireless.ath0.channel'], #supp_chan"
+    ACTIVE_CHANNEL_DISPLAY = "#opchannel"
+    ENCRYPTION_DROPDOWN = "select[name='wireless.@wifi-iface[0].encryption']"
+    ENCRYPTION_KEY_INPUT = "input[name='wireless.@wifi-iface[0].key'], #key_input"
+
 
 class ManagementLocators:
     # Sidebar

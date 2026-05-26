@@ -32,6 +32,13 @@ DEFAULT_VALUES = {
     # "Traffic Shaping Status": "Disable",
 }
 
+RADIO_24_TEST_VALUES = {
+    "SSID_VALID": "UBR_24G_Auto_Test_SSID",
+    "SSID_INVALID": "An_Invalid_33_Character_SSID_1234567",
+    "KEY_VALID": "Senao24GTestKey!01",
+    "KEY_INVALID": "x",
+}
+
 RADIO_TEST_VALUES = {
     "SSID_VALID": "A_Valid_32_Character_SSID_123456",
     "SSID_INVALID": "An_Invalid_33_Character_SSID_1234567",

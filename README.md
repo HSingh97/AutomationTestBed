@@ -21,7 +21,8 @@ Automation framework for UBR P2MP validation:
 | Path | Purpose |
 |------|---------|
 | `conftest.py` | Shared fixtures, CLI options, regression/GUI reporting hooks |
-| `tests/GUI/` | GUI suites (`GUI_01`–`GUI_112` where implemented) |
+| `tests/GUI/` | GUI suites (`GUI_01`–`GUI_112` where implemented, incl. `test_radio_24.py`) |
+| `scripts/generate_automation_coverage.py` | Build `reports/Automation_Coverage_May18.xlsx` from test plan |
 | `tests/JumboFrames/` | Jumbo suite (`JMB_01`–`JMB_10`) |
 | `tests/Regression/` | Stability regression (`REG_01`–`REG_03`) |
 | `tests/Throughput/` | TRex parser/unit helper (not a product GUI case) |
@@ -39,11 +40,11 @@ Automation framework for UBR P2MP validation:
 
 | Category | Automated in repo | Lab-validated (typical) | Notes |
 |----------|------------------|-------------------------|--------|
-| **GUI** | **52** | Most suites | See gaps below |
+| **GUI** | **58** | Most suites | See gaps below |
 | **Jumbo** | **10** | `JMB_01`–`JMB_06`, `JMB_08`–`JMB_09` | `JMB_07`, `JMB_10` destructive, opt-in |
 | **Regression** | **3** | `REG_01`, `REG_02` | `REG_03` needs firmware image |
-| **Throughput** | Script only | Manual / Jenkins | Not counted in 65 product cases |
-| **Total product cases in automation** | **65** | | |
+| **Throughput** | Script only | Manual / Jenkins | Not counted in product pytest IDs |
+| **Total product cases in automation** | **71** | | See `reports/Automation_Coverage_May18.xlsx` |
 
 ### Completed — automated and in test plan
 
@@ -78,6 +79,19 @@ Automation framework for UBR P2MP validation:
 - `GUI_27` – ATPC Status (remote CPE)  
 - `GUI_28` – Transmit Power  
 - `GUI_29` – Maximum EIRP  
+
+#### 2.4 GHz Radio — Wireless (6)
+
+(`tests/GUI/test_radio_24.py`, `utils/radio24_flows.py`, page `/admin/wireless/radio0`)
+
+Each case reads the **current UCI/GUI value as baseline**, applies a test value, verifies GUI + SSH, then **restores the baseline**.
+
+- `GUI_34` – 2.4 GHz Radio Status (Enable / Disable)  
+- `GUI_35` – 2.4 GHz SSID  
+- `GUI_36` – 2.4 GHz Bandwidth (20 / 40 MHz)  
+- `GUI_37` – 2.4 GHz Configured & Active Channel (Auto-only)  
+- `GUI_38` – 2.4 GHz Encryption (None / WPA2-PSK)  
+- `GUI_39` – 2.4 GHz Encryption Key  
 
 #### Network (15)
 
@@ -150,8 +164,9 @@ Regression reports (default single file `reports/Regression_Report.html`; all ru
 
 These product IDs are **not** present under `tests/GUI/` (gaps in numbering vs a full manual test plan):
 
-- `GUI_11`–`GUI_16`  
-- `GUI_56`–`GUI_69`  
+- `GUI_11`–`GUI_16` (Quick Start)  
+- `GUI_30`–`GUI_33`, `GUI_40`–`GUI_49` (other wireless pages; `GUI_34`–`GUI_39` are done)  
+- `GUI_56`–`GUI_62`, `GUI_69` (Tools / extras; `GUI_63`–`GUI_68` Management are done)  
 - `GUI_79`–`GUI_87`  
 - `GUI_94`–`GUI_104`  
 
@@ -164,6 +179,7 @@ These product IDs are **not** present under `tests/GUI/` (gaps in numbering vs a
 | `GUI_01` | CPU vs GUI tolerance can fail under load; may need tuning |
 | `GUI_25`, `GUI_26` | CPE DDRS page; GUI dropdown vs SSH only (no TRex in GUI job) |
 | `GUI_27` | Requires reachable remote CPE |
+| `GUI_39` | Skipped when 2.4 GHz encryption is `None` (run after `GUI_38` or with WPA2-PSK enabled) |
 | `JMB_07`, `JMB_10` | Destructive; skipped unless `--allow-destructive-jumbo` |
 | `REG_03` | Implemented; needs firmware file path and reserved bench run |
 | Regression QoS row | Collector may show `—` until QoS UCI/SNMP mapping is finalized |
@@ -206,6 +222,16 @@ venv/bin/playwright install chromium
 venv/bin/python -m pytest tests/GUI/ -v
 venv/bin/python -m pytest tests/GUI/ -v -k "Summary"
 venv/bin/python -m pytest tests/GUI/ -v -k "WirelessProperties"
+venv/bin/python -m pytest tests/GUI/test_radio_24.py -v
+venv/bin/python -m pytest tests/GUI/ -v -k "Wireless24"
+```
+
+### Automation coverage report (vs May18 test plan)
+
+```bash
+python3 scripts/generate_automation_coverage.py
+# Output: reports/Automation_Coverage_May18.xlsx
+# Sheets: Summary, GUI Progress, All Cases, Roadmap, Automation Index (pytest file + Jenkins job per case)
 ```
 
 ### Jumbo Frames
@@ -355,7 +381,8 @@ Shared helpers: `jenkins/jenkins-common.groovy` (email, `publishHTML`, report co
 
 ### 1. GUI test cases
 
-- **Filter:** `TEST_FILTER` (comma = OR), e.g. `Summary, TopPanel, WirelessProperties` or `test_gui`
+- **Filter:** `TEST_FILTER` (comma = OR), e.g. `Summary, TopPanel, WirelessProperties, Wireless24` or `GUI_34`
+- **Note:** Jumbo tests live under `tests/JumboFrames/` — run locally or extend the pipeline path; destructive cases need `--allow-destructive-jumbo`
 - **Profile:** `PROFILE_NAME`, `RECOVERY_PROFILE_NAME`, optional `Local IPv6 Address`
 
 ### 2. Regression
@@ -375,6 +402,8 @@ Create three separate Jenkins jobs, each pointing at the matching pipeline file 
 
 ## Quick Reference
 
-**65 automated product test cases** are implemented in this repository: **52 GUI + 10 Jumbo + 3 Regression**.
+**71 automated product test cases** are implemented in this repository: **58 GUI + 10 Jumbo + 3 Regression**.
 
-**Remaining work** is mainly: unnumbered GUI product IDs (`GUI_11`–`16`, `56`–`69`, etc.), deeper lab sign-off on conditional cases (TRex, destructive jumbo, firmware upgrade), and framework/reporting polish—not the core GUI/Jumbo/REG flows already coded.
+**Remaining work** is mainly: other GUI product IDs (`GUI_11`–`16`, `GUI_30`–`33`, `GUI_40`–`49`, `GUI_56`–`62`, etc.), deeper lab sign-off on conditional cases (TRex, destructive jumbo, firmware upgrade), and framework/reporting polish—not the core GUI/Jumbo/REG flows already coded.
+
+Regenerate the coverage workbook after adding tests: `python3 scripts/generate_automation_coverage.py`.
