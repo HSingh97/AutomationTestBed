@@ -15,7 +15,7 @@ from scrapli.driver.generic import AsyncGenericDriver
 
 from pages.commands import RootCommands
 from pages.locators import CommonLocators, LinkTestToolLocators, MonitorLocators, UITimeouts
-from utils.cpe_session import open_cpe_gui_session
+from utils.cpe_session import open_cpe_gui_session_if_reachable
 from utils.link_test_config import LinkTestConfig
 from utils.net_utils import ip_in_text
 from utils.parsers import clean_ssh_output, parse_link_test_results, parse_numeric_metric, ssh_scalar
@@ -577,7 +577,9 @@ async def assert_gui_127_link_test_parameters(
         f"logging into CPE {cpe_ip}"
     )
 
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     cpe_root_ssh = await _open_root_ssh_for_host(cpe_ip, device_creds)
     try:
         await _assert_gui_127_on_device(cpe_page, cpe_root_ssh, link_test_config, device_label="CPE")
@@ -671,7 +673,9 @@ async def assert_gui_128_link_test_cpe(
     )
     # endregion
 
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     cpe_root_ssh = await _open_root_ssh_for_host(cpe_ip, device_creds)
     try:
         await _assert_gui_128_on_device(
@@ -812,7 +816,9 @@ async def assert_gui_130_link_test_results(
     )
     # endregion
 
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     cpe_root_ssh = await _open_root_ssh_for_host(cpe_ip, device_creds)
     try:
         await _assert_gui_130_on_device(

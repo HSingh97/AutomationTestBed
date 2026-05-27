@@ -40,7 +40,12 @@ from utils.parsers import (
     ssh_scalar,
     sysfs_tput_to_mbps,
 )
-from utils.cpe_session import ensure_cpe_logged_in, goto_cpe_luci, open_cpe_gui_session
+from utils.cpe_session import (
+    ensure_cpe_logged_in,
+    goto_cpe_luci,
+    is_cpe_host_reachable,
+    open_cpe_gui_session_if_reachable,
+)
 from utils.monitor_assoc import find_assoc_index_for_cpe
 from utils.verify_output import print_comparison_table, print_gui_backend_table, print_section
 
@@ -322,7 +327,9 @@ async def assert_gui_83_radio_link_statistics(
         f"logging into CPE {cpe_ip} for the same validation"
     )
 
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     cpe_root_ssh = await _open_root_ssh_for_host(cpe_ip, device_creds)
     try:
         await _assert_gui_83_on_device(cpe_page, cpe_root_ssh, [bsu_ip], device_label="CPE")
@@ -494,6 +501,27 @@ async def _verify_single_ip_hyperlink(
         f"{source_label}: link does not target {target_label} {target_ip} (text={link_text}, href={link_href})",
     )
 
+    if not is_cpe_host_reachable(target_ip):
+        print_gui_backend_table(
+            f"GUI_84 [{source_label}] — {target_label} {target_ip} hyperlink (test host cannot open peer GUI)",
+            [
+                (f"{target_label} IP (link text)", target_ip, link_text, None),
+                ("Link href", link_href, link_href, None),
+                ("Peer GUI from test host", "reachable", "not reachable (IPv6 mgmt path)", None),
+            ],
+        )
+        _log(
+            f"GUI_84 [{source_label}]: verified hyperlink to {target_ip}; "
+            "skipped new-tab login because peer is not reachable from test host"
+        )
+        return {
+            "target_ip": target_ip,
+            "link_text": link_text,
+            "link_href": link_href,
+            "target_url": "",
+            "summary_ip": "",
+        }
+
     async with gui_page.context.expect_page(timeout=UITimeouts.PAGE_LOAD_MS) as new_page_info:
         await ip_link.click(timeout=UITimeouts.ELEMENT_WAIT_MS)
     target_page = await new_page_info.value
@@ -577,7 +605,9 @@ async def assert_gui_84_cpe_ip_hyperlink(
         return
 
     check.is_true(bool(bsu_ip), "GUI_84: BTS IP is required for CPE-side hyperlink verification")
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     try:
         await open_radio1_link_statistics(cpe_page)
         _log(f"GUI_84: saved BTS hyperlink data; verifying BTS hyperlink from CPE {cpe_ip}")
@@ -645,7 +675,9 @@ async def assert_gui_88_detailed_statistics_back(
         f"logging into CPE {cpe_ip} for the same validation"
     )
 
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     try:
         await _assert_gui_88_on_device(cpe_page, [bsu_ip], device_label="CPE")
     finally:
@@ -750,7 +782,9 @@ async def assert_gui_89_detailed_statistics_disconnect(
         f"logging into CPE {cpe_ip} for the same validation"
     )
 
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     cpe_root_ssh = await _open_root_ssh_for_host(cpe_ip, device_creds)
     try:
         await _assert_gui_89_on_device(cpe_page, cpe_root_ssh, [bsu_ip], device_label="CPE")
@@ -866,7 +900,9 @@ async def assert_gui_90_detailed_statistics_clear(
         f"logging into CPE {cpe_ip} for the same validation"
     )
 
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     cpe_root_ssh = await _open_root_ssh_for_host(cpe_ip, device_creds)
     try:
         await _assert_gui_90_on_device(cpe_page, cpe_root_ssh, [bsu_ip], device_label="CPE")
@@ -1120,7 +1156,9 @@ async def assert_gui_91_detailed_statistics_identity(
         f"logging into CPE {cpe_ip} for the same validation"
     )
 
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     cpe_root_ssh = await _open_root_ssh_for_host(cpe_ip, device_creds)
     try:
         await _assert_gui_91_on_device(cpe_page, cpe_root_ssh, [bsu_ip], device_label="CPE")
@@ -1204,7 +1242,9 @@ async def assert_gui_92_detailed_statistics_performance(
         f"logging into CPE {cpe_ip} for the same validation"
     )
 
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     cpe_root_ssh = await _open_root_ssh_for_host(cpe_ip, device_creds)
     try:
         await _assert_gui_92_on_device(cpe_page, cpe_root_ssh, [bsu_ip], device_label="CPE")

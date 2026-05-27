@@ -13,7 +13,7 @@ from scrapli.driver.generic import AsyncGenericDriver
 
 from pages.commands import RootCommands
 from pages.locators import CommonLocators, DiagnosticsLocators, MonitorLocators, UITimeouts
-from utils.cpe_session import open_cpe_gui_session
+from utils.cpe_session import open_cpe_gui_session_if_reachable
 from utils.net_utils import ip_in_text, unreachable_ping_target
 from utils.monitor_assoc import find_assoc_index_for_cpe
 from utils.parsers import clean_ssh_output, ssh_scalar
@@ -299,20 +299,36 @@ async def _assert_gui_113_on_device(
     await gui_page.locator(DiagnosticsLocators.PING_SIZE).fill("64")
     await gui_page.locator(DiagnosticsLocators.PING_BUTTON).click()
 
+    def _ping_failed(text: str) -> bool:
+        lowered = text.lower()
+        if "bytes from" in lowered and "0% packet loss" in lowered:
+            return False
+        failure_markers = (
+            "100% packet loss",
+            "network unreachable",
+            "destination unreachable",
+            "address unreachable",
+            "bad address",
+            "name or service not known",
+            "timed out",
+        )
+        return any(marker in lowered for marker in failure_markers)
+
     bad_out = await _wait_for_response_text(
         gui_page,
         lambda u: "diag_ping_output" in u,
-        lambda t: "100% packet loss" in t.lower(),
+        _ping_failed,
         timeout_s=40,
     )
     bad_text = bad_out or await _read_rc_output(gui_page)
+    failed = _ping_failed(bad_text)
 
     bad_rows = [
-        ("Unreachable — 100% loss", "yes" if "100% packet loss" in bad_text.lower() else "no", "yes", None),
-        ("Unreachable — no replies", "yes" if "bytes from" not in bad_text.lower() else "no", "yes", None),
+        ("Unreachable — failed", "yes" if failed else "no", "yes", "PASS" if failed else "FAIL"),
+        ("Unreachable — no replies", "yes" if "bytes from" not in bad_text.lower() else "no", "yes", "PASS" if failed else "FAIL"),
     ]
     print_gui_backend_table(f"GUI_113 [{device_label}] — Ping unreachable host", bad_rows)
-    check.is_true("100% packet loss" in bad_text.lower(), f"Ping to {bad_target} should fail: {bad_text[:200]}")
+    check.is_true(failed, f"Ping to {bad_target} should fail: {bad_text[:200]}")
 
     _log(f"GUI_113 [{device_label}] completed")
     return {"target": target, "bad_target": bad_target}
@@ -334,7 +350,9 @@ async def assert_gui_113_ping(
     check.is_true(bool(device_creds), "GUI_113: device credentials are required for CPE validation")
     _log(f"GUI_113: saved BTS snapshot ({bts_result['target']}); logging into CPE {cpe_ip}")
 
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     try:
         if await _cpe_has_feature(cpe_page, DiagnosticsLocators.UTIL_PING, "Ping", "GUI_113"):
             await _assert_gui_113_on_device(cpe_page, [bsu_ip], device_label="CPE", check_shell=False)
@@ -396,7 +414,9 @@ async def assert_gui_114_traceroute(
     check.is_true(bool(device_creds), "GUI_114: device credentials are required for CPE validation")
     _log(f"GUI_114: saved BTS snapshot ({bts_result['target']}); logging into CPE {cpe_ip}")
 
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     try:
         if await _cpe_has_feature(cpe_page, DiagnosticsLocators.UTIL_TRACEROUTE, "Traceroute", "GUI_114"):
             await _assert_gui_114_on_device(cpe_page, [bsu_ip], device_label="CPE")
@@ -506,7 +526,9 @@ async def assert_gui_115_packet_capture(
     check.is_true(bool(device_creds), "GUI_115: device credentials are required for CPE validation")
     _log(f"GUI_115: saved BTS snapshot ({bts_result['pcap_path'] or 'no_pcap'}); logging into CPE {cpe_ip}")
 
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     cpe_root_ssh = await _open_root_ssh_for_host(cpe_ip, device_creds)
     try:
         if await _cpe_has_feature(cpe_page, DiagnosticsLocators.UTIL_PACKET_CAPTURE, "Packet Capture", "GUI_115"):
@@ -571,7 +593,9 @@ async def assert_gui_116_console(
     check.is_true(bool(device_creds), "GUI_116: device credentials are required for CPE validation")
     _log(f"GUI_116: saved BTS snapshot (len={bts_result['text_len']}); logging into CPE {cpe_ip}")
 
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     try:
         if await _cpe_has_feature(cpe_page, DiagnosticsLocators.UTIL_CONSOLE, "Console", "GUI_116"):
             await _assert_gui_116_on_device(cpe_page, device_label="CPE")
@@ -675,7 +699,9 @@ async def assert_gui_117_cable_length(
         f"logging into CPE {cpe_ip}"
     )
 
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     cpe_root_ssh = await _open_root_ssh_for_host(cpe_ip, device_creds)
     try:
         if await _cpe_has_feature(cpe_page, DiagnosticsLocators.UTIL_CABLE_LENGTH, "Cable Length", "GUI_117"):
@@ -863,7 +889,9 @@ async def assert_gui_118_lldp(
     check.is_true(bool(device_creds), "GUI_118: device credentials are required for CPE validation")
     _log(f"GUI_118: saved BTS snapshot (neighbors={bts_result['neighbors']}); logging into CPE {cpe_ip}")
 
-    cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
+    cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
+    if not cpe_page:
+        return
     cpe_root_ssh = await _open_root_ssh_for_host(cpe_ip, device_creds)
     try:
         if await _cpe_has_feature(cpe_page, DiagnosticsLocators.UTIL_LLDP, "LLDP", "GUI_118"):

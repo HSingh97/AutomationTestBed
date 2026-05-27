@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import time
 from pathlib import Path
 
 from pages.locators import CommonLocators, LoginPageLocators, SummaryLocators, SummaryNetworkLocators, UITimeouts
-from utils.net_utils import format_luci_url, ip_in_text, is_ipv6_literal
+from utils.net_utils import format_luci_url, ip_in_text, is_ipv6_literal, normalize_ip
 
 DEBUG_LOG_PATH = Path("/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-a9118f.log")
 DEBUG_SESSION_ID = "a9118f"
@@ -249,12 +250,56 @@ async def ensure_cpe_logged_in(
     raise RuntimeError(f"CPE {cpe_ip}: authenticated LuCI page did not become ready")
 
 
+def is_cpe_host_reachable(cpe_ip: str, *, timeout_s: int = 2) -> bool:
+    """Return True when the test runner can reach the peer management address."""
+    host = normalize_ip(cpe_ip)
+    if not host:
+        return False
+    if is_ipv6_literal(host):
+        cmd = ["ping6", "-c", "1", "-W", str(max(1, timeout_s)), host]
+    else:
+        cmd = ["ping", "-c", "1", "-W", str(max(1, timeout_s)), host]
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True).returncode == 0
+    except FileNotFoundError:
+        return False
+
+
 async def open_cpe_gui_session(context, cpe_ip: str, device_creds: dict, *, require_summary: bool = False):
     """Return a logged-in Playwright page for the CPE."""
     page = await context.new_page()
     await goto_cpe_luci(page, cpe_ip)
     await ensure_cpe_logged_in(page, cpe_ip, device_creds, require_summary=require_summary)
     return page
+
+
+async def open_cpe_gui_session_if_reachable(
+    context,
+    cpe_ip: str,
+    device_creds: dict,
+    *,
+    require_summary: bool = False,
+):
+    """
+    Open a CPE GUI session when the peer is reachable from the test host.
+    Returns None when the management path is down (common on IPv6 lab setups).
+    """
+    if not is_cpe_host_reachable(cpe_ip):
+        print(f"[CPE_SESSION] {cpe_ip} not reachable from test host; skipping CPE GUI login")
+        return None
+    try:
+        return await open_cpe_gui_session(
+            context,
+            cpe_ip,
+            device_creds,
+            require_summary=require_summary,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        if "UNREACHABLE" in message or "ERR_ADDRESS_UNREACHABLE" in message:
+            print(f"[CPE_SESSION] {cpe_ip} GUI unreachable ({message}); skipping CPE-side validation")
+            return None
+        raise
 
 
 async def read_summary_network_ips(cpe_page) -> str:

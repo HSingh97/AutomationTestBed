@@ -8,7 +8,8 @@ from utils.parsers import extract_ip_objects
 
 UNREACHABLE_IPV4 = "192.0.0.1"
 # Non-routable target for unreachable ping/traceroute on IPv6-only stacks.
-UNREACHABLE_IPV6 = "100::ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+# Valid ULA form; typically unrouted from the DUT (unlike overlong literals rejected by ping).
+UNREACHABLE_IPV6 = "fd00:dead:beef::1"
 
 
 def normalize_ip(ip_text: str) -> str:
