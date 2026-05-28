@@ -7,6 +7,7 @@ from typing import Any
 
 from utils.parsers import clean_ssh_output
 from utils.vlan_uci import (
+    build_bts_transparent_mgmt_commands,
     build_bts_qinq_commands,
     build_cpe_untagged_commands,
     build_verify_commands,
@@ -133,6 +134,22 @@ async def ensure_bts_qinq_ssh(ssh, profile_tb: dict[str, Any]) -> bool:
     return ok and _verify_bts_qinq(after, profile_tb)
 
 
+async def ensure_bts_transparent_ssh(ssh, profile_tb: dict[str, Any]) -> bool:
+    current = await read_vlan_uci_ssh(ssh, profile_tb, "bts")
+    exp_mgmt = str(int((profile_tb.get("mgmt_vlan", {}) or {}).get("uci_value", 101)))
+    mode = _normalize_mode_name(current.get("mode", "transparent"))
+    if mode == "transparent" and (not current.get("mgmtvlan") or current.get("mgmtvlan") == exp_mgmt):
+        print(f"[vlan] BTS transparent OK (mgmtvlan={current.get('mgmtvlan', exp_mgmt)})")
+        return True
+    cmds = build_bts_transparent_mgmt_commands(profile_tb)
+    print(f"[vlan] BTS applying transparent+mgmtvlan ({len(cmds)} commands)")
+    ok = await apply_vlan_commands_ssh(ssh, cmds)
+    after = await read_vlan_uci_ssh(ssh, profile_tb, "bts")
+    mode_after = _normalize_mode_name(after.get("mode", "transparent"))
+    mgmt_ok = not after.get("mgmtvlan") or after.get("mgmtvlan") == exp_mgmt
+    return ok and mode_after == "transparent" and mgmt_ok
+
+
 async def ensure_cpe_untagged_ssh(ssh, profile_tb: dict[str, Any]) -> bool:
     current = await read_vlan_uci_ssh(ssh, profile_tb, "cpe")
     if _verify_cpe_untagged(current):
@@ -161,6 +178,8 @@ async def ensure_vlan_mode_ssh(
 
     if role == "bts" and exp == "qinq" and tb.get("qinq"):
         return await ensure_bts_qinq_ssh(ssh, tb)
+    if role == "bts" and exp == "transparent":
+        return await ensure_bts_transparent_ssh(ssh, tb)
 
     if role == "cpe" and exp == "transparent":
         return await ensure_cpe_untagged_ssh(ssh, tb)

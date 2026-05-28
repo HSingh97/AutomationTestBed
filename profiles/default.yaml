@@ -14,7 +14,7 @@ dut:
   username: root
   password: Sen@0ubRNwk$
 
-# Session bootstrap: BTS QinQ, CPE transparent, mgmt VLAN (any ID), CPE IP from BTS DHCP (SSH)
+# Session bootstrap: BTS transparent, CPE transparent, mgmt VLAN (any ID), CPE IP from BTS DHCP (SSH)
 testbed:
   enabled: true
   bootstrap_on_start: true
@@ -23,14 +23,14 @@ testbed:
   recovery:
     bts_fallback_ipv4: "10.0.0.1"
   factory_defaults:
-    bts_vlan_mode: qinq
+    bts_vlan_mode: transparent
     cpe_vlan_mode: transparent
   # RF data path: BTS double-tag S-VLAN 100 + C-VLAN 101; CPE untagged (transparent)
   qinq:
     svlan: 100
     cvlan: 101
   mgmt_vlan:
-    prefix_len: 64
+    prefix_len: 120
     uci_key: vlan.ath1.mgmtvlan
     uci_value: 101
     lab_pc_vlan_id: 101
@@ -46,7 +46,7 @@ testbed:
     cpe_radio: ath1
     bts:
       mode_key: vlan.ath1.mode
-      mode_value: qinq
+      mode_value: transparent
       svlan_key: vlan.ath1.svlan
       cvlan_key: vlan.ath1.cvlan
       mgmtvlan_key: vlan.ath1.mgmtvlan
@@ -58,9 +58,8 @@ testbed:
       cvlan_key: vlan.ath1.cvlan
   lab_pc_tagging:
     bts:
-      mode: qinq
-      svlan: 100
-      cvlan: 101
+      mode: single
+      vlan_id: 101
     cpe:
       mode: untagged
   vlan_ssh: {}
@@ -182,7 +181,7 @@ ip_tests:
   ipv4_address: "192.168.2.1"
   ipv4_netmask: "255.255.255.0"
   ipv4_gateway: "192.168.2.254"
-  ipv6_address: "2401:4900:d0:40d4:0:17b8:0:330/64"
+  ipv6_address: "2401:4900:d0:40d4:0:17b8:0:330/120"
   ipv6_gateway: "2401:4900:d0:40d4::17b8:0:1"
   ping_count_short: 4
   ping_count_long: 50

@@ -19,6 +19,9 @@ OID_VLAN_STATUS_SCALAR = ".1.3.6.1.4.1.52619.1.1.4.1.0"
 OID_VLAN_MODE_SCALAR = ".1.3.6.1.4.1.52619.1.1.4.2.0"
 VLAN_MODE_MAP = {"0": "Transparent", "1": "Access", "2": "Trunk", "3": "QinQ"}
 
+_MODEL_TOKEN_RE = re.compile(r"\b(?:UBR|EOC|ADE)[A-Za-z0-9._-]*\b", re.IGNORECASE)
+_FW_TOKEN_RE = re.compile(r"\b\d+\.\d+\.\d+(?:\.\d+)?\b")
+
 
 @dataclass
 class DeviceSummary:
@@ -101,6 +104,30 @@ async def _ssh_cmd(ssh: AsyncGenericDriver, command: str) -> str:
     return clean_ssh_output(str(result.result or ""))
 
 
+def _sanitize_model(raw_output: str) -> str:
+    """
+    Extract stable model token from noisy shell output.
+    Prevents banner/ascii junk from leaking into report headers.
+    """
+    text = str(raw_output or "").replace("\r", "\n")
+    for token in _MODEL_TOKEN_RE.findall(text):
+        if token:
+            return token.upper()
+    scalar = ssh_scalar(raw_output).strip()
+    if scalar and re.fullmatch(r"[A-Za-z0-9._-]{3,40}", scalar):
+        return scalar
+    return "—"
+
+
+def _sanitize_fw(raw_output: str) -> str:
+    text = str(raw_output or "")
+    match = _FW_TOKEN_RE.search(text)
+    if match:
+        return match.group(0)
+    scalar = ssh_scalar(raw_output).strip()
+    return scalar if scalar else "—"
+
+
 async def _fetch_qos_label(ssh: AsyncGenericDriver, host: str) -> str:
     """Best-effort QoS label via UCI, with SNMP/CLI fallback."""
     qos_uci = await _ssh_cmd(ssh, "uci show ath1qos 2>/dev/null")
@@ -130,8 +157,10 @@ async def _fetch_qos_label(ssh: AsyncGenericDriver, host: str) -> str:
 async def collect_device_summary(host: str, password: str, *, fallback_ip: str = "") -> DeviceSummary:
     ssh = await _open_ssh(host, password)
     try:
-        model = ssh_scalar((await ssh.send_command(RootCommands.GET_MODEL)).result) or "—"
-        fw_version = ssh_scalar((await ssh.send_command(RootCommands.GET_SW_VERSION)).result) or "—"
+        model_raw = str((await ssh.send_command(RootCommands.GET_MODEL)).result or "")
+        fw_raw = str((await ssh.send_command(RootCommands.GET_SW_VERSION)).result or "")
+        model = _sanitize_model(model_raw)
+        fw_version = _sanitize_fw(fw_raw)
         ip = ssh_scalar((await ssh.send_command(RootCommands.GET_IPv6)).result) or fallback_ip or host
         vlan = await asyncio.to_thread(fetch_vlan_label, host)
         qos = await _fetch_qos_label(ssh, host)

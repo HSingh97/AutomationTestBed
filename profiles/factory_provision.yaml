@@ -39,13 +39,13 @@ testbed:
   recovery:
     bts_fallback_ipv4: "10.0.0.1"
   factory_defaults:
-    bts_vlan_mode: qinq
+    bts_vlan_mode: transparent
     cpe_vlan_mode: transparent
   qinq:
     svlan: 200
     cvlan: 201
   mgmt_vlan:
-    prefix_len: 64
+    prefix_len: 120
     uci_key: vlan.ath1.mgmtvlan
     uci_value: 201
     lab_pc_vlan_id: 201
@@ -59,15 +59,14 @@ testbed:
     cpe_radio: ath1
     bts:
       mode_key: vlan.ath1.mode
-      mode_value: qinq
+      mode_value: transparent
     cpe:
       mode_key: vlan.ath1.mode
       mode_value: transparent
   lab_pc_tagging:
     bts:
-      mode: qinq
-      svlan: 200
-      cvlan: 201
+      mode: single
+      vlan_id: 201
     cpe:
       mode: untagged
   primary_pc:

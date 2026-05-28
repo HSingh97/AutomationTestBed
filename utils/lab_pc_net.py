@@ -49,11 +49,36 @@ def _build_pc_link_commands(
     Returns (joined shell commands, human-readable if name).
     """
     mode = str(tagging.get("mode", "untagged")).lower()
+    # Keep a single source of truth for management IPv6.
+    # We explicitly clear stale global IPv6 from commonly used legacy VLAN subinterfaces
+    # so host reachability checks cannot accidentally succeed via the wrong path.
+    cleanup_known_vlan_globals = [
+        f"ip -6 addr flush dev {shlex.quote(iface)}.100.101 2>/dev/null || true",
+        f"ip -6 addr flush dev {shlex.quote(iface)}.100 2>/dev/null || true",
+        f"ip -6 addr flush dev {shlex.quote(iface)}.200.201 2>/dev/null || true",
+        f"ip -6 addr flush dev {shlex.quote(iface)}.200 2>/dev/null || true",
+        f"ip -6 addr flush dev {shlex.quote(iface)}.201 2>/dev/null || true",
+    ]
     if tagging.get("untagged") or mode == "untagged":
         vlan_if = iface
         cmds = [
+            *cleanup_known_vlan_globals,
             f"ip -6 addr flush dev {shlex.quote(iface)} 2>/dev/null || true",
             f"ip -6 addr add {shlex.quote(cidr)} dev {shlex.quote(iface)} 2>/dev/null || true",
+            f"ip link set {shlex.quote(iface)} up",
+        ]
+        return " && ".join(cmds), vlan_if
+
+    if mode == "single":
+        vlan_id = int(tagging.get("vlan_id", tagging.get("cvlan", 101)))
+        vlan_if = f"{iface}.{vlan_id}"
+        cmds = [
+            *cleanup_known_vlan_globals,
+            f"ip -6 addr flush dev {shlex.quote(iface)} 2>/dev/null || true",
+            f"ip link add link {shlex.quote(iface)} name {shlex.quote(vlan_if)} type vlan id {vlan_id} 2>/dev/null || true",
+            f"ip -6 addr flush dev {shlex.quote(vlan_if)} 2>/dev/null || true",
+            f"ip -6 addr add {shlex.quote(cidr)} dev {shlex.quote(vlan_if)} 2>/dev/null || true",
+            f"ip link set {shlex.quote(vlan_if)} up",
             f"ip link set {shlex.quote(iface)} up",
         ]
         return " && ".join(cmds), vlan_if
@@ -65,6 +90,7 @@ def _build_pc_link_commands(
     outer = f"{iface}.{svlan}"
     inner = f"{outer}.{cvlan}"
     cmds = [
+        *cleanup_known_vlan_globals,
         f"ip -6 addr flush dev {shlex.quote(iface)} 2>/dev/null || true",
         f"ip link add link {shlex.quote(iface)} name {shlex.quote(outer)} type vlan id {svlan} 2>/dev/null || true",
         f"ip link add link {shlex.quote(outer)} name {shlex.quote(inner)} type vlan id {cvlan} 2>/dev/null || true",

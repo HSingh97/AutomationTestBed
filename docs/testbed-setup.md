@@ -99,6 +99,16 @@ PYTHONPATH=. python3 scripts/factory_provision.py --fallback-ip 10.0.0.1
    - CPE SSID/key applied via **secondary PC SSH hop** (`ucidyn apply`)
    - link formed (`clients >= 1`)
 5. Run target pytest suites.
+6. Run generic post-upgrade smoke:
+
+```bash
+PYTHONPATH=. python3 scripts/generic_ui_smoke.py --profile factory_provision --fallback-ip 10.0.0.1
+```
+
+Generates:
+- `reports/artifacts/generic_ui_smoke_<timestamp>.json` (page results + CPU/memory samples)
+- `reports/artifacts/generic_ui_smoke_<timestamp>.csv` (page timing table)
+- `reports/artifacts/generic_ui_smoke_<timestamp>.html` (end-user dashboard report)
 
 Default automation safeguards:
 - BTS PC fallback subnet auto-ensure: `10.0.0.10/8`

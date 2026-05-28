@@ -60,6 +60,24 @@ def build_bts_qinq_commands(profile_tb: dict[str, Any]) -> list[str]:
     return cmds + extra
 
 
+def build_bts_transparent_mgmt_commands(profile_tb: dict[str, Any]) -> list[str]:
+    """BTS: transparent mode + mgmt VLAN only (single mgmt tag)."""
+    keys = _iface_keys(profile_tb, "bts")
+    mgmt = _mgmt(profile_tb)
+    mgmt_val = int(mgmt.get("uci_value", _qinq(profile_tb).get("cvlan", 101)))
+    mode_val = str(_vlan_uci(profile_tb).get("bts", {}).get("mode_value", "transparent"))
+    cmds = [
+        build_uci_set(keys["mode"], mode_val),
+        build_uci_delete(keys["svlan"]),
+        build_uci_delete(keys["cvlan"]),
+        build_uci_set(keys["mgmtvlan"], mgmt_val),
+        "uci commit vlan",
+        "/etc/init.d/network reload 2>/dev/null || true",
+    ]
+    extra = list(_vlan_uci(profile_tb).get("bts", {}).get("extra_commands") or [])
+    return cmds + extra
+
+
 def build_cpe_untagged_commands(profile_tb: dict[str, Any]) -> list[str]:
     """CPE: transparent / untagged — no double tagging on RF."""
     keys = _iface_keys(profile_tb, "cpe")
@@ -108,7 +126,7 @@ def _mgmt_from_profile(profile: dict[str, Any]) -> dict[str, Any]:
 def build_bts_network_ipv6_commands(profile: dict[str, Any]) -> list[str]:
     """Set management IPv6 on BTS (network.lan) after factory reset."""
     mgmt = _mgmt_from_profile(profile)
-    prefix = int(mgmt.get("prefix_len", 64))
+    prefix = int(mgmt.get("prefix_len", 120))
     v6 = str(mgmt.get("ipv6_bts", "")).strip()
     if not v6:
         return []
@@ -176,8 +194,15 @@ def lab_pc_vlan_plan(profile_tb: dict[str, Any], *, side: str) -> dict[str, Any]
     cpe_pc = pc_tag.get("cpe", {}) or {}
 
     if side == "bts":
+        mode = str(bts_pc.get("mode", "qinq"))
+        if mode == "single":
+            return {
+                "mode": "single",
+                "vlan_id": int(bts_pc.get("vlan_id", mgmt.get("lab_pc_vlan_id", cvlan))),
+                "untagged": False,
+            }
         return {
-            "mode": str(bts_pc.get("mode", "qinq")),
+            "mode": mode,
             "svlan": int(bts_pc.get("svlan", svlan)),
             "cvlan": int(bts_pc.get("cvlan", cvlan)),
             "untagged": False,

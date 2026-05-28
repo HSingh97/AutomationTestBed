@@ -9,6 +9,16 @@ pipeline {
     agent { node { label "${TARGET_STAND}" } }
 
     parameters {
+        string(
+            name: 'PROFILE_NAME',
+            defaultValue: 'default',
+            description: 'Primary profile: profiles/<name>.yaml'
+        )
+        string(
+            name: 'RECOVERY_PROFILE_NAME',
+            defaultValue: 'link_formation',
+            description: 'Recovery profile: profiles/<name>.yaml'
+        )
         booleanParam(
             name: 'RUN_SOFT_REBOOT',
             defaultValue: true,
@@ -105,6 +115,8 @@ pipeline {
                     echo 'UBR Stability Regression (pytest)'
                     echo "--- TARGET STAND: ${TARGET_STAND}"
                     echo "--- TESTS:        ${env.REGRESSION_SELECTED_SUMMARY}"
+                    echo "Profile:        ${params.PROFILE_NAME}"
+                    echo "Recovery:       ${params.RECOVERY_PROFILE_NAME}"
                     echo "Local IPv6:     ${params['Local IPv6 Address'] ?: '(profile default)'}"
                     echo "Firmware:       ${params.RUN_FIRMWARE_UPGRADE ? 'uploaded image -> uploads/firmware_upload.bin' : '(not used)'}"
                     echo 'Report:         single merged reports/artifacts/Regression_Report.html'
@@ -128,6 +140,8 @@ pipeline {
             steps {
                 script {
                     def localIP = (params['Local IPv6 Address'] ?: '').trim()
+                    def profileName = params.PROFILE_NAME
+                    def recoveryProfileName = params.RECOVERY_PROFILE_NAME
                     def ipv6Arg = localIP ? "--local-ipv6 \"${localIP}\"" : ''
 
                     sh '''
@@ -143,8 +157,8 @@ pipeline {
                             -k "${env.REGRESSION_K_FILTER}" \
                             --allow-regression \
                             --regression-fresh \
-                            --profile default \
-                            --recovery-profile link_formation \
+                            --profile "${profileName}" \
+                            --recovery-profile "${recoveryProfileName}" \
                             ${ipv6Arg} \
                             ${env.REGRESSION_ITER_ARGS} \
                             ${env.FIRMWARE_IMAGE_ARG}
@@ -191,6 +205,8 @@ pipeline {
 
                 def detailsHtml = """\
                     <p><strong>Tests run:</strong> ${env.REGRESSION_SELECTED_SUMMARY ?: '—'}</p>
+                    <p><strong>Profile:</strong> ${params.PROFILE_NAME}</p>
+                    <p><strong>Recovery profile:</strong> ${params.RECOVERY_PROFILE_NAME}</p>
                     <p><strong>Target IPv6:</strong> ${params['Local IPv6 Address'] ?: '(profile default)'}</p>
                     <p><strong>Firmware:</strong> ${params.RUN_FIRMWARE_UPGRADE ? 'uploaded in build' : '(not used)'}</p>
                     <p><strong>Report:</strong> one merged HTML (per test: Total Executed / Passed / Failed)</p>

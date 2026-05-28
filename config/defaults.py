@@ -199,7 +199,7 @@ TESTBED_DEFAULTS = {
     },
     "qinq": {"svlan": 100, "cvlan": 101},
     "mgmt_vlan": {
-        "prefix_len": 64,
+        "prefix_len": 120,
         "uci_key": "vlan.ath1.mgmtvlan",
         "uci_value": 101,
         "lab_pc_vlan_id": 101,

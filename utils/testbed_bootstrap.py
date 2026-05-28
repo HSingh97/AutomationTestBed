@@ -105,15 +105,33 @@ async def _open_mgmt_strict(
     label: str = "device",
     retries: int = 3,
     retry_s: int = 5,
+    source_ipv6: str = "",
 ) -> tuple[AsyncGenericDriver, str]:
     """SSH to device on mgmt IPv6 only (no IPv4 fallbacks)."""
     host = normalize_ip(primary)
+    source = normalize_ip(source_ipv6) if source_ipv6 else ""
     last = ""
     for attempt in range(max(1, retries)):
         try:
             return await _open_root_ssh(host, password), host
         except Exception as exc:
             last = str(exc)
+            # Some hosts have multiple IPv6 routes/interfaces (tailscale, parent NIC, VLAN NIC).
+            # If mgmt reachability exists but SSH picks a bad source path, retry with explicit source bind.
+            if source and ":" in host:
+                try:
+                    conn = AsyncGenericDriver(
+                        host=host,
+                        auth_username="root",
+                        auth_password=password,
+                        auth_strict_key=False,
+                        transport="asyncssh",
+                        transport_options={"local_addr": source},
+                    )
+                    await conn.open()
+                    return conn, host
+                except Exception as src_exc:
+                    last = f"{last}; source-bind({source})={src_exc}"
             if attempt + 1 < retries:
                 await asyncio.sleep(retry_s)
     raise ConnectionError(f"{label} mgmt IPv6 SSH failed for {host}: {last}")
@@ -138,7 +156,7 @@ async def _setup_lab_pcs(
     """Configure lab PC Ethernet tagging + mgmt IPv6 via internet SSH (before device access)."""
     tb = _tb(active)
     mgmt = _mgmt(active)
-    prefix_len = int(mgmt.get("prefix_len", 64))
+    prefix_len = int(mgmt.get("prefix_len", 120))
     bts_pc_tag = lab_pc_vlan_plan(tb, side="bts")
     cpe_pc_tag = lab_pc_vlan_plan(tb, side="cpe")
 
@@ -409,7 +427,12 @@ async def bootstrap_testbed(
     used_recovery = False
 
     async def _connect_bts_strict() -> tuple[AsyncGenericDriver, str]:
-        ssh, host = await _open_mgmt_strict(state.bts_mgmt_ipv6, password, label="BTS")
+        ssh, host = await _open_mgmt_strict(
+            state.bts_mgmt_ipv6,
+            password,
+            label="BTS",
+            source_ipv6=state.bts_pc_ipv6,
+        )
         print(f"[testbed] BTS SSH via mgmt IPv6 {host}")
         return ssh, host
 

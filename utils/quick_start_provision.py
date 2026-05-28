@@ -75,7 +75,7 @@ async def provision_bts_quick_start_gui(
     if await _try_open_quick_start(gui_page):
         done.append("quick_start_page")
 
-    prefix = int(mgmt.get("prefix_len", 64))
+    prefix = int(mgmt.get("prefix_len", 120))
     v6_bts = str(mgmt.get("ipv6_bts", "")).strip()
     v6_cidr = v6_bts if "/" in v6_bts else f"{v6_bts}/{prefix}"
 
