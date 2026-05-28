@@ -6,10 +6,11 @@ from utils.apply_triple import apply_triple as _apply_triple
 
 
 async def _goto_admin_path(gui_page, path_fragment: str):
-    match = re.search(r"(https?://[^/]+/cgi-bin/luci/;stok=[^/]+)", gui_page.url or "")
-    if not match:
+    from utils.ui_helpers import luci_base_url
+
+    base = luci_base_url(gui_page.url or "")
+    if not base:
         return False
-    base = match.group(1)
     target = f"{base}/admin{path_fragment}"
     await gui_page.goto(target, timeout=UITimeouts.PAGE_LOAD_MS)
     await gui_page.wait_for_load_state("networkidle")
@@ -17,8 +18,14 @@ async def _goto_admin_path(gui_page, path_fragment: str):
 
 
 async def open_network_submenu(gui_page, href_fragment):
-    await gui_page.locator(CommonLocators.MENU_NETWORK).first.click()
-    await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
+    try:
+        await gui_page.locator(CommonLocators.MENU_NETWORK).first.click(timeout=5000)
+        await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
+    except Exception:
+        used_direct = await _goto_admin_path(gui_page, href_fragment)
+        if used_direct:
+            return
+        raise
     submenu = gui_page.locator(CommonLocators.submenu_by_href(href_fragment)).first
     try:
         await submenu.click(timeout=5000)

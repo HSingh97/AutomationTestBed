@@ -18,11 +18,12 @@ Usage:
 
 import sys, os, time, traceback, subprocess, re, argparse, json, asyncio
 from ixnetwork_restpy import *
+from config.defaults import TRAFFIC_DEFAULTS
 from pages.commands import RootCommands
 from utils.net_utils import format_snmp_host, format_ssh_host, normalize_ip
 from utils.profile_manager import load_profile_bundle
 from utils.recovery_manager import RecoveryManager
-from utils.traffic.trex_runner import run_trex_stats_check
+from traffic.trex_runner import run_trex_stats_check
 
 try:
     from weasyprint import HTML
@@ -76,6 +77,7 @@ physicalPorts = [
 
 debugMode = True
 forceTakePortOwnership = True
+TREX_DEFAULTS = TRAFFIC_DEFAULTS["trex"]
 
 frameSizeType = 'imix'   
 fixedFrameSize = 1500    
@@ -713,8 +715,52 @@ try:
                         help="Recovery profile name from profiles/<name>.yaml")
     parser.add_argument('--traffic-mode', type=str, choices=['benchmark', 'stats_check'], default='benchmark',
                         help="benchmark uses IXIA; stats_check uses TRex for lightweight checks")
-    parser.add_argument('--trex-server', type=str, default='127.0.0.1',
+    parser.add_argument('--trex-server', type=str, default=TREX_DEFAULTS["host"],
                         help="TRex server for stats-check mode")
+    parser.add_argument('--trex-user', type=str, default=TREX_DEFAULTS["user"],
+                        help="SSH username for the TRex server")
+    parser.add_argument('--trex-password', type=str, default=os.getenv("TREX_PASSWORD", TREX_DEFAULTS["password"]),
+                        help="SSH password for the TRex server (or use TREX_PASSWORD env var)")
+    parser.add_argument('--trex-dir', type=str, default=TREX_DEFAULTS["directory"],
+                        help="Remote TRex install directory")
+    parser.add_argument('--trex-pythonpath', type=str, default=TREX_DEFAULTS["pythonpath"],
+                        help="Remote PYTHONPATH used by the TRex client script")
+    parser.add_argument('--trex-client-script', type=str, default=TREX_DEFAULTS["client_script"],
+                        help="Remote TRex client script path")
+    parser.add_argument('--trex-ports', type=str, default=TREX_DEFAULTS["ports"],
+                        help="Comma-separated TRex ports reserved for the run")
+    parser.add_argument('--trex-server-su', type=str, default='',
+                        help="Remote TRex SU server 1 IP for 4-7 SUs")
+    parser.add_argument('--trex-server-su2', type=str, default='',
+                        help="Remote TRex SU server 2 IP for 8-11 SUs")
+    parser.add_argument('--trex-server-su3', type=str, default='',
+                        help="Remote TRex SU server 3 IP for 12-15 SUs")
+    parser.add_argument('--trex-server-su4', type=str, default='',
+                        help="Remote TRex SU server 4 IP for 16-19 SUs")
+    parser.add_argument('--trex-server-cores', type=int, default=TREX_DEFAULTS["server_cores"],
+                        help="Core count passed to t-rex-64 -c")
+    parser.add_argument('--trex-run-mode', type=str, choices=['max_throughput', 'counter_check'], default='max_throughput',
+                        help="max_throughput captures achieved throughput; counter_check also validates DUT counters")
+    parser.add_argument('--trex-direction', type=str, choices=['bidi', 'uplink', 'downlink', 'all'], default='',
+                        help="Direction passed to the remote TRex script (blank derives from ratio)")
+    parser.add_argument('--trex-proto', type=str, choices=['udp', 'tcp', 'both'], default='udp',
+                        help="Protocol passed to the remote TRex script")
+    parser.add_argument('--trex-subw', type=str, default='',
+                        help="Optional per-SU uplink bandwidth override passed as --subw")
+    parser.add_argument('--trex-vlan', type=int, default=-1,
+                        help="Optional VLAN ID for the remote TRex script")
+    parser.add_argument('--trex-graph', action='store_true',
+                        help="Enable graph generation in the remote TRex script")
+    parser.add_argument('--trex-su-count', type=int, default=0,
+                        help="Override SU count for the TRex client script (0 uses --cpes)")
+    parser.add_argument('--trex-dl-bw', type=str, default='',
+                        help="Override TRex client downlink bandwidth, e.g. 400M")
+    parser.add_argument('--trex-ul-bw', type=str, default='',
+                        help="Override TRex client uplink bandwidth, e.g. 400M")
+    parser.add_argument('--trex-packet-size', type=int, default=1500,
+                        help="Packet size passed to the TRex client script")
+    parser.add_argument('--trex-expected-min-mbps', type=float, default=0.0,
+                        help="Optional pass/fail threshold for combined RX throughput in TRex mode")
     args = parser.parse_args()
 
     clear_config_flag = (args.mode == 'clear')
@@ -751,6 +797,17 @@ try:
     uplink_total_mbps = totalCombinedMbps * (ul_ratio / total_ratio) if total_ratio else 0.0
     DOWNLINK_MBPS_PER_CPE = downlink_total_mbps / NUM_CPES if NUM_CPES else 0.0
     UPLINK_MBPS_PER_CPE = uplink_total_mbps / NUM_CPES if NUM_CPES else 0.0
+    trex_su_count = args.trex_su_count or NUM_CPES
+    trex_dl_bw = args.trex_dl_bw or f"{int(round(downlink_total_mbps))}M"
+    trex_ul_bw = args.trex_ul_bw or f"{int(round(uplink_total_mbps))}M"
+    if args.trex_direction:
+        trex_direction = args.trex_direction
+    elif downlink_total_mbps > 0 and uplink_total_mbps > 0:
+        trex_direction = "bidi"
+    elif downlink_total_mbps > 0:
+        trex_direction = "downlink"
+    else:
+        trex_direction = "uplink"
 
     totalDownlinkBps = downlink_total_mbps * 1_000_000
     totalUplinkBps = uplink_total_mbps * 1_000_000
@@ -768,6 +825,13 @@ try:
     print(f"Downlink Target: {downlink_total_mbps:.2f} Mbps total => {DOWNLINK_MBPS_PER_CPE:.2f} Mbps/CPE x {NUM_CPES}")
     print(f"Uplink Target:   {uplink_total_mbps:.2f} Mbps total => {UPLINK_MBPS_PER_CPE:.2f} Mbps/CPE x {NUM_CPES}")
     print(f"Total Combined:  {totalCombinedMbps:.2f} Mbps")
+    if args.traffic_mode == "stats_check":
+        print(f"TRex Server:     {args.trex_server} ({args.trex_user})")
+        print(f"TRex Ports:      {args.trex_ports}")
+        print(f"TRex Run Mode:   {args.trex_run_mode}")
+        print(f"TRex Client:     {args.trex_client_script}")
+        print(f"TRex Direction:  {trex_direction} | Proto={args.trex_proto}")
+        print(f"TRex BWs:        DL={trex_dl_bw} | UL={trex_ul_bw} | SU={trex_su_count}")
     print("-" * 70 + "\n")
     if not asyncio.run(recovery_manager.is_gui_reachable(DUT_IP)):
         print("[RECOVERY] DUT GUI not reachable. Running soft recovery before traffic...")
@@ -777,12 +841,68 @@ try:
         trex_result = run_trex_stats_check(
             trex_server=args.trex_server,
             duration_s=TEST_SECONDS,
-            expected_min_mbps=totalCombinedMbps * 0.3,
-            output_json=args.output_json,
+            expected_min_mbps=args.trex_expected_min_mbps,
+            output_json=None,
+            trex_user=args.trex_user,
+            trex_password=args.trex_password,
+            trex_dir=args.trex_dir,
+            trex_pythonpath=args.trex_pythonpath,
+            trex_client_script=args.trex_client_script,
+            trex_ports=args.trex_ports,
+            trex_server_su=args.trex_server_su or None,
+            trex_server_su2=args.trex_server_su2 or None,
+            trex_server_su3=args.trex_server_su3 or None,
+            trex_server_su4=args.trex_server_su4 or None,
+            trex_server_cores=args.trex_server_cores,
+            trex_su_count=trex_su_count,
+            trex_dl_bw=trex_dl_bw,
+            trex_ul_bw=trex_ul_bw,
+            trex_subw=args.trex_subw or None,
+            trex_packet_size=args.trex_packet_size,
+            trex_direction=trex_direction,
+            trex_protocol=args.trex_proto,
+            trex_vlan=args.trex_vlan if args.trex_vlan >= 0 else None,
+            trex_enable_graph=args.trex_graph,
+            run_mode=args.trex_run_mode,
+            dut_host=DUT_IP,
+            dut_user=SSH_USER,
+            dut_password=SSH_PASS,
+            dut_radio_idx=args.radio_index,
         )
+        print("Fetching Connected Clients RF Data...")
+        connected_clients = fetch_connected_clients(DUT_IP)
         json_export = {
             "mode": "stats_check",
             "profile": {"active": args.profile, "recovery": args.recovery_profile},
+            "config": {
+                "cpes": NUM_CPES,
+                "target_mbps": totalCombinedMbps,
+                "ratio": args.ratio,
+                "traffic_backend": "trex",
+                "trex_server": args.trex_server,
+                "trex_user": args.trex_user,
+                "trex_ports": args.trex_ports,
+                "trex_run_mode": args.trex_run_mode,
+                "trex_client_script": args.trex_client_script,
+                "trex_dir": args.trex_dir,
+                "trex_server_su": args.trex_server_su,
+                "trex_server_su2": args.trex_server_su2,
+                "trex_server_su3": args.trex_server_su3,
+                "trex_server_su4": args.trex_server_su4,
+                "trex_dl_bw": trex_dl_bw,
+                "trex_ul_bw": trex_ul_bw,
+                "trex_subw": args.trex_subw,
+                "trex_packet_size": args.trex_packet_size,
+                "trex_su_count": trex_su_count,
+                "trex_direction": trex_direction,
+                "trex_proto": args.trex_proto,
+                "trex_vlan": None if args.trex_vlan < 0 else args.trex_vlan,
+                "trex_graph": args.trex_graph,
+                "bandwidth": args.bandwidth,
+                "mcs_rate": args.mcs_rate,
+                "spatial_stream": args.spatial_stream,
+                "ddrs_rate": args.ddrs_rate,
+            },
             "recovery": {
                 "attempts": recovery_manager.metrics.attempts,
                 "successes": recovery_manager.metrics.successes,
@@ -790,6 +910,10 @@ try:
                 "factory_resets": recovery_manager.metrics.factory_resets,
                 "last_error": recovery_manager.metrics.last_error,
             },
+            "combined": trex_result.get("combined", {}),
+            "downlink": trex_result.get("downlink", {}),
+            "uplink": trex_result.get("uplink", {}),
+            "rf_metrics": connected_clients,
             "trex": trex_result,
         }
         with open(args.output_json, 'w') as f:

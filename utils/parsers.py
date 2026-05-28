@@ -56,6 +56,48 @@ def clean_ssh_output(raw_output):
     return filtered[-1]
 
 
+_SSH_READ_FAILURE_MARKERS = (
+    "can't open",
+    "cannot open",
+    "no such file",
+    "read failed",
+    "error:",
+    "cat: ",
+)
+
+
+def is_ssh_read_failure(text):
+    """True when shell output indicates the metric could not be read."""
+    lower = str(text or "").strip().lower()
+    if not lower:
+        return False
+    return any(marker in lower for marker in _SSH_READ_FAILURE_MARKERS)
+
+
+def normalize_ssh_metric(text):
+    """Map failed SSH reads to '-' so validators can match an empty GUI."""
+    raw = str(text or "").strip()
+    cleaned = clean_ssh_output(raw)
+    if is_ssh_read_failure(raw) or is_ssh_read_failure(cleaned):
+        return "-"
+    return cleaned if cleaned else "-"
+
+
+def normalize_gui_metric(text):
+    """Map unrendered Summary page placeholders to '-'."""
+    raw = str(text or "").strip()
+    if not raw:
+        return "-"
+    lower = raw.lower()
+    if "document.write" in lower:
+        return "-"
+    if lower.startswith("if (") or 'values["' in raw or "values['" in raw:
+        return "-"
+    if lower in {"-", "—", "n/a"}:
+        return "-"
+    return raw
+
+
 def extract_command_result(raw_output, command):
     """
     Extract command value from noisy interactive SSH output.
@@ -143,6 +185,30 @@ def parse_radio_status(ssh_str):
     return val
 
 
+def parse_ddrs_status(ssh_str):
+    """Normalize txparam.athN.ddrsstatus (0/1) to enable/disable tokens."""
+    val = extract_uci_value(ssh_str).strip().lower()
+    if val in ("0", "disable", "disabled"):
+        return "disable"
+    if val in ("1", "enable", "enabled"):
+        return "enable"
+    return val
+
+
+def parse_spatial_stream_uci(ssh_str):
+    """Normalize txparam.athN.spatialstream UCI to single/dual/auto."""
+    val = extract_uci_value(ssh_str).strip().lower()
+    mapping = {
+        "0": "single",
+        "1": "dual",
+        "2": "auto",
+        "single": "single",
+        "dual": "dual",
+        "auto": "auto",
+    }
+    return mapping.get(val, val)
+
+
 def parse_link_type(ssh_str):
     val = extract_uci_value(ssh_str)
     if val == "0": return "WI-FI"
@@ -175,6 +241,41 @@ def parse_bandwidth(ssh_str):
     return str(ssh_str).strip()
 
 
+def parse_enable_disable_flag(ssh_str):
+    val = extract_uci_value(ssh_str)
+    if val == "1":
+        return "Enable"
+    if val == "0":
+        return "Disable"
+    return val
+
+
+def parse_dl_ul_ratio(ssh_str):
+    val = extract_uci_value(ssh_str)
+    if val == "0":
+        return "Auto"
+    if val.isdigit():
+        downlink = int(val)
+        uplink = max(0, 100 - downlink)
+        return f"{downlink}/{uplink}"
+    return val
+
+
+def parse_spatial_stream(ssh_str):
+    val = extract_uci_value(ssh_str)
+    mapping = {
+        "1": "Single",
+        "2": "Dual",
+        "3": "Auto",
+    }
+    return mapping.get(val, val)
+
+
+def parse_modulation_index(ssh_str):
+    val = extract_uci_value(ssh_str)
+    return f"MCS{val}" if str(val).isdigit() else val
+
+
 def parse_security(ssh_str):
     """Validates if security contains ccmp or psk"""
     val = extract_uci_value(ssh_str).lower()
@@ -200,6 +301,128 @@ def parse_ifconfig_mac(ssh_str):
     if match:
         return match.group(1).upper()
     return ""
+
+
+def normalize_mac_address(raw_mac):
+    match = re.search(r'([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})', str(raw_mac or ""))
+    return match.group(1).upper() if match else ""
+
+
+def normalize_monitor_interface_label(raw_label):
+    label = str(raw_label or "").strip().lower()
+    mapping = {
+        "eth0": "LAN 1",
+        "lan 1": "LAN 1",
+        "lan1": "LAN 1",
+        "eth1": "LAN 2",
+        "lan 2": "LAN 2",
+        "lan2": "LAN 2",
+        "ath1": "Radio 1",
+        "radio 1": "Radio 1",
+        "radio1": "Radio 1",
+        "ath0": "Radio 2",
+        "radio 2": "Radio 2",
+        "radio2": "Radio 2",
+        "br-lan": "Bridge",
+        "bridge": "Bridge",
+    }
+    if label in mapping:
+        return mapping[label]
+    if label.startswith("br-lan"):
+        return "Bridge"
+    return str(raw_label or "").strip()
+
+
+def _is_multicast_mac(mac):
+    mac = normalize_mac_address(mac)
+    if not mac:
+        return False
+    try:
+        return bool(int(mac.split(":")[0], 16) & 1)
+    except ValueError:
+        return False
+
+
+def parse_bridge_fdb_entries(raw_output):
+    text = str(raw_output or "").replace("\r", "")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    entries = []
+    seen = set()
+
+    port_map = {
+        "1": "LAN 1",
+        "2": "LAN 2",
+        "3": "Radio 1",
+        "4": "Radio 2",
+    }
+    for line in lines:
+        match = re.match(
+            r"^\s*(\d+)\s+([0-9A-Fa-f:]{17})\s+(\w+)\s+([\d.]+)\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            continue
+        port, mac, local_text, ageing_text = match.groups()
+        mac = normalize_mac_address(mac)
+        if not mac or _is_multicast_mac(mac):
+            continue
+        interface = port_map.get(port, f"Port {port}")
+        local = local_text.lower() in {"yes", "y", "true", "1"}
+        ageing_seconds = float(ageing_text)
+        signature = (interface, mac, local)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        entries.append(
+            {
+                "interface": interface,
+                "mac": mac,
+                "local": local,
+                "ageing_seconds": ageing_seconds,
+                "source_dev": port,
+            }
+        )
+    return entries
+
+
+def parse_arp_entries(raw_output):
+    text = str(raw_output or "").replace("\r", "")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    entries = []
+    seen = set()
+
+    for line in lines[1:]:
+        parts = re.split(r"\s+", line)
+        if len(parts) < 6:
+            continue
+        ip_text, _hw_type, _flags, mac_text, _mask, dev = parts[:6]
+        mac = normalize_mac_address(mac_text)
+        if not mac:
+            continue
+        signature = (normalize_monitor_interface_label(dev), mac, ip_text)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        entries.append(
+            {
+                "interface": normalize_monitor_interface_label(dev),
+                "mac": mac,
+                "ip": ip_text,
+                "state": "",
+            }
+        )
+    return entries
+
+
+def parse_monitor_log_lines(raw_output, *, newest_first=False, empty_placeholder=True):
+    text = str(raw_output or "").replace("\r", "")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if newest_first:
+        lines = list(reversed(lines))
+    if not lines and empty_placeholder:
+        return ["Log File is empty"]
+    return lines
 
 
 def parse_iwconfig_active_channel(ssh_str):

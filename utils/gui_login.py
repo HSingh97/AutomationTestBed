@@ -14,7 +14,14 @@ async def login_if_needed(gui_page, bsu_ip, device_creds, wait_ms=4000, *, skip_
 
     is_in_session = "/cgi-bin/luci" in (gui_page.url or "")
     if not is_in_session:
-        await gui_page.goto(f"https://{format_http_host(bsu_ip)}/cgi-bin/luci/", timeout=UITimeouts.PAGE_LOAD_MS)
+        await gui_page.goto(
+            f"https://{format_http_host(bsu_ip)}/cgi-bin/luci/",
+            timeout=UITimeouts.PAGE_LOAD_MS,
+            wait_until="commit",
+        )
+        await gui_page.locator(LoginPageLocators.USERNAME_INPUT).wait_for(
+            state="visible", timeout=UITimeouts.ELEMENT_WAIT_MS
+        )
 
     if await gui_page.locator(LoginPageLocators.USERNAME_INPUT).is_visible(timeout=UITimeouts.SHORT_WAIT_MS):
         await gui_page.fill(LoginPageLocators.USERNAME_INPUT, device_creds["user"])

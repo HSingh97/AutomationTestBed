@@ -1,8 +1,21 @@
+import argparse
+import asyncio
 import json
 import csv
 import sys
 import re
 from datetime import datetime
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from utils.regression_report import _render_testbed_summary_table
+
+SENAO_LOGO_URL = (
+    "https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png"
+)
 
 
 def get_group_marker(keywords):
@@ -63,14 +76,61 @@ def clean_failure_message(raw_failure):
     return clean_msg
 
 
-def generate():
-    if len(sys.argv) < 4:
-        print("Usage: python report_generator.py <build_no> <ip_address> <date_str>")
-        sys.exit(1)
+def _load_testbed_summary(profile_name: str | None, local_ip: str) -> dict:
+    summary_path = Path("testbed_summary.json")
+    if summary_path.is_file():
+        try:
+            with summary_path.open(encoding="utf-8") as handle:
+                return json.load(handle)
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"Warning: could not read {summary_path}: {exc}")
 
-    build_no = sys.argv[1]
-    ip_addr = sys.argv[2]
-    date_str = sys.argv[3]
+    if not profile_name:
+        return {}
+
+    try:
+        from utils.net_utils import normalize_ip
+        from utils.profile_manager import load_profile_bundle
+        from utils.regression_device_info import collect_testbed_summary
+
+        bundle = load_profile_bundle(profile_name=profile_name, local_ip=local_ip or None)
+        dut = bundle.active["dut"]
+        password = str(dut.get("password") or "")
+        if dut.get("ip_mode") == "ipv6" or dut.get("strict_ipv6"):
+            bsu_host = normalize_ip(str(dut["local_ipv6"]))
+            cpe_hosts = [normalize_ip(str(ip)) for ip in dut.get("remote_ipv6s", []) if str(ip).strip()]
+        else:
+            bsu_host = normalize_ip(str(dut.get("local_ip") or local_ip))
+            cpe_hosts = [normalize_ip(str(ip)) for ip in dut.get("remote_ips", []) if str(ip).strip()]
+        print(f"Collecting testbed summary (BTS={bsu_host})...")
+        return asyncio.run(collect_testbed_summary(bsu_host, cpe_hosts, password))
+    except Exception as exc:
+        print(f"Warning: testbed summary collection failed: {exc}")
+        return {}
+
+
+def generate():
+    parser = argparse.ArgumentParser(description="Generate Senao customer HTML/CSV from report.json")
+    parser.add_argument("build_no")
+    parser.add_argument("ip_address", help="BTS/local target label for run metadata")
+    parser.add_argument("date_str")
+    parser.add_argument(
+        "--profile",
+        default="",
+        help="Profile name (profiles/<name>.yaml) used to collect BTS/CPE info if testbed_summary.json is missing",
+    )
+    parser.add_argument(
+        "--output-prefix",
+        default="Senao_GUI",
+        help="Report filename prefix (e.g. Senao_GUI_<build>_Report_<date>.html)",
+    )
+    args = parser.parse_args()
+
+    build_no = args.build_no
+    ip_addr = args.ip_address
+    date_str = args.date_str
+    profile_name = (args.profile or "").strip() or None
+    output_prefix = (args.output_prefix or "Senao_GUI").strip()
 
     try:
         with open('report.json', 'r') as f:
@@ -170,8 +230,8 @@ def generate():
             groups[group_name] = []
         groups[group_name].append(record)
 
-    html_filename = f"Senao_Release_{build_no}_Report_{date_str}.html"
-    csv_filename = f"Senao_Release_{build_no}_Report_{date_str}.csv"
+    html_filename = f"{output_prefix}_{build_no}_Report_{date_str}.html"
+    csv_filename = f"{output_prefix}_{build_no}_Report_{date_str}.csv"
 
     # Generate CSV
     with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
@@ -186,23 +246,58 @@ def generate():
     for g in sorted(groups.keys()):
         group_options += f'<option value="{g}">{g}</option>\n'
 
+    report_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    testbed_summary = _load_testbed_summary(profile_name, ip_addr)
+    testbed_table = _render_testbed_summary_table(testbed_summary)
+
     # Generate Professional HTML
     html = f"""
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
         <title>Senao Quality Assurance Report</title>
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-            body {{ font-family: 'Inter', sans-serif; background-color: #f1f5f9; color: #334155; margin: 0; padding: 40px 20px; }}
-            .container {{ max-width: 1100px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03); overflow: hidden; }}
-            .header {{ background-color: #ffffff; padding: 30px 40px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; }}
-            .logo-title {{ display: flex; align-items: center; gap: 24px; }}
-            .logo-title img {{ height: 45px; }}
-            .logo-text h1 {{ margin: 0; color: #0f172a; font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }}
-            .logo-text p {{ margin: 4px 0 0 0; color: #64748b; font-size: 14px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }}
-            .meta-info {{ background: #f8fafc; padding: 12px 20px; border-radius: 8px; border: 1px solid #e2e8f0; text-align: right; font-size: 13px; color: #475569; line-height: 1.6; }}
-            .meta-info strong {{ color: #0f172a; }}
+            body {{ font-family: 'Inter', sans-serif; background-color: #eef2f7; color: #334155; margin: 0; padding: 28px 18px; }}
+            .wrap {{ max-width: 1100px; margin: 0 auto; }}
+            .hero {{
+              background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #2563eb 100%);
+              color: #fff; border-radius: 14px; padding: 22px 26px; margin-bottom: 18px;
+              display: flex; justify-content: space-between; align-items: center; gap: 20px;
+            }}
+            .hero-main {{ flex: 1; min-width: 0; }}
+            .hero h1 {{ margin: 0 0 8px; font-size: 24px; }}
+            .hero-date {{ margin: 0; font-size: 14px; opacity: 0.92; font-weight: 500; }}
+            .hero-logo {{
+              flex-shrink: 0; background: #fff; border-radius: 10px; padding: 10px 14px;
+              box-shadow: 0 2px 8px rgba(15,23,42,0.15);
+            }}
+            .hero-logo img {{ display: block; height: 42px; width: auto; }}
+            .container {{ background: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03); overflow: hidden; border: 1px solid #cbd5e1; }}
+            .panel-top {{ padding: 20px 40px; border-bottom: 1px solid #e2e8f0; background: #fff; }}
+            .panel-top h2 {{ margin: 0 0 12px; font-size: 17px; color: #0f172a; }}
+            .run-meta {{ display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; color: #475569; margin-top: 14px; }}
+            .run-meta strong {{ color: #0f172a; }}
+            .panel-top h3 {{ margin: 18px 0 12px; font-size: 15px; color: #0f172a; }}
+            table.summary-top {{ max-width: 100%; margin-bottom: 0; }}
+            .ip-cell {{ white-space: nowrap; font-family: Consolas, Monaco, monospace; font-size: 12px; }}
+            table.matrix {{
+              width: 100%; max-width: 100%; border-collapse: collapse; background: #fff;
+              border: 2px solid #cbd5e1; border-radius: 8px; overflow: hidden;
+              box-shadow: 0 1px 3px rgba(15,23,42,0.06);
+            }}
+            table.matrix th, table.matrix td {{
+              border: 1px solid #cbd5e1; padding: 12px 16px; text-align: center;
+            }}
+            table.matrix thead th {{
+              background: #f8fafc; color: #1e3a8a; font-size: 13px; font-weight: 700;
+              text-transform: uppercase; letter-spacing: 0.5px;
+            }}
+            table.matrix th.corner {{ background: #f1f5f9; width: 100px; }}
+            table.matrix th.row-label {{
+              text-align: left; background: #f8fafc; color: #0f172a;
+              font-size: 13px; font-weight: 600; padding-left: 14px;
+            }}
 
             .summary-cards {{ display: flex; padding: 30px 40px; gap: 20px; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
             .card {{ flex: 1; padding: 20px; border-radius: 10px; text-align: center; border: 1px solid #e2e8f0; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.02); cursor: pointer; transition: all 0.2s ease; }}
@@ -283,21 +378,27 @@ def generate():
         </script>
     </head>
     <body>
-        <div class="container">
-            <div class="header">
-                <div class="logo-title">
-                    <img src="https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png" alt="Senao Networks">
-                    <div class="logo-text">
-                        <h1>Validation Execution Report</h1>
-                        <p>Automation Test Case Execution Report</p>
-                    </div>
+        <div class="wrap">
+            <header class="hero">
+                <div class="hero-main">
+                    <h1>Senao UBR Validation Execution Report</h1>
+                    <p class="hero-date">{report_timestamp}</p>
                 </div>
-                <div class="meta-info">
-                    <strong>Build Release:</strong> #{build_no}<br>
-                    <strong>Target Device IP:</strong> {ip_addr}<br>
-                    <strong>Timestamp:</strong> {datetime.now().strftime('%d %b %Y, %H:%M:%S')}
+                <div class="hero-logo">
+                    <img src="{SENAO_LOGO_URL}" alt="Senao Networks"/>
                 </div>
-            </div>
+            </header>
+
+            <div class="container">
+            <section class="panel-top">
+                <h2>Testbed Summary</h2>
+                {testbed_table}
+                <h3>Run Summary</h3>
+                <div class="run-meta">
+                    <span><strong>Build release:</strong> #{build_no}</span>
+                    <span><strong>Target device:</strong> {ip_addr}</span>
+                </div>
+            </section>
 
             <div class="summary-cards">
                 <div class="card active" style="border-bottom: 4px solid #64748b;" onclick="setStatusFilter('ALL', this)">
@@ -356,6 +457,7 @@ def generate():
     html += """
                     </tbody>
                 </table>
+            </div>
             </div>
         </div>
     </body>

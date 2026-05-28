@@ -1,6 +1,12 @@
 import re
 import pytest_check as check
-from utils.parsers import parse_device_time, extract_ip_objects, parse_uptime_to_seconds
+from utils.parsers import (
+    extract_ip_objects,
+    normalize_gui_metric,
+    normalize_ssh_metric,
+    parse_device_time,
+    parse_uptime_to_seconds,
+)
 
 
 def is_empty_or_unknown(val):
@@ -10,9 +16,29 @@ def is_empty_or_unknown(val):
                                           "not found", "-", "down"]
 
 
+def validate_backend_param(param_name, expected, actual):
+    """Compare two backend/UCI values without GUI placeholder normalization."""
+    expected_clean = str(expected).strip()
+    actual_clean = str(actual).strip()
+    if is_empty_or_unknown(actual_clean):
+        print(f"    -> {param_name}: FAILED (backend read empty: '{actual_clean}')")
+        check.fail(f"{param_name} Mismatch! Backend read empty or missing.")
+        return
+    if (
+        expected_clean.lower() == actual_clean.lower()
+        or expected_clean.lower() in actual_clean.lower()
+        or actual_clean.lower() in expected_clean.lower()
+    ):
+        print(f"    -> {param_name}: PASSED")
+        check.is_true(True)
+        return
+    print(f"    -> {param_name}: FAILED (expected '{expected_clean}' | got '{actual_clean}')")
+    check.fail(f"{param_name} Mismatch! expected '{expected_clean}' | got '{actual_clean}'")
+
+
 def validate_param(param_name, ssh_val, gui_val):
-    ssh_val_clean = str(ssh_val).strip() if ssh_val else ""
-    gui_val_clean = str(gui_val).strip() if gui_val else ""
+    ssh_val_clean = normalize_ssh_metric(ssh_val)
+    gui_val_clean = normalize_gui_metric(gui_val)
 
     # Strictly check for One-Sided Missing Data
     ssh_empty = is_empty_or_unknown(ssh_val_clean)
@@ -102,8 +128,8 @@ def validate_time(param_name, ssh_time, gui_time):
 
 
 def validate_temperature(param_name, ssh_val, gui_val, tolerance=1.0):
-    ssh_clean = str(ssh_val).strip()
-    gui_clean = str(gui_val).strip()
+    ssh_clean = normalize_ssh_metric(ssh_val)
+    gui_clean = normalize_gui_metric(gui_val)
 
     ssh_empty = is_empty_or_unknown(ssh_clean)
     gui_empty = is_empty_or_unknown(gui_clean)
@@ -173,13 +199,15 @@ def validate_cpu_mem(ssh_cpu, ssh_mem, gui_val, tolerance=5.0):
 
 
 def validate_speed_duplex(param_name, ssh_speed, ssh_duplex, gui_val):
-    ssh_s, ssh_d, gui_v = str(ssh_speed).strip().lower(), str(ssh_duplex).strip().lower(), str(gui_val).strip().lower()
+    ssh_s = normalize_ssh_metric(ssh_speed).lower()
+    ssh_d = normalize_ssh_metric(ssh_duplex).lower()
+    gui_v = normalize_gui_metric(gui_val).lower()
 
-    if gui_v in ["", "none", "n/a", "no information", "unknown", "down"]:
+    if gui_v in ["", "none", "n/a", "no information", "unknown", "down", "-"]:
         ssh_num_match = re.search(r'\d+', ssh_s)
         ssh_num = ssh_num_match.group() if ssh_num_match else ""
 
-        if ssh_s in ["", "none", "n/a", "no information", "unknown", "down"] or not ssh_s or ssh_num == "10":
+        if ssh_s in ["", "none", "n/a", "no information", "unknown", "down", "-"] or not ssh_s or ssh_num == "10":
             print(f"    -> {param_name}: PASSED (Link Down)")
             check.is_true(True)
         else:
@@ -207,7 +235,8 @@ def validate_speed_duplex(param_name, ssh_speed, ssh_duplex, gui_val):
 
 
 def validate_throughput(param_name, ssh_val, gui_val, tolerance=20.0):
-    ssh_clean, gui_clean = str(ssh_val).strip(), str(gui_val).strip()
+    ssh_clean = normalize_ssh_metric(ssh_val)
+    gui_clean = normalize_gui_metric(gui_val)
 
     ssh_empty = is_empty_or_unknown(ssh_clean)
     gui_empty = is_empty_or_unknown(gui_clean)

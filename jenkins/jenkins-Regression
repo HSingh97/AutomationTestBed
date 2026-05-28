@@ -1,0 +1,213 @@
+// UBR stability regression — runs on TARGET_STAND.
+// Select tests via checkboxes; per-test iteration counts; one merged HTML report.
+
+def archiveArtifacts(pattern) {
+    step([$class: 'ArtifactArchiver', artifacts: pattern, fingerprint: true, onlyIfSuccessful: false])
+}
+
+pipeline {
+    agent { node { label "${TARGET_STAND}" } }
+
+    parameters {
+        booleanParam(
+            name: 'RUN_SOFT_REBOOT',
+            defaultValue: true,
+            description: 'REG_01 — BTS soft reboot with BTS↔CPE ping and web checks each cycle'
+        )
+        string(
+            name: 'ITERATIONS_SOFT_REBOOT',
+            defaultValue: '3',
+            description: 'Cycle count when Soft Reboot is enabled'
+        )
+        booleanParam(
+            name: 'RUN_SOFT_RESET',
+            defaultValue: false,
+            description: 'REG_02 — Network soft reset (/etc/init.d/network reload on CPE then BTS)'
+        )
+        string(
+            name: 'ITERATIONS_SOFT_RESET',
+            defaultValue: '3',
+            description: 'Cycle count when Network Soft Reset is enabled'
+        )
+        booleanParam(
+            name: 'RUN_FIRMWARE_UPGRADE',
+            defaultValue: false,
+            description: 'REG_03 — Firmware upgrade regression (upload image below)'
+        )
+        string(
+            name: 'ITERATIONS_FIRMWARE',
+            defaultValue: '1',
+            description: 'Cycle count when Firmware Upgrade is enabled'
+        )
+        file(
+            name: 'FIRMWARE_IMAGE',
+            description: 'Upload firmware image (.bin) — required when Firmware Upgrade is enabled'
+        )
+        string(
+            name: 'Local IPv6 Address',
+            defaultValue: '',
+            description: 'BTS IPv6 override. Leave empty for profiles/default.yaml'
+        )
+    }
+
+    stages {
+        stage('Prepare regression') {
+            steps {
+                script {
+                    def selected = []
+                    if (params.RUN_SOFT_REBOOT) {
+                        selected << "Soft Reboot × ${params.ITERATIONS_SOFT_REBOOT.trim()}"
+                    }
+                    if (params.RUN_SOFT_RESET) {
+                        selected << "Network Soft Reset × ${params.ITERATIONS_SOFT_RESET.trim()}"
+                    }
+                    if (params.RUN_FIRMWARE_UPGRADE) {
+                        selected << "Firmware Upgrade × ${params.ITERATIONS_FIRMWARE.trim()}"
+                    }
+                    if (selected.isEmpty()) {
+                        error('Select at least one regression test (Soft Reboot, Soft Reset, or Firmware Upgrade).')
+                    }
+                    if (params.RUN_FIRMWARE_UPGRADE && !(params.FIRMWARE_IMAGE ?: '').trim()) {
+                        error('Upload a firmware image when Firmware Upgrade is enabled.')
+                    }
+
+                    def filterParts = []
+                    def iterArgs = []
+                    if (params.RUN_SOFT_REBOOT) {
+                        filterParts << 'REG_01'
+                        iterArgs << "--regression-iterations-reg01 ${params.ITERATIONS_SOFT_REBOOT.trim()}"
+                    }
+                    if (params.RUN_SOFT_RESET) {
+                        filterParts << 'REG_02'
+                        iterArgs << "--regression-iterations-reg02 ${params.ITERATIONS_SOFT_RESET.trim()}"
+                    }
+                    if (params.RUN_FIRMWARE_UPGRADE) {
+                        filterParts << 'REG_03'
+                        iterArgs << "--regression-iterations-reg03 ${params.ITERATIONS_FIRMWARE.trim()}"
+                    }
+
+                    env.REGRESSION_SELECTED_SUMMARY = selected.join(', ')
+                    env.REGRESSION_K_FILTER = filterParts.join(' or ')
+                    env.REGRESSION_ITER_ARGS = iterArgs.join(' ')
+                    env.FIRMWARE_IMAGE_ARG = ''
+
+                    if (params.RUN_FIRMWARE_UPGRADE) {
+                        def uploadedName = params.FIRMWARE_IMAGE.trim()
+                        def uploadedPath = "${env.WORKSPACE}/${uploadedName}"
+                        sh """
+                            mkdir -p uploads
+                            cp \"${uploadedPath}\" uploads/firmware_upload.bin
+                        """
+                        env.FIRMWARE_IMAGE_ARG = '--firmware-image uploads/firmware_upload.bin'
+                    }
+
+                    echo '----------------------------------------'
+                    echo 'UBR Stability Regression (pytest)'
+                    echo "--- TARGET STAND: ${TARGET_STAND}"
+                    echo "--- TESTS:        ${env.REGRESSION_SELECTED_SUMMARY}"
+                    echo "Local IPv6:     ${params['Local IPv6 Address'] ?: '(profile default)'}"
+                    echo "Firmware:       ${params.RUN_FIRMWARE_UPGRADE ? 'uploaded image -> uploads/firmware_upload.bin' : '(not used)'}"
+                    echo 'Report:         single merged reports/Regression_Report.html'
+                    echo '----------------------------------------'
+                }
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh '''
+                    python3 -m venv venv
+                    venv/bin/pip install --upgrade pip
+                    venv/bin/pip install -r requirements.txt
+                    venv/bin/playwright install chromium
+                '''
+            }
+        }
+
+        stage('Execute Regression Suite') {
+            steps {
+                script {
+                    def localIP = (params['Local IPv6 Address'] ?: '').trim()
+                    def ipv6Arg = localIP ? "--local-ipv6 \"${localIP}\"" : ''
+
+                    sh '''
+                        rm -f reports/regression_collector_state.json \
+                              reports/Regression_Report.html \
+                              reports/regression_pytest.html \
+                              Senao_Regression_*.html || true
+                    '''
+
+                    catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                        sh """
+                            venv/bin/python -m pytest tests/Regression/ -v \
+                            -k "${env.REGRESSION_K_FILTER}" \
+                            --allow-regression \
+                            --regression-fresh \
+                            --profile default \
+                            --recovery-profile link_formation \
+                            ${ipv6Arg} \
+                            ${env.REGRESSION_ITER_ARGS} \
+                            ${env.FIRMWARE_IMAGE_ARG}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Finalize Report') {
+            steps {
+                script {
+                    def senao = load 'jenkins/jenkins-common.groovy'
+                    def destFile = "${senao.standardReportBasename('Senao_Regression')}.html"
+                    try {
+                        senao.copyRegressionReport(destFile)
+                        env.REGRESSION_REPORT = destFile
+                    } catch (Exception exc) {
+                        unstable("Regression HTML report not produced: ${exc.message}")
+                    }
+                }
+            }
+        }
+
+        stage('Archive Report') {
+            steps {
+                archiveArtifacts 'Senao_Regression_*.html,allowEmptyArchive:true'
+                archiveArtifacts 'reports/Regression_Report.html,allowEmptyArchive:true'
+                archiveArtifacts 'reports/regression_pytest.html,allowEmptyArchive:true'
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                def senao = load 'jenkins/jenkins-common.groovy'
+                def destFile = env.REGRESSION_REPORT ?: "${senao.standardReportBasename('Senao_Regression')}.html"
+                def hasReport = fileExists(destFile)
+
+                if (hasReport) {
+                    senao.publishSenaoHtmlReport(destFile, "Senao Regression Report - Build ${env.BUILD_NUMBER}")
+                }
+
+                def detailsHtml = """\
+                    <p><strong>Tests run:</strong> ${env.REGRESSION_SELECTED_SUMMARY ?: '—'}</p>
+                    <p><strong>Target IPv6:</strong> ${params['Local IPv6 Address'] ?: '(profile default)'}</p>
+                    <p><strong>Firmware:</strong> ${params.RUN_FIRMWARE_UPGRADE ? 'uploaded in build' : '(not used)'}</p>
+                    <p><strong>Report:</strong> one merged HTML (per test: Total Executed / Passed / Failed)</p>
+                """
+
+                try {
+                    senao.sendSenaoPipelineEmail([
+                        subjectPrefix: 'UBR Stability Regression',
+                        reportTitle: 'UBR Stability Regression Report',
+                        footerNote: 'Merged regression results per test type',
+                        reportFile: hasReport ? destFile : '',
+                        detailsHtml: detailsHtml
+                    ])
+                } catch (Exception exc) {
+                    echo "Email notification failed: ${exc.message}"
+                }
+            }
+        }
+    }
+}
