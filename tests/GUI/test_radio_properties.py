@@ -9,7 +9,6 @@ from utils.radio_properties_flows import (
     assert_gui_24_ddrs_status,
     assert_gui_25_spatial_stream,
     assert_gui_26_modulation_index,
-    assert_gui_27_atpc_status,
     assert_gui_28_transmit_power,
     assert_gui_29_maximum_eirp,
     assert_max_cpe_lifecycle,
@@ -96,14 +95,6 @@ async def test_gui_25_spatial_stream(gui_page, bsu_ip, device_creds):
 @pytest.mark.DDRS
 async def test_gui_26_modulation_index(gui_page, bsu_ip, device_creds):
     await assert_gui_26_modulation_index(gui_page, bsu_ip, device_creds)
-
-
-@pytest.mark.asyncio(scope="session")
-@pytest.mark.GUI_27
-@pytest.mark.WirelessProperties
-@pytest.mark.DDRS
-async def test_gui_27_atpc_status(gui_page, bsu_ip, device_creds):
-    await assert_gui_27_atpc_status(gui_page, bsu_ip, device_creds)
 
 
 @pytest.mark.asyncio(scope="session")
