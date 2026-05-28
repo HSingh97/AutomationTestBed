@@ -145,16 +145,26 @@ async def _fill_field(gui_page, locator: str, value: str):
     check.equal(await field.input_value(), value, f"GUI field {locator} did not retain value {value}")
 
 
+DEFAULT_PACKET_SIZE = 1400
+
+
 async def _configure_link_test_fields(
     gui_page,
     *,
     bandwidth: int,
     duration_s: int,
     vlan_id: int,
+    packet_size: int = DEFAULT_PACKET_SIZE,
 ):
     await _fill_field(gui_page, LinkTestToolLocators.BANDWIDTH_INPUT, str(bandwidth))
     await _fill_field(gui_page, LinkTestToolLocators.TIME_DURATION_INPUT, str(duration_s))
     await _fill_field(gui_page, LinkTestToolLocators.VLAN_ID_INPUT, str(vlan_id))
+    packet_field = gui_page.locator(LinkTestToolLocators.PACKET_SIZE_INPUT).first
+    try:
+        if await packet_field.is_enabled(timeout=UITimeouts.SHORT_WAIT_MS):
+            await packet_field.fill(str(packet_size), timeout=UITimeouts.ELEMENT_WAIT_MS)
+    except Exception:
+        pass
     bidirection = gui_page.locator(LinkTestToolLocators.BIDIRECTION_CHECKBOX).first
     await bidirection.wait_for(state="attached", timeout=UITimeouts.ELEMENT_WAIT_MS)
     was_checked = await bidirection.is_checked()
@@ -259,6 +269,82 @@ async def _ensure_cpe_in_list(gui_page, root_ssh, cpe_ip: str, link_test_config:
     )
 
 
+async def _prepare_link_test_run(
+    gui_page,
+    root_ssh,
+    peer_ip: str,
+    link_test_config: LinkTestConfig,
+    *,
+    device_label: str = "BTS",
+):
+    """
+    GUI_130 prep: clear peer list, set bandwidth/duration/VLAN/bidirection, add peer, verify UCI.
+    Always reconfigures (does not skip when a stale peer row exists).
+    """
+    bandwidth = link_test_config.default_bandwidth
+    duration_s = link_test_config.duration_s
+    vlan_id = link_test_config.vlan_id
+
+    _log(
+        f"GUI_130 [{device_label}]: configure link test "
+        f"(bw={bandwidth} Mbps, dur={duration_s}s, vlan={vlan_id}, peer={peer_ip})"
+    )
+
+    await clear_link_test_cpe_list(root_ssh)
+    await open_link_test_tool(gui_page)
+    await _configure_link_test_fields(
+        gui_page,
+        bandwidth=bandwidth,
+        duration_s=duration_s,
+        vlan_id=vlan_id,
+    )
+
+    await _wait_for_cpe_dropdown(gui_page, peer_ip)
+    await _add_cpe_from_dropdown(gui_page, peer_ip)
+
+    await open_link_test_tool(gui_page)
+    await _configure_link_test_fields(
+        gui_page,
+        bandwidth=bandwidth,
+        duration_s=duration_s,
+        vlan_id=vlan_id,
+    )
+
+    check.is_true(await _cpe_rows_count(gui_page) >= 1, f"GUI_130 [{device_label}]: peer must be in list before Start")
+
+    backend_cfg = await _read_backend_config(root_ssh)
+    print_gui_backend_table(
+        f"GUI_130 [{device_label}] — Link Test configuration (GUI vs UCI)",
+        [
+            ("Bandwidth (Mbps)", str(bandwidth), backend_cfg.get("bandwidth", ""), None),
+            ("Duration (sec)", str(duration_s), backend_cfg.get("duration", ""), None),
+            ("VLAN ID", str(vlan_id), backend_cfg.get("vlan", ""), None),
+            ("Peer IP", peer_ip, backend_cfg.get("iplist", ""), None),
+        ],
+    )
+    _validate_uci_parameters(bandwidth, duration_s, vlan_id, backend_cfg)
+    check.is_true(
+        ip_in_text(peer_ip, backend_cfg.get("iplist", "")),
+        f"GUI_130 [{device_label}]: peer {peer_ip} not in UCI iplist after Add",
+    )
+
+    for locator, label, expected in (
+        (LinkTestToolLocators.BANDWIDTH_INPUT, "Bandwidth", str(bandwidth)),
+        (LinkTestToolLocators.TIME_DURATION_INPUT, "Duration", str(duration_s)),
+        (LinkTestToolLocators.VLAN_ID_INPUT, "VLAN", str(vlan_id)),
+    ):
+        field = gui_page.locator(locator).first
+        actual = (await field.input_value()).strip()
+        if actual != expected:
+            await field.fill(expected)
+            actual = (await field.input_value()).strip()
+        check.equal(
+            actual,
+            expected,
+            f"GUI_130 [{device_label}]: {label} field must be {expected} before Start (got {actual!r})",
+        )
+
+
 async def _start_link_test(gui_page):
     start_btn = gui_page.locator(LinkTestToolLocators.START_BUTTON).first
     await start_btn.wait_for(state="visible", timeout=UITimeouts.ELEMENT_WAIT_MS)
@@ -282,7 +368,34 @@ async def _stop_link_test_if_running(gui_page):
         pass
 
 
-async def _wait_for_link_test_complete(root_ssh, gui_page, duration_s: int, radio_idx: int = RADIO_INDEX) -> str:
+async def _wait_for_link_test_started(
+    root_ssh,
+    *,
+    timeout_s: int = 30,
+    radio_idx: int = RADIO_INDEX,
+) -> bool:
+    """Return True when backend reports link test active after Start."""
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    while asyncio.get_event_loop().time() < deadline:
+        status = ssh_scalar(await _send_ssh(root_ssh, RootCommands.get_link_test_active(radio_idx))).strip()
+        if status not in {"", "0"}:
+            return True
+        await asyncio.sleep(RESULT_POLL_INTERVAL_S)
+    return False
+
+
+async def _wait_for_link_test_complete(
+    root_ssh,
+    gui_page,
+    duration_s: int,
+    radio_idx: int = RADIO_INDEX,
+    *,
+    require_started: bool = False,
+) -> str:
+    if require_started:
+        started = await _wait_for_link_test_started(root_ssh, timeout_s=min(30, duration_s + 10), radio_idx=radio_idx)
+        check.is_true(started, "GUI_130: link test did not enter running state after Start (backend still idle)")
+
     total_wait = duration_s + RESULT_BUFFER_S
     deadline = asyncio.get_event_loop().time() + total_wait
     while asyncio.get_event_loop().time() < deadline:
@@ -441,6 +554,21 @@ def _validate_metric_pair(
     )
     if diff <= tolerance:
         _log(f"    -> {label}: PASSED (GUI={gui_val}, {reference_label}={reference_val})")
+
+
+def _validate_nonzero_link_test_traffic(
+    gui_results: dict[str, str],
+    *,
+    device_label: str = "BTS",
+):
+    """Fail when Start completed but no measurable throughput was reported."""
+    ul = parse_numeric_metric(gui_results.get("ul_throughput", "")) or 0.0
+    dl = parse_numeric_metric(gui_results.get("dl_throughput", "")) or 0.0
+    check.is_true(
+        max(ul, dl) > 0,
+        f"GUI_130 [{device_label}]: link test reported zero throughput (UL={ul} Mbps, DL={dl} Mbps); "
+        "verify configuration was applied and radio link is up",
+    )
 
 
 def _validate_results_against_reference(
@@ -710,19 +838,21 @@ async def _assert_gui_130_on_device(
 
     _log(f"GUI_130 [{device_label}]: start link test, wait {duration_s}s, validate results for {target_ip}")
 
-    await open_link_test_tool(gui_page)
-    await _configure_link_test_fields(
+    await _prepare_link_test_run(
         gui_page,
-        bandwidth=bandwidth,
-        duration_s=duration_s,
-        vlan_id=vlan_id,
+        root_ssh,
+        target_ip,
+        link_test_config,
+        device_label=device_label,
     )
-    await _ensure_cpe_in_list(gui_page, root_ssh, target_ip, link_test_config)
-
-    check.is_true(await _cpe_rows_count(gui_page) >= 1, "GUI_130 requires at least one CPE in the list before Start")
 
     await _start_link_test(gui_page)
-    results_text = await _wait_for_link_test_complete(root_ssh, gui_page, duration_s)
+    results_text = await _wait_for_link_test_complete(
+        root_ssh,
+        gui_page,
+        duration_s,
+        require_started=True,
+    )
     gui_results = parse_link_test_results(results_text)
     check.is_true(bool(gui_results), "GUI_130: Link test results not displayed after Start")
 
@@ -758,6 +888,7 @@ async def _assert_gui_130_on_device(
         link_test_config,
         reference_label="Backend (on-device traffic stats)",
     )
+    _validate_nonzero_link_test_traffic(gui_results, device_label=device_label)
 
     tester_ref = _load_reference_results(link_test_config.reference_results_path)
     if tester_ref:
