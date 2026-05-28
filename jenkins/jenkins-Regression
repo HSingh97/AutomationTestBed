@@ -107,7 +107,7 @@ pipeline {
                     echo "--- TESTS:        ${env.REGRESSION_SELECTED_SUMMARY}"
                     echo "Local IPv6:     ${params['Local IPv6 Address'] ?: '(profile default)'}"
                     echo "Firmware:       ${params.RUN_FIRMWARE_UPGRADE ? 'uploaded image -> uploads/firmware_upload.bin' : '(not used)'}"
-                    echo 'Report:         single merged reports/Regression_Report.html'
+                    echo 'Report:         single merged reports/artifacts/Regression_Report.html'
                     echo '----------------------------------------'
                 }
             }
@@ -131,9 +131,9 @@ pipeline {
                     def ipv6Arg = localIP ? "--local-ipv6 \"${localIP}\"" : ''
 
                     sh '''
-                        rm -f reports/regression_collector_state.json \
-                              reports/Regression_Report.html \
-                              reports/regression_pytest.html \
+                        rm -f reports/artifacts/regression_collector_state.json \
+                              reports/artifacts/Regression_Report.html \
+                              reports/artifacts/regression_pytest.html \
                               Senao_Regression_*.html || true
                     '''
 
@@ -172,8 +172,8 @@ pipeline {
         stage('Archive Report') {
             steps {
                 archiveArtifacts 'Senao_Regression_*.html,allowEmptyArchive:true'
-                archiveArtifacts 'reports/Regression_Report.html,allowEmptyArchive:true'
-                archiveArtifacts 'reports/regression_pytest.html,allowEmptyArchive:true'
+                archiveArtifacts 'reports/artifacts/Regression_Report.html,allowEmptyArchive:true'
+                archiveArtifacts 'reports/artifacts/regression_pytest.html,allowEmptyArchive:true'
             }
         }
     }

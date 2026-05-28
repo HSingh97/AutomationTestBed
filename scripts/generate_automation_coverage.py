@@ -14,7 +14,7 @@ from openpyxl.utils import get_column_letter
 
 ROOT = Path(__file__).resolve().parents[1]
 PLAN_PATH = ROOT / "Senao UBR P2MP Test Result_May18.xlsx"
-OUTPUT_PATH = ROOT / "reports" / "Automation_Coverage_May18.xlsx"
+OUTPUT_PATH = ROOT / "reports" / "artifacts" / "Automation_Coverage_May18.xlsx"
 
 TC_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*_\d+$")
 CASE_ID_RE = re.compile(r"^[A-Z][A-Z0-9_]*_\d+$")

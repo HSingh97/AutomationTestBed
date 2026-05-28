@@ -131,12 +131,12 @@ def _artifact_name(bandwidth: str, mcs: str, mode: str, ratio: str) -> str:
 
 
 def _resolve_logs_paths(output_dir_arg: str) -> tuple[Path, Path, str]:
-    """All performance artifacts live under logs/ (regression-style report name)."""
+    """All performance artifacts live under reports/artifacts/."""
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    logs_root = Path("logs")
+    logs_root = Path("reports/artifacts")
     logs_root.mkdir(parents=True, exist_ok=True)
     base = Path(output_dir_arg)
-    if base.parts and base.parts[0] != "logs":
+    if base.parts and tuple(base.parts[:2]) != ("reports", "artifacts"):
         base = logs_root
     elif base.parts == () or str(base) == ".":
         base = logs_root
@@ -683,7 +683,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-dir",
         default=perf["artifact_dir"],
-        help="Base directory under logs/ for per-run artifacts (default: logs)",
+        help="Base directory under reports/artifacts/ for per-run artifacts",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print matrix plan without running traffic")
     parser.add_argument(

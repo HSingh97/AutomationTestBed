@@ -22,13 +22,16 @@ Automation framework for UBR P2MP validation:
 |------|---------|
 | `conftest.py` | Shared fixtures, CLI options, regression/GUI reporting hooks |
 | `tests/GUI/` | GUI suites (`GUI_01`–`GUI_112` where implemented, incl. `test_radio_24.py`) |
-| `scripts/generate_automation_coverage.py` | Build `reports/Automation_Coverage_May18.xlsx` from test plan |
+| `scripts/generate_automation_coverage.py` | Build `reports/artifacts/Automation_Coverage_May18.xlsx` from test plan |
 | `instruments/` | Vaunix LDA-602 control + SNMP SNR (`attenuator_snr.py`) |
 | `vendor/vaunix_linux_sdk/` | Vaunix `libLDAhid.so` + rebuild sources (`LDAhid.c`/`h` only) |
 | `scripts/attenuator_snr.py` | Lab CLI: sweep, verify, parallel streams, SNMP monitor |
 | `tests/Lab/` | Attenuator + SNR lab tests (`--allow-attenuator-lab`) |
 | `tests/JumboFrames/` | Jumbo suite (`JMB_01`–`JMB_10`) |
 | `tests/Regression/` | Stability regression (`REG_01`–`REG_03`) |
+| `tests/IP/` | IPv4/IPv6 networking (`IP_01`–`IP_37`, BTS & CPE) |
+| `config/ip_test_cases.py` | IP case catalog and markers |
+| `utils/ip_test_flows.py` | SSH/GUI flows for IP validation |
 | `tests/Throughput/` | TRex parser/unit helper (not a product GUI case) |
 | `traffic/` | IXIA/TRex throughput runners |
 | `utils/` | Flow helpers, recovery, regression report, device info |
@@ -47,8 +50,9 @@ Automation framework for UBR P2MP validation:
 | **GUI** | **58** | Most suites | See gaps below |
 | **Jumbo** | **10** | `JMB_01`–`JMB_06`, `JMB_08`–`JMB_09` | `JMB_07`, `JMB_10` destructive, opt-in |
 | **Regression** | **3** | `REG_01`, `REG_02` | `REG_03` needs firmware image |
+| **IP** | **37** (73 runs) | Ping, gateway, ARP/ND, MTU, dual-stack | iperf/backup/firmware/power cases need profile flags or opt-in |
 | **Throughput** | Script only | Manual / Jenkins | Not counted in product pytest IDs |
-| **Total product cases in automation** | **71** | | See `reports/Automation_Coverage_May18.xlsx` |
+| **Total product cases in automation** | **108** | | GUI+Jumbo+Regression+IP; see coverage spreadsheet |
 
 ### Completed — automated and in test plan
 
@@ -154,7 +158,7 @@ Each case reads the **current UCI/GUI value as baseline**, applies a test value,
 - `REG_02` – N-cycle **network soft reset** (`/etc/init.d/network reload` on CPE then BTS); same health checks  
 - `REG_03` – N-cycle **firmware upgrade** (GUI flash); same health checks; requires `--firmware-image`  
 
-Regression reports (default single file `reports/Regression_Report.html`; all runs/iterations append unless `--regression-fresh`):
+Regression reports (default single file `reports/artifacts/Regression_Report.html`; all runs/iterations append unless `--regression-fresh`):
 
 - Fixed **Testbed Summary** table (Model, FW Version, IP, VLAN, QoS for BTS/CPE)  
 - **Iteration 1+** only (baseline hidden)  
@@ -198,14 +202,18 @@ These product IDs are **not** present under `tests/GUI/` (gaps in numbering vs a
 
 ---
 
-## Default IPv6 Testbed
+## Default IPv6 Testbed (mgmt VLAN)
 
-From `profiles/default.yaml` (overridable via CLI):
+Factory defaults: **BTS = QinQ** (S-VLAN **100**, C-VLAN **101**, mgmt `vlan.ath1.mgmtvlan` **101**), **CPE = untagged/transparent**. Bootstrap uses **SSH/UCI only** (no SNMP). Lab PCs: BTS port stacked QinQ `enp3s0.100.101`, CPE port native untagged. All tests use mgmt IPv6 only.
+
+From `profiles/default.yaml` → `testbed.mgmt_vlan` (overridable via CLI):
 
 - BTS: `2401:4900:d0:40d4:0:17b8:0:330`  
-- CPE: `2401:4900:d0:40d4::17b8:0:331`  
+- CPE: discovered from BTS or `2401:4900:d0:40d4::17b8:0:331`  
 - BTS PC: `2401:4900:d0:40d4::17b8:0:301`  
-- CPE PC: `2401:4900:d0:40d4::17b8:0:302`  
+- CPE PC (secondary bench): `2401:4900:d0:40d4::17b8:0:302`  
+
+See [docs/testbed-setup.md](docs/testbed-setup.md). Bootstrap: `PYTHONPATH=. python3 scripts/bootstrap_testbed.py` (add `--with-gui` to load `config/BTS.tar.gz` / `config/CPE.tar.gz`). Pytest: omit `--skip-testbed-bootstrap` (default on).
 
 ---
 
@@ -271,7 +279,7 @@ with AttenuatorSnrController.from_profile(bundle.active) as att:
 
 ```bash
 python3 scripts/generate_automation_coverage.py
-# Output: reports/Automation_Coverage_May18.xlsx
+# Output: reports/artifacts/Automation_Coverage_May18.xlsx
 # Sheets: Summary, GUI Progress, All Cases, Roadmap, Automation Index (pytest file + Jenkins job per case)
 ```
 
@@ -281,6 +289,30 @@ python3 scripts/generate_automation_coverage.py
 venv/bin/python -m pytest tests/JumboFrames/ -v
 venv/bin/python -m pytest tests/JumboFrames/ -v --allow-destructive-jumbo -k "JMB_07 or JMB_10"
 ```
+
+### IP validation (`IP_01`–`IP_37`)
+
+Catalog in `config/ip_test_cases.py`. Each case runs on **BTS** and **CPE** (except `IP_29`, BTS-only). Configure addresses in `profiles/default.yaml` → `ip_tests:`.
+
+```bash
+# Collect (73 tests)
+venv/bin/python -m pytest tests/IP/ --collect-only -q
+
+# Safe functional/validation (ping, gateway, ARP, IPv6 ND, dual-stack)
+venv/bin/python -m pytest tests/IP/ -v --allow-ip-suite -k "IP_02 or IP_19 or IP_20 or IP_37"
+
+# Destructive (reboot, network reload, interface flap) — lab only
+venv/bin/python -m pytest tests/IP/ -v --allow-ip-suite --allow-ip-destructive -k "IP_09 or IP_11"
+
+# Optional: set in profile to un-skip throughput / backup / firmware cases
+# ip_tests.iperf_server_v4 / iperf_server_v6
+# ip_tests.backup_archive_path
+# ip_tests.firmware_image_path
+```
+
+Flags: `--allow-ip-suite` (required), `--allow-ip-destructive` (reboot/reset/flap). GUI static-IP/MTU cases use the BTS LuCI session only.
+
+Reachability: SSH and Web UI try the profile/CLI **fallback** management IP (`ip_tests.fallback_ipv4` or `--fallback-ip`, default `10.0.0.1`) when the primary address is down. Remote ping cases **confirm local ping first**, then ping the peer.
 
 ### Stability Regression
 
@@ -304,10 +336,10 @@ venv/bin/python -m pytest tests/Regression/ -v --allow-regression --regression-f
 
 Reports:
 
-- Regression dashboard: `reports/Regression_Report.html` (one merged file per `--regression-fresh` run; append without `--regression-fresh`)  
-- Pytest HTML (auto when `--allow-regression`): `reports/regression_pytest.html`  
-- Customer CSV: `reports/Customer_Summary_<timestamp>.csv`  
-- Performance matrix: `logs/Performance_Report_<timestamp>.html` (artifacts in `logs/performance_<timestamp>/`)  
+- Regression dashboard: `reports/artifacts/Regression_Report.html` (one merged file per `--regression-fresh` run; append without `--regression-fresh`)  
+- Pytest HTML (auto when `--allow-regression`): `reports/artifacts/regression_pytest.html`  
+- Customer CSV: `reports/artifacts/Customer_Summary_<timestamp>.csv`  
+- Performance matrix: `reports/artifacts/Performance_Report_<timestamp>.html` (artifacts in `reports/artifacts/performance_<timestamp>/`)  
 
 ### Throughput (IXIA example)
 
@@ -345,7 +377,7 @@ python3 traffic/trex_stats_check.py --deploy-client-script --time 30 --expected-
 
 ### Performance matrix (bandwidth × MCS × DL/UL ratio)
 
-Sweeps all bandwidth/MCS/ratio combinations. **BTS** gets bandwidth + DL/UL ratio + MCS over SSH; **CPE** gets MCS only (direct SSH to `remote_ipv6s`). Then TRex runs per case. Outputs: JSON + CSV under `logs/performance_<timestamp>/`, HTML at `logs/Performance_Report_<timestamp>.html`.
+Sweeps all bandwidth/MCS/ratio combinations. **BTS** gets bandwidth + DL/UL ratio + MCS over SSH; **CPE** gets MCS only (direct SSH to `remote_ipv6s`). Then TRex runs per case. Outputs: JSON + CSV under `reports/artifacts/performance_<timestamp>/`, HTML at `reports/artifacts/Performance_Report_<timestamp>.html`.
 
 **Dynamic targets (default):** rates come from the product spec sheet (`traffic/operating_rate_table.py`, Dual column). Example: HT20 + MCS23 → **286 Mbps** operating rate; at 75% efficiency and 75:25 → **~215 Mbps** → **161M DL + 54M UL**.
 
@@ -363,7 +395,7 @@ PYTHONPATH=. python3 traffic/performance_matrix.py \
   --bandwidths HT80,HT160 --mcs MCS5,MCS7,MCS9 --ratios 80:20 --time 15
 ```
 
-Each run produces `Throughput_<BW>_<MCS>_<Mode>_<ratio>.json`, `performance_matrix_summary.json/csv` under `logs/performance_<timestamp>/`, and `logs/Performance_Report_<timestamp>.html` (testbed summary, pass/fail chips, per-iteration cards — same style as regression).
+Each run produces `Throughput_<BW>_<MCS>_<Mode>_<ratio>.json`, `performance_matrix_summary.json/csv` under `reports/artifacts/performance_<timestamp>/`, and `reports/artifacts/Performance_Report_<timestamp>.html` (testbed summary, pass/fail chips, per-iteration cards — same style as regression).
 
 ---
 
@@ -381,7 +413,7 @@ Each run produces `Throughput_<BW>_<MCS>_<Mode>_<ratio>.json`, `performance_matr
 | `--regression-iterations-reg01 N` | Soft reboot cycles |
 | `--regression-iterations-reg02 N` | Network soft reset cycles |
 | `--regression-iterations-reg03 N` | Firmware upgrade cycles |
-| `--regression-report PATH` | Single HTML report (default `reports/Regression_Report.html`) |
+| `--regression-report PATH` | Single HTML report (default `reports/artifacts/Regression_Report.html`) |
 | `--regression-fresh` | Clear shared state; one new merged report for this run |
 | `--firmware-image PATH` | Image for `REG_03` |
 | `--allow-attenuator-lab` | Enable `tests/Lab/test_attenuator_snr.py` |
@@ -432,7 +464,7 @@ Shared helpers: `jenkins/jenkins-common.groovy` (email, `publishHTML`, report co
 
 - **Checkboxes:** Soft Reboot (`REG_01`), Network Soft Reset (`REG_02`), Firmware Upgrade (`REG_03`)
 - **Iterations:** separate count per enabled test (`ITERATIONS_SOFT_REBOOT`, `ITERATIONS_SOFT_RESET`, `ITERATIONS_FIRMWARE`)
-- **Report:** one merged `reports/Regression_Report.html` per build (`--regression-fresh`); Jenkins copies to `Senao_Regression_<build>_Report_<date>.html`
+- **Report:** one merged `reports/artifacts/Regression_Report.html` per build (`--regression-fresh`); Jenkins copies to `Senao_Regression_<build>_Report_<date>.html`
 - **Optional:** `Local IPv6 Address`, **upload** `FIRMWARE_IMAGE` file (required when firmware upgrade is enabled)
 
 ### 3. Throughput

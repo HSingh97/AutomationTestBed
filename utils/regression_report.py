@@ -11,8 +11,8 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-DEFAULT_REGRESSION_REPORT = Path("reports/Regression_Report.html")
-DEFAULT_STATE_FILE = Path("reports/regression_collector_state.json")
+DEFAULT_REGRESSION_REPORT = Path("reports/artifacts/Regression_Report.html")
+DEFAULT_STATE_FILE = Path("reports/artifacts/regression_collector_state.json")
 
 SENAO_LOGO_URL = (
     "https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png"

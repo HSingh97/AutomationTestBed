@@ -95,7 +95,7 @@ pipeline {
                         error("Packet Size must be numeric bytes (e.g. 1500), got: ${packetRaw}")
                     }
 
-                    sh 'rm -rf logs/performance_* logs/Performance_Report_*.html Senao_Performance_*.html || true'
+                    sh 'rm -rf reports/artifacts/performance_* reports/artifacts/Performance_Report_*.html Senao_Performance_*.html || true'
 
                     def cmd = new StringBuilder('PYTHONPATH=. python3 traffic/performance_matrix.py')
                     cmd.append(" --bandwidths '${bandwidths}'")
@@ -117,11 +117,11 @@ pipeline {
                     env.PERF_MATRIX_EXIT = "${exitCode}"
 
                     def reportPath = sh(
-                        script: 'ls -t logs/Performance_Report_*.html 2>/dev/null | head -1',
+                        script: 'ls -t reports/artifacts/Performance_Report_*.html 2>/dev/null | head -1',
                         returnStdout: true
                     ).trim()
                     if (!reportPath) {
-                        error('Performance matrix finished but no HTML report found under logs/')
+                        error('Performance matrix finished but no HTML report found under reports/artifacts/')
                     }
                     env.PERFORMANCE_REPORT_RAW = reportPath
                     echo "HTML report (raw): ${reportPath}"
@@ -147,8 +147,8 @@ pipeline {
         stage('Archive Report') {
             steps {
                 archiveArtifacts 'Senao_Performance_*.html'
-                archiveArtifacts 'logs/Performance_Report_*.html,allowEmptyArchive:true'
-                archiveArtifacts 'logs/performance_*/**,allowEmptyArchive:true'
+                archiveArtifacts 'reports/artifacts/Performance_Report_*.html,allowEmptyArchive:true'
+                archiveArtifacts 'reports/artifacts/performance_*/**,allowEmptyArchive:true'
             }
         }
     }

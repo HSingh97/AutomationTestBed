@@ -16,6 +16,7 @@ from utils.regression_report import _render_testbed_summary_table
 SENAO_LOGO_URL = (
     "https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png"
 )
+ARTIFACTS_DIR = Path("reports/artifacts")
 
 
 def get_group_marker(keywords):
@@ -77,7 +78,7 @@ def clean_failure_message(raw_failure):
 
 
 def _load_testbed_summary(profile_name: str | None, local_ip: str) -> dict:
-    summary_path = Path("testbed_summary.json")
+    summary_path = ARTIFACTS_DIR / "testbed_summary.json"
     if summary_path.is_file():
         try:
             with summary_path.open(encoding="utf-8") as handle:
@@ -117,7 +118,7 @@ def generate():
     parser.add_argument(
         "--profile",
         default="",
-        help="Profile name (profiles/<name>.yaml) used to collect BTS/CPE info if testbed_summary.json is missing",
+        help="Profile name (profiles/<name>.yaml) used to collect BTS/CPE info if artifacts summary is missing",
     )
     parser.add_argument(
         "--output-prefix",
@@ -133,10 +134,11 @@ def generate():
     output_prefix = (args.output_prefix or "Senao_GUI").strip()
 
     try:
-        with open('report.json', 'r') as f:
+        report_path = ARTIFACTS_DIR / "report.json"
+        with report_path.open('r', encoding='utf-8') as f:
             data = json.load(f)
     except FileNotFoundError:
-        print("report.json not found! Tests may not have executed properly.")
+        print("reports/artifacts/report.json not found! Tests may not have executed properly.")
         sys.exit(1)
 
     groups = {}
@@ -230,11 +232,12 @@ def generate():
             groups[group_name] = []
         groups[group_name].append(record)
 
-    html_filename = f"{output_prefix}_{build_no}_Report_{date_str}.html"
-    csv_filename = f"{output_prefix}_{build_no}_Report_{date_str}.csv"
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    html_filename = ARTIFACTS_DIR / f"{output_prefix}_{build_no}_Report_{date_str}.html"
+    csv_filename = ARTIFACTS_DIR / f"{output_prefix}_{build_no}_Report_{date_str}.csv"
 
     # Generate CSV
-    with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
+    with csv_filename.open('w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(['Test Group', 'Module ID', 'Module Name', 'Status', 'Execution Details'])
         for group_name, records in groups.items():
@@ -464,7 +467,7 @@ def generate():
     </html>
     """
 
-    with open(html_filename, 'w', encoding='utf-8') as f:
+    with html_filename.open('w', encoding='utf-8') as f:
         f.write(html)
 
     print(f"✅ Generated Professional Reports: {html_filename} & {csv_filename}")

@@ -1,0 +1,122 @@
+name: factory_provision
+description: >
+  Fresh factory-reset path — VLAN 200/201 (not 100/101), installer Quick Start,
+  AIRTEL SSID on BTS, CPE mgmt VLAN only, then link formation.
+
+dut:
+  ip_mode: ipv6
+  strict_ipv6: true
+  local_ipv6: "2401:4900:d0:40d4:0:17b8:0:330"
+  remote_ipv6s:
+    - "2401:4900:d0:40d4::17b8:0:331"
+  bts_pc_ipv6: "2401:4900:d0:40d4::17b8:0:301"
+  cpe_pc_ipv6: "2401:4900:d0:40d4::17b8:0:302"
+  mgmt_oob_ipv6: "2401:4900:d0:40d4::17b8:0:301"
+  username: root
+  password: Sen@0ubRNwk$
+
+factory_login:
+  username: installer
+  password: senao123
+
+factory_provision:
+  enabled: true
+  # CPE Quick Start equivalent — transparent + mgmt VLAN ID only (no SSID on CPE GUI)
+  cpe_use_mgmtvlan_only: true
+  bts_fallback_ipv4: "10.0.0.1"
+  post_provision_bootstrap: true
+  link_wait_s: 120
+
+nms:
+  syslog_ipv6: "2401:4900:d0:40d4::17b8:0:10"
+  syslog_port: "514"
+
+testbed:
+  enabled: true
+  bootstrap_on_start: true
+  configure_vlan_modes: true
+  strict_ipv6: true
+  recovery:
+    bts_fallback_ipv4: "10.0.0.1"
+  factory_defaults:
+    bts_vlan_mode: qinq
+    cpe_vlan_mode: transparent
+  qinq:
+    svlan: 200
+    cvlan: 201
+  mgmt_vlan:
+    prefix_len: 64
+    uci_key: vlan.ath1.mgmtvlan
+    uci_value: 201
+    lab_pc_vlan_id: 201
+    ipv6_bts: "2401:4900:d0:40d4:0:17b8:0:330"
+    ipv6_cpe: "2401:4900:d0:40d4::17b8:0:331"
+    ipv6_bts_pc: "2401:4900:d0:40d4::17b8:0:301"
+    ipv6_cpe_pc: "2401:4900:d0:40d4::17b8:0:302"
+    set_on_cpe: true
+  vlan_uci:
+    bts_radio: ath1
+    cpe_radio: ath1
+    bts:
+      mode_key: vlan.ath1.mode
+      mode_value: qinq
+    cpe:
+      mode_key: vlan.ath1.mode
+      mode_value: transparent
+  lab_pc_tagging:
+    bts:
+      mode: qinq
+      svlan: 200
+      cvlan: 201
+    cpe:
+      mode: untagged
+  primary_pc:
+    local: true
+    mgmt_interface: enp3s0
+    # Native port: 10.0.0.xx for BTS fallback 10.0.0.1 before QinQ is added
+    fallback_ipv4: "10.0.0.10"
+    fallback_prefix_len: 8
+    internet_ssh: ""
+  secondary_pc:
+    enabled: true
+    ssh: "root@10.0.150.187"
+    password: "senao1234#"
+    mgmt_interface: enp3s0
+    fallback_ipv4: "10.0.0.11"
+    fallback_prefix_len: 8
+    cpe_factory_ipv4: "192.168.2.1"
+    cpe_gui_ipv4: "10.0.0.1"
+  cpe_discovery:
+    radio_idx: 2
+  link_recovery:
+    restore_bts: false
+    restore_cpe: false
+
+link:
+  auto_credentials: true
+  # CPE LuCI on CPE lab PC L2 network (not reachable as 10.0.0.1 from BTS PC — that is BTS)
+  cpe_fallback_ipv4: "10.0.0.1"
+  always_apply_cpe_credentials: true
+  tx_power_default: "1"
+  radio_type: 5G
+  radio_idx: 1
+  cpe_radio_idx: 1
+  auth_mode: "32"
+  encryption_mode: "8"
+  min_connected_clients: 1
+  health_check_timeout_s: 120
+
+recovery:
+  restore_default_ip: "192.168.2.1"
+  reboot_wait_seconds: 60
+
+traffic:
+  enabled: false
+
+capture:
+  cpe_host: "10.0.150.187"
+  bts_interface: enp3s0.200.201
+
+ip_tests:
+  ipv6_gateway: ""
+  fallback_ipv4: ""

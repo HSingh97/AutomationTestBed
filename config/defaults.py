@@ -5,8 +5,25 @@ Single Source of Truth for all device factory default values.
 The keys here MUST match the 'param_name' passed into the UI helpers.
 """
 
-# Lab P2MP link SSID — BTS and CPE must match or the link drops between GUI tests.
+# Fallback SSID when link.auto_credentials is false (default: use AIRTEL_SSID_GEN).
 LINK_SSID = "ATUMNAWJ"
+
+LINK_DEFAULTS = {
+    "auto_credentials": True,
+    "cpe_fallback_ipv4": "10.0.0.1",
+    "always_apply_cpe_credentials": True,
+    "airtel_gen_path": "",
+    "radio_type": "5G",
+    "auth_mode": "32",
+    "encryption_mode": "8",
+    "radio_idx": 1,
+    "cpe_radio_idx": 1,
+    "bts_serial": "",
+    "ssid": "",
+    "expected_mode": "linked",
+    "min_connected_clients": 1,
+    "health_check_timeout_s": 60,
+}
 
 DEFAULT_VALUES = {
     # Wireless -> Radio Properties
@@ -20,7 +37,7 @@ DEFAULT_VALUES = {
     "DDRS Status": "Enable",
     "Spatial Stream": "Auto",
     "ATPC Status": "Disable",
-    "Transmit Power": "26",
+    "Transmit Power": "1",
     "Maximum EIRP": "0",
 
     "Syslog IP": "",
@@ -95,7 +112,7 @@ PERFORMANCE_DEFAULTS = {
     "packet_size": 1500,
     "profile": "default",
     "recovery_profile": "link_formation",
-    "artifact_dir": "logs",
+    "artifact_dir": "reports/artifacts",
     "mcs_traffic_cap_mbps": {
         "MCS0": 80,
         "MCS1": 120,
@@ -129,11 +146,133 @@ ATTENUATOR_DEFAULTS = {
     ],
 }
 
+IP_TEST_DEFAULTS = {
+    "enabled": False,
+    "ipv4_address": "192.168.2.1",
+    "ipv4_netmask": "255.255.255.0",
+    "ipv4_gateway": "192.168.2.254",
+    "ipv6_address": "",
+    "ipv6_gateway": "",
+    "ping_count_short": 4,
+    "ping_count_long": 100,
+    "max_ping_loss_pct": 1.0,
+    "mtu_test_value": 1400,
+    "mtu_restore_value": 1500,
+    "gui_settle_seconds": 12,
+    "reboot_timeout_s": 200,
+    "network_reload_wait_s": 30,
+    "iface_up_wait_s": 15,
+    "iperf_duration_s": 10,
+    "iperf_server_v4": "",
+    "iperf_server_v6": "",
+    "backup_archive_path": "",
+    "firmware_image_path": "",
+    "static_route_cidr": "",
+    "ipv6_link_local_iface": "eth0",
+    "ipv6_link_local_peer": "",
+    "fallback_ipv4": "",
+    "fallback_ipv6": "",
+    "reachability_use_device_fallback": True,
+    "ssh_connect_attempts": 3,
+    "ssh_connect_retry_interval_s": 15,
+    "remote_ping_retries": 5,
+    "remote_ping_retry_interval_s": 10,
+    "post_reboot_remote_ping_retries": 12,
+    "post_reboot_remote_ping_interval_s": 10,
+    "post_reload_remote_ping_retries": 8,
+}
+
+TESTBED_DEFAULTS = {
+    "enabled": True,
+    "bootstrap_on_start": True,
+    "configure_vlan_modes": True,
+    "strict_ipv6": True,
+    "recovery": {
+        "bts_fallback_ipv4": "10.0.0.1",
+        "bootstrap_fallback_ipv4s": [],
+    },
+    "bootstrap_fallback_ipv4": "10.0.0.1",
+    "bootstrap_fallback_ipv4s": [],
+    "factory_defaults": {
+        "bts_vlan_mode": "qinq",
+        "cpe_vlan_mode": "transparent",
+    },
+    "qinq": {"svlan": 100, "cvlan": 101},
+    "mgmt_vlan": {
+        "prefix_len": 64,
+        "uci_key": "vlan.ath1.mgmtvlan",
+        "uci_value": 101,
+        "lab_pc_vlan_id": 101,
+        "ipv6_bts": "",
+        "ipv6_cpe": "",
+        "ipv6_bts_pc": "",
+        "ipv6_cpe_pc": "",
+        "set_on_cpe": False,
+        "bts_apply_commands": [],
+        "cpe_apply_commands": [],
+    },
+    "vlan_uci": {
+        "bts_radio": "ath1",
+        "cpe_radio": "ath1",
+        "bts": {
+            "mode_key": "vlan.ath1.mode",
+            "mode_value": "qinq",
+            "svlan_key": "vlan.ath1.svlan",
+            "cvlan_key": "vlan.ath1.cvlan",
+            "mgmtvlan_key": "vlan.ath1.mgmtvlan",
+        },
+        "cpe": {
+            "mode_key": "vlan.ath1.mode",
+            "mode_value": "transparent",
+        },
+    },
+    "lab_pc_tagging": {
+        "bts": {"mode": "qinq", "svlan": 100, "cvlan": 101},
+        "cpe": {"mode": "untagged"},
+    },
+    "primary_pc": {
+        "local": True,
+        "mgmt_interface": "enp3s0",
+        "fallback_ipv4": "10.0.0.10",
+        "fallback_prefix_len": 8,
+        "internet_ssh": "",
+    },
+    "secondary_pc": {
+        "enabled": True,
+        "ssh": "",
+        "mgmt_interface": "enp3s0",
+        "fallback_ipv4": "10.0.0.11",
+        "fallback_prefix_len": 8,
+        "cpe_factory_ipv4": "192.168.2.1",
+    },
+    "wifi": {
+        "enabled": False,
+        "interface": "wlan0",
+        "ssid": "",
+        "psk": "",
+    },
+    "vlan_ssh": {
+        "bts": {"verify_commands": [], "modes": {}},
+        "cpe": {"verify_commands": [], "modes": {}},
+    },
+    "cpe_discovery": {
+        "radio_idx": 2,
+        "lease_commands": [],
+        "discover_commands": [],
+    },
+    "link_recovery": {
+        "restore_bts": True,
+        "restore_cpe": True,
+        "bts_archive": "config/BTS.tar.gz",
+        "cpe_archive": "config/CPE.tar.gz",
+    },
+}
+
 CAPTURE_DEFAULTS = {
     "enabled": False,
     "username": "root",
     "password": "senao1234#",
     "tool": "tcpdump",
-    "artifact_dir": "logs/jumbo_captures",
+    "artifact_dir": "reports/artifacts/jumbo_captures",
     "remote_tmp_dir": "/tmp/ubr_jumbo_captures",
 }

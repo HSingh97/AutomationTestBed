@@ -1,17 +1,28 @@
-"""Keep BTS on the lab link SSID so P2MP stays up between GUI tests."""
+"""Link SSID helpers — delegates to AIRTEL_SSID_GEN when auto_credentials is enabled."""
 
 from __future__ import annotations
 
+from typing import Any
+
 from config.defaults import DEFAULT_VALUES, LINK_SSID
-from pages.commands import RootCommands
 from pages.locators import RadioPropertiesLocators
+from utils.link_formation import (
+    ensure_p2mp_link_credentials,
+    link_auto_enabled,
+    resolve_link_credentials_ssh,
+)
 from utils.parsers import extract_uci_value
+from pages.commands import RootCommands
 from utils.ui_helpers import execute_triple_apply
 
 
 def resolve_link_ssid(profile_bundle=None) -> str:
+    """Return expected link SSID (from generator config or static profile)."""
     if profile_bundle is not None:
-        ssid = profile_bundle.active.get("link", {}).get("ssid")
+        active = profile_bundle.active
+        if link_auto_enabled(active):
+            return str(active.get("link", {}).get("ssid") or LINK_SSID)
+        ssid = active.get("link", {}).get("ssid")
         if ssid:
             return str(ssid).strip()
     return DEFAULT_VALUES.get("SSID", LINK_SSID)
@@ -22,8 +33,26 @@ async def _current_bts_ssid(root_ssh, radio_idx: int = 1) -> str:
     return extract_uci_value(str(raw or "").strip())
 
 
-async def ensure_bts_link_ssid_ssh(root_ssh, *, ssid: str | None = None, radio_idx: int = 1) -> bool:
-    """Set BTS SSID over SSH when it drifted from the lab link value."""
+async def ensure_bts_link_ssid_ssh(
+    root_ssh,
+    *,
+    ssid: str | None = None,
+    radio_idx: int = 1,
+    profile: dict[str, Any] | None = None,
+) -> bool:
+    """
+    Sync P2MP link on BTS (and CPE when profile + cpe_ssh provided via ensure_p2mp_link_credentials).
+
+    When link.auto_credentials is true (default), uses AIRTEL_SSID_GEN from BTS serial — no manual SSID.
+    """
+    if profile and link_auto_enabled(profile):
+        await ensure_p2mp_link_credentials(
+            bts_ssh=root_ssh,
+            profile=profile,
+            bts_radio_idx=radio_idx,
+        )
+        return True
+
     target = ssid or LINK_SSID
     current = await _current_bts_ssid(root_ssh, radio_idx)
     if current == target:
@@ -48,9 +77,15 @@ async def ensure_bts_link_ssid_gui(
     *,
     ssid: str | None = None,
     radio_url_chunk: str = "/admin/wireless/radio1",
+    profile: dict[str, Any] | None = None,
 ) -> bool:
-    """Apply lab link SSID through the GUI (Apply x3) when SSH-only change is insufficient."""
-    target = ssid or LINK_SSID
+    """GUI fallback for static SSID only; auto_credentials uses SSH AIRTEL path."""
+    if profile and link_auto_enabled(profile):
+        creds = await resolve_link_credentials_ssh(root_ssh, profile)
+        target = creds.ssid
+    else:
+        target = ssid or LINK_SSID
+
     current = await _current_bts_ssid(root_ssh)
     if current == target:
         print(f"[link] BTS SSID already '{target}' (GUI check skipped).")

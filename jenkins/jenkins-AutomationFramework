@@ -76,7 +76,7 @@ pipeline {
                     def ipv6Arg = localIP ? "--local-ipv6 \"${localIP}\"" : ''
 
                     echo "Testing with filter: [ ${formattedFilter} ]"
-                    sh 'rm -f report.json testbed_summary.json Senao_GUI_*.html Senao_GUI_*.csv || true'
+                    sh 'rm -f reports/artifacts/report.json reports/artifacts/testbed_summary.json reports/artifacts/Senao_GUI_*.html reports/artifacts/Senao_GUI_*.csv Senao_GUI_*.html Senao_GUI_*.csv || true'
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                         sh """
@@ -85,7 +85,7 @@ pipeline {
                             --recovery-profile "${recoveryProfileName}" \
                             ${ipv6Arg} \
                             ${destructiveFlag} \
-                            --json-report --json-report-file=report.json
+                            --json-report --json-report-file=reports/artifacts/report.json
                         """
                     }
                 }
@@ -98,11 +98,11 @@ pipeline {
                     def senao = load 'jenkins/jenkins-common.groovy'
                     def localIP = (params['Local IPv6 Address'] ?: 'profile-default').trim()
                     def basename = senao.standardReportBasename('Senao_GUI')
-                    def htmlFile = "${basename}.html"
-                    def csvFile = "${basename}.csv"
+                    def htmlFile = "reports/artifacts/${basename}.html"
+                    def csvFile = "reports/artifacts/${basename}.csv"
 
-                    if (!fileExists('report.json')) {
-                        unstable('report.json missing — skipping report generation')
+                    if (!fileExists('reports/artifacts/report.json')) {
+                        unstable('reports/artifacts/report.json missing — skipping report generation')
                         return
                     }
 
@@ -121,10 +121,10 @@ pipeline {
 
         stage('Archive Report') {
             steps {
-                archiveArtifacts 'Senao_GUI_*.html'
-                archiveArtifacts 'Senao_GUI_*.csv,allowEmptyArchive:true'
-                archiveArtifacts 'report.json,allowEmptyArchive:true'
-                archiveArtifacts 'testbed_summary.json,allowEmptyArchive:true'
+                archiveArtifacts 'reports/artifacts/Senao_GUI_*.html'
+                archiveArtifacts 'reports/artifacts/Senao_GUI_*.csv,allowEmptyArchive:true'
+                archiveArtifacts 'reports/artifacts/report.json,allowEmptyArchive:true'
+                archiveArtifacts 'reports/artifacts/testbed_summary.json,allowEmptyArchive:true'
             }
         }
     }
@@ -134,8 +134,8 @@ pipeline {
             script {
                 def senao = load 'jenkins/jenkins-common.groovy'
                 def basename = senao.standardReportBasename('Senao_GUI')
-                def htmlFile = env.CUSTOMER_REPORT ?: "${basename}.html"
-                def csvFile = env.CUSTOMER_REPORT_CSV ?: "${basename}.csv"
+                def htmlFile = env.CUSTOMER_REPORT ?: "reports/artifacts/${basename}.html"
+                def csvFile = env.CUSTOMER_REPORT_CSV ?: "reports/artifacts/${basename}.csv"
                 def hasReport = fileExists(htmlFile)
 
                 if (hasReport) {

@@ -4,6 +4,7 @@ import json
 import os
 import asyncio
 from datetime import datetime
+from pathlib import Path
 import httpx
 from playwright.async_api import async_playwright
 from pages.locators import LoginPageLocators
@@ -11,6 +12,13 @@ from scrapli.driver.generic import AsyncGenericDriver
 from utils.net_utils import format_http_host, normalize_ip
 from utils.profile_manager import load_profile_bundle
 from utils.recovery_manager import RecoveryManager, set_active_recovery_manager
+
+ARTIFACTS_DIR = Path("reports/artifacts")
+
+
+def _artifact_path(*parts: str) -> Path:
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    return ARTIFACTS_DIR.joinpath(*parts)
 
 # =====================================================================
 # EVENT LOOP MANAGER (Fixes the "Attached to different loop" crash)
@@ -42,7 +50,12 @@ def pytest_addoption(parser):
         default="2401:4900:d0:40d4::17b8:0:331",
         help="Comma-separated CPE IPv6 addresses",
     )
-    group.addoption("--fallback-ip", action="store", default="10.0.0.1", help="BTS/CPE Fallback IP Address")
+    group.addoption(
+        "--fallback-ip",
+        action="store",
+        default="10.0.0.1",
+        help="Recovery-only factory IPv4 for bootstrap link/device restore (not used in strict IPv6 tests)",
+    )
     group.addoption("--username", action="store", default="root", help="Device Username")
     group.addoption("--password", action="store", default="Sen@0ubRNwk$", help="Device Password")
     group.addoption(
@@ -101,7 +114,7 @@ def pytest_addoption(parser):
     group.addoption(
         "--regression-report",
         action="store",
-        default="reports/Regression_Report.html",
+        default="reports/artifacts/Regression_Report.html",
         help="Single HTML report path for all regression iterations/runs (append when state file exists).",
     )
     group.addoption(
@@ -122,20 +135,102 @@ def pytest_addoption(parser):
         default="auto",
         help="Vaunix LDA backend: auto | dll | mock (lab tests default to mock).",
     )
+    group.addoption(
+        "--allow-ip-suite",
+        action="store_true",
+        default=False,
+        help="Enable IP_01–IP_37 networking validation tests (tests/IP/).",
+    )
+    group.addoption(
+        "--allow-ip-destructive",
+        action="store_true",
+        default=False,
+        help="Allow IP cases that reboot, network-reload, or flap interfaces.",
+    )
+    group.addoption(
+        "--skip-testbed-bootstrap",
+        action="store_true",
+        default=False,
+        help="Skip session testbed bootstrap (mgmt VLAN, CPE discovery, VLAN modes).",
+    )
+    group.addoption(
+        "--bootstrap-only",
+        action="store_true",
+        default=False,
+        help="Run testbed bootstrap then exit (no tests). Use with an empty or dummy test path.",
+    )
+    group.addoption(
+        "--factory-provision",
+        action="store_true",
+        default=False,
+        help=(
+            "After factory reset: run factory_provision (VLAN/NMS/AIRTEL/link) before bootstrap. "
+            "Use --profile factory_provision. For installer GUI use scripts/factory_provision.py --headed."
+        ),
+    )
 
 # =====================================================================
 # 2. PARAMETER FIXTURES
 # =====================================================================
 @pytest.fixture(scope="session")
-def bsu_ip(request, profile_bundle):
-    dut = profile_bundle.active["dut"]
+def testbed_ready(request, profile_bundle, device_creds, event_loop):
+    """
+    Configure lab for mgmt VLAN-only access:
+    BTS QinQ, CPE transparent, mgmt addresses, CPE IP from BTS DHCP (SSH only).
+    """
+    tb = profile_bundle.active.get("testbed", {}) or {}
+    if request.config.getoption("--skip-testbed-bootstrap") or not tb.get("bootstrap_on_start", True):
+        return profile_bundle
+
+    if request.config.getoption("--factory-provision"):
+        from utils.factory_provision import provision_factory_reset
+
+        print("\n[testbed] Factory provision (post-reset VLAN/NMS/AIRTEL/link)...")
+        cli_fb = request.config.getoption("--fallback-ip") or None
+        event_loop.run_until_complete(
+            provision_factory_reset(
+                profile_bundle,
+                device_creds,
+                gui_page=None,
+                fallback_ip=cli_fb,
+            )
+        )
+
+    from utils.testbed_bootstrap import bootstrap_testbed
+
+    print("\n[testbed] Running session bootstrap (mgmt VLAN, VLAN modes, CPE discovery)...")
+    cli_fb = request.config.getoption("--fallback-ip") or None
+    event_loop.run_until_complete(
+        bootstrap_testbed(
+            profile_bundle,
+            device_creds,
+            gui_page=None,
+            cli_fallback_ip=cli_fb,
+        )
+    )
+    return profile_bundle
+
+
+def pytest_collection_modifyitems(config, items):
+    if not config.getoption("--bootstrap-only"):
+        return
+    # Keep a single lightweight item so session fixtures still run.
+    selected = [item for item in items if "testbed" in item.nodeid or item.name == "test_ip_case"]
+    if not selected and items:
+        selected = items[:1]
+    items[:] = selected[:1]
+
+
+@pytest.fixture(scope="session")
+def bsu_ip(request, testbed_ready):
+    dut = testbed_ready.active["dut"]
     if dut.get("ip_mode") == "ipv6" or dut.get("strict_ipv6"):
         return normalize_ip(str(dut["local_ipv6"]))
     return request.config.getoption("--local-ip")
 
 @pytest.fixture(scope="session")
-def cpe_ips(request, profile_bundle):
-    dut = profile_bundle.active["dut"]
+def cpe_ips(request, testbed_ready):
+    dut = testbed_ready.active["dut"]
     if dut.get("ip_mode") == "ipv6" or dut.get("strict_ipv6"):
         cli_remote_v6 = request.config.getoption("--remote-ipv6")
         if cli_remote_v6:
@@ -176,14 +271,14 @@ def recovery_manager(profile_bundle):
 @pytest.fixture(scope="session")
 async def root_ssh(bsu_ip, device_creds, recovery_manager):
     """SSH connection to the Linux backend as 'root'."""
-    os.makedirs("logs", exist_ok=True)
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     device = {
         "host": bsu_ip,
         "auth_username": "root",
         "auth_password": device_creds["pass"],
         "auth_strict_key": False,
         "transport": "asyncssh",
-        "channel_log": f"logs/root_cli_{bsu_ip}.log",
+        "channel_log": str(_artifact_path(f"root_cli_{bsu_ip}.log")),
     }
     conn = AsyncGenericDriver(**device)
     open_errors = []
@@ -198,24 +293,28 @@ async def root_ssh(bsu_ip, device_creds, recovery_manager):
     else:
         raise RuntimeError(f"Unable to open root SSH to {bsu_ip} after retries: {' | '.join(open_errors)}")
     await recovery_manager.ensure_link_or_recover(bsu_ip=bsu_ip, device_creds=device_creds, root_ssh=conn)
-    from utils.link_ssid import ensure_bts_link_ssid_ssh, resolve_link_ssid
+    from utils.link_ssid import ensure_bts_link_ssid_ssh
 
-    link_ssid = resolve_link_ssid(recovery_manager.profile_bundle)
-    await ensure_bts_link_ssid_ssh(conn, ssid=link_ssid)
+    profile = recovery_manager.profile_bundle.active
+    await ensure_bts_link_ssid_ssh(
+        conn,
+        profile=profile,
+        radio_idx=int(profile.get("link", {}).get("radio_idx", 1)),
+    )
     yield conn
     await conn.close()
 
 @pytest.fixture(scope="session")
 async def bsu_admin_cli(bsu_ip, device_creds):
     """SSH connection to the device CLI as 'admin'."""
-    os.makedirs("logs", exist_ok=True)
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     device = {
         "host": bsu_ip,
         "auth_username": "admin",
         "auth_password": device_creds["pass"],
         "auth_strict_key": False,
         "transport": "asyncssh",
-        "channel_log": f"logs/admin_cli_{bsu_ip}.log",
+        "channel_log": str(_artifact_path(f"admin_cli_{bsu_ip}.log")),
     }
     conn = AsyncGenericDriver(**device)
     await conn.open()
@@ -252,7 +351,7 @@ def pytest_runtest_makereport(item, call):
 
 
 def _resolve_testbed_hosts(config):
-    """BTS and CPE hosts/password using the same rules as bsu_ip / cpe_ips fixtures."""
+    """BTS and CPE hosts/password using mgmt VLAN addresses (post-bootstrap dut)."""
     local_override = config.getoption("--local-ipv6") or config.getoption("--local-ip")
     bundle = load_profile_bundle(
         profile_name=config.getoption("--profile"),
@@ -279,14 +378,15 @@ def _resolve_testbed_hosts(config):
 
 def _write_testbed_summary(config) -> None:
     """Persist BTS/CPE model, FW, IP, VLAN, QoS for customer HTML report generation."""
-    if not os.path.isfile("report.json"):
+    report_json = _artifact_path("report.json")
+    if not report_json.is_file() and not os.path.isfile("report.json"):
         return
     try:
         from utils.regression_device_info import collect_testbed_summary
 
         bsu_host, cpe_hosts, password = _resolve_testbed_hosts(config)
         summary = asyncio.run(collect_testbed_summary(bsu_host, cpe_hosts, password))
-        with open("testbed_summary.json", "w", encoding="utf-8") as handle:
+        with _artifact_path("testbed_summary.json").open("w", encoding="utf-8") as handle:
             json.dump(summary, handle, indent=2)
         print(f"\n[report] Testbed summary written (BTS={bsu_host}, CPE={cpe_hosts[:1] or ['—']})")
     except Exception as exc:
@@ -297,8 +397,8 @@ def _write_testbed_summary(config) -> None:
 def pytest_sessionfinish(session, exitstatus):
     """Generates customer CSV and regression HTML summaries at end of run."""
     _write_testbed_summary(session.config)
-    reports_dir = "reports"
-    os.makedirs(reports_dir, exist_ok=True)
+    reports_dir = str(ARTIFACTS_DIR)
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     customer_report_path = os.path.join(reports_dir, f"Customer_Summary_{timestamp}.csv")
     reporter = session.config.pluginmanager.get_plugin('terminalreporter')
@@ -442,11 +542,11 @@ async def gui_page(gui_browser, bsu_ip, device_creds, recovery_manager, root_ssh
     print("    -> Waiting 3 seconds for Dashboard routing...")
     await page.wait_for_timeout(3000)
 
-    from utils.link_ssid import ensure_bts_link_ssid_gui, resolve_link_ssid
+    from utils.link_ssid import ensure_bts_link_ssid_gui
 
-    link_ssid = resolve_link_ssid(recovery_manager.profile_bundle)
+    profile = recovery_manager.profile_bundle.active
     try:
-        await ensure_bts_link_ssid_gui(page, root_ssh, ssid=link_ssid)
+        await ensure_bts_link_ssid_gui(page, root_ssh, profile=profile)
     except Exception as exc:
         print(f"[link] GUI SSID restore after login skipped: {exc}")
 
@@ -454,12 +554,17 @@ async def gui_page(gui_browser, bsu_ip, device_creds, recovery_manager, root_ssh
     yield page
 
     # When all tests finish, save the trace and close the browser
-    os.makedirs("logs", exist_ok=True)
-    await context.tracing.stop(path=f"logs/global_gui_trace.zip")
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    await context.tracing.stop(path=str(_artifact_path("global_gui_trace.zip")))
     await context.close()
 
 
 def pytest_configure(config):
+    from config.ip_test_cases import IP_TEST_CASES
+
+    for case in IP_TEST_CASES:
+        config.addinivalue_line("markers", f"{case.case_id}: {case.title} ({case.category})")
+
     regression_mode = bool(config.getoption("--allow-regression"))
     config._regression_mode = regression_mode
     config._regression_report_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -470,7 +575,7 @@ def pytest_configure(config):
         from utils.regression_report import init_regression_collector_for_session
 
         repo_root = Path(os.path.dirname(__file__))
-        reports_dir = repo_root / "reports"
+        reports_dir = repo_root / "reports" / "artifacts"
         reports_dir.mkdir(parents=True, exist_ok=True)
         report_path = Path(config.getoption("--regression-report"))
         if not report_path.is_absolute():
