@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import time
+from pathlib import Path
 from typing import Any
 
 import pytest_check as check
@@ -60,9 +62,36 @@ COUNTER_ABS_TOL = 3000
 COUNTER_REL_TOL = 0.08
 SNR_TOLERANCE_DB = 2.0
 
+DEBUG_LOG_PATH = Path("/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-a9118f.log")
+DEBUG_SESSION_ID = "a9118f"
+DEBUG_RUN_ID = "pre-fix"
+
 
 def _log(message: str):
     print(f"[RADIO_STATS] {message}")
+
+
+def _debug_log(location: str, message: str, data: dict, hypothesis_id: str) -> None:
+    try:
+        DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with DEBUG_LOG_PATH.open("a", encoding="utf-8") as fp:
+            fp.write(
+                json.dumps(
+                    {
+                        "sessionId": DEBUG_SESSION_ID,
+                        "runId": DEBUG_RUN_ID,
+                        "hypothesisId": hypothesis_id,
+                        "location": location,
+                        "message": message,
+                        "data": data,
+                        "timestamp": int(time.time() * 1000),
+                    },
+                    ensure_ascii=True,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
 
 
 async def _goto_admin_path(gui_page, path_fragment: str) -> bool:
@@ -387,8 +416,22 @@ async def open_link_detailed_statistics(
     Lands on Detailed Statistics (/admin/monitor/radio1/details/...).
     """
     await open_radio1_link_statistics(gui_page)
+    row_count = await gui_page.locator(MonitorLocators.RADIO1_LINK_ROWS).count()
     idx = row_index if row_index is not None else await _find_link_row_index(gui_page, cpe_ip)
     row = gui_page.locator(MonitorLocators.RADIO1_LINK_ROWS).nth(idx)
+    # region agent log
+    _debug_log(
+        "utils/radio_statistics_flows.py:418",
+        "attempting detailed statistics row click",
+        {
+            "peer_ip": cpe_ip or "",
+            "row_count": row_count,
+            "selected_index": idx,
+            "url_before": gui_page.url or "",
+        },
+        "H2",
+    )
+    # endregion
     await row.locator("td[data-col='index']").click(timeout=UITimeouts.ELEMENT_WAIT_MS)
     await gui_page.wait_for_load_state("domcontentloaded")
     await gui_page.wait_for_timeout(UITimeouts.MEDIUM_WAIT_MS)
@@ -727,6 +770,22 @@ async def _assert_gui_89_on_device(
         assoc_min = min(assoc_min, assoc_now) if assoc_now >= 0 else assoc_min
         if saw_reset and links_now >= 1:
             break
+    # region agent log
+    _debug_log(
+        "utils/radio_statistics_flows.py:761",
+        "disconnect metrics sampled",
+        {
+            "device_label": device_label,
+            "assoc_before": assoc_before,
+            "assoc_min": assoc_min,
+            "links_before": links_before,
+            "links_after": links_after,
+            "saw_reset": saw_reset,
+            "elapsed_s": round(time.monotonic() - t0, 2),
+        },
+        "H3",
+    )
+    # endregion
 
     reconnect_ok = links_after >= 1
     duration_s = round(time.monotonic() - t0, 2)

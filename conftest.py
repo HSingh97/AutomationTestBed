@@ -88,6 +88,144 @@ def pytest_addoption(parser):
         default=None,
         help="Optional JSON file with external tester throughput/latency for GUI_130 comparison.",
     )
+    group.addoption(
+        "--skip-cpe-api-24",
+        action="store_true",
+        default=False,
+        help="Skip CPE 2.4 GHz btsconnect API tests (169.254.254.1).",
+    )
+    group.addoption(
+        "--cpe-24-api-base",
+        action="store",
+        default=None,
+        help="Override CPE 2.4 GHz mgmt API base (default fixed http://169.254.254.1).",
+    )
+    group.addoption(
+        "--cpe-24-bts-ssid",
+        action="store",
+        default=None,
+        help="Step 2 Case 1: BTS SSID in btsconnect POST (links CPE to BTS; not PC Wi‑Fi).",
+    )
+    group.addoption(
+        "--cpe-24-bts-password",
+        action="store",
+        default=None,
+        help="Step 2 Case 1: BTS security key in btsconnect POST body.",
+    )
+    group.addoption(
+        "--cpe-24-btsconnect-timeout",
+        action="store",
+        default=None,
+        help="Seconds to wait for btsconnect HTTP response (default 300; CPE links to BTS first).",
+    )
+    group.addoption(
+        "--cpe-24-btsconnect-negative-timeout",
+        action="store",
+        default=None,
+        help="Read timeout for API_02/API_03 btsconnect (default 120; should fail fast).",
+    )
+    group.addoption(
+        "--cpe-24-reset-wait-s",
+        action="store",
+        default=None,
+        help="Seconds to wait after full CPE factory reset (default 120).",
+    )
+    group.addoption(
+        "--cpe-24-factory-reset-command",
+        action="store",
+        default=None,
+        help="SSH command for full CPE reset on 169.254.254.1 (default: firstboot && reboot).",
+    )
+    group.addoption(
+        "--cpe-24-factory-reset-path",
+        action="store",
+        default=None,
+        help="Optional mgmt REST path for factory reset (default: SSH firstboot on 169.254.254.1).",
+    )
+    group.addoption(
+        "--cpe-24-ssh-host",
+        action="store",
+        default=None,
+        help="CPE SSH host for factory reset when on mgmt Wi‑Fi (default 169.254.254.1).",
+    )
+    group.addoption(
+        "--cpe-24-no-bts-ssh-fetch",
+        action="store_true",
+        default=False,
+        help="Do not SSH to BTS for btsconnect creds; pass --cpe-24-bts-ssid/password.",
+    )
+    group.addoption(
+        "--cpe-24-invalid-ssid",
+        action="store",
+        default=None,
+        help="API_03: fake BTS SSID (default UBR_INVALID_SSID_NOT_FOUND).",
+    )
+    group.addoption(
+        "--cpe-24-invalid-password",
+        action="store",
+        default=None,
+        help="API_02: wrong BTS password (default wrong-password-99).",
+    )
+    group.addoption(
+        "--cpe-24-wifi-interface",
+        action="store",
+        default=None,
+        help="Lab PC Wi‑Fi NIC (optional; auto-detect e.g. wlp3s0). Omit if not wlan0.",
+    )
+    group.addoption(
+        "--cpe-24-mgmt-ssid",
+        action="store",
+        default=None,
+        help="Optional: only for --cpe-24-auto-join-wifi (manual join needs no mgmt CLI).",
+    )
+    group.addoption(
+        "--cpe-24-mgmt-password",
+        action="store",
+        default=None,
+        help="Optional: only for --cpe-24-auto-join-wifi.",
+    )
+    group.addoption(
+        "--cpe-24-auto-join-wifi",
+        action="store_true",
+        default=False,
+        help="Use nmcli to join CPE mgmt Wi‑Fi (default: you connect manually; tests verify SSID + API).",
+    )
+    group.addoption(
+        "--cpe-24-wifi-leave-connected",
+        action="store_true",
+        default=False,
+        help="Do not disconnect nmcli profile after API tests.",
+    )
+    group.addoption(
+        "--cpe-24-fw-file",
+        action="store",
+        default=None,
+        help="API_09: firmware .tgz filename or path (default dir: /tftpboot).",
+    )
+    group.addoption(
+        "--cpe-24-fw-dir",
+        action="store",
+        default=None,
+        help="API_09: directory containing firmware image (default /tftpboot).",
+    )
+    group.addoption(
+        "--cpe-24-fw-upload-timeout",
+        action="store",
+        default=None,
+        help="API_09: seconds to wait for upload-sw HTTP response (default 900).",
+    )
+    group.addoption(
+        "--cpe-24-cpe-model",
+        action="store",
+        default=None,
+        help="CPE model label for logs. Inferred from FW filename if omitted.",
+    )
+    group.addoption(
+        "--cpe-24-invalid-fw-file",
+        action="store",
+        default=None,
+        help="API_15: wrong-model firmware .tgz (default: pick other Senao-UBR*.tgz in /tftpboot).",
+    )
 
 # =====================================================================
 # 2. PARAMETER FIXTURES

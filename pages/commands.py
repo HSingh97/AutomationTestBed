@@ -202,6 +202,17 @@ class RootCommands:
     GET_ARP_TABLE = "ip neigh show 2>/dev/null"
     GET_ARP_TABLE_PROC = "cat /proc/net/arp 2>/dev/null"
     GET_IP6_NEIGH = "ip -6 neigh show 2>/dev/null"
+    GET_CONFIG_LOGS = "logread -e 'uci:' 2>/dev/null | tail -n 120"
+    GET_DEVICE_LOGS = "logread 2>/dev/null | tail -n 120"
+    GET_DEVICE_LOGS_TAIL = "logread 2>/dev/null | tail -n 80"
+    GET_DEVICE_LOGS_REBOOT_GREP = "logread 2>/dev/null | grep -Ei 'reboot|kernel|boot' | tail -n 40"
+    GET_TEMPERATURE_LOGS = "logread -e 'temp' 2>/dev/null | tail -n 120"
+    GET_SYSTEM_LOGS = "logread 2>/dev/null | tail -n 200"
+
+    @staticmethod
+    def emit_system_log_marker(marker: str):
+        safe_marker = str(marker).replace('"', "").replace("'", "")
+        return f'logger "{safe_marker}"'
 
     @staticmethod
     def find_pcap_files():

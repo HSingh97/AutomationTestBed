@@ -255,6 +255,7 @@ class MonitorLocators:
     SUBMENU_RADIO_1_STATS = CommonLocators.submenu_by_href("/monitor/radio1")
     SUBMENU_RADIO_0_STATS = CommonLocators.submenu_by_href("/monitor/radio0")
     SUBMENU_LEARN_TABLE = CommonLocators.submenu_by_href("/monitor/learntable")
+    SUBMENU_SYSTEM_LOGS = CommonLocators.submenu_by_href("/monitor/logs")
     SUBMENU_TOOLS = CommonLocators.submenu_by_href("/monitor/tools")
     TAB_DIAGNOSTICS = "ul.cbi-tabmenu > li > a[href*='/monitor/tools']:not([href*='testtool']):not([href*='spectrum']):not([href*='scans']):not([href*='survey'])"
     TAB_LINK_TEST_TOOL = "ul.cbi-tabmenu > li > a[href*='/monitor/tools/testtool']"
@@ -308,6 +309,23 @@ class MonitorLocators:
     DETAIL_LOCAL_RTX = "#l_rtx"
     DETAIL_REMOTE_RTX = "#r_rtx"
     DETAIL_REMOTE_FW = "#r_buildno"
+
+    # Legacy/HS Learn Table + System Logs selectors
+    ARP_TAB = "ul.cbi-tabmenu > li > a[href*='/monitor/learntable/arptbl']"
+    BRIDGE_TABLE = "#brctl-list"
+    BRIDGE_ROWS = "#brctl-list tr"
+    ARP_TABLE = "#arp-list"
+    ARP_ROWS = "#arp-list tr"
+    INTERFACE_FILTER = "#intf_type"
+    REFRESH_BUTTON = "#refresh"
+    CLEAR_BUTTON = "#clear"
+    LOG_CONFIG_TAB = "li#Configuration > a"
+    LOG_DEVICE_TAB = "li#Device > a"
+    LOG_TEMPERATURE_TAB = "li#Temperature > a"
+    LOG_SYSTEM_TAB = "li#System > a"
+    LOG_REFRESH_BUTTON = "input.cbi-button[value='Refresh']"
+    LOG_CLEAR_BUTTON = "#clr_button"
+    LOG_TEXTAREA = "#result"
 
 
 class LearnTableLocators:

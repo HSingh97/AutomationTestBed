@@ -26,6 +26,8 @@ Automation framework for UBR validation with:
   - `test_network.py`
   - `test_management.py`
   - `test_monitor.py` (GUI_83 Radio Stats, GUI_127/128/130 Link Test Tool)
+- `tests/API/`
+  - `test_API.py` (API_01–API_03 — CPE btsconnect on 2.4 GHz management)
 - `tests/JumboFrames/`
   Jumbo frame suite:
   - `test_jumbo_frames.py` (JMB_01 ... JMB_10)
@@ -295,6 +297,19 @@ venv/bin/python -m pytest tests/GUI/ -v \
   --remote-ipv6 2401:4900:d0:40d4::17b8:0:331 \
   --username root \
   --password "Sen@0ubRNwk$"
+```
+
+Run CPE btsconnect API tests (fixed API IP **169.254.254.1** = CPE 2.4 GHz mgmt only):
+
+```bash
+# Join CPE 2.4 GHz mgmt Wi‑Fi on PC manually first; tests print connected SSID
+python3 -m pytest tests/API/test_API.py -m CPE_API_24 \
+  --profile=default --local-ipv6=2401:4900:d0:40d4::17b8:0:330 -v
+
+# No BTS SSH — pass all four creds on CLI:
+#   ... --cpe-24-no-bts-ssh-fetch --cpe-24-bts-ssid=... --cpe-24-bts-password=...
+
+# Optional: --cpe-24-wifi-interface=wlp3s0  --cpe-24-auto-join-wifi (nmcli join instead of manual)
 ```
 
 Run destructive jumbo cases (reboot/factory reset):

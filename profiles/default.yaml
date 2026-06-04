@@ -31,6 +31,19 @@ traffic:
   benchmark_backend: ixia
   stats_backend: trex
 
+cpe_api_24:
+  # Fixed CPE 2.4 GHz management REST API (always 169.254.254.1 when on CPE mgmt Wi‑Fi)
+  base_url: "http://169.254.254.1"
+  btsconnect_path: "/api/v1/CPE/btsconnect"
+  cpe_ssh_host: "169.254.254.1"
+  factory_reset_command: "firstboot -y && reboot"
+  reset_wait_s: 180
+  invalid_ssid: "UBR_INVALID_SSID_NOT_FOUND"
+  invalid_password: "wrong-password-99"
+  prefer_transport: auto
+  fw_dir: "/tftpboot"
+  fw_upload_timeout_s: 900
+
 link_test:
   vlan_id: 0
   vlan_min: 0
