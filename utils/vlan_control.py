@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 
@@ -138,16 +139,18 @@ async def ensure_bts_transparent_ssh(ssh, profile_tb: dict[str, Any]) -> bool:
     current = await read_vlan_uci_ssh(ssh, profile_tb, "bts")
     exp_mgmt = str(int((profile_tb.get("mgmt_vlan", {}) or {}).get("uci_value", 101)))
     mode = _normalize_mode_name(current.get("mode", "transparent"))
-    if mode == "transparent" and (not current.get("mgmtvlan") or current.get("mgmtvlan") == exp_mgmt):
-        print(f"[vlan] BTS transparent OK (mgmtvlan={current.get('mgmtvlan', exp_mgmt)})")
+    mgmt = str(current.get("mgmtvlan", "")).strip()
+    if mode == "transparent" and mgmt == exp_mgmt:
+        print(f"[vlan] BTS transparent OK (mgmtvlan={mgmt})")
         return True
     cmds = build_bts_transparent_mgmt_commands(profile_tb)
-    print(f"[vlan] BTS applying transparent+mgmtvlan ({len(cmds)} commands)")
+    print(f"[vlan] BTS applying transparent+mgmtvlan={exp_mgmt} ({len(cmds)} commands)")
     ok = await apply_vlan_commands_ssh(ssh, cmds)
+    await asyncio.sleep(15)
     after = await read_vlan_uci_ssh(ssh, profile_tb, "bts")
     mode_after = _normalize_mode_name(after.get("mode", "transparent"))
-    mgmt_ok = not after.get("mgmtvlan") or after.get("mgmtvlan") == exp_mgmt
-    return ok and mode_after == "transparent" and mgmt_ok
+    mgmt_after = str(after.get("mgmtvlan", "")).strip()
+    return ok and mode_after == "transparent" and mgmt_after == exp_mgmt
 
 
 async def ensure_cpe_untagged_ssh(ssh, profile_tb: dict[str, Any]) -> bool:

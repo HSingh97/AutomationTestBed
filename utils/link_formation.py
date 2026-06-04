@@ -28,6 +28,58 @@ async def read_device_serial_ssh(ssh) -> str:
     return str(serial or "").strip().upper()
 
 
+async def link_health_bts(ssh, profile: dict[str, Any]) -> tuple[bool, int]:
+    """Return (link_up, connected_station_count) from BTS ath interface."""
+    link = link_config(profile)
+    min_clients = int(link.get("min_connected_clients", 1))
+    radio_idx = int(link.get("radio_idx", 1))
+    ath = f"ath{radio_idx}"
+    out = await ssh.send_command(
+        f"wlanconfig {ath} list 2>/dev/null | grep -cE '^[0-9a-f][0-9a-f]:' || echo 0",
+        timeout_ops=20,
+    )
+    try:
+        count = int(str(out.result or "0").strip().split()[0])
+    except (ValueError, IndexError):
+        count = 0
+    if count < min_clients:
+        out2 = await ssh.send_command(
+            f"iw dev {ath} station dump 2>/dev/null | grep -c '^Station' || echo 0",
+            timeout_ops=20,
+        )
+        try:
+            count = int(str(out2.result or "0").strip().split()[0])
+        except (ValueError, IndexError):
+            count = 0
+    return count >= min_clients, count
+
+
+async def read_bts_wireless_diag(ssh, profile: dict[str, Any]) -> dict[str, str]:
+    """Snapshot SSID/key/txpower on BTS for recovery logs."""
+    link = link_config(profile)
+    radio_idx = int(link.get("radio_idx", 1))
+    ssid = await _read_radio_ssid(ssh, radio_idx)
+    key = await _read_radio_key(ssh, radio_idx)
+    raw_pwr = await ssh.send_command(RootCommands.get_tx_power(radio_idx), timeout_ops=15)
+    tx_power = extract_uci_value(str(raw_pwr.result or "").strip())
+    ok, clients = await link_health_bts(ssh, profile)
+    return {
+        "ssid": ssid,
+        "key_len": str(len(key or "")),
+        "tx_power": tx_power or "",
+        "link_up": str(ok),
+        "clients": str(clients),
+    }
+
+
+async def apply_bts_tx_power(ssh, profile: dict[str, Any], *, radio_idx: int | None = None) -> str:
+    link = link_config(profile)
+    idx = int(radio_idx if radio_idx is not None else link.get("radio_idx", 1))
+    tx_power = _tx_power_default(profile)
+    await ssh.send_command(f"ucidyn set txparam.ath{idx}.atpcpower {tx_power}", timeout_ops=30)
+    await ssh.send_command("ucidyn apply", timeout_ops=60)
+    return tx_power
+
 def resolve_link_credentials_from_profile(
     profile: dict[str, Any],
     *,

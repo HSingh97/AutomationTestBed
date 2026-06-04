@@ -19,11 +19,23 @@ async def _main(args: argparse.Namespace) -> int:
     bundle = load_profile_bundle(
         profile_name=args.profile,
         recovery_profile_name=args.recovery_profile,
-        local_ip=args.local_ipv6,
+        local_ip=args.local_ipv6 or args.fallback_ip,
         username=args.username,
         password=args.password,
     )
     creds = {"user": args.username, "pass": args.password}
+
+    if args.ipv4_recover:
+        from utils.ip_case_preflight import run_manual_ipv4_recovery
+
+        bts_ip, cpe_ip = await run_manual_ipv4_recovery(
+            bundle.active,
+            password=creds["pass"],
+            fallback_ip=args.fallback_ip,
+        )
+        print(f"[ok] IPv4 recovery BTS={bts_ip} CPE={cpe_ip}")
+        return 0
+
     gui_page = None
     if args.with_gui:
         from playwright.async_api import async_playwright
@@ -85,5 +97,10 @@ if __name__ == "__main__":
         "--fallback-ip",
         default="10.0.0.1",
         help="BTS/CPE factory fallback IPv4 when mgmt IPv6 is down (VLAN/UCI bootstrap)",
+    )
+    parser.add_argument(
+        "--ipv4-recover",
+        action="store_true",
+        help="IPv4 quick recovery only (VLAN 101, test LAN, tx=1, link, ping) — no full bootstrap",
     )
     raise SystemExit(asyncio.run(_main(parser.parse_args())))

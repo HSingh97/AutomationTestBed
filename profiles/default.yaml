@@ -79,7 +79,7 @@ testbed:
     mgmt_interface: enp3s0
     fallback_ipv4: "10.0.0.11"
     fallback_prefix_len: 8
-    cpe_factory_ipv4: "192.168.2.1"
+    cpe_factory_ipv4: "10.0.0.1"
   wifi:
     enabled: false
     interface: wlan0
@@ -198,6 +198,12 @@ ip_tests:
   iperf_server_v6: ""
   backup_archive_path: ""
   firmware_image_path: ""
+  use_cpe_peer: false
+  remote_ping_host: ""
+  # IP_17: destination CIDR reachable via gateway (defaults to device default gw)
+  static_route_cidr: ""
+  static_route_gateway: ""
+  static_route_ping_target: ""
 
 capture:
   enabled: true

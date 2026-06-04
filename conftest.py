@@ -20,6 +20,26 @@ def _artifact_path(*parts: str) -> Path:
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     return ARTIFACTS_DIR.joinpath(*parts)
 
+
+def _profile_uses_ipv6(profile_name: str) -> bool:
+    from utils.profile_manager import _load_profile_file
+
+    dut = _load_profile_file(profile_name)["dut"]
+    return bool(dut.get("ip_mode") == "ipv6" or dut.get("strict_ipv6"))
+
+
+def _cli_local_override(config, profile_name: str) -> str | None:
+    """Do not apply default --local-ipv6 when the active profile is IPv4-only."""
+    if _profile_uses_ipv6(profile_name):
+        return config.getoption("--local-ipv6") or config.getoption("--local-ip") or None
+    return config.getoption("--local-ip") or None
+
+
+def _cli_remote_override(config, profile_name: str) -> str | None:
+    if _profile_uses_ipv6(profile_name):
+        return config.getoption("--remote-ipv6") or config.getoption("--remote-ip") or None
+    return config.getoption("--remote-ip") or None
+
 # =====================================================================
 # EVENT LOOP MANAGER (Fixes the "Attached to different loop" crash)
 # =====================================================================
@@ -37,7 +57,7 @@ def event_loop():
 def pytest_addoption(parser):
     group = parser.getgroup("UBR Automation Config")
     group.addoption("--local-ip", action="store", default="192.168.2.230", help="BTS/Local IP Address")
-    group.addoption("--remote-ip", action="store", default="192.168.2.231", help="CPE/Remote IP Address")
+    group.addoption("--remote-ip", action="store", default="", help="Optional CPE IPv4 hint; discovery is dynamic when empty")
     group.addoption(
         "--local-ipv6",
         action="store",
@@ -148,6 +168,12 @@ def pytest_addoption(parser):
         help="Allow IP cases that reboot, network-reload, or flap interfaces.",
     )
     group.addoption(
+        "--no-ip-stop-on-first-fail",
+        action="store_true",
+        default=False,
+        help="Keep running remaining IP tests after the first failure (default: stop at first fail).",
+    )
+    group.addoption(
         "--skip-testbed-bootstrap",
         action="store_true",
         default=False,
@@ -215,7 +241,11 @@ def pytest_collection_modifyitems(config, items):
     if not config.getoption("--bootstrap-only"):
         return
     # Keep a single lightweight item so session fixtures still run.
-    selected = [item for item in items if "testbed" in item.nodeid or item.name == "test_ip_case"]
+    selected = [
+        item
+        for item in items
+        if "testbed" in item.nodeid or "tests/ip/" in item.nodeid.lower()
+    ]
     if not selected and items:
         selected = items[:1]
     items[:] = selected[:1]
@@ -225,7 +255,12 @@ def pytest_collection_modifyitems(config, items):
 def bsu_ip(request, testbed_ready):
     dut = testbed_ready.active["dut"]
     if dut.get("ip_mode") == "ipv6" or dut.get("strict_ipv6"):
+        cli_local_v6 = request.config.getoption("--local-ipv6")
+        if cli_local_v6:
+            return normalize_ip(cli_local_v6)
         return normalize_ip(str(dut["local_ipv6"]))
+    if dut.get("local_ip"):
+        return normalize_ip(str(dut["local_ip"]))
     return request.config.getoption("--local-ip")
 
 @pytest.fixture(scope="session")
@@ -236,6 +271,8 @@ def cpe_ips(request, testbed_ready):
         if cli_remote_v6:
             return [normalize_ip(ip.strip()) for ip in cli_remote_v6.split(",") if ip.strip()]
         return [normalize_ip(str(ip)) for ip in dut.get("remote_ipv6s", []) if str(ip).strip()]
+    if dut.get("remote_ips"):
+        return [normalize_ip(str(ip)) for ip in dut["remote_ips"] if str(ip).strip()]
     raw = request.config.getoption("--remote-ip")
     return [normalize_ip(ip.strip()) for ip in raw.split(",") if ip.strip()]
 
@@ -249,11 +286,12 @@ def device_creds(request):
 
 @pytest.fixture(scope="session")
 def profile_bundle(request):
-    local_ip_override = request.config.getoption("--local-ipv6") or request.config.getoption("--local-ip")
+    profile_name = request.config.getoption("--profile")
     return load_profile_bundle(
-        profile_name=request.config.getoption("--profile"),
+        profile_name=profile_name,
         recovery_profile_name=request.config.getoption("--recovery-profile"),
-        local_ip=local_ip_override,
+        local_ip=_cli_local_override(request.config, profile_name),
+        remote_ip=_cli_remote_override(request.config, profile_name),
         username=request.config.getoption("--username"),
         password=request.config.getoption("--password"),
     )
@@ -352,11 +390,12 @@ def pytest_runtest_makereport(item, call):
 
 def _resolve_testbed_hosts(config):
     """BTS and CPE hosts/password using mgmt VLAN addresses (post-bootstrap dut)."""
-    local_override = config.getoption("--local-ipv6") or config.getoption("--local-ip")
+    profile_name = config.getoption("--profile")
     bundle = load_profile_bundle(
-        profile_name=config.getoption("--profile"),
+        profile_name=profile_name,
         recovery_profile_name=config.getoption("--recovery-profile"),
-        local_ip=local_override,
+        local_ip=_cli_local_override(config, profile_name),
+        remote_ip=_cli_remote_override(config, profile_name),
         username=config.getoption("--username"),
         password=config.getoption("--password"),
     )
@@ -550,6 +589,19 @@ async def gui_page(gui_browser, bsu_ip, device_creds, recovery_manager, root_ssh
     except Exception as exc:
         print(f"[link] GUI SSID restore after login skipped: {exc}")
 
+    ip_cfg = profile.get("ip_tests", {}) or {}
+    if ip_cfg.get("take_session_backup", False):
+        from utils.device_backup import ensure_session_device_backup
+
+        await ensure_session_device_backup(
+            page,
+            profile=profile,
+            device_creds=device_creds,
+            gui_ip=bsu_ip,
+            ssh=root_ssh,
+            password=device_creds["pass"],
+        )
+
     # Hand the LIVE, logged-in page to the tests!
     yield page
 
@@ -564,6 +616,20 @@ def pytest_configure(config):
 
     for case in IP_TEST_CASES:
         config.addinivalue_line("markers", f"{case.case_id}: {case.title} ({case.category})")
+
+    if config.getoption("--allow-ip-suite") and not config.getoption("--no-ip-stop-on-first-fail"):
+        profile_name = config.getoption("--profile") or "default"
+        stop = True
+        try:
+            from utils.profile_manager import _load_profile_file
+
+            ip_cfg = (_load_profile_file(profile_name).get("ip_tests") or {})
+            stop = bool(ip_cfg.get("stop_on_first_failure", True))
+        except Exception:
+            pass
+        if stop and getattr(config.option, "maxfail", 0) == 0:
+            config.option.maxfail = 1
+            print("\n[IP] stop_on_first_failure: aborting suite after first failed case (use --no-ip-stop-on-first-fail to continue)")
 
     regression_mode = bool(config.getoption("--allow-regression"))
     config._regression_mode = regression_mode
@@ -596,11 +662,12 @@ def pytest_configure(config):
         config._regression_pytest_html = config.option.htmlpath
 
     try:
-        local_ip_override = config.getoption("--local-ipv6") or config.getoption("--local-ip")
+        profile_name = config.getoption("--profile")
         bundle = load_profile_bundle(
-            profile_name=config.getoption("--profile"),
+            profile_name=profile_name,
             recovery_profile_name=config.getoption("--recovery-profile"),
-            local_ip=local_ip_override,
+            local_ip=_cli_local_override(config, profile_name),
+            remote_ip=_cli_remote_override(config, profile_name),
             username=config.getoption("--username"),
             password=config.getoption("--password"),
         )
@@ -609,3 +676,46 @@ def pytest_configure(config):
         config._ubr_recovery_manager = manager
     except Exception:
         config._ubr_recovery_manager = None
+
+
+# =====================================================================
+# 7. IP SUITE (tests/IP/test_IP.py — same layout as GUI tests)
+# =====================================================================
+@pytest.fixture
+async def run_ip(request, profile_bundle, bsu_ip, cpe_ips, device_creds, gui_page):
+    """Callable: await run_ip('IP_05', 'bts')."""
+
+    from utils.ip_validation_flows import case_needs_gui, run_ip_validation
+
+    async def _run(case_id: str, target: str) -> None:
+        page = gui_page if case_needs_gui(case_id, target) else None
+        await run_ip_validation(
+            case_id,
+            target,
+            request=request,
+            profile_bundle=profile_bundle,
+            bsu_ip=bsu_ip,
+            cpe_ips=cpe_ips,
+            device_creds=device_creds,
+            gui_page=page,
+        )
+
+    return _run
+
+
+def pytest_generate_tests(metafunc):
+    """Parametrize IP_18–IP_37 in test_IP.test_ip_extended_case only."""
+    if "ip_extended_bundle" not in metafunc.fixturenames:
+        return
+    from config.ip_test_cases import IP_TEST_CASES, device_targets
+
+    params = []
+    for case in IP_TEST_CASES:
+        num = int(case.case_id.split("_", 1)[1])
+        if num < 18:
+            continue
+        for target in device_targets(case):
+            params.append(
+                pytest.param((case, target), id=f"{case.case_id}-{target.upper()}")
+            )
+    metafunc.parametrize("ip_extended_bundle", params)

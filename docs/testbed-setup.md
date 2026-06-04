@@ -125,7 +125,11 @@ Runs when `testbed.bootstrap_on_start: true` (pytest default) or:
 ```bash
 PYTHONPATH=. python3 scripts/bootstrap_testbed.py
 PYTHONPATH=. python3 scripts/bootstrap_testbed.py --with-gui   # link recovery via LuCI
+# IPv4 bench only (VLAN 101, test LAN, tx=1, link, ping) — uses utils/ip_case_preflight.py
+PYTHONPATH=. python3 scripts/bootstrap_testbed.py --profile ipv4_quickrun --ipv4-recover --fallback-ip 10.0.0.1
 ```
+
+IP cases reuse the same recovery via `run_ip_case_preflight` / `run_post_event_testbed_recovery` in `utils/ip_case_preflight.py`. After **IP_15** restore, a **cold BTS reboot** is required before lab mgmt-VLAN ping works (UCI alone is not enough).
 
 ### Phase 1 — Lab PCs (internet IP)
 
@@ -199,7 +203,7 @@ testbed:
     mgmt_interface: enp3s0
     fallback_ipv4: "10.0.0.11"
     fallback_prefix_len: 8
-    cpe_factory_ipv4: "192.168.2.1"
+    cpe_factory_ipv4: "10.0.0.1"
   link_recovery:
     bts_archive: config/BTS.tar.gz
     cpe_archive: config/CPE.tar.gz

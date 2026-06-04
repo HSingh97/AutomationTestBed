@@ -80,14 +80,14 @@ def _apply_cli_overrides(
         if ipv6_mode:
             if ":" in local_ip:
                 dut["local_ipv6"] = local_ip
-        else:
+        elif ":" not in local_ip:
             dut["local_ip"] = local_ip
     if remote_ip:
         remote_hosts = [item.strip() for item in remote_ip.split(",") if item.strip()]
         if ipv6_mode:
-            dut["remote_ipv6s"] = remote_hosts
+            dut["remote_ipv6s"] = [h for h in remote_hosts if ":" in h]
         else:
-            dut["remote_ips"] = remote_hosts
+            dut["remote_ips"] = [h for h in remote_hosts if ":" not in h]
     if username:
         dut["username"] = username
     if password:

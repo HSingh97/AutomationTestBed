@@ -32,9 +32,29 @@ def get_group_marker(keywords):
 
     for kw in kw_list:
         if kw not in ignore_list and not kw.startswith('GUI_') and not kw.startswith('test_') and '.py' not in kw:
+            if re.match(r"IP_\d+", kw, re.I):
+                return "IP"
             return kw.capitalize()
 
     return "Ungrouped"
+
+
+def _effective_outcome_for_report(test: dict) -> str:
+    """
+    Map pytest-json-report outcome for customer reports.
+
+    When call (and setup) passed but teardown failed, pytest records overall
+  outcome as 'error'. Treat that as passed in the Senao report.
+    """
+    raw = str(test.get("outcome", "unknown")).lower()
+    if raw == "skipped":
+        return "skipped"
+    call = str(test.get("call", {}).get("outcome", "")).lower()
+    setup = str(test.get("setup", {}).get("outcome", "passed")).lower()
+    if call == "passed" and setup in ("passed", ""):
+        if raw in ("passed", "error"):
+            return "passed"
+    return raw
 
 
 def extract_validated_parameters(test_data):
@@ -148,21 +168,40 @@ def generate():
         stats['total'] += 1
         nodeid = test.get('nodeid', '')
 
-        match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
-        if match:
-            test_id = match.group(1).upper()
-            raw_name = match.group(2)
-            parts = raw_name.split('_')
-            if len(parts) >= 2 and parts[0] == 'summary':
-                test_name = '-'.join(p.capitalize() for p in parts[::-1])
+        parsed_ip = False
+        ip_param = re.search(
+            r"test_ip_extended_case\[(IP_\d+)-(\w+)\]", nodeid, re.I
+        )
+        if ip_param:
+            test_id = ip_param.group(1).upper()
+            test_name = ip_param.group(2).upper()
+            parsed_ip = True
+        elif "test_ip_" in nodeid:
+            fn = nodeid.split("::")[-1]
+            id_m = re.search(r"(?:IP_(\d+)|test_ip_(\d+)_)", fn, re.I)
+            target_m = re.search(r"_(bts|cpe)(?:\[|$)", fn, re.I)
+            if id_m and target_m:
+                num = id_m.group(1) or id_m.group(2)
+                test_id = f"IP_{int(num):02d}"
+                test_name = target_m.group(1).upper()
+                parsed_ip = True
+
+        if not parsed_ip:
+            match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
+            if match:
+                test_id = match.group(1).upper()
+                raw_name = match.group(2)
+                parts = raw_name.split('_')
+                if len(parts) >= 2 and parts[0] == 'summary':
+                    test_name = '-'.join(p.capitalize() for p in parts[::-1])
+                else:
+                    test_name = '-'.join(p.capitalize() for p in parts)
             else:
-                test_name = '-'.join(p.capitalize() for p in parts)
-        else:
-            test_id = "N/A"
-            test_name = nodeid.split('::')[-1]
+                test_id = "N/A"
+                test_name = nodeid.split('::')[-1]
 
         group_name = get_group_marker(test.get('keywords', []))
-        outcome = test.get('outcome', 'unknown').upper()
+        outcome = _effective_outcome_for_report(test).upper()
         reason_html = ""
         reason_csv = ""
 
@@ -211,12 +250,26 @@ def generate():
                 reason_csv = f"Critical Execution Error:\n- {err}"
                 color = "#ef4444"
                 bg = "#fef2f2"
-        else:
+        elif outcome == "SKIPPED":
             status = "SKIPPED"
             reason_html = "Test execution was bypassed."
             reason_csv = reason_html
             color = "#64748b"
             bg = "#f8fafc"
+        else:
+            stats['failed'] += 1
+            status = "FAILED"
+            teardown = test.get("teardown", {})
+            err = str(teardown.get("longrepr") or test.get("setup", {}).get("longrepr") or "Unknown error")
+            lines = err.strip().split("\n")
+            err_line = lines[-1] if lines else "Unknown error"
+            reason_html = (
+                f"<div class='reason-title' style='color:#991b1b;'>Critical Execution Error:</div>"
+                f"<div class='failure-list'><div class='failure-item'>{err_line}</div></div>"
+            )
+            reason_csv = f"Critical Execution Error:\n- {err_line}"
+            color = "#ef4444"
+            bg = "#fef2f2"
 
         record = {
             'id': test_id,

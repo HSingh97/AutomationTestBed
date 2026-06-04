@@ -18,6 +18,7 @@ from utils.link_formation import (
     ensure_cpe_link_credentials_always,
     ensure_p2mp_link_credentials,
     link_auto_enabled,
+    link_health_bts,
 )
 from utils.link_ssid import ensure_bts_link_ssid_ssh
 from utils.net_utils import normalize_ip
@@ -271,29 +272,8 @@ async def _configure_cpe_vlan_via_secondary_pc(
 
 
 async def _link_health_bts(ssh, profile: dict[str, Any]) -> bool:
-    link = profile.get("link", {})
-    min_clients = int(link.get("min_connected_clients", 1))
-    # Link SSID is on ath{radio_idx}; `wlanconfig wifiN` often fails (-22) on this build.
-    radio_idx = int(link.get("radio_idx", 1))
-    ath = f"ath{radio_idx}"
-    out = await ssh.send_command(
-        f"wlanconfig {ath} list 2>/dev/null | grep -cE '^[0-9a-f][0-9a-f]:' || echo 0",
-        timeout_ops=20,
-    )
-    try:
-        count = int(str(out.result or "0").strip().split()[0])
-    except (ValueError, IndexError):
-        count = 0
-    if count < min_clients:
-        out2 = await ssh.send_command(
-            f"iw dev {ath} station dump 2>/dev/null | grep -c '^Station' || echo 0",
-            timeout_ops=20,
-        )
-        try:
-            count = int(str(out2.result or "0").strip().split()[0])
-        except (ValueError, IndexError):
-            count = 0
-    return count >= min_clients
+    ok, _ = await link_health_bts(ssh, profile)
+    return ok
 
 
 async def _restore_link_via_archives(

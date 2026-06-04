@@ -29,7 +29,7 @@ Automation framework for UBR P2MP validation:
 | `tests/Lab/` | Attenuator + SNR lab tests (`--allow-attenuator-lab`) |
 | `tests/JumboFrames/` | Jumbo suite (`JMB_01`–`JMB_10`) |
 | `tests/Regression/` | Stability regression (`REG_01`–`REG_03`) |
-| `tests/IP/` | IPv4/IPv6 networking (`IP_01`–`IP_37`, BTS & CPE) |
+| `tests/IP/test_IP.py` | IPv4/IPv6 networking (`IP_01`–`IP_37`, BTS & CPE); run with `-m IP` |
 | `config/ip_test_cases.py` | IP case catalog and markers |
 | `utils/ip_test_flows.py` | SSH/GUI flows for IP validation |
 | `tests/Throughput/` | TRex parser/unit helper (not a product GUI case) |
@@ -292,11 +292,20 @@ venv/bin/python -m pytest tests/JumboFrames/ -v --allow-destructive-jumbo -k "JM
 
 ### IP validation (`IP_01`–`IP_37`)
 
-Catalog in `config/ip_test_cases.py`. Each case runs on **BTS** and **CPE** (except `IP_29`, BTS-only). Configure addresses in `profiles/default.yaml` → `ip_tests:`.
+Catalog in `config/ip_test_cases.py`. Most cases run on **BTS** and **CPE**; **`IP_01`–`IP_05` are BTS-only** (local DUT). Configure addresses in `profiles/default.yaml` → `ip_tests:`.
+
+For BTS-only remote ping/throughput (`IP_03`, `IP_05`), set `ip_tests.use_cpe_peer: false` and `ip_tests.remote_ping_host` (lab PC or gateway) — not the CPE management IP.
 
 ```bash
-# Collect (73 tests)
+# Collect (68 tests with IP_01–IP_05 BTS-only; was 73 when those were duplicated on CPE)
 venv/bin/python -m pytest tests/IP/ --collect-only -q
+
+# Full IP suite (marker IP on every case)
+venv/bin/python -m pytest tests/IP/ -m IP -v --allow-ip-suite --profile ipv4_quickrun
+
+# IPv4 functional block (BTS only): IP_01–IP_05
+venv/bin/python -m pytest tests/IP/ -v --allow-ip-suite --profile ipv4_quickrun \
+  -k "IP_01 or IP_02 or IP_03 or IP_04 or IP_05"
 
 # Safe functional/validation (ping, gateway, ARP, IPv6 ND, dual-stack)
 venv/bin/python -m pytest tests/IP/ -v --allow-ip-suite -k "IP_02 or IP_19 or IP_20 or IP_37"

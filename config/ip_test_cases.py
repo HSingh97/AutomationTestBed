@@ -22,13 +22,13 @@ class IpTestCase:
 
 
 IP_TEST_CASES: tuple[IpTestCase, ...] = (
-    IpTestCase("IP_01", "Static IPv4 Configuration", "Functional", "both", "v4", ("gui",)),
-    IpTestCase("IP_02", "IPv4 Ping (Local)", "Functional", "both", "v4"),
-    IpTestCase("IP_03", "IPv4 Ping (Remote)", "Functional", "both", "v4"),
-    IpTestCase("IP_04", "IPv4 Gateway Reachability", "Functional", "both", "v4"),
-    IpTestCase("IP_05", "IPv4 Throughput", "Validation", "both", "v4", ("iperf",)),
+    IpTestCase("IP_01", "Static IPv4 Configuration", "Functional", "bts", "v4"),
+    IpTestCase("IP_02", "IPv4 Ping (Local)", "Functional", "bts", "v4"),
+    IpTestCase("IP_03", "IPv4 Ping (Remote)", "Functional", "bts", "v4"),
+    IpTestCase("IP_04", "IPv4 Gateway Reachability", "Functional", "bts", "v4"),
+    IpTestCase("IP_05", "IPv4 Throughput", "Validation", "bts", "v4", ("iperf",)),
     IpTestCase("IP_06", "IPv4 Long Ping", "Validation", "both", "v4"),
-    IpTestCase("IP_07", "IPv4 MTU Change", "Validation", "both", "v4", ("gui",)),
+    IpTestCase("IP_07", "IPv4 MTU Change", "Validation", "both", "v4"),
     IpTestCase("IP_08", "IPv4 Fragmentation", "Validation", "both", "v4"),
     IpTestCase("IP_09", "Soft Reboot with IPv4", "Negative", "both", "v4", ("destructive",)),
     IpTestCase("IP_10", "Hard Reboot with IPv4", "Negative", "both", "v4", ("manual_power", "destructive")),
@@ -45,7 +45,7 @@ IP_TEST_CASES: tuple[IpTestCase, ...] = (
     IpTestCase("IP_21", "IPv6 Gateway Reachability", "Functional", "both", "v6"),
     IpTestCase("IP_22", "IPv6 Throughput", "Validation", "both", "v6", ("iperf",)),
     IpTestCase("IP_23", "IPv6 Long Ping", "Validation", "both", "v6"),
-    IpTestCase("IP_24", "IPv6 MTU Change", "Validation", "both", "v6", ("gui",)),
+    IpTestCase("IP_24", "IPv6 MTU Change", "Validation", "both", "v6"),
     IpTestCase("IP_25", "IPv6 Fragmentation", "Validation", "both", "v6"),
     IpTestCase("IP_26", "IPv6 Link-Local Connectivity", "Validation", "both", "v6"),
     IpTestCase("IP_27", "Neighbor Discovery", "Functional", "both", "v6"),
