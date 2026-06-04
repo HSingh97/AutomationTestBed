@@ -4078,6 +4078,18 @@ async def run_ip_post_case_recovery(
     if cid in _SKIP_POST_CASE_RECOVERY:
         return
 
+    from config.ip_test_cases import is_fast_path_ip_case
+
+    if bool(ctx.cfg.get("ip_fast_path_enabled", True)) and is_fast_path_ip_case(cid):
+        from utils.ip_case_preflight import preflight_step1_fallback_ssh
+
+        try:
+            await preflight_step1_fallback_ssh(ctx)
+            ctx.notes.append(f"{cid}: fast-path post-case (SSH check only)")
+        except Exception as exc:
+            ctx.notes.append(f"{cid}: fast-path post-case SSH warn: {exc}")
+        return
+
     ctx.notes.append(f"{cid}: post-case recovery")
     restore_failed = False
 
@@ -4191,12 +4203,15 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
         _skip_if_unsupported(ctx, "firmware", "set ip_tests.firmware_image_path in profile")
 
     cid = case.case_id
+    from config.ip_test_cases import is_fast_path_ip_case
 
-    # Rigid preflight (steps 1–4): fallback SSH → VLAN apply → lab mgmt if → link + ping
+    fast_path = bool(cfg.get("ip_fast_path_enabled", True)) and is_fast_path_ip_case(cid)
+
+    # Preflight: full link+CPE setup for destructive/config cases; fast path for ping/gateway.
     if _stack_allowed(ctx, "v4") and ctx.case.stack in ("v4", "dual", "any"):
         from utils.ip_case_preflight import run_ip_case_preflight
 
-        await run_ip_case_preflight(ctx, stack_v4=True)
+        await run_ip_case_preflight(ctx, stack_v4=True, minimal=fast_path)
         ssh = ctx.ssh
 
     profile = cfg.get("_profile") or {}
@@ -4209,6 +4224,7 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
                 ctx,
                 skip_device_v6_ping=(cid == "IP_18"),
                 require_cpe=case_requires_cpe(cid) if cid != "IP_18" else False,
+                minimal=fast_path,
             )
             ssh = ctx.ssh
 

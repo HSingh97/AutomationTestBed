@@ -451,6 +451,7 @@ async def run_ip_case_preflight_v6(
     require_cpe: bool | None = None,
     skip_device_v6_ping: bool = False,
     skip_bts_precheck: bool = False,
+    minimal: bool = False,
 ) -> None:
     """
     IPv6 suite mirrors IPv4 preflight:
@@ -467,6 +468,17 @@ async def run_ip_case_preflight_v6(
     cid = ctx.case.case_id
     need_cpe = case_requires_cpe(cid) if require_cpe is None else require_cpe
     skip_ping = skip_device_v6_ping or cid == "IP_18"
+
+    if minimal:
+        _log(ctx, f"=== {cid} IPv6 preflight (fast) ===")
+        await preflight_step1_fallback_ssh(ctx)
+        await preflight_step3_lab_mgmt_ipv6(ctx)
+        if not skip_ping:
+            await preflight_step4_ipv6_reachability(
+                ctx, require_cpe=need_cpe, strict=False
+            )
+        _log(ctx, f"=== {cid} IPv6 preflight (fast) done ===")
+        return
 
     _log(ctx, f"=== {cid} IPv6 preflight start ===")
     await preflight_step1_fallback_ssh(ctx)
@@ -573,6 +585,7 @@ async def run_ip_case_preflight(
     stack_v4: bool = True,
     skip_bts_precheck: bool = False,
     require_cpe: bool | None = None,
+    minimal: bool = False,
 ) -> None:
     """
     Run steps 1–4 before the case body. Applies config when missing (does not skip apply).
@@ -587,6 +600,19 @@ async def run_ip_case_preflight(
     cid = ctx.case.case_id
     need_cpe = case_requires_cpe(cid) if require_cpe is None else require_cpe
     skip_bts = skip_bts_precheck or cid in ("IP_01", "IP_15", "IP_34")
+
+    if minimal:
+        _log(ctx, f"=== {cid} preflight (fast) ===")
+        await preflight_step1_fallback_ssh(ctx)
+        await preflight_step3_lab_mgmt_interface(ctx)
+        await preflight_step4_reachability(
+            ctx,
+            skip_bts_precheck=True,
+            require_cpe=need_cpe,
+            strict=False,
+        )
+        _log(ctx, f"=== {cid} preflight (fast) done ===")
+        return
 
     _log(ctx, f"=== {cid} preflight start ===")
     await preflight_step1_fallback_ssh(ctx)

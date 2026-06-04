@@ -94,11 +94,12 @@ ip_tests:
   fallback_ipv4: ""
   fallback_ipv6: ""
   reachability_use_device_fallback: false
-  ping_count_short: 4
+  ping_count_short: 2
+  ip_fast_path_enabled: true
   ping_count_long: 10
   max_ping_loss_pct: 2.0
   ipv6_fragmentation_ping_size: 2000
-  ip19_local_ping_rounds: 3
+  ip19_local_ping_rounds: 1
   ip18_apply_wait_s: 40
   ip18_apply_ping_interval_s: 3
   ip18_configure_cpe: true

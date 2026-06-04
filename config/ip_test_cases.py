@@ -149,6 +149,26 @@ def is_active_ip_case(case_id: str) -> bool:
     return case_id in ACTIVE_IP_CASE_IDS
 
 
+# Ping / gateway / ARP / link-local — skip full link+CPE reconfigure between cases.
+IP_FAST_PATH_CASE_IDS: frozenset[str] = frozenset(
+    {
+        "IP_02",
+        "IP_03",
+        "IP_04",
+        "IP_16",
+        "IP_19",
+        "IP_20",
+        "IP_21",
+        "IP_23",
+        "IP_26",
+    }
+)
+
+
+def is_fast_path_ip_case(case_id: str) -> bool:
+    return case_id in IP_FAST_PATH_CASE_IDS
+
+
 def device_targets(case: IpTestCase) -> tuple[str, ...]:
     if case.devices == "bts":
         return ("bts",)

@@ -1,4 +1,5 @@
 import builtins
+import logging
 import pytest
 import csv
 import json
@@ -416,6 +417,16 @@ def pytest_html_report_title(report):
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
+    progress = getattr(item.config, "_ip_suite_progress", None)
+    if progress is not None and report.when == "call" and item.get_closest_marker("IP"):
+        from utils.ip_suite_progress import outcome_from_report
+
+        duration = getattr(call, "duration", 0.0) or 0.0
+        progress.record(
+            item.nodeid,
+            outcome=outcome_from_report(report),
+            duration_s=float(duration),
+        )
     if report.when != "call" or "Regression" not in item.keywords:
         return
     try:
@@ -666,9 +677,22 @@ async def gui_page(request, gui_browser, bsu_ip, device_creds, recovery_manager,
     await context.close()
 
 
+def _quiet_ssh_library_logs() -> None:
+    for name in ("scrapli", "scrapli.transport", "scrapli.channel", "asyncssh"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
 def pytest_collection_finish(session):
     count = len(session.items)
     print(f"\n[pytest] Collected {count} test(s). Starting session setup (not stuck)...\n")
+    if session.config.getoption("--allow-ip-suite"):
+        ip_items = [i for i in session.items if i.get_closest_marker("IP")]
+        if ip_items:
+            from utils.ip_suite_progress import IpSuiteProgress
+
+            session.config._ip_suite_progress = IpSuiteProgress(
+                [item.nodeid for item in ip_items]
+            )
 
 
 def pytest_sessionstart(session):
@@ -678,14 +702,8 @@ def pytest_sessionstart(session):
     )
 
 
-@pytest.hookimpl(hookwrapper=True)
-def pytest_fixture_setup(fixturedef, request):
-    if fixturedef.scope == "session":
-        print(f"[pytest] session fixture setup: {fixturedef.argname}")
-    yield
-
-
 def pytest_configure(config):
+    _quiet_ssh_library_logs()
     from config.ip_test_cases import IP_TEST_CASES
 
     for case in IP_TEST_CASES:
