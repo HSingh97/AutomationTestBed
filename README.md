@@ -473,30 +473,32 @@ Shared helpers: `jenkins/jenkins-common.groovy` (email, `publishHTML`, report co
 
 Select suites with **`TEST_MARKERS`** (comma-separated):
 
-| Marker | Test path | Auto flags |
-|--------|-----------|------------|
-| `GUI` | `tests/GUI/` | (none) |
-| `IP` | `tests/IP/` | `--allow-ip-suite`, optional `--allow-ip-destructive` |
-| `Regression` | `tests/Regression/` | `--allow-regression`, `--regression-fresh` |
-| `JumboFrames` | `tests/JumboFrames/` | optional `--allow-destructive-jumbo` |
+| Marker | Test path | Auto profile | Auto flags |
+|--------|-----------|--------------|------------|
+| `GUI` | `tests/GUI/` | `default` | (none) |
+| `IP` | `tests/IP/` | `ipv6_quickrun` (`ipv4_quickrun` if `-k` is only IP_01–IP_17) | `--allow-ip-suite`, `--allow-ip-destructive`, `--no-ip-stop-on-first-fail` |
+| `Regression` | `tests/Regression/` | `default` | `--allow-regression`, `--regression-fresh` |
+| `JumboFrames` | `tests/JumboFrames/` | `default` | `--allow-destructive-jumbo` (JMB_07, JMB_10) |
+
+Destructive IP and jumbo cases run automatically when those markers are selected (no Jenkins toggles).
 
 **Examples**
 
-| Goal | `TEST_MARKERS` | `TEST_FILTER` | `PROFILE_NAME` |
-|------|----------------|---------------|----------------|
-| GUI smoke | `GUI` | `Summary, TopPanel` | `default` |
-| Full IP suite | `IP` | *(empty)* | `ipv6_quickrun` |
-| One IP case | `IP` | `IP_18` | `ipv6_quickrun` |
-| GUI + IP | `GUI,IP` | `Summary or IP_19` | `ipv6_quickrun` |
+| Goal | `TEST_MARKERS` | `TEST_FILTER` |
+|------|----------------|---------------|
+| GUI smoke | `GUI` | `Summary, TopPanel` |
+| Full IP suite | `IP` | *(empty)* |
+| One IPv6 case | `IP` | `IP_18` |
+| IPv4-only cases | `IP` | `IP_01 or IP_05` |
+| GUI + IP | `GUI,IP` | `Summary or IP_19` |
 
-**IP-specific job parameters** (used when `IP` is in `TEST_MARKERS`): `Remote IPv6 Address`, `FALLBACK_IP`, `ENABLE_IP_DESTRUCTIVE`, `SKIP_TESTBED_BOOTSTRAP`, `NO_STOP_ON_FIRST_FAIL`.
+**Optional overrides:** `Remote IPv6 Address`, `FALLBACK_IP`, `SKIP_TESTBED_BOOTSTRAP`.
 
-**Local run (same as Jenkins IP job):**
+**Local run (matches Jenkins IP marker defaults):**
 
 ```bash
 pytest tests/IP/ -m IP -v --allow-ip-suite --allow-ip-destructive \
-  --profile ipv6_quickrun --skip-testbed-bootstrap --fallback-ip 10.0.0.1 \
-  --no-ip-stop-on-first-fail
+  --profile ipv6_quickrun --fallback-ip 10.0.0.1 --no-ip-stop-on-first-fail
 ```
 
 ### 2. Regression (standalone job)

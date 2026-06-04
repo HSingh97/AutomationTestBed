@@ -28,6 +28,42 @@ def ssh_scalar(raw_output):
     return clean_ssh_output(raw_output).replace("'", "")
 
 
+def _ssh_output_lines(raw_output) -> list[str]:
+    text = str(raw_output or "").replace("\r", "")
+    return [line.strip().strip("'\"") for line in text.split("\n") if line.strip()]
+
+
+def pick_scalar_ipv4(raw_output: str) -> str:
+    """Return a valid IPv4 from ``uci get`` output; ignore SSH MOTD / banner lines."""
+    for line in reversed(_ssh_output_lines(raw_output)):
+        if not line or is_uci_error(line):
+            continue
+        if not re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", line):
+            continue
+        try:
+            ipaddress.IPv4Address(line)
+            return line
+        except ValueError:
+            continue
+    return ""
+
+
+def pick_scalar_ipv6(raw_output: str) -> str:
+    """Return a valid IPv6 from ``uci get`` output; ignore SSH MOTD / banner lines."""
+    for line in reversed(_ssh_output_lines(raw_output)):
+        if not line or is_uci_error(line):
+            continue
+        if ":" not in line:
+            continue
+        candidate = line.split("/")[0].strip()
+        try:
+            ipaddress.IPv6Address(candidate)
+            return line
+        except ValueError:
+            continue
+    return ""
+
+
 def clean_ssh_output(raw_output):
     """
     Normalizes noisy interactive SSH output to the last meaningful line.

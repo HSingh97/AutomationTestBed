@@ -433,21 +433,44 @@ async def _ping(
         return PingStats(raw=str(exc))
 
 
-def _uci_scalar_clean(raw: str) -> str:
-    val = ssh_scalar(raw)
+def _uci_scalar_clean(raw: str, *, ipv4: bool = False, ipv6: bool = False) -> str:
+    from utils.parsers import pick_scalar_ipv4, pick_scalar_ipv6
+
+    if ipv6:
+        val = pick_scalar_ipv6(raw)
+    elif ipv4:
+        val = pick_scalar_ipv4(raw)
+    else:
+        val = ssh_scalar(raw)
     return "" if is_uci_error(val) else val
 
 
+async def _ssh_drain_banner(ssh: AsyncGenericDriver) -> None:
+    """Clear MOTD/prompt noise on a fresh SSH session before UCI reads."""
+    await _ssh_run(ssh, "true", timeout=15)
+
+
 async def _read_uci_ip(ssh: AsyncGenericDriver, *, v6: bool) -> dict[str, str]:
+    await _ssh_drain_banner(ssh)
     if v6:
         return {
-            "address": _uci_scalar_clean(await _ssh_run(ssh, RootCommands.GET_NET_IP6)),
-            "gateway": _uci_scalar_clean(await _ssh_run(ssh, RootCommands.GET_NET_GW6)),
+            "address": _uci_scalar_clean(
+                await _ssh_run(ssh, RootCommands.GET_NET_IP6), ipv6=True
+            ),
+            "gateway": _uci_scalar_clean(
+                await _ssh_run(ssh, RootCommands.GET_NET_GW6), ipv6=True
+            ),
         }
     return {
-        "address": _uci_scalar_clean(await _ssh_run(ssh, RootCommands.GET_NET_IP)),
-        "netmask": _uci_scalar_clean(await _ssh_run(ssh, RootCommands.GET_NET_MASK)),
-        "gateway": _uci_scalar_clean(await _ssh_run(ssh, RootCommands.GET_NET_GW)),
+        "address": _uci_scalar_clean(
+            await _ssh_run(ssh, RootCommands.GET_NET_IP), ipv4=True
+        ),
+        "netmask": _uci_scalar_clean(
+            await _ssh_run(ssh, RootCommands.GET_NET_MASK), ipv4=True
+        ),
+        "gateway": _uci_scalar_clean(
+            await _ssh_run(ssh, RootCommands.GET_NET_GW), ipv4=True
+        ),
     }
 
 
@@ -4210,14 +4233,27 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
         await _wait_for_lab_ping_during_apply(
             ctx, expected, wait_s=wait_s, interval_s=interval_s
         )
-        verify_ssh = ssh
-        for host in _all_mgmt_hosts(expected, (ctx.host, *ctx.fallback_hosts)):
+        verify_ssh = None
+        verify_hosts = _all_mgmt_hosts(
+            expected,
+            tuple(h for h in (ctx.host, *ctx.fallback_hosts) if normalize_ip(h) != expected),
+        )
+        for host in verify_hosts:
             try:
                 verify_ssh = await _open_ssh(host, password)
-                ctx.notes.append(f"post-apply SSH on {host}")
+                ctx.notes.append(f"IP_01 post-apply SSH on {host}")
                 break
-            except Exception:
-                continue
+            except Exception as exc:
+                ctx.notes.append(f"IP_01 post-apply SSH {host} failed: {exc}")
+        if verify_ssh is None:
+            pytest.fail(
+                f"IP_01: cannot SSH to applied LAN IP {expected} "
+                f"(tried {verify_hosts}) after {wait_s}s ping wait"
+            )
+        lan_ips = await _read_device_lan_ipv4s(verify_ssh, cfg)
+        assert expected in lan_ips, (
+            f"IP_01: {expected} not on br-lan after apply; seen {sorted(lan_ips)}"
+        )
         uci = await _read_uci_ip(verify_ssh, v6=False)
         assert expected in uci.get("address", ""), f"UCI IP mismatch: {uci}"
         bridge = str(cfg.get("verify_lan_bridge", "br-lan"))
@@ -4228,8 +4264,7 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
             f"{expected} not on {bridge} after {wait_s}s apply wait; ifconfig:\n{if_out[:400]}"
         )
         ctx.notes.append(f"ifconfig {bridge}: {if_out[:200]}")
-        if verify_ssh is not ssh:
-            await _close_ssh(verify_ssh)
+        await _close_ssh(verify_ssh)
         return
 
     if cid == "IP_02":

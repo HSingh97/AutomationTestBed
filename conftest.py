@@ -1,10 +1,35 @@
+import builtins
 import pytest
 import csv
 import json
 import os
+import sys
 import asyncio
 from datetime import datetime
 from pathlib import Path
+
+
+def _enable_live_console_output() -> None:
+    """Line-buffer stdout/stderr and default flush=True on print (Jenkins is not a TTY)."""
+    if getattr(builtins, "_ubr_flush_print_installed", False):
+        return
+    _orig_print = builtins.print
+
+    def print(*args, **kwargs):  # noqa: A001
+        kwargs.setdefault("flush", True)
+        return _orig_print(*args, **kwargs)
+
+    builtins.print = print
+    builtins._ubr_flush_print_installed = True
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(line_buffering=True)
+            except Exception:
+                pass
+
+
+_enable_live_console_output()
 import httpx
 from playwright.async_api import async_playwright
 from pages.locators import LoginPageLocators
@@ -639,6 +664,25 @@ async def gui_page(request, gui_browser, bsu_ip, device_creds, recovery_manager,
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     await context.tracing.stop(path=str(_artifact_path("global_gui_trace.zip")))
     await context.close()
+
+
+def pytest_collection_finish(session):
+    count = len(session.items)
+    print(f"\n[pytest] Collected {count} test(s). Starting session setup (not stuck)...\n")
+
+
+def pytest_sessionstart(session):
+    print(
+        "[pytest] Session fixtures next: testbed_ready → root_ssh → gui_page "
+        "(bootstrap/SSH/GUI can take several minutes on Jenkins).\n"
+    )
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_fixture_setup(fixturedef, request):
+    if fixturedef.scope == "session":
+        print(f"[pytest] session fixture setup: {fixturedef.argname}")
+    yield
 
 
 def pytest_configure(config):

@@ -14,6 +14,28 @@ def parseMarkerList(String raw) {
         .collect { it.toUpperCase() }
 }
 
+/** True when -k token looks like an IPv4-only IP case (IP_01–IP_17). */
+def isIpv4OnlyIpFilterToken(String token) {
+    def t = (token ?: '').trim().toUpperCase()
+    def m = (t =~ /^IP_?0*(\d+)$/)
+    if (!m.matches()) {
+        return false
+    }
+    def n = m[0][1] as int
+    return n >= 1 && n <= 17
+}
+
+/** Pick profiles/<name>.yaml from markers and optional -k filter (no manual profile pick). */
+def resolveProfileName(List markers, List kParts) {
+    if (!markers.contains('IP')) {
+        return 'default'
+    }
+    if (kParts && kParts.every { isIpv4OnlyIpFilterToken(it) }) {
+        return 'ipv4_quickrun'
+    }
+    return 'ipv6_quickrun'
+}
+
 pipeline {
     agent { node { label "${TARGET_STAND}" } }
 
@@ -26,17 +48,12 @@ pipeline {
         string(
             name: 'TEST_FILTER',
             defaultValue: 'Summary, TopPanel, WirelessProperties',
-            description: 'Optional pytest -k filter (comma = OR). Examples: GUI_05, IP_18, IP_28, WirelessProperties. Leave empty to run all tests in selected marker paths.'
-        )
-        string(
-            name: 'PROFILE_NAME',
-            defaultValue: 'default',
-            description: 'Primary profile: profiles/<name>.yaml (use ipv6_quickrun for IP IPv6 suite)'
+            description: 'Optional pytest -k filter (comma = OR). Examples: GUI_05, IP_18, IP_28. Leave empty to run all tests in selected marker paths. Profile is chosen automatically from TEST_MARKERS.'
         )
         string(
             name: 'RECOVERY_PROFILE_NAME',
             defaultValue: 'link_formation',
-            description: 'Recovery profile: profiles/<name>.yaml'
+            description: 'Recovery profile: profiles/<name>.yaml (used for bootstrap/link recovery)'
         )
         string(
             name: 'Local IPv6 Address',
@@ -51,27 +68,12 @@ pipeline {
         string(
             name: 'FALLBACK_IP',
             defaultValue: '10.0.0.1',
-            description: 'BTS factory/fallback SSH IPv4 (IP suite)'
-        )
-        booleanParam(
-            name: 'ENABLE_IP_DESTRUCTIVE',
-            defaultValue: true,
-            description: 'When IP marker is selected: allow reboot/reset/restore (IP_09–IP_15, IP_28–IP_34, IP_35)'
+            description: 'BTS factory/fallback SSH IPv4 (auto-used for IP marker runs)'
         )
         booleanParam(
             name: 'SKIP_TESTBED_BOOTSTRAP',
             defaultValue: false,
             description: 'Skip session bootstrap (use when BTS/CPE mgmt link and RF are already up)'
-        )
-        booleanParam(
-            name: 'NO_STOP_ON_FIRST_FAIL',
-            defaultValue: false,
-            description: 'Continue after first failure (recommended for full IP suite)'
-        )
-        booleanParam(
-            name: 'ENABLE_DESTRUCTIVE_JUMBO',
-            defaultValue: false,
-            description: 'When JumboFrames marker is selected: allow JMB_07/JMB_10'
         )
     }
 
@@ -98,12 +100,8 @@ pipeline {
                         paths << 'tests/IP/'
                         mParts << 'IP'
                         extraFlags << '--allow-ip-suite'
-                        if (params.ENABLE_IP_DESTRUCTIVE) {
-                            extraFlags << '--allow-ip-destructive'
-                        }
-                        if (params.NO_STOP_ON_FIRST_FAIL) {
-                            extraFlags << '--no-ip-stop-on-first-fail'
-                        }
+                        extraFlags << '--allow-ip-destructive'
+                        extraFlags << '--no-ip-stop-on-first-fail'
                     }
                     if (markers.contains('REGRESSION')) {
                         paths << 'tests/Regression/'
@@ -114,9 +112,7 @@ pipeline {
                     if (markers.contains('JUMBOFRAMES')) {
                         paths << 'tests/JumboFrames/'
                         mParts << 'JumboFrames'
-                        if (params.ENABLE_DESTRUCTIVE_JUMBO) {
-                            extraFlags << '--allow-destructive-jumbo'
-                        }
+                        extraFlags << '--allow-destructive-jumbo'
                     }
 
                     def unknown = markers.findAll { m ->
@@ -126,14 +122,19 @@ pipeline {
                         error("Unknown TEST_MARKERS: ${unknown.join(', ')}. Use GUI, IP, Regression, JumboFrames")
                     }
 
-                    env.TEST_PATHS = paths.join(' ')
-                    env.TEST_M_EXPR = (markers.size() == 1 && mParts.size() == 1) ? "-m \"${mParts[0]}\"" : ''
-                    env.TEST_EXTRA_FLAGS = extraFlags.join(' ')
-
                     def kParts = (params.TEST_FILTER ?: '').split(',')
                         .collect { it.trim() }
                         .findAll { it }
+                    env.TEST_PATHS = paths.join(' ')
+                    env.TEST_M_EXPR = (markers.size() == 1 && mParts.size() == 1) ? "-m \"${mParts[0]}\"" : ''
+                    env.TEST_EXTRA_FLAGS = extraFlags.join(' ')
+                    env.PROFILE_NAME = resolveProfileName(markers, kParts)
                     env.TEST_K_FILTER = kParts ? "-k \"${kParts.join(' or ')}\"" : ''
+
+                    if (markers.contains('IP') && !markers.contains('GUI') && kParts &&
+                        !kParts.any { (it ?: '').trim().toUpperCase() =~ /^IP_/ }) {
+                        echo 'WARNING: TEST_FILTER has no IP_* names — clear it for the full IP suite or set e.g. IP_18'
+                    }
 
                     echo '----------------------------------------'
                     echo 'UBR Validation (pytest, marker-driven)'
@@ -143,7 +144,7 @@ pipeline {
                     echo "pytest -m:      ${env.TEST_M_EXPR ?: '(paths only)'}"
                     echo "pytest -k:      ${kParts ? kParts.join(' or ') : '(none)'}"
                     echo "Extra flags:    ${env.TEST_EXTRA_FLAGS ?: '(none)'}"
-                    echo "Profile:        ${params.PROFILE_NAME}"
+                    echo "Profile:        ${env.PROFILE_NAME} (auto from markers/filter)"
                     echo "Recovery:       ${params.RECOVERY_PROFILE_NAME}"
                     echo "Local IPv6:     ${params['Local IPv6 Address'] ?: '(profile default)'}"
                     echo '----------------------------------------'
@@ -167,7 +168,7 @@ pipeline {
                 script {
                     def localIP = (params['Local IPv6 Address'] ?: '').trim()
                     def remoteIP = (params['Remote IPv6 Address'] ?: '').trim()
-                    def profileName = params.PROFILE_NAME
+                    def profileName = env.PROFILE_NAME ?: 'default'
                     def recoveryProfileName = params.RECOVERY_PROFILE_NAME
                     def fallbackIp = (params.FALLBACK_IP ?: '10.0.0.1').trim()
                     def ipv6Local = localIP ? "--local-ipv6 \"${localIP}\"" : ''
@@ -182,7 +183,9 @@ pipeline {
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                         sh """
-                            PYTHONPATH=. venv/bin/python -m pytest ${env.TEST_PATHS} -v -s \
+                            export PYTHONUNBUFFERED=1
+                            export PYTHONPATH=.
+                            stdbuf -oL -eL venv/bin/python -u -m pytest ${env.TEST_PATHS} -v \
                             ${env.TEST_M_EXPR} \
                             ${env.TEST_K_FILTER} \
                             --profile "${profileName}" \
@@ -213,7 +216,7 @@ pipeline {
                     }
 
                     echo 'Building Senao UBR HTML & CSV (report_generator.py)...'
-                    sh "PYTHONPATH=. venv/bin/python utils/report_generator.py ${env.BUILD_ID} ${localIP} ${new Date().format('yyyyMMdd')} --profile ${params.PROFILE_NAME} --output-prefix Senao_UBR"
+                    sh "PYTHONPATH=. venv/bin/python utils/report_generator.py ${env.BUILD_ID} ${localIP} ${new Date().format('yyyyMMdd')} --profile ${env.PROFILE_NAME ?: 'default'} --output-prefix Senao_UBR"
 
                     if (!fileExists(htmlFile)) {
                         error("Customer report not created: ${htmlFile}")
@@ -254,10 +257,9 @@ pipeline {
                     <p><strong>Paths:</strong> ${env.TEST_PATHS ?: '(not set)'}</p>
                     <p><strong>Target IPv6:</strong> ${params['Local IPv6 Address'] ?: '(profile default)'}</p>
                     <p><strong>Remote IPv6:</strong> ${params['Remote IPv6 Address'] ?: '(profile default)'}</p>
-                    <p><strong>Profile:</strong> ${params.PROFILE_NAME}</p>
+                    <p><strong>Profile:</strong> ${env.PROFILE_NAME ?: 'default'} (auto)</p>
                     <p><strong>Recovery profile:</strong> ${params.RECOVERY_PROFILE_NAME}</p>
-                    <p><strong>IP destructive:</strong> ${params.ENABLE_IP_DESTRUCTIVE}</p>
-                    <p><strong>Jumbo destructive:</strong> ${params.ENABLE_DESTRUCTIVE_JUMBO}</p>
+                    <p><strong>Destructive cases:</strong> enabled when IP / JumboFrames markers are selected</p>
                 """
 
                 try {
