@@ -57,6 +57,34 @@ def _parse_iperf3_mbps(output: str, *, reverse: bool) -> float:
     return sender_rates[-1] if sender_rates else (receiver_rates[-1] if receiver_rates else 0.0)
 
 
+def _resolve_iperf_server_ipv6(
+    cfg: dict[str, Any],
+    profile: dict[str, Any],
+    *,
+    device_target: str = "bts",
+) -> str:
+    explicit = str(cfg.get("iperf_server_v6", "")).strip()
+    if explicit:
+        return normalize_ip(explicit.split("/")[0])
+    dut = profile.get("dut", {}) or {}
+    mgmt = (profile.get("testbed", {}) or {}).get("mgmt_vlan", {}) or {}
+    if device_target == "cpe":
+        for key in ("ipv6_bts",):
+            v6 = str(mgmt.get(key, "") or dut.get("local_ipv6", "")).strip()
+            if v6:
+                return normalize_ip(v6.split("/")[0])
+    else:
+        for key in ("ipv6_cpe", "ipv6_cpe_pc"):
+            v6 = str(mgmt.get(key, "")).strip()
+            if v6:
+                return normalize_ip(v6.split("/")[0])
+        for ip in dut.get("remote_ipv6s") or []:
+            clean = normalize_ip(str(ip).split("/")[0])
+            if clean:
+                return clean
+    return ""
+
+
 def _resolve_iperf_server_ipv4(cfg: dict[str, Any], profile: dict[str, Any]) -> str:
     explicit = str(cfg.get("iperf_server_v4", "")).strip()
     if explicit:
@@ -135,7 +163,7 @@ async def _manage_cpe_iperf3_server_via_secondary_pc(
         inner = (
             f"pkill -f 'iperf3 -s' >/dev/null 2>&1 || true; "
             f"command -v iperf3 >/dev/null 2>&1; "
-            f"iperf3 -s -p {port_q} -B {bind_q} -D"
+            f"iperf3 -s -6 -p {port_q} -B {bind_q} -D"
         )
     else:
         inner = "pkill -f 'iperf3 -s' >/dev/null 2>&1 || true"
@@ -190,22 +218,24 @@ async def _wait_for_iperf_server_ready(
     port: int,
     bind_ip: str,
     wait_s: int = 30,
+    v6: bool = False,
 ) -> None:
     """Probe from lab PC (same bind path as throughput test) until iperf3 server accepts."""
     host = shlex.quote(normalize_ip(server_ip))
     port_q = shlex.quote(str(port))
     bind = shlex.quote(bind_ip)
+    v6_flag = " -6" if v6 else ""
     deadline = time.monotonic() + max(5, wait_s)
     last = ""
     while time.monotonic() < deadline:
-        cmd = f"iperf3 -c {host} -p {port_q} -t 1 -i 1 -B {bind} 2>&1"
+        cmd = f"iperf3 -c {host} -p {port_q} -t 1 -i 1 -B {bind}{v6_flag} 2>&1"
         _, out = await _run_local_iperf3(cmd, timeout_s=20)
         if "connected" in out.lower() or "bits/sec" in out.lower():
             return
         last = out[-220:]
         await asyncio.sleep(2)
     raise RuntimeError(
-        f"iperf3 server {server_ip}:{port} not accepting connections within {wait_s}s: {last}"
+        f"iperf3{' -6' if v6 else ''} server {server_ip}:{port} not accepting connections within {wait_s}s: {last}"
     )
 
 
@@ -219,12 +249,15 @@ async def _run_client_session(
     udp: bool,
     reverse: bool,
     udp_bandwidth: str,
+    v6: bool = False,
 ) -> IperfSessionResult:
     label = f"{'UDP' if udp else 'TCP'} {'RX' if reverse else 'TX'}"
     host = shlex.quote(server_ip)
     port_q = shlex.quote(str(port))
     bind = shlex.quote(bind_ip)
     extra = ""
+    if v6:
+        extra += " -6"
     if udp:
         extra += f" -u -b {shlex.quote(udp_bandwidth)}"
     if reverse:
@@ -250,6 +283,7 @@ async def _run_client_session_with_retry(
     reverse: bool,
     udp_bandwidth: str,
     attempts: int = 2,
+    v6: bool = False,
 ) -> IperfSessionResult:
     last = IperfSessionResult(
         label="",
@@ -269,6 +303,7 @@ async def _run_client_session_with_retry(
             udp=udp,
             reverse=reverse,
             udp_bandwidth=udp_bandwidth,
+            v6=v6,
         )
         if last.ok and last.mbps > 0:
             return last
@@ -406,38 +441,47 @@ async def _stop_iperf_server(meta: dict[str, Any]) -> None:
         )
 
 
-async def run_ip13_reboot_during_traffic(ctx: Any) -> None:
+async def run_ip13_reboot_during_traffic(ctx: Any, *, v6: bool = False) -> None:
     """
-    IP_13: start lab iperf3, reboot DUT mid-session, verify drop then recovery.
+    IP_13/IP_32: start lab iperf3, reboot DUT mid-session, verify drop then recovery.
     """
     cfg = ctx.cfg
-    meta = await prepare_ipv4_lab_iperf_server(ctx)
+    cid = "IP_32" if v6 else "IP_13"
+    if v6:
+        meta = await prepare_ipv6_lab_iperf_server(ctx)
+        bind_ip = meta["bind_v6"]
+    else:
+        meta = await prepare_ipv4_lab_iperf_server(ctx)
+        bind_ip = meta["bind_ip"]
     server_ip = meta["server_ip"]
     port = meta["port"]
-    bind_ip = meta["bind_ip"]
-    vlan_if = meta["vlan_if"]
     duration = int(cfg.get("ip13_iperf_duration_s", 30))
     reboot_delay = int(cfg.get("ip13_reboot_delay_s", 5))
     recovery_s = int(cfg.get("ip13_recovery_iperf_s", 5))
 
     from utils.ip_test_flows import (
         _assert_lab_ping_ipv4,
+        _assert_lab_ping_ipv6,
         _event_ssh_hosts,
         _resolve_bts_lan_ipv4,
+        _resolve_dut_ipv6_for_lab_ping,
         _wait_ssh_after_event,
     )
 
     host_q = shlex.quote(server_ip)
     port_q = shlex.quote(str(port))
     bind_q = shlex.quote(bind_ip)
-    cmd = f"iperf3 -c {host_q} -p {port_q} -t {duration} -i 1 -B {bind_q} 2>&1"
+    v6_flag = " -6" if v6 else ""
+    cmd = f"iperf3 -c {host_q} -p {port_q} -t {duration} -i 1 -B {bind_q}{v6_flag} 2>&1"
     proc = await _run_local_iperf3_bg(cmd)
-    ctx.notes.append(f"IP_13 iperf client started toward {server_ip}:{port}")
+    ctx.notes.append(f"{cid} iperf client started toward {server_ip}:{port}")
     await asyncio.sleep(max(1, reboot_delay))
 
     password = str(cfg.get("_password", ""))
     lan_ip = ""
-    if ctx.device_target == "bts":
+    if v6:
+        lan_ip = await _resolve_dut_ipv6_for_lab_ping(ctx)
+    elif ctx.device_target == "bts":
         lan_ip = await _resolve_bts_lan_ipv4(ctx)
     else:
         lan_ip = normalize_ip(str(cfg.get("remote_ping_host", "")).split("/")[0])
@@ -461,10 +505,13 @@ async def run_ip13_reboot_during_traffic(ctx: Any) -> None:
         or "broken pipe" in raw.lower()
         or not had_traffic
     )
-    ctx.notes.append(f"IP_13 mid-reboot iperf: traffic={had_traffic} interrupt={had_interrupt}")
-    assert had_traffic or had_interrupt, f"IP_13: no traffic or interrupt seen: {raw[-400:]}"
+    ctx.notes.append(f"{cid} mid-reboot iperf: traffic={had_traffic} interrupt={had_interrupt}")
+    assert had_traffic or had_interrupt, f"{cid}: no traffic or interrupt seen: {raw[-400:]}"
 
-    await _stop_iperf_server(meta)
+    if v6:
+        await _stop_iperf_server_v6(meta)
+    else:
+        await _stop_iperf_server(meta)
     timeout_s = int(cfg.get("reboot_timeout_s", 200))
     new_ssh, effective = await _wait_ssh_after_event(
         ctx,
@@ -476,11 +523,34 @@ async def run_ip13_reboot_during_traffic(ctx: Any) -> None:
     ctx.host = effective
 
     if ctx.device_target == "bts":
-        from utils.ip_case_preflight import run_post_event_testbed_recovery
+        if v6:
+            from utils.ip_case_preflight import run_post_event_testbed_recovery_v6
 
-        await run_post_event_testbed_recovery(ctx, label="IP_13-post-reboot", require_cpe=True)
+            await run_post_event_testbed_recovery_v6(
+                ctx, label=f"{cid}-post-reboot", require_cpe=True
+            )
+        else:
+            from utils.ip_case_preflight import run_post_event_testbed_recovery
 
-    if meta["server_on_cpe"]:
+            await run_post_event_testbed_recovery(ctx, label=f"{cid}-post-reboot", require_cpe=True)
+
+    if v6:
+        if meta["server_on_cpe"]:
+            await _manage_cpe_iperf3_server_via_secondary_pc(
+                meta["profile"], meta["password"], bind_ip=server_ip, port=port, start=True
+            )
+        else:
+            await _manage_bts_iperf3_server_ssh(
+                server_ip, meta["password"], bind_ip=server_ip, port=port, start=True
+            )
+        await _wait_for_iperf_server_ready(
+            server_ip=server_ip,
+            port=port,
+            bind_ip=bind_ip,
+            wait_s=int(cfg.get("iperf_server_ready_wait_s", 30)),
+            v6=True,
+        )
+    elif meta["server_on_cpe"]:
         await _manage_cpe_iperf3_server_via_secondary_pc(
             meta["profile"], meta["password"], bind_ip=server_ip, port=port, start=True
         )
@@ -488,22 +558,28 @@ async def run_ip13_reboot_during_traffic(ctx: Any) -> None:
         await _manage_remote_iperf3_server(
             meta["profile"], meta["password"], port=port, bind_ip=server_ip, start=True
         )
-    await _wait_for_iperf_server_ready(
-        server_ip=server_ip,
-        port=port,
-        bind_ip=bind_ip,
-        wait_s=int(cfg.get("iperf_server_ready_wait_s", 30)),
-    )
-    rec_cmd = f"iperf3 -c {host_q} -p {port_q} -t {recovery_s} -i 1 -B {bind_q} 2>&1"
+        await _wait_for_iperf_server_ready(
+            server_ip=server_ip,
+            port=port,
+            bind_ip=bind_ip,
+            wait_s=int(cfg.get("iperf_server_ready_wait_s", 30)),
+        )
+    rec_cmd = f"iperf3 -c {host_q} -p {port_q} -t {recovery_s} -i 1 -B {bind_q}{v6_flag} 2>&1"
     _, rec_out = await _run_local_iperf3(rec_cmd, timeout_s=recovery_s + 30)
     rec_mbps = _parse_iperf3_mbps(rec_out, reverse=False)
     assert rec_mbps > 0 or "bits/sec" in rec_out.lower(), (
-        f"IP_13 post-recovery iperf failed: {rec_out[-300:]}"
+        f"{cid} post-recovery iperf failed: {rec_out[-300:]}"
     )
-    ctx.notes.append(f"IP_13 post-recovery iperf: {rec_mbps:.1f} Mbps")
+    ctx.notes.append(f"{cid} post-recovery iperf: {rec_mbps:.1f} Mbps")
     if lan_ip:
-        await _assert_lab_ping_ipv4(ctx, lan_ip)
-    await _stop_iperf_server(meta)
+        if v6:
+            await _assert_lab_ping_ipv6(ctx, lan_ip)
+        else:
+            await _assert_lab_ping_ipv4(ctx, lan_ip)
+    if v6:
+        await _stop_iperf_server_v6(meta)
+    else:
+        await _stop_iperf_server(meta)
 
 
 async def run_ip05_ipv4_lab_throughput(ctx: Any) -> None:
@@ -569,3 +645,186 @@ async def run_ip05_ipv4_lab_throughput(ctx: Any) -> None:
                 await asyncio.sleep(1)
     finally:
         await _stop_iperf_server(meta)
+
+
+async def _manage_bts_iperf3_server_ssh(
+    bts_host: str,
+    password: str,
+    *,
+    bind_ip: str,
+    port: int,
+    start: bool,
+) -> None:
+    from utils.ip_test_flows import _close_ssh, open_ssh_with_fallback
+
+    cfg = {"_strict_ipv6": True, "_cli_fallback_ip": None}
+    ssh, _, _ = await open_ssh_with_fallback(
+        normalize_ip(bts_host),
+        password,
+        cfg,
+        attempts=3,
+        retry_interval_s=10,
+    )
+    port_q = shlex.quote(str(port))
+    bind_q = shlex.quote(normalize_ip(bind_ip))
+    try:
+        if start:
+            await ssh.send_command(
+                f"pkill -f 'iperf3 -s' >/dev/null 2>&1 || true; "
+                f"iperf3 -s -6 -p {port_q} -B {bind_q} -D",
+                timeout_ops=30,
+            )
+        else:
+            await ssh.send_command("pkill -f 'iperf3 -s' >/dev/null 2>&1 || true", timeout_ops=15)
+    finally:
+        await _close_ssh(ssh)
+
+
+async def prepare_ipv6_lab_iperf_server(ctx: Any) -> dict[str, Any]:
+    """IP_22: iperf3 -6 server on far-end peer (CPE when testing BTS, BTS when testing CPE)."""
+    cfg = ctx.cfg
+    profile = cfg.get("_profile") or {}
+    password = str(cfg.get("_password", ""))
+    port = int(cfg.get("iperf_port", 5201))
+    dut = profile.get("dut", {}) or {}
+
+    from utils.ip_test_flows import (
+        _ensure_lab_mgmt_vlan_ipv6_for_ping,
+        _lab_ping_bind_ipv6,
+        _ping_from_lab_pc_v6,
+        _remote_ping_wait_settings,
+    )
+
+    vlan_if = await _ensure_lab_mgmt_vlan_ipv6_for_ping(ctx)
+    if ctx.device_target == "cpe":
+        bind_v6 = normalize_ip(str(dut.get("cpe_pc_ipv6", "")).split("/")[0])
+        server_on_cpe = False
+    else:
+        bind_v6 = _lab_ping_bind_ipv6(cfg, profile)
+        server_on_cpe = True
+    if not bind_v6:
+        pytest.skip("IP_22: lab bind IPv6 not configured (bts_pc_ipv6 / cpe_pc_ipv6)")
+
+    server_ip = normalize_ip(
+        str(ctx.peer_host or "").strip()
+        or _resolve_iperf_server_ipv6(cfg, profile, device_target=ctx.device_target)
+    )
+    if not server_ip:
+        pytest.skip("IP_22: no IPv6 iperf server target (peer / iperf_server_v6)")
+
+    max_wait_s, _ = _remote_ping_wait_settings(cfg)
+    ready = await _ping_from_lab_pc_v6(
+        vlan_if, server_ip, count=1, bind_ipv6=bind_v6
+    )
+    if not ready.ok:
+        pytest.skip(
+            f"IP_22: server {server_ip} not reachable via ping6 on {vlan_if} "
+            f"within {max_wait_s}s: {ready.raw[:120]}"
+        )
+
+    if server_on_cpe:
+        await _manage_cpe_iperf3_server_via_secondary_pc(
+            profile, password, bind_ip=server_ip, port=port, start=True
+        )
+    else:
+        await _manage_bts_iperf3_server_ssh(
+            server_ip, password, bind_ip=server_ip, port=port, start=True
+        )
+
+    probe_cmd = (
+        f"iperf3 -6 -c {shlex.quote(server_ip)} -p {shlex.quote(str(port))} "
+        f"-t 1 -i 1 -B {shlex.quote(bind_v6)} 2>&1"
+    )
+    _, probe_out = await _run_local_iperf3(probe_cmd, timeout_s=25)
+    if "connected" not in probe_out.lower() and "bits/sec" not in probe_out.lower():
+        pytest.skip(f"IP_22: iperf3 -6 server not ready on {server_ip}: {probe_out[-200:]}")
+
+    return {
+        "server_ip": server_ip,
+        "server_on_cpe": server_on_cpe,
+        "vlan_if": vlan_if,
+        "profile": profile,
+        "password": password,
+        "port": port,
+        "bind_v6": bind_v6,
+    }
+
+
+async def _stop_iperf_server_v6(meta: dict[str, Any]) -> None:
+    if meta.get("server_on_cpe"):
+        await _manage_cpe_iperf3_server_via_secondary_pc(
+            meta["profile"],
+            meta["password"],
+            bind_ip=meta["server_ip"],
+            port=meta["port"],
+            start=False,
+        )
+    else:
+        await _manage_bts_iperf3_server_ssh(
+            meta["server_ip"],
+            meta["password"],
+            bind_ip=meta["server_ip"],
+            port=meta["port"],
+            start=False,
+        )
+
+
+async def run_ip22_ipv6_lab_throughput(ctx: Any) -> None:
+    """
+    IP_22: iperf3 -6 server on far-end (CPE mgmt), client on lab PC (bts_pc_ipv6 bind).
+    TCP + UDP, forward and reverse (-R), same plan as IP_05.
+    """
+    cfg = ctx.cfg
+    profile = cfg.get("_profile") or {}
+    port = int(cfg.get("iperf_port", 5201))
+    duration = int(cfg.get("iperf_duration_s", 10))
+    min_ratio = float(cfg.get("iperf_min_throughput_ratio", 0.70))
+    udp_bw = str(cfg.get("iperf_udp_bandwidth", "50M"))
+    sessions = max(1, int(cfg.get("iperf_session_count", 1)))
+
+    meta = await prepare_ipv6_lab_iperf_server(ctx)
+    server_ip = meta["server_ip"]
+    bind_v6 = meta["bind_v6"]
+    vlan_if = meta["vlan_if"]
+    server_role = "CPE" if meta["server_on_cpe"] else "BTS"
+    ctx.notes.append(
+        f"IP_22 iperf3 -6 server on {server_role} {server_ip}; "
+        f"lab client bind {bind_v6}/{vlan_if}"
+    )
+
+    try:
+        expected_tcp = _resolve_expected_mbps(cfg, profile, udp=False)
+        expected_udp = _resolve_expected_mbps(cfg, profile, udp=True)
+        ctx.notes.append(
+            f"IP_22 expected TCP {expected_tcp:.1f} Mbps, UDP {expected_udp:.1f} Mbps, "
+            f"pass floor {min_ratio * 100:.0f}%"
+        )
+        plan: list[tuple[bool, bool]] = [
+            (False, False),
+            (False, True),
+            (True, False),
+            (True, True),
+        ]
+        for udp, reverse in plan:
+            for _ in range(sessions):
+                res = await _run_client_session_with_retry(
+                    server_ip=server_ip,
+                    port=port,
+                    duration_s=duration,
+                    bind_ip=bind_v6,
+                    bind_iface=vlan_if,
+                    udp=udp,
+                    reverse=reverse,
+                    udp_bandwidth=udp_bw,
+                    attempts=int(cfg.get("iperf_client_retries", 2)),
+                    v6=True,
+                )
+                ctx.notes.append(f"IP_22 {res.label}: {res.mbps:.1f} Mbps")
+                _validate_session_throughput(
+                    res,
+                    expected_mbps=expected_udp if udp else expected_tcp,
+                    min_ratio=min_ratio,
+                )
+                await asyncio.sleep(1)
+    finally:
+        await _stop_iperf_server_v6(meta)

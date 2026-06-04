@@ -74,6 +74,14 @@ def is_ssh_read_failure(text):
     return any(marker in lower for marker in _SSH_READ_FAILURE_MARKERS)
 
 
+def is_uci_error(text: str) -> bool:
+    """True when ``uci get`` failed (must not be written back to UCI or compared as a value)."""
+    lower = str(text or "").strip().lower()
+    if not lower:
+        return True
+    return lower.startswith("uci:") or "entry not found" in lower
+
+
 def normalize_ssh_metric(text):
     """Map failed SSH reads to '-' so validators can match an empty GUI."""
     raw = str(text or "").strip()

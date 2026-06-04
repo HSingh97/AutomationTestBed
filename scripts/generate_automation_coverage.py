@@ -22,8 +22,13 @@ CASE_ID_RE = re.compile(r"^[A-Z][A-Z0-9_]*_\d+$")
 JENKINS_JOBS = {
     "gui": {
         "pipeline_file": "jenkins/jenkins-AutomationFramework",
-        "job_name": "jenkins-AutomationFramework (UBR GUI Test Cases)",
+        "job_name": "jenkins-AutomationFramework (TEST_MARKERS=GUI)",
         "default_pytest_path": "tests/GUI/",
+    },
+    "ip": {
+        "pipeline_file": "jenkins/jenkins-AutomationFramework",
+        "job_name": "jenkins-AutomationFramework (TEST_MARKERS=IP)",
+        "default_pytest_path": "tests/IP/",
     },
     "jumbo": {
         "pipeline_file": "jenkins/jenkins-AutomationFramework",
@@ -83,15 +88,24 @@ def _jenkins_info(case_id: str, rel_test_file: str) -> dict[str, str]:
         job = JENKINS_JOBS["regression"]
     elif case_id.startswith("JMB_"):
         job = JENKINS_JOBS["jumbo"]
+    elif case_id.startswith("IP_"):
+        job = JENKINS_JOBS["ip"]
     else:
         job = JENKINS_JOBS["gui"]
     pytest_path = job["default_pytest_path"]
     if case_id.startswith("GUI_") and not case_id.startswith("REG_"):
         pytest_path = f"tests/GUI/  # file: {rel_test_file}"
+    elif case_id.startswith("IP_"):
+        pytest_path = f"tests/IP/  # file: {rel_test_file}"
     cmd = (
         f"PYTHONPATH=. pytest {job['default_pytest_path']} -v -k \"{case_id}\" "
         f"--profile default"
     )
+    if case_id.startswith("IP_"):
+        cmd = (
+            f"PYTHONPATH=. pytest tests/IP/ -m IP -v -k \"{case_id}\" "
+            f"--allow-ip-suite --profile ipv6_quickrun"
+        )
     if case_id.startswith("JMB_") and case_id in ("JMB_07", "JMB_10"):
         cmd += " --allow-destructive-jumbo"
     if case_id.startswith("REG_"):

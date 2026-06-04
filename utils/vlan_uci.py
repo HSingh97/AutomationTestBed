@@ -133,6 +133,36 @@ def build_bts_network_ipv6_commands(profile: dict[str, Any]) -> list[str]:
     cidr = v6 if "/" in v6 else f"{v6}/{prefix}"
     gw6 = str(mgmt.get("ipv6_gateway", "") or profile.get("ip_tests", {}).get("ipv6_gateway", "")).strip()
     cmds = [
+        "uci set network.lan.ip6proto=static 2>/dev/null || true",
+        f"uci set network.lan.ip6addr='{cidr}'",
+    ]
+    if gw6:
+        cmds.append(f"uci set network.lan.ip6gw='{gw6}'")
+    cmds.extend(["uci commit network", "/etc/init.d/network reload 2>/dev/null || true"])
+    return cmds
+
+
+def build_cpe_network_ipv6_commands(profile: dict[str, Any]) -> list[str]:
+    """Set LAN IPv6 on CPE (network.lan) via secondary PC hop."""
+    mgmt = _mgmt_from_profile(profile)
+    ip_cfg = profile.get("ip_tests", {}) or {}
+    prefix = int(ip_cfg.get("ipv6_prefix_len", mgmt.get("prefix_len", 120)))
+    v6 = str(
+        ip_cfg.get("ipv6_address_cpe")
+        or mgmt.get("ipv6_cpe")
+        or (profile.get("dut", {}) or {}).get("remote_ipv6s", [""])[0]
+        or ""
+    ).strip()
+    if not v6:
+        return []
+    cidr = v6 if "/" in v6 else f"{v6}/{prefix}"
+    gw6 = str(
+        ip_cfg.get("ipv6_gateway_cpe")
+        or ip_cfg.get("ipv6_gateway")
+        or mgmt.get("ipv6_gateway", "")
+    ).strip()
+    cmds = [
+        "uci set network.lan.ip6proto=static 2>/dev/null || true",
         f"uci set network.lan.ip6addr='{cidr}'",
     ]
     if gw6:

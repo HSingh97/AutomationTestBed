@@ -38,7 +38,7 @@ Automation framework for UBR P2MP validation:
 | `pages/` | Locators and SSH command templates |
 | `profiles/` | `default.yaml`, `link_formation.yaml` |
 | `docs/testcase-validation-flows.md` | Per-case validation flowcharts |
-| `jenkins/jenkins-AutomationFramework` | GUI test-case Jenkins pipeline |
+| `jenkins/jenkins-AutomationFramework` | Unified GUI / IP / Regression / Jumbo Jenkins pipeline (`TEST_MARKERS`) |
 | `jenkins/jenkins-Regression` | Stability regression Jenkins pipeline |
 | `jenkins/jenkins-Throughput` | TRex throughput Jenkins pipeline |
 | `jenkins/jenkins-common.groovy` | Shared email/HTML publish helpers |
@@ -303,6 +303,12 @@ venv/bin/python -m pytest tests/IP/ --collect-only -q
 # Full IP suite (marker IP on every case)
 venv/bin/python -m pytest tests/IP/ -m IP -v --allow-ip-suite --profile ipv4_quickrun
 
+# IPv6 block IP_18–IP_26 (mgmt IPv6, /120 prefix, BTS + CPE)
+venv/bin/python -m pytest tests/IP/ -m IP -v --allow-ip-suite --profile ipv6_quickrun \
+  --local-ipv6 2401:4900:d0:40d4:0:17b8:0:330 \
+  --remote-ipv6 2401:4900:d0:40d4::17b8:0:331 \
+  -k "IP_18 or IP_19 or IP_20 or IP_21 or IP_22 or IP_23 or IP_24 or IP_25 or IP_26"
+
 # IPv4 functional block (BTS only): IP_01–IP_05
 venv/bin/python -m pytest tests/IP/ -v --allow-ip-suite --profile ipv4_quickrun \
   -k "IP_01 or IP_02 or IP_03 or IP_04 or IP_05"
@@ -451,25 +457,49 @@ regression:
 
 ---
 
-## Jenkins (three pipelines)
+## Jenkins (three pipelines + unified validation job)
 
 All jobs run on agent label **`TARGET_STAND`** (lab bench). Reports share the same layout: Senao hero header, logo, **Testbed Summary** (BTS/CPE model/FW/IP/VLAN/QoS), then run-specific results.
 
 | Job file | Purpose | Standard HTML artifact |
 |----------|---------|------------------------|
-| `jenkins/jenkins-AutomationFramework` | GUI test cases (`tests/GUI/`) | `Senao_GUI_<build>_Report_<date>.html` (+ CSV) |
-| `jenkins/jenkins-Regression` | Stability regression (`tests/Regression/`, `--allow-regression`) | `Senao_Regression_<build>_Report_<date>.html` |
+| `jenkins/jenkins-AutomationFramework` | **Unified** GUI / IP / Regression / Jumbo via `TEST_MARKERS` | `Senao_UBR_<build>_Report_<date>.html` (+ CSV) |
+| `jenkins/jenkins-Regression` | Stability regression only (legacy dedicated job) | `Senao_Regression_<build>_Report_<date>.html` |
 | `jenkins/jenkins-Throughput` | TRex performance matrix (`traffic/performance_matrix.py`) | `Senao_Performance_<build>_Report_<date>.html` |
 
 Shared helpers: `jenkins/jenkins-common.groovy` (email, `publishHTML`, report copy/rename).
 
-### 1. GUI test cases
+### 1. Unified validation (`jenkins-AutomationFramework`)
 
-- **Filter:** `TEST_FILTER` (comma = OR), e.g. `Summary, TopPanel, WirelessProperties, Wireless24` or `GUI_34`
-- **Note:** Jumbo tests live under `tests/JumboFrames/` — run locally or extend the pipeline path; destructive cases need `--allow-destructive-jumbo`
-- **Profile:** `PROFILE_NAME`, `RECOVERY_PROFILE_NAME`, optional `Local IPv6 Address`
+Select suites with **`TEST_MARKERS`** (comma-separated):
 
-### 2. Regression
+| Marker | Test path | Auto flags |
+|--------|-----------|------------|
+| `GUI` | `tests/GUI/` | (none) |
+| `IP` | `tests/IP/` | `--allow-ip-suite`, optional `--allow-ip-destructive` |
+| `Regression` | `tests/Regression/` | `--allow-regression`, `--regression-fresh` |
+| `JumboFrames` | `tests/JumboFrames/` | optional `--allow-destructive-jumbo` |
+
+**Examples**
+
+| Goal | `TEST_MARKERS` | `TEST_FILTER` | `PROFILE_NAME` |
+|------|----------------|---------------|----------------|
+| GUI smoke | `GUI` | `Summary, TopPanel` | `default` |
+| Full IP suite | `IP` | *(empty)* | `ipv6_quickrun` |
+| One IP case | `IP` | `IP_18` | `ipv6_quickrun` |
+| GUI + IP | `GUI,IP` | `Summary or IP_19` | `ipv6_quickrun` |
+
+**IP-specific job parameters** (used when `IP` is in `TEST_MARKERS`): `Remote IPv6 Address`, `FALLBACK_IP`, `ENABLE_IP_DESTRUCTIVE`, `SKIP_TESTBED_BOOTSTRAP`, `NO_STOP_ON_FIRST_FAIL`.
+
+**Local run (same as Jenkins IP job):**
+
+```bash
+pytest tests/IP/ -m IP -v --allow-ip-suite --allow-ip-destructive \
+  --profile ipv6_quickrun --skip-testbed-bootstrap --fallback-ip 10.0.0.1 \
+  --no-ip-stop-on-first-fail
+```
+
+### 2. Regression (standalone job)
 
 - **Checkboxes:** Soft Reboot (`REG_01`), Network Soft Reset (`REG_02`), Firmware Upgrade (`REG_03`)
 - **Iterations:** separate count per enabled test (`ITERATIONS_SOFT_REBOOT`, `ITERATIONS_SOFT_RESET`, `ITERATIONS_FIRMWARE`)

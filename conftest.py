@@ -159,7 +159,7 @@ def pytest_addoption(parser):
         "--allow-ip-suite",
         action="store_true",
         default=False,
-        help="Enable IP_01–IP_37 networking validation tests (tests/IP/).",
+        help="Enable IP_01–IP_60 networking validation tests (tests/IP/).",
     )
     group.addoption(
         "--allow-ip-destructive",
@@ -306,30 +306,48 @@ def recovery_manager(profile_bundle):
 # =====================================================================
 # 3. SSH ENGINES
 # =====================================================================
+def _session_bts_ssh_hosts(request, profile: dict, bsu_ip: str) -> list[str]:
+    """BTS SSH chain: factory IPv4 first, then mgmt IPv6 (matches IP preflight step 1)."""
+    from utils.ip_test_flows import _factory_first_ssh_hosts, _ordered_unique_hosts
+
+    dut = profile.get("dut", {}) or {}
+    tb = profile.get("testbed", {}) or {}
+    rec = tb.get("recovery", {}) or {}
+    mgmt = tb.get("mgmt_vlan", {}) or {}
+    cli_fb = (
+        request.config.getoption("--fallback-ip")
+        or rec.get("bts_fallback_ipv4")
+        or dut.get("local_ip")
+        or "10.0.0.1"
+    )
+    return _factory_first_ssh_hosts(
+        _ordered_unique_hosts(
+            cli_fb,
+            rec.get("bts_fallback_ipv4"),
+            dut.get("local_ip"),
+            bsu_ip,
+            mgmt.get("ipv6_bts"),
+            dut.get("local_ipv6"),
+        )
+    )
+
+
 @pytest.fixture(scope="session")
-async def root_ssh(bsu_ip, device_creds, recovery_manager):
+async def root_ssh(request, bsu_ip, device_creds, recovery_manager):
     """SSH connection to the Linux backend as 'root'."""
+    from utils.ip_test_flows import _wait_ssh_any
+
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-    device = {
-        "host": bsu_ip,
-        "auth_username": "root",
-        "auth_password": device_creds["pass"],
-        "auth_strict_key": False,
-        "transport": "asyncssh",
-        "channel_log": str(_artifact_path(f"root_cli_{bsu_ip}.log")),
-    }
-    conn = AsyncGenericDriver(**device)
-    open_errors = []
-    for wait_s in (0, 15, 20, 20):
-        if wait_s:
-            await asyncio.sleep(wait_s)
-        try:
-            await conn.open()
-            break
-        except Exception as exc:
-            open_errors.append(str(exc))
-    else:
-        raise RuntimeError(f"Unable to open root SSH to {bsu_ip} after retries: {' | '.join(open_errors)}")
+    profile = recovery_manager.profile_bundle.active
+    hosts = _session_bts_ssh_hosts(request, profile, bsu_ip)
+    conn, effective = await _wait_ssh_any(
+        hosts,
+        device_creds["pass"],
+        timeout_s=90,
+        interval_s=5,
+    )
+    if effective != normalize_ip(bsu_ip):
+        print(f"[ssh] root_ssh session on {effective} (profile primary {bsu_ip})")
     await recovery_manager.ensure_link_or_recover(bsu_ip=bsu_ip, device_creds=device_creds, root_ssh=conn)
     from utils.link_ssid import ensure_bts_link_ssid_ssh
 
@@ -515,7 +533,7 @@ async def gui_browser():
 # 6. GLOBAL AUTHENTICATION ENGINE (LIVE TAB)
 # =====================================================================
 @pytest.fixture(scope="session")
-async def gui_page(gui_browser, bsu_ip, device_creds, recovery_manager, root_ssh):
+async def gui_page(request, gui_browser, bsu_ip, device_creds, recovery_manager, root_ssh):
     """
     Logs into the GUI once per test run and yields the LIVE authenticated page.
     This safely bypasses the strict URL-token security on Senao devices.
@@ -527,25 +545,33 @@ async def gui_page(gui_browser, bsu_ip, device_creds, recovery_manager, root_ssh
     await context.tracing.start(screenshots=True, snapshots=True, sources=True)
     page = await context.new_page()
 
-    # Go to the IP and log in, allowing for transient GUI reachability issues.
-    gui_errors = []
+    profile = recovery_manager.profile_bundle.active
+    gui_hosts = _session_bts_ssh_hosts(request, profile, bsu_ip)
+    gui_errors: list[str] = []
+    logged_in = False
     for wait_s in (0, 5, 10, 15):
         if wait_s:
             await asyncio.sleep(wait_s)
-        try:
-            await page.goto(
-                f"https://{format_http_host(bsu_ip)}/cgi-bin/luci/",
-                wait_until="commit",
-                timeout=15000,
-            )
-            await page.locator(LoginPageLocators.USERNAME_INPUT).wait_for(state="visible", timeout=15000)
-            await page.fill(LoginPageLocators.USERNAME_INPUT, device_creds["user"])
-            await page.fill(LoginPageLocators.PASSWORD_INPUT, device_creds["pass"])
-            await page.locator(LoginPageLocators.PASSWORD_INPUT).press("Enter")
+        for gui_host in gui_hosts:
+            try:
+                await page.goto(
+                    f"https://{format_http_host(gui_host)}/cgi-bin/luci/",
+                    wait_until="commit",
+                    timeout=15000,
+                )
+                await page.locator(LoginPageLocators.USERNAME_INPUT).wait_for(
+                    state="visible", timeout=15000
+                )
+                await page.fill(LoginPageLocators.USERNAME_INPUT, device_creds["user"])
+                await page.fill(LoginPageLocators.PASSWORD_INPUT, device_creds["pass"])
+                await page.locator(LoginPageLocators.PASSWORD_INPUT).press("Enter")
+                logged_in = True
+                break
+            except Exception as exc:
+                gui_errors.append(f"{gui_host}: {exc}")
+        if logged_in:
             break
-        except Exception as exc:
-            gui_errors.append(str(exc))
-    else:
+    if not logged_in:
         await recovery_manager.ensure_link_or_recover(
             gui_page=page,
             bsu_ip=bsu_ip,
@@ -555,21 +581,25 @@ async def gui_page(gui_browser, bsu_ip, device_creds, recovery_manager, root_ssh
         for wait_s in (0, 10, 20, 30):
             if wait_s:
                 await asyncio.sleep(wait_s)
-            try:
-                await page.goto(
-                    f"https://{format_http_host(bsu_ip)}/cgi-bin/luci/",
-                    wait_until="commit",
-                    timeout=20000,
-                )
-                await page.locator(LoginPageLocators.USERNAME_INPUT).wait_for(
-                    state="visible", timeout=20000
-                )
-                await page.fill(LoginPageLocators.USERNAME_INPUT, device_creds["user"])
-                await page.fill(LoginPageLocators.PASSWORD_INPUT, device_creds["pass"])
-                await page.locator(LoginPageLocators.PASSWORD_INPUT).press("Enter")
+            for gui_host in gui_hosts:
+                try:
+                    await page.goto(
+                        f"https://{format_http_host(gui_host)}/cgi-bin/luci/",
+                        wait_until="commit",
+                        timeout=20000,
+                    )
+                    await page.locator(LoginPageLocators.USERNAME_INPUT).wait_for(
+                        state="visible", timeout=20000
+                    )
+                    await page.fill(LoginPageLocators.USERNAME_INPUT, device_creds["user"])
+                    await page.fill(LoginPageLocators.PASSWORD_INPUT, device_creds["pass"])
+                    await page.locator(LoginPageLocators.PASSWORD_INPUT).press("Enter")
+                    logged_in = True
+                    break
+                except Exception as exc:
+                    gui_errors_after.append(f"{gui_host}: {exc}")
+            if logged_in:
                 break
-            except Exception as exc:
-                gui_errors_after.append(str(exc))
         else:
             raise RuntimeError(
                 "Unable to open GUI to "
@@ -704,15 +734,15 @@ async def run_ip(request, profile_bundle, bsu_ip, cpe_ips, device_creds, gui_pag
 
 
 def pytest_generate_tests(metafunc):
-    """Parametrize IP_18–IP_37 in test_IP.test_ip_extended_case only."""
+    """Parametrize active IP_27–IP_36 in test_IP.test_ip_extended_case only."""
     if "ip_extended_bundle" not in metafunc.fixturenames:
         return
-    from config.ip_test_cases import IP_TEST_CASES, device_targets
+    from config.ip_test_cases import IP_TEST_CASES, ACTIVE_IP_CASE_IDS, device_targets
 
     params = []
     for case in IP_TEST_CASES:
         num = int(case.case_id.split("_", 1)[1])
-        if num < 18:
+        if num < 27 or case.case_id not in ACTIVE_IP_CASE_IDS:
             continue
         for target in device_targets(case):
             params.append(

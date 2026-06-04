@@ -99,8 +99,16 @@ async def uci_get_cmd_for_locator(gui_page, locator: str) -> str:
 
 async def fill_luci_input(gui_page, locator: str, value: str) -> None:
     """Fill CBI inputs that may be hidden until a tab/section is expanded."""
+    from utils.parsers import is_uci_error
+
     element = gui_page.locator(locator).first
     await element.wait_for(state="attached", timeout=UITimeouts.ELEMENT_WAIT_MS)
+    try:
+        current = (await element.input_value()).strip()
+    except Exception:
+        current = ""
+    if is_uci_error(current):
+        await element.fill("", force=True)
     try:
         await element.fill(value, force=True)
         return

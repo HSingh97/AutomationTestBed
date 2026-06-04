@@ -10,8 +10,10 @@ from config.ip_test_cases import case_by_id
 from utils.ip_test_flows import (
     IpTestContext,
     _cpe_ipv4_hint_candidates,
+    _factory_first_ssh_hosts,
     _ip_cfg,
     _ipv4_test_address_candidates,
+    _ordered_unique_hosts,
     _wait_ssh_any,
     execute_ip_case_with_recovery,
     open_cpe_ssh_via_secondary_pc,
@@ -33,7 +35,7 @@ def require_ip_suite(request, profile_bundle) -> None:
 def case_needs_gui(case_id: str, target: str) -> bool:
     case = case_by_id(case_id)
     return target == "bts" and (
-        "gui" in case.requires or case_id in ("IP_15", "IP_35", "IP_36")
+        "gui" in case.requires or case_id in ("IP_15", "IP_34", "IP_35")
     )
 
 
@@ -44,6 +46,7 @@ async def open_ip_ssh_session(
     request,
     profile_bundle,
     bsu_ip: str,
+    cpe_ips: list[str],
     device_creds: dict[str, str],
 ):
     """Return (ssh, host, fallbacks) for one IP case target."""
@@ -51,6 +54,64 @@ async def open_ip_ssh_session(
     dut = profile_bundle.active.get("dut", {}) or {}
     tb = profile_bundle.active.get("testbed", {}) or {}
     primary = bsu_ip if target == "bts" else ""
+
+    ipv6_mode = dut.get("ip_mode") == "ipv6" or tb.get("strict_ipv6")
+    if ipv6_mode:
+        cfg["_strict_ipv6"] = True
+        cfg["ssh_allow_ipv4_fallback"] = True
+        cfg["_profile"] = profile_bundle.active
+        rec = tb.get("recovery", {}) or {}
+        cli_fb = (
+            request.config.getoption("--fallback-ip")
+            or rec.get("bts_fallback_ipv4")
+            or dut.get("local_ip")
+            or "10.0.0.1"
+        )
+        cfg["_cli_fallback_ip"] = normalize_ip(str(cli_fb).split("/")[0])
+        cfg["_device_target"] = target
+
+        if target == "cpe":
+            sec = tb.get("secondary_pc", {}) or {}
+            factory = normalize_ip(str(sec.get("cpe_factory_ipv4", "10.0.0.1")))
+            mgmt = tb.get("mgmt_vlan", {}) or {}
+            cpe_mgmt = normalize_ip(str(cpe_ips[0]).split("/")[0]) if cpe_ips else ""
+            if not cpe_mgmt:
+                cpe_mgmt = normalize_ip(str(mgmt.get("ipv6_cpe", "")).split("/")[0])
+            try:
+                ssh, effective_host, _ = await open_cpe_ssh_via_secondary_pc(
+                    profile_bundle.active,
+                    device_creds["pass"],
+                    cpe_lan=cpe_mgmt or factory,
+                    cpe_factory=factory,
+                )
+                return ssh, effective_host, (factory, cpe_mgmt or factory)
+            except Exception as exc:
+                if case_id in {
+                    "IP_18", "IP_19", "IP_20", "IP_21", "IP_22", "IP_23",
+                    "IP_24", "IP_25", "IP_26",
+                    "IP_28", "IP_30", "IP_31", "IP_32", "IP_33", "IP_34", "IP_35",
+                }:
+                    pytest.fail(f"CPE SSH via secondary PC failed: {exc}")
+                pytest.skip(f"CPE SSH via secondary PC unavailable: {exc}")
+
+        mgmt = tb.get("mgmt_vlan", {}) or {}
+        hosts = _factory_first_ssh_hosts(
+            _ordered_unique_hosts(
+                cfg["_cli_fallback_ip"],
+                str(rec.get("bts_fallback_ipv4", "")),
+                str(dut.get("local_ip", "")),
+                normalize_ip(str(bsu_ip).split("/")[0]),
+                str(mgmt.get("ipv6_bts", dut.get("local_ipv6", ""))),
+            )
+        )
+        ssh, effective_host = await _wait_ssh_any(
+            hosts,
+            device_creds["pass"],
+            timeout_s=90,
+            interval_s=3,
+        )
+        fallbacks = tuple(h for h in hosts if normalize_ip(h) != normalize_ip(effective_host))
+        return ssh, effective_host, fallbacks
 
     if target == "cpe":
         hints = _cpe_ipv4_hint_candidates(cfg, profile_bundle.active)
@@ -86,6 +147,9 @@ async def open_ip_ssh_session(
             if case_id in {
                 "IP_06", "IP_07", "IP_08", "IP_09", "IP_11", "IP_12",
                 "IP_13", "IP_14", "IP_15", "IP_16", "IP_17",
+                "IP_18", "IP_19", "IP_20", "IP_21", "IP_22", "IP_23",
+                "IP_24", "IP_25", "IP_26",
+                "IP_28", "IP_30", "IP_31", "IP_32", "IP_33", "IP_34", "IP_35",
             }:
                 pytest.fail(f"CPE SSH via secondary PC failed: {exc}")
             pytest.skip(f"CPE SSH via secondary PC unavailable: {exc}")
@@ -167,10 +231,20 @@ async def run_ip_validation(
     dut = profile_bundle.active.get("dut", {}) or {}
     tb = profile_bundle.active.get("testbed", {}) or {}
     cfg["_strict_ipv6"] = bool(dut.get("strict_ipv6") or tb.get("strict_ipv6"))
+    cfg["ssh_allow_ipv4_fallback"] = True
     cfg["_password"] = device_creds["pass"]
-    cfg["_cli_fallback_ip"] = (
-        None if cfg["_strict_ipv6"] else request.config.getoption("--fallback-ip")
-    )
+    rec = tb.get("recovery", {}) or {}
+    if cfg["_strict_ipv6"]:
+        cfg["_cli_fallback_ip"] = normalize_ip(
+            str(
+                request.config.getoption("--fallback-ip")
+                or rec.get("bts_fallback_ipv4")
+                or dut.get("local_ip")
+                or "10.0.0.1"
+            ).split("/")[0]
+        )
+    else:
+        cfg["_cli_fallback_ip"] = request.config.getoption("--fallback-ip")
     cfg["_device_target"] = target
     cfg["_profile"] = profile_bundle.active
     cfg["_profile_bundle"] = profile_bundle
@@ -181,6 +255,7 @@ async def run_ip_validation(
         request=request,
         profile_bundle=profile_bundle,
         bsu_ip=bsu_ip,
+        cpe_ips=cpe_ips,
         device_creds=device_creds,
     )
     try:

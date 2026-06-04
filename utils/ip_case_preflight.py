@@ -1,8 +1,9 @@
-"""IPv4 bench preflight and recovery (reused by IP_01–IP_37 and manual bootstrap)."""
+"""IPv4 bench preflight and recovery (reused by IP_01–IP_60 and manual bootstrap)."""
 
 from __future__ import annotations
 
 import asyncio
+import re
 import shlex
 import subprocess
 from collections.abc import Awaitable, Callable
@@ -61,11 +62,16 @@ def _run_local(command: str) -> tuple[int, str]:
 async def preflight_step1_fallback_ssh(ctx) -> None:
     """Connect BTS/CPE SSH using fallback chain (10.0.0.1 → LAN → mgmt IPv6)."""
     from utils.ip_test_flows import (
+        CpeSecondaryHopDriver,
         _close_ssh,
         _device_ssh_host_candidates,
         _ordered_unique_hosts,
         _wait_ssh_any,
     )
+
+    if ctx.device_target == "cpe" and isinstance(ctx.ssh, CpeSecondaryHopDriver):
+        _log(ctx, f"step 1 OK: keep CPE SSH hop (host={ctx.host})")
+        return
 
     cfg = ctx.cfg
     password = str(cfg.get("_password", ""))
@@ -292,7 +298,273 @@ def case_requires_cpe(case_id: str) -> bool:
     return case_id in {
         "IP_03", "IP_05", "IP_06", "IP_07", "IP_08",
         "IP_09", "IP_11", "IP_12", "IP_13", "IP_14", "IP_16", "IP_17",
+        "IP_20", "IP_22", "IP_23", "IP_24", "IP_25", "IP_26",
+        "IP_28", "IP_30", "IP_31", "IP_32", "IP_33",
     }
+
+
+async def preflight_step3_lab_mgmt_ipv6(ctx) -> None:
+    """Lab PC tagged mgmt VLAN with /120 IPv6 (same layer as testbed bootstrap)."""
+    from utils.ip_test_flows import (
+        _lab_mgmt_vlan_id,
+        _lab_primary_pc,
+        format_ipv6_cidr,
+    )
+    from utils.lab_pc_net import configure_mgmt_interface, ensure_fallback_subnet
+    from utils.vlan_uci import lab_pc_vlan_plan
+
+    profile = ctx.cfg.get("_profile") or {}
+    tb = _tb(profile)
+    mgmt = tb.get("mgmt_vlan", {}) or {}
+    dut = profile.get("dut", {}) or {}
+    prefix_len = int(ctx.cfg.get("ipv6_prefix_len", mgmt.get("prefix_len", 120)))
+    pc_v6_raw = str(
+        dut.get("bts_pc_ipv6") or mgmt.get("ipv6_bts_pc") or dut.get("mgmt_oob_ipv6") or ""
+    ).strip()
+    if not pc_v6_raw:
+        pytest.fail("preflight step 3v6: dut.bts_pc_ipv6 / mgmt_vlan.ipv6_bts_pc not set")
+    pc_cidr = format_ipv6_cidr(pc_v6_raw, ctx.cfg)
+    pc = _lab_primary_pc(profile)
+    password = str(ctx.cfg.get("_password", ""))
+    vlan_id = _lab_mgmt_vlan_id(profile)
+
+    await ensure_fallback_subnet(pc, password)
+    ok = await configure_mgmt_interface(
+        pc,
+        ipv6_address=pc_cidr,
+        prefix_len=prefix_len,
+        password=password,
+        vlan_id=vlan_id,
+        tagging=lab_pc_vlan_plan(tb, side="bts"),
+    )
+    if not ok:
+        pytest.fail(f"preflight step 3v6: lab PC mgmt IPv6 {pc_cidr} not configured")
+
+    parent = str(pc.get("mgmt_interface", "enp3s0"))
+    vlan_if = f"{parent}.{vlan_id}"
+    rc, out = _run_local(f"ip -6 addr show dev {shlex.quote(vlan_if)}")
+    want_host = normalize_ip(pc_cidr.split("/")[0])
+    has_v6 = False
+    if rc == 0:
+        import ipaddress
+
+        try:
+            want_addr = ipaddress.IPv6Address(want_host)
+            for line in out.splitlines():
+                if "inet6" not in line.lower():
+                    continue
+                m = re.search(r"inet6\s+([0-9a-f:]+)/\d+", line, re.I)
+                if m and ipaddress.IPv6Address(m.group(1)) == want_addr:
+                    has_v6 = True
+                    break
+        except ValueError:
+            has_v6 = want_host in out
+    if not has_v6:
+        pytest.fail(
+            f"preflight step 3v6: {vlan_if} missing {pc_cidr} — got: {out[:200]}"
+        )
+    from utils.ip_test_flows import _canonical_ipv6
+
+    ctx.cfg["_lab_ping_bind_ipv6"] = _canonical_ipv6(pc_cidr.split("/")[0])
+    _log(ctx, f"step 3v6 OK: lab {vlan_if} has {pc_cidr}")
+
+
+async def _read_device_ipv6_state(ctx) -> dict[str, str]:
+    from utils.ip_test_flows import _read_uci_ip, _ssh_run_raw
+
+    uci = await _read_uci_ip(ctx.ssh, v6=True)
+    show = await _ssh_run_raw(ctx.ssh, "ip -6 addr show dev br-lan 2>/dev/null; ip -6 addr show")
+    return {"uci_address": str(uci.get("address", "")), "uci_gateway": str(uci.get("gateway", "")), "ip6_show": show}
+
+
+async def preflight_step4_ipv6_reachability(
+    ctx,
+    *,
+    require_cpe: bool = False,
+    strict: bool = True,
+) -> None:
+    """Lab ping6 to device static/mgmt IPv6 after link formation."""
+    from utils.ip_test_flows import (
+        _assert_lab_ping_ipv6,
+        _ipv6_values_for_target,
+        _ping_remote_after_local,
+    )
+
+    cid = ctx.case.case_id
+    apply = _ipv6_values_for_target(ctx)
+    target = normalize_ip(apply["ipv6_address"].split("/")[0])
+    try:
+        await _assert_lab_ping_ipv6(ctx, target, count=int(ctx.cfg.get("ping_count_short", 4)))
+        _log(ctx, f"step 4v6 OK: lab ping6 to device {target}")
+    except Exception as exc:
+        if strict:
+            pytest.fail(f"{cid}: step 4v6 — device {target} not reachable via lab ping6: {exc}")
+        _log(ctx, f"step 4v6 warn: lab ping6 {target}: {exc}")
+
+    if require_cpe and ctx.peer_host:
+        from utils.ip_test_flows import _remote_ping_wait_settings
+
+        max_wait_s, interval_s = _remote_ping_wait_settings(ctx.cfg)
+        retries = max(
+            int(ctx.cfg.get("post_reboot_remote_ping_retries", 12)),
+            max(1, max_wait_s // interval_s),
+        )
+        try:
+            await _ping_remote_after_local(
+                ctx,
+                v6=True,
+                count=int(ctx.cfg.get("ping_count_short", 4)),
+                retries=retries,
+                retry_interval_s=interval_s,
+            )
+            _log(ctx, f"step 4v6 OK: DUT ping6 to peer {ctx.peer_host}")
+        except AssertionError as exc:
+            if ctx.cfg.get("ip_preflight_warn_remote_cpe_v6", True):
+                _log(ctx, f"step 4v6 warn: BTS→CPE ping6 {ctx.peer_host}: {exc}")
+            elif strict:
+                pytest.fail(f"{cid}: step 4v6 — CPE {ctx.peer_host} not reachable: {exc}")
+
+
+async def ensure_device_ipv6_configured(ctx) -> None:
+    """IP_19+ require static IPv6 on DUT (from IP_18 or profile)."""
+    from utils.ip_test_flows import _ipv6_values_for_target
+
+    state = await _read_device_ipv6_state(ctx)
+    apply = _ipv6_values_for_target(ctx)
+    from utils.ip_test_flows import ipv6_addr_in_text, ipv6_equal
+
+    uci_addr = str(state.get("uci_address", ""))
+    if not ipv6_equal(apply["ipv6_address"], uci_addr) and not ipv6_addr_in_text(
+        apply["ipv6_address"].split("/")[0], state.get("ip6_show", "")
+    ):
+        pytest.fail(
+            f"{ctx.case.case_id}: device IPv6 not configured "
+            f"(expected {apply['ipv6_address']} in UCI/ip -6). "
+            "Run IP_18 first or set ip_tests.ipv6_address_* in profile."
+        )
+    ctx.notes.append(f"device IPv6 OK: UCI={uci_addr[:80]}")
+
+
+async def run_ip_case_preflight_v6(
+    ctx,
+    *,
+    require_cpe: bool | None = None,
+    skip_device_v6_ping: bool = False,
+    skip_bts_precheck: bool = False,
+) -> None:
+    """
+    IPv6 suite mirrors IPv4 preflight:
+      1) fallback SSH (10.0.0.1 → … → mgmt IPv6)
+      2) BTS VLAN baseline
+      3) lab PC mgmt VLAN + /120 on backend PC
+      4) link formation + ping6 (skipped for IP_18 before static apply)
+    """
+    cfg = ctx.cfg
+    ip_cfg = (cfg.get("_profile") or {}).get("ip_tests", {}) or {}
+    if not ip_cfg.get("preflight_enabled", True):
+        return
+
+    cid = ctx.case.case_id
+    need_cpe = case_requires_cpe(cid) if require_cpe is None else require_cpe
+    skip_ping = skip_device_v6_ping or cid == "IP_18"
+
+    _log(ctx, f"=== {cid} IPv6 preflight start ===")
+    await preflight_step1_fallback_ssh(ctx)
+    if ctx.device_target == "bts":
+        await preflight_step2_device_config(ctx)
+    await preflight_step3_lab_mgmt_ipv6(ctx)
+
+    state = await _read_device_ipv6_state(ctx)
+    ctx.cfg["_device_ipv6_preflight"] = state
+    _log(
+        ctx,
+        f"device IPv6 before case: uci={state.get('uci_address', '')[:60]} "
+        f"fe80={'fe80::' in state.get('ip6_show', '').lower()}",
+    )
+
+    link_ok = await preflight_step4_link_formation(ctx, strict=need_cpe and not skip_ping)
+    if not link_ok and need_cpe and not skip_ping:
+        pytest.fail(f"{cid}: IPv6 preflight — RF link down")
+
+    if need_cpe and cid not in ("IP_18",):
+        from utils.ip_test_flows import ensure_cpe_ipv6_ready
+
+        await ensure_cpe_ipv6_ready(ctx)
+
+    if not skip_ping:
+        if cid != "IP_18":
+            await ensure_device_ipv6_configured(ctx)
+        await preflight_step4_ipv6_reachability(
+            ctx, require_cpe=need_cpe, strict=need_cpe
+        )
+    else:
+        _log(ctx, "step 4v6: deferred (IP_18 will apply static IPv6 then lab ping6)")
+
+    _log(ctx, f"=== {cid} IPv6 preflight complete ===")
+
+
+async def run_post_event_testbed_recovery_v6(
+    ctx,
+    *,
+    label: str = "post-event",
+    link_formation: bool = True,
+    verify_reachability: bool = True,
+    require_cpe: bool | None = None,
+    strict: bool = False,
+    after_mgmt_hook: Callable[[], Awaitable[None]] | None = None,
+) -> bool:
+    """
+    Post-reboot/reset/post-case recovery for IPv6 suite (mirrors run_post_event_testbed_recovery).
+    """
+    cfg = ctx.cfg
+    profile = cfg.get("_profile") or {}
+    ip_cfg = profile.get("ip_tests", {}) or {}
+    if not ip_cfg.get("preflight_enabled", True):
+        return True
+    if not ip_cfg.get("post_event_recovery_enabled", True):
+        return True
+
+    cid = ctx.case.case_id
+    need_cpe = case_requires_cpe(cid) if require_cpe is None else require_cpe
+
+    _log(ctx, f"=== {cid} {label} IPv6 recovery start ===")
+    await preflight_step1_fallback_ssh(ctx)
+    if ctx.device_target == "bts":
+        await preflight_step2_device_config(ctx)
+    await preflight_step3_lab_mgmt_ipv6(ctx)
+
+    if after_mgmt_hook is not None:
+        await after_mgmt_hook()
+
+    link_ok = True
+    if link_formation:
+        link_ok = await preflight_step4_link_formation(ctx, strict=strict and need_cpe)
+        if not link_ok and need_cpe and strict:
+            pytest.fail(f"{cid}: {label} — RF link down (IPv6 recovery)")
+
+    if need_cpe and cfg.get("ip18_configure_cpe", True):
+        from utils.ip_test_flows import ensure_cpe_ipv6_ready
+
+        try:
+            await ensure_cpe_ipv6_ready(ctx)
+        except Exception as exc:
+            if strict:
+                raise
+            _log(ctx, f"{label} v6: CPE configure warn: {exc}")
+
+    if verify_reachability:
+        try:
+            from utils.ip_test_flows import _reconnect_device_ssh
+
+            await _reconnect_device_ssh(ctx, timeout_s=90)
+        except Exception as exc:
+            _log(ctx, f"{label} v6: SSH reconnect before reachability: {exc}")
+        await preflight_step4_ipv6_reachability(
+            ctx, require_cpe=need_cpe, strict=strict
+        )
+
+    _log(ctx, f"=== {cid} {label} IPv6 recovery complete ===")
+    return link_ok
 
 
 async def run_ip_case_preflight(
@@ -314,7 +586,7 @@ async def run_ip_case_preflight(
 
     cid = ctx.case.case_id
     need_cpe = case_requires_cpe(cid) if require_cpe is None else require_cpe
-    skip_bts = skip_bts_precheck or cid in ("IP_01", "IP_15", "IP_35")
+    skip_bts = skip_bts_precheck or cid in ("IP_01", "IP_15", "IP_34")
 
     _log(ctx, f"=== {cid} preflight start ===")
     await preflight_step1_fallback_ssh(ctx)
@@ -419,7 +691,7 @@ async def ensure_bts_testbed_baseline(ctx) -> None:
     await run_post_event_testbed_recovery(ctx, label="baseline")
 
 
-async def reboot_bts_then_recovery(ctx, *, label: str = "post-reboot") -> None:
+async def reboot_bts_then_recovery(ctx, *, label: str = "post-reboot", v6: bool = False) -> None:
     """Cold reboot BTS, wait for SSH, then full post-event recovery."""
     from utils.ip_test_flows import _close_ssh, _event_ssh_hosts, _wait_ssh_any
 
@@ -438,23 +710,30 @@ async def reboot_bts_then_recovery(ctx, *, label: str = "post-reboot") -> None:
     )
     ctx.ssh = ssh
     ctx.host = effective
-    await run_post_event_testbed_recovery(ctx, label=label)
+    if v6:
+        await run_post_event_testbed_recovery_v6(ctx, label=label, require_cpe=True)
+    else:
+        await run_post_event_testbed_recovery(ctx, label=label)
 
 
-async def run_ip15_post_restore_recovery(ctx) -> None:
+async def run_ip15_post_restore_recovery(ctx, *, v6: bool = False) -> None:
     """
-    IP_15: after sysupgrade restore, run baseline recovery then cold reboot.
+    IP_15/IP_34: after sysupgrade restore, run baseline recovery then cold reboot.
 
     Bench: UCI can show the correct LAN while lab mgmt-VLAN ping to BTS fails until reboot.
     """
-    await ensure_bts_testbed_baseline(ctx)
+    cid = ctx.case.case_id if getattr(ctx, "case", None) else ("IP_34" if v6 else "IP_15")
+    if v6:
+        await run_post_event_testbed_recovery_v6(ctx, label=f"{cid}-baseline", require_cpe=True)
+    else:
+        await ensure_bts_testbed_baseline(ctx)
     if not ctx.cfg.get("ip15_reboot_after_restore", True):
         return
     ctx.notes.append(
-        "IP_15: cold reboot after restore (mgmt-VLAN ping to BTS failed until reboot on bench)"
+        f"{cid}: cold reboot after restore (mgmt-VLAN ping to BTS failed until reboot on bench)"
     )
-    print("[IP_15] cold reboot after restore — required for lab ping to BTS LAN")
-    await reboot_bts_then_recovery(ctx, label="IP_15-post-reboot")
+    print(f"[{cid}] cold reboot after restore — required for lab ping to BTS LAN")
+    await reboot_bts_then_recovery(ctx, label=f"{cid}-post-reboot", v6=v6)
 
 
 async def ensure_non_default_bts_lan_ipv4(ctx) -> tuple[str, dict[str, str]]:
