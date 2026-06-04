@@ -176,38 +176,80 @@ async def apply_link_credentials_via_secondary_pc(
     radio_idx: int = 1,
 ) -> bool:
     """Apply wireless UCI on CPE via CPE-side lab PC → factory IPv4 (recovery path)."""
-    import shlex
+    inner = " && ".join(shlex.quote(c) for c in _uci_set_commands(creds, radio_idx))
+    return await _run_on_cpe_via_secondary_ssh(
+        sec_cfg,
+        {"dut": {"password": password}},
+        inner,
+        password=password,
+        cpe_host=str(sec_cfg.get("cpe_factory_ipv4", "192.168.2.1")).strip(),
+        timeout_ops=90,
+        log_ok="CPE credentials",
+    )
 
+
+def _cpe_ssh_credential_attempts(profile: dict[str, Any]) -> list[tuple[str, str]]:
+    """(user, password) pairs for nested SSH from the secondary lab PC to the CPE."""
+    dut = profile.get("dut", {}) or {}
+    fl = profile.get("factory_login", {}) or {}
+    attempts: list[tuple[str, str]] = [
+        ("root", str(dut.get("password", ""))),
+        ("root", str(fl.get("password", ""))),
+        (str(fl.get("username", "installer")), str(fl.get("password", ""))),
+    ]
+    return [(u, p) for u, p in attempts if p]
+
+
+async def _run_on_cpe_via_secondary_ssh(
+    sec_cfg: dict[str, Any],
+    profile: dict[str, Any],
+    inner: str,
+    *,
+    password: str = "",
+    cpe_host: str | None = None,
+    timeout_ops: int = 120,
+    log_ok: str,
+) -> bool:
+    """Run a shell command on the CPE via secondary PC, using sshpass when needed."""
     from scrapli.driver.generic import AsyncGenericDriver
     from utils.lab_pc_net import _parse_ssh_target
 
     ssh_target = str(sec_cfg.get("ssh", "")).strip()
     if not ssh_target:
         return False
-    cpe_factory = str(sec_cfg.get("cpe_factory_ipv4", "192.168.2.1")).strip()
-    host, user = _parse_ssh_target(ssh_target)
-    pc_pass = str(sec_cfg.get("password") or password)
-    inner = " && ".join(shlex.quote(c) for c in _uci_set_commands(creds, radio_idx))
-    remote = (
-        f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 "
-        f"root@{cpe_factory} {inner}"
-    )
+
+    cpe_target = cpe_host or str(sec_cfg.get("cpe_factory_ipv4", "")).strip()
+    if not cpe_target:
+        cpe_target = cpe_ssh_access(profile)["host"]
+    pc_host, pc_user = _parse_ssh_target(ssh_target)
+    pc_pass = str(sec_cfg.get("password") or password or profile.get("dut", {}).get("password", ""))
+
     pc = AsyncGenericDriver(
-        host=host,
-        auth_username=user,
+        host=pc_host,
+        auth_username=pc_user,
         auth_password=pc_pass,
         auth_strict_key=False,
         transport="asyncssh",
     )
     await pc.open()
     try:
-        result = await pc.send_command(remote, timeout_ops=90)
-        out = str(result.result or "")
-        if "error" in out.lower() and "entry not found" not in out.lower():
-            print(f"[link] secondary→CPE credentials: {out[:300]}")
-            return False
-        print(f"[link] CPE credentials via {user}@{host} → {cpe_factory}")
-        return True
+        for cpe_user, cpe_pass in _cpe_ssh_credential_attempts(profile):
+            remote = (
+                f"sshpass -p {shlex.quote(cpe_pass)} ssh -o StrictHostKeyChecking=no "
+                f"-o ConnectTimeout=20 {shlex.quote(cpe_user)}@{cpe_target} {inner}"
+            )
+            try:
+                result = await pc.send_command(remote, timeout_ops=timeout_ops)
+            except Exception as exc:
+                print(f"[link] {log_ok} {cpe_user}@{cpe_target}: {exc}")
+                continue
+            out = str(result.result or "")
+            if "error" in out.lower() and "entry not found" not in out.lower():
+                print(f"[link] {log_ok} ({cpe_user}): {out[:200]}")
+                continue
+            print(f"[link] {log_ok} via {pc_user}@{pc_host} → {cpe_user}@{cpe_target}")
+            return True
+        return False
     finally:
         await pc.close()
 
@@ -267,19 +309,8 @@ async def _apply_cpe_credentials_via_secondary_ssh(
     sec_cfg: dict[str, Any] | None = None,
 ) -> bool:
     """Apply CPE SSID/key (+ tx power default) via secondary PC SSH hop."""
-    import shlex
-
     tb = profile.get("testbed", {}) or {}
     sec = sec_cfg if sec_cfg is not None else (tb.get("secondary_pc", {}) or {})
-    ssh_target = str(sec.get("ssh", "")).strip()
-    if not ssh_target:
-        return False
-
-    cpe_host = cpe_ssh_access(profile)["host"]
-    from utils.lab_pc_net import _parse_ssh_target
-
-    host, user = _parse_ssh_target(ssh_target)
-    pc_pass = str(sec.get("password") or profile.get("dut", {}).get("password", ""))
     link = link_config(profile)
     radio_idx = int(link.get("cpe_radio_idx", link.get("radio_idx", 1)))
     tx_power = _tx_power_default(profile)
@@ -291,47 +322,14 @@ async def _apply_cpe_credentials_via_secondary_ssh(
         "ucidyn apply",
     ]
     inner = " && ".join(shlex.quote(c) for c in dyn_cmds)
-
-    dut = profile.get("dut", {}) or {}
-    fl = profile.get("factory_login", {}) or {}
-    cpe_users = [
-        ("root", str(dut.get("password", ""))),
-        ("root", str(fl.get("password", ""))),
-        (str(fl.get("username", "installer")), str(fl.get("password", ""))),
-    ]
-
-    from scrapli.driver.generic import AsyncGenericDriver
-
-    pc = AsyncGenericDriver(
-        host=host,
-        auth_username=user,
-        auth_password=pc_pass,
-        auth_strict_key=False,
-        transport="asyncssh",
+    return await _run_on_cpe_via_secondary_ssh(
+        sec,
+        profile,
+        inner,
+        cpe_host=cpe_ssh_access(profile)["host"],
+        timeout_ops=180,
+        log_ok="CPE SSID/key",
     )
-    await pc.open()
-    try:
-        for cpe_user, cpe_pass in cpe_users:
-            if not cpe_pass:
-                continue
-            remote = (
-                f"sshpass -p {shlex.quote(cpe_pass)} ssh -o StrictHostKeyChecking=no "
-                f"-o ConnectTimeout=20 {shlex.quote(cpe_user)}@{cpe_host} {inner}"
-            )
-            try:
-                result = await pc.send_command(remote, timeout_ops=180)
-            except Exception as exc:
-                print(f"[link] secondary SSH {cpe_user}@{cpe_host}: {exc}")
-                continue
-            out = str(result.result or "")
-            if "error" in out.lower() and "entry not found" not in out.lower():
-                print(f"[link] secondary SSH→CPE ({cpe_user}): {out[:200]}")
-                continue
-            print(f"[link] CPE SSID/key via {user}@{host} → {cpe_user}@{cpe_host}")
-            return True
-        return False
-    finally:
-        await pc.close()
 
 
 async def ensure_p2mp_link_credentials(
@@ -377,19 +375,11 @@ async def apply_cpe_pre_link_via_secondary_pc(
 
     Applies transparent VLAN + matching AIRTEL SSID/password in one hop.
     """
-    import shlex
-
-    from scrapli.driver.generic import AsyncGenericDriver
-    from utils.lab_pc_net import _parse_ssh_target
     from utils.vlan_uci import build_cpe_mgmtvlan_only_commands, build_cpe_untagged_commands
 
-    ssh_target = str(sec_cfg.get("ssh", "")).strip()
-    if not ssh_target:
+    if not str(sec_cfg.get("ssh", "")).strip():
         return False
 
-    cpe_factory = str(sec_cfg.get("cpe_factory_ipv4", "192.168.2.1")).strip()
-    host, user = _parse_ssh_target(ssh_target)
-    pc_pass = str(sec_cfg.get("password") or password)
     tb = profile_tb if profile_tb is not None else (profile.get("testbed", {}) or {})
     link = link_config(profile)
     radio_idx = int(link.get("cpe_radio_idx", link.get("radio_idx", 1)))
@@ -401,29 +391,14 @@ async def apply_cpe_pre_link_via_secondary_pc(
         uci_cmds.extend(build_cpe_untagged_commands(tb))
     uci_cmds.extend(_uci_set_commands(creds, radio_idx))
     inner = " && ".join(shlex.quote(c) for c in uci_cmds)
-    remote = (
-        f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 "
-        f"root@{cpe_factory} {inner}"
+    cpe_factory = str(sec_cfg.get("cpe_factory_ipv4", "192.168.2.1")).strip()
+    ok = await _run_on_cpe_via_secondary_ssh(
+        sec_cfg,
+        profile,
+        inner,
+        password=password,
+        cpe_host=cpe_factory,
+        timeout_ops=120,
+        log_ok=f"CPE pre-link ({cpe_mode} + SSID={creds.ssid})",
     )
-
-    pc = AsyncGenericDriver(
-        host=host,
-        auth_username=user,
-        auth_password=pc_pass,
-        auth_strict_key=False,
-        transport="asyncssh",
-    )
-    await pc.open()
-    try:
-        result = await pc.send_command(remote, timeout_ops=120)
-        out = str(result.result or "")
-        if "error" in out.lower() and "entry not found" not in out.lower():
-            print(f"[link] CPE pre-link setup: {out[:400]}")
-            return False
-        print(
-            f"[link] CPE pre-link OK via {user}@{host} → {cpe_factory} "
-            f"(transparent + SSID={creds.ssid})"
-        )
-        return True
-    finally:
-        await pc.close()
+    return ok

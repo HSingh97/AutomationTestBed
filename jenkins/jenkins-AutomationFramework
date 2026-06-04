@@ -61,7 +61,7 @@ pipeline {
         booleanParam(
             name: 'SKIP_TESTBED_BOOTSTRAP',
             defaultValue: false,
-            description: 'Skip session bootstrap (IP: use true when bench RF link is already up)'
+            description: 'Skip session bootstrap (use when BTS/CPE mgmt link and RF are already up)'
         )
         booleanParam(
             name: 'NO_STOP_ON_FIRST_FAIL',
@@ -91,15 +91,15 @@ pipeline {
                     if (markers.contains('GUI')) {
                         paths << 'tests/GUI/'
                     }
+                    if (params.SKIP_TESTBED_BOOTSTRAP) {
+                        extraFlags << '--skip-testbed-bootstrap'
+                    }
                     if (markers.contains('IP')) {
                         paths << 'tests/IP/'
                         mParts << 'IP'
                         extraFlags << '--allow-ip-suite'
                         if (params.ENABLE_IP_DESTRUCTIVE) {
                             extraFlags << '--allow-ip-destructive'
-                        }
-                        if (params.SKIP_TESTBED_BOOTSTRAP) {
-                            extraFlags << '--skip-testbed-bootstrap'
                         }
                         if (params.NO_STOP_ON_FIRST_FAIL) {
                             extraFlags << '--no-ip-stop-on-first-fail'

@@ -493,6 +493,7 @@ async def bootstrap_testbed(
             )
 
         # --- CPE: always set SSID/key via root on fallback (default 10.0.0.1) ---
+        cpe_direct = False
         if link_auto_enabled(active) and link_creds is not None:
             cpe_direct = await ensure_cpe_link_credentials_always(active, link_creds, force=True)
             state.notes.append(f"CPE SSID/key direct (10.0.0.1) ok={cpe_direct}")
@@ -502,15 +503,22 @@ async def bootstrap_testbed(
         sec = tb.get("secondary_pc", {}) or {}
         if tb.get("configure_vlan_modes", True) and sec.get("enabled", True) and sec.get("ssh"):
             if link_auto_enabled(active) and link_creds is not None:
-                ok = await apply_cpe_pre_link_via_secondary_pc(
-                    sec,
-                    link_creds,
-                    active,
-                    profile_tb=tb,
-                    password=password,
-                    cpe_mode=cpe_mode,
-                )
-                state.notes.append(f"CPE pre-link (secondary PC) ok={ok}")
+                if cpe_direct:
+                    state.notes.append("CPE pre-link skipped (SSID/key already applied via secondary PC)")
+                else:
+                    try:
+                        ok = await apply_cpe_pre_link_via_secondary_pc(
+                            sec,
+                            link_creds,
+                            active,
+                            profile_tb=tb,
+                            password=password,
+                            cpe_mode=cpe_mode,
+                        )
+                        state.notes.append(f"CPE pre-link (secondary PC) ok={ok}")
+                    except Exception as sec_exc:
+                        state.notes.append(f"CPE pre-link failed: {sec_exc}")
+                        print(f"[testbed] CPE pre-link warning: {sec_exc}")
             else:
                 try:
                     ok = await _configure_cpe_vlan_via_secondary_pc(
