@@ -3594,11 +3594,13 @@ class CpeSecondaryHopDriver:
         sec_conn: AsyncGenericDriver,
         *,
         cpe_factory: str,
+        cpe_user: str,
         cpe_password: str,
         label: str,
     ) -> None:
         self._sec = sec_conn
         self._factory = normalize_ip(cpe_factory)
+        self._user = (cpe_user or "root").strip() or "root"
         self._password = cpe_password
         self._label = label
 
@@ -3612,9 +3614,35 @@ class CpeSecondaryHopDriver:
         hop = (
             f"sshpass -p {shlex.quote(self._password)} "
             "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 "
-            f"root@{self._factory} {shlex.quote(command)}"
+            f"{shlex.quote(self._user)}@{self._factory} {shlex.quote(command)}"
         )
         return await self._sec.send_command(hop, timeout_ops=timeout_ops)
+
+
+async def _probe_cpe_ssh_via_secondary(
+    sec_conn: AsyncGenericDriver,
+    profile: dict[str, Any],
+    cpe_factory: str,
+) -> tuple[str, str]:
+    """Return (user, password) for nested SSH secondary PC → CPE factory."""
+    from utils.link_formation import _cpe_ssh_credential_attempts
+
+    factory = normalize_ip(cpe_factory)
+    last_out = ""
+    for cpe_user, cpe_pass in _cpe_ssh_credential_attempts(profile):
+        probe = (
+            f"sshpass -p {shlex.quote(cpe_pass)} "
+            "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 "
+            f"{shlex.quote(cpe_user)}@{factory} 'echo cpe_ok'"
+        )
+        out = await _ssh_run_raw(sec_conn, probe, timeout=25)
+        if "cpe_ok" in out:
+            return cpe_user, cpe_pass
+        last_out = out
+    hint = ""
+    if "sshpass" in last_out.lower() and "not found" in last_out.lower():
+        hint = " (install sshpass on secondary PC)"
+    raise ConnectionError(f"secondary→CPE SSH probe failed: {last_out[:220]}{hint}")
 
 
 async def open_cpe_ssh_via_secondary_pc(
@@ -3645,20 +3673,18 @@ async def open_cpe_ssh_via_secondary_pc(
     )
     await sec_conn.open()
     factory = normalize_ip(cpe_factory)
-    cpe_pass = str(password).strip()
-    probe = (
-        f"sshpass -p {shlex.quote(cpe_pass)} "
-        "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 "
-        f"root@{factory} 'echo cpe_ok'"
-    )
-    out = await _ssh_run_raw(sec_conn, probe, timeout=25)
-    if "cpe_ok" not in out:
+    try:
+        cpe_user, cpe_pass = await _probe_cpe_ssh_via_secondary(
+            sec_conn, profile, factory
+        )
+    except ConnectionError:
         await _close_ssh(sec_conn)
-        raise ConnectionError(f"secondary→CPE SSH probe failed: {out[:220]}")
-    label = f"secondary→CPE({factory})"
+        raise
+    label = f"secondary→CPE({cpe_user}@{factory})"
     driver = CpeSecondaryHopDriver(
         sec_conn,
         cpe_factory=factory,
+        cpe_user=cpe_user,
         cpe_password=cpe_pass,
         label=label,
     )
@@ -4178,14 +4204,16 @@ async def execute_ip_case_with_recovery(ctx: IpTestContext) -> None:
 
 
 def _stack_allowed(ctx: IpTestContext, stack: Stack) -> bool:
-    if ctx.case.stack == "any" or ctx.case.stack == stack:
+    """True when this case should run IPv4 or IPv6 steps (not merely profile ip_mode)."""
+    case_stack = ctx.case.stack
+    if case_stack == "dual":
         return True
-    if ctx.case.stack == "dual":
+    if case_stack == stack:
         return True
-    if ctx.stack_mode == "ipv6" and stack == "v6":
-        return True
-    if ctx.stack_mode != "ipv6" and stack == "v4":
-        return True
+    if case_stack == "any":
+        if stack == "v6":
+            return ctx.stack_mode == "ipv6"
+        return ctx.stack_mode != "ipv6"
     return False
 
 

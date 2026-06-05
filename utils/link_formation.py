@@ -192,12 +192,29 @@ def _cpe_ssh_credential_attempts(profile: dict[str, Any]) -> list[tuple[str, str
     """(user, password) pairs for nested SSH from the secondary lab PC to the CPE."""
     dut = profile.get("dut", {}) or {}
     fl = profile.get("factory_login", {}) or {}
-    attempts: list[tuple[str, str]] = [
+    tb = profile.get("testbed", {}) or {}
+    cpe_acc = tb.get("cpe_access", {}) or {}
+    link = link_config(profile)
+    seen: set[tuple[str, str]] = set()
+    ordered: list[tuple[str, str]] = []
+    for user, password in (
         ("root", str(dut.get("password", ""))),
         ("root", str(fl.get("password", ""))),
         (str(fl.get("username", "installer")), str(fl.get("password", ""))),
-    ]
-    return [(u, p) for u, p in attempts if p]
+        (
+            str(cpe_acc.get("username", link.get("cpe_ssh_user", "root"))),
+            str(cpe_acc.get("password") or link.get("cpe_ssh_password", "")),
+        ),
+        (str(link.get("cpe_ssh_user", "root")), str(link.get("cpe_ssh_password", ""))),
+    ):
+        if not password:
+            continue
+        key = (user.strip() or "root", password)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(key)
+    return ordered
 
 
 async def _run_on_cpe_via_secondary_ssh(

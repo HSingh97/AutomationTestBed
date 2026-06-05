@@ -13,6 +13,10 @@ dut:
   username: root
   password: Sen@0ubRNwk$
 
+factory_login:
+  username: installer
+  password: senao123
+
 testbed:
   enabled: true
   bootstrap_on_start: true

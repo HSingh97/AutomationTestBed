@@ -67,17 +67,6 @@ def _cli_remote_override(config, profile_name: str) -> str | None:
     return config.getoption("--remote-ip") or None
 
 # =====================================================================
-# EVENT LOOP MANAGER (Fixes the "Attached to different loop" crash)
-# =====================================================================
-@pytest.fixture(scope="session")
-def event_loop():
-    """Overrides pytest default function-scoped event loop"""
-    policy = asyncio.get_event_loop_policy()
-    loop = policy.new_event_loop()
-    yield loop
-    loop.close()
-
-# =====================================================================
 # 1. COMMAND LINE ARGUMENTS
 # =====================================================================
 def pytest_addoption(parser):
@@ -225,7 +214,7 @@ def pytest_addoption(parser):
 # 2. PARAMETER FIXTURES
 # =====================================================================
 @pytest.fixture(scope="session")
-def testbed_ready(request, profile_bundle, device_creds, event_loop):
+async def testbed_ready(request, profile_bundle, device_creds):
     """
     Configure lab for mgmt VLAN-only access:
     BTS QinQ, CPE transparent, mgmt addresses, CPE IP from BTS DHCP (SSH only).
@@ -239,26 +228,22 @@ def testbed_ready(request, profile_bundle, device_creds, event_loop):
 
         print("\n[testbed] Factory provision (post-reset VLAN/NMS/AIRTEL/link)...")
         cli_fb = request.config.getoption("--fallback-ip") or None
-        event_loop.run_until_complete(
-            provision_factory_reset(
-                profile_bundle,
-                device_creds,
-                gui_page=None,
-                fallback_ip=cli_fb,
-            )
+        await provision_factory_reset(
+            profile_bundle,
+            device_creds,
+            gui_page=None,
+            fallback_ip=cli_fb,
         )
 
     from utils.testbed_bootstrap import bootstrap_testbed
 
     print("\n[testbed] Running session bootstrap (mgmt VLAN, VLAN modes, CPE discovery)...")
     cli_fb = request.config.getoption("--fallback-ip") or None
-    event_loop.run_until_complete(
-        bootstrap_testbed(
-            profile_bundle,
-            device_creds,
-            gui_page=None,
-            cli_fallback_ip=cli_fb,
-        )
+    await bootstrap_testbed(
+        profile_bundle,
+        device_creds,
+        gui_page=None,
+        cli_fallback_ip=cli_fb,
     )
     return profile_bundle
 
@@ -678,8 +663,28 @@ async def gui_page(request, gui_browser, bsu_ip, device_creds, recovery_manager,
 
 
 def _quiet_ssh_library_logs() -> None:
-    for name in ("scrapli", "scrapli.transport", "scrapli.channel", "asyncssh"):
+    """Keep Jenkins console to pytest prints + IP progress table (not scrapli/asyncssh INFO)."""
+    try:
+        import asyncssh.logging as ash_log
+
+        ash_log.set_log_level("WARNING")
+        ash_log.set_sftp_log_level("WARNING")
+    except Exception:
+        pass
+    for name in (
+        "scrapli",
+        "scrapli.driver",
+        "scrapli.channel",
+        "scrapli.transport",
+        "asyncssh",
+        "asyncssh.connection",
+        "asyncssh.stream",
+        "asyncssh.sftp",
+    ):
         logging.getLogger(name).setLevel(logging.WARNING)
+
+
+_quiet_ssh_library_logs()
 
 
 def pytest_collection_finish(session):
