@@ -255,6 +255,10 @@ IP_TEST_DEFAULTS = {
     "configure_static_ip": False,
     "ip01_apply_wait_s": 40,
     "ip01_apply_ping_interval_s": 3,
+    # When false, leave IP_01 applied LAN IP for subsequent suite cases (restore at suite end only).
+    "ip01_restore_baseline_after_case": False,
+    # Skip heavy preflight when the previous IP case in the session passed.
+    "ip_skip_preflight_when_chain_ok": True,
     # Max ceiling for CPE reachability polls; exits as soon as ping succeeds (every ip03_remote_retry_interval_s).
     "ip03_remote_wait_s": 90,
     "ip03_remote_wait_max_s": 90,

@@ -112,6 +112,8 @@ ip_tests:
   mtu_restore_value: 1500
   network_reload_wait_s: 30
   gui_settle_seconds: 12
+  ip01_restore_baseline_after_case: false
+  ip_skip_preflight_when_chain_ok: true
   enable_ip_post_case_recovery: true
   enable_link_recovery: true
   link_recovery_before_precheck: true

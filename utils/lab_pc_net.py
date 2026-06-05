@@ -39,6 +39,18 @@ def _run_local(command: str) -> tuple[int, str]:
     return proc.returncode, out
 
 
+def _lab_pc_log_prefix(pc_cfg: dict[str, Any] | None) -> str:
+    """Distinguish automation host vs remote secondary lab PC in console logs."""
+    if pc_cfg is None:
+        return "[lab-pc-local]"
+    ssh_target = str(pc_cfg.get("ssh", "")).strip()
+    if ssh_target:
+        return "[lab-pc-remote]"
+    if pc_cfg.get("local", True):
+        return "[lab-pc-local]"
+    return "[lab-pc-remote]"
+
+
 def _build_pc_link_commands(
     iface: str,
     *,
@@ -494,7 +506,9 @@ async def ensure_secondary_pc_cpe_hop_ready(
                 or "1 received" in out
                 or "1 packets received" in out
             ):
-                print(f"[lab-pc] secondary→CPE ping {cpe_factory} ok on {user}@{host}")
+                print(
+                    f"[lab-pc-remote] secondary→CPE ping {cpe_factory} ok on {user}@{host}"
+                )
                 return
             last = out[:220]
             await asyncio.sleep(max(1, interval_s))
@@ -613,9 +627,9 @@ async def configure_mgmt_interface(
         if rc != 0:
             rc, out = await asyncio.to_thread(_run_local, joined)
         if rc != 0:
-            print(f"[lab-pc] local mgmt VLAN setup failed: {out[:300]}")
+            print(f"[lab-pc-local] local mgmt VLAN setup failed: {out[:300]}")
             return False
-        print(f"[lab-pc] local {vlan_if} -> {cidr}")
+        print(f"[lab-pc-local] {vlan_if} -> {cidr}")
         return True
 
     host, user = _parse_ssh_target(ssh_target)
@@ -624,8 +638,8 @@ async def configure_mgmt_interface(
         result = await conn.send_command(joined, timeout_ops=60)
         out = str(result.result or "")
         if "RTNETLINK" in out and "File exists" not in out and "Error" in out:
-            print(f"[lab-pc] remote {host} setup: {out[:300]}")
-        print(f"[lab-pc] {user}@{host} {vlan_if} -> {cidr}")
+            print(f"[lab-pc-remote] {host} setup: {out[:300]}")
+        print(f"[lab-pc-remote] {user}@{host} {vlan_if} -> {cidr}")
         return True
     finally:
         await conn.close()

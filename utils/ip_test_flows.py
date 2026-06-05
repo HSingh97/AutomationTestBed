@@ -602,11 +602,18 @@ async def _iface_name(ssh: AsyncGenericDriver) -> str:
     return m.group(1) if m else "eth0"
 
 
-async def _check_web_ui(host: str, password: str, *, timeout: float = 15.0) -> bool:
+async def _check_web_ui(
+    host: str,
+    password: str,
+    *,
+    username: str = "admin",
+    timeout: float = 15.0,
+) -> bool:
     url = f"http://{format_http_host(host)}/"
+    user = (username or "admin").strip() or "admin"
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            resp = await client.get(url, auth=("admin", password))
+            resp = await client.get(url, auth=(user, password))
             return resp.status_code < 500
     except Exception:
         return False
@@ -617,10 +624,11 @@ async def _check_web_ui_with_fallback(
     fallbacks: Iterable[str],
     password: str,
     *,
+    username: str = "admin",
     notes: list[str] | None = None,
 ) -> bool:
     for host in _all_mgmt_hosts(primary, fallbacks):
-        if await _check_web_ui(host, password):
+        if await _check_web_ui(host, password, username=username):
             if notes is not None and host != normalize_ip(primary):
                 notes.append(f"Web UI reachable via fallback {host}")
             return True
@@ -2766,6 +2774,31 @@ async def _ipv4_test_apply_values_for_device(
     )
 
 
+async def _verified_bts_lan_ipv4(ctx: IpTestContext) -> str:
+    """Ping-verified BTS LAN IPv4 from preflight, or discover via ensure_bts_ipv4_ready."""
+    cfg = ctx.cfg
+    cached = normalize_ip(str(cfg.get("_preflight_bts_lan_ipv4", "")).split("/")[0])
+    if cached:
+        return cached
+    host = await ensure_bts_ipv4_ready(ctx)
+    cfg["_preflight_bts_lan_ipv4"] = host
+    return host
+
+
+async def _verified_cpe_lan_ipv4(ctx: IpTestContext) -> str:
+    """Ping-verified CPE LAN IPv4 from preflight, or discover via ensure_cpe_ipv4_ready."""
+    cfg = ctx.cfg
+    cached = normalize_ip(
+        str(ctx.peer_host or cfg.get("_preflight_cpe_ipv4", "")).split("/")[0]
+    )
+    if cached:
+        return cached
+    host = await ensure_cpe_ipv4_ready(ctx)
+    ctx.peer_host = host
+    cfg["_preflight_cpe_ipv4"] = host
+    return host
+
+
 async def _resolve_bts_lan_ipv4(ctx: IpTestContext) -> str:
     """Active BTS LAN IPv4 (e.g. 192.168.2.240 after IP_01), not factory 10.0.0.1."""
     cfg = ctx.cfg
@@ -3347,39 +3380,38 @@ async def ensure_bts_ipv4_ready(ctx: IpTestContext) -> str:
     except Exception as exc:
         ctx.notes.append(f"precheck: BTS SSH reconnect skipped: {exc}")
 
-    ssh_host = normalize_ip(str(ctx.host).split("/")[0])
-    if ssh_host and _bts_ping_candidate(ssh_host):
-        try:
-            await _ssh_run(ctx.ssh, "echo precheck", timeout=15)
-            ctx.notes.append(f"precheck BTS IPv4 {ssh_host} ok (SSH session active)")
-            return ssh_host
-        except Exception as exc:
-            ctx.notes.append(f"precheck: SSH on {ssh_host} not usable: {exc}")
+    default_ip = normalize_ip(
+        str(cfg.get("ipv4_default_address", "192.168.2.1")).split("/")[0]
+    )
+
+    def _add_candidate(ip: str) -> None:
+        clean = normalize_ip(str(ip).split("/")[0])
+        if clean and clean not in seen and _bts_ping_candidate(clean):
+            seen.add(clean)
+            candidates.append(clean)
+
+    # Prefer profile test LAN IPs (e.g. 192.168.2.230 after IP_01) before UCI/default guesses.
+    for ip in reversed(_ipv4_test_address_candidates(cfg)):
+        _add_candidate(ip)
 
     try:
         lan_ips = await _read_device_lan_ipv4s(ctx.ssh, cfg)
     except Exception as exc:
         ctx.notes.append(f"precheck: skip UCI LAN read over SSH: {exc}")
         lan_ips = []
+    for ip in sorted(lan_ips):
+        if normalize_ip(ip) != default_ip:
+            _add_candidate(ip)
     for ip in lan_ips:
-        clean = normalize_ip(ip)
-        if clean and clean not in seen and _bts_ping_candidate(clean):
-            seen.add(clean)
-            candidates.append(clean)
-    for ip in reversed(_ipv4_test_address_candidates(cfg)):
-        clean = normalize_ip(ip)
-        if clean and clean not in seen and _bts_ping_candidate(clean):
-            seen.add(clean)
-            candidates.append(clean)
-    for ip in (
-        str(cfg.get("ipv4_address", "")).split("/")[0],
-        str(cfg.get("ipv4_default_address", "192.168.2.1")).split("/")[0],
-        ctx.host,
-    ):
-        clean = normalize_ip(str(ip).split("/")[0])
-        if clean and clean not in seen and not clean.startswith("10.0.0."):
-            seen.add(clean)
-            candidates.append(clean)
+        if normalize_ip(ip) == default_ip:
+            _add_candidate(ip)
+
+    _add_candidate(str(cfg.get("ipv4_address", "")).split("/")[0])
+    ssh_host = normalize_ip(str(ctx.host).split("/")[0])
+    if ssh_host and _bts_ping_candidate(ssh_host):
+        _add_candidate(ssh_host)
+    if default_ip:
+        _add_candidate(default_ip)
 
     max_wait_s, interval_s = _remote_ping_wait_settings(cfg)
     per_candidate_wait = min(int(cfg.get("bts_precheck_ping_wait_s", 20)), max_wait_s)
@@ -4104,23 +4136,31 @@ async def run_ip_post_case_recovery(
     if cid in _SKIP_POST_CASE_RECOVERY:
         return
 
-    from config.ip_test_cases import is_fast_path_ip_case
+    from config.ip_test_cases import IP_LIGHT_POST_CASE_IDS, is_fast_path_ip_case
 
-    if bool(ctx.cfg.get("ip_fast_path_enabled", True)) and is_fast_path_ip_case(cid):
+    light_post = cid in IP_LIGHT_POST_CASE_IDS or (
+        bool(ctx.cfg.get("ip_fast_path_enabled", True)) and is_fast_path_ip_case(cid)
+    )
+    if light_post:
         from utils.ip_case_preflight import preflight_step1_fallback_ssh
 
         try:
             await preflight_step1_fallback_ssh(ctx)
-            ctx.notes.append(f"{cid}: fast-path post-case (SSH check only)")
+            label = "throughput" if cid in IP_LIGHT_POST_CASE_IDS else "fast-path"
+            ctx.notes.append(f"{cid}: {label} post-case (SSH check only)")
         except Exception as exc:
-            ctx.notes.append(f"{cid}: fast-path post-case SSH warn: {exc}")
+            ctx.notes.append(f"{cid}: light post-case SSH warn: {exc}")
         return
 
     ctx.notes.append(f"{cid}: post-case recovery")
     restore_failed = False
 
     try:
-        if cid == "IP_01" and ctx.device_target == "bts":
+        if (
+            cid == "IP_01"
+            and ctx.device_target == "bts"
+            and ctx.cfg.get("ip01_restore_baseline_after_case", False)
+        ):
             await _restore_bts_baseline_ipv4(ctx)
         elif cid == "IP_04" and ctx.device_target == "bts":
             await _restore_ipv4_gateway(ctx, str(snapshot.get("gateway", "")))
@@ -4197,6 +4237,9 @@ async def execute_ip_case_with_recovery(ctx: IpTestContext) -> None:
         case_failed = True
         raise
     finally:
+        chain = ctx.cfg.get("_ip_suite_chain")
+        if isinstance(chain, dict):
+            chain["ok"] = not case_failed
         try:
             await run_ip_post_case_recovery(ctx, snapshot, case_failed=case_failed)
         except Exception as exc:
@@ -4314,8 +4357,8 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
     if cid == "IP_02":
         if not _stack_allowed(ctx, "v4"):
             pytest.skip("IPv4 not in scope")
-        local_ip = await _resolve_bts_lan_ipv4(ctx)
-        ctx.notes.append(f"IP_02 local target {local_ip}")
+        local_ip = await _verified_bts_lan_ipv4(ctx)
+        ctx.notes.append(f"IP_02 local target {local_ip} (preflight ping-verified)")
         vlan_if = await _ensure_lab_mgmt_vlan_for_ping(ctx)
         stats = await _ping_from_lab_pc(
             vlan_if, local_ip, count=int(cfg.get("ping_count_short", 4))
@@ -4325,35 +4368,30 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
             f"(0% loss required): {stats.raw[:300]}"
         )
         ctx.notes.append(f"local ping {local_ip} via {vlan_if}: loss={stats.loss_pct}%")
-        assert await _check_web_ui(local_ip, password), f"Web UI not reachable at {local_ip}"
+        creds = cfg.get("_device_creds") or {"user": "root", "pass": password}
+        gui_user = str(creds.get("user") or "root")
+        assert await _check_web_ui_with_fallback(
+            local_ip,
+            (ctx.host, cfg.get("_cli_fallback_ip"), "10.0.0.1"),
+            password,
+            username=gui_user,
+            notes=ctx.notes,
+        ), f"Web UI not reachable at {local_ip} (tried fallbacks)"
         return
 
     if cid == "IP_03":
         if not _stack_allowed(ctx, "v4"):
             pytest.skip("IPv4 not in scope")
-        ssh = ctx.ssh
         await _reconnect_device_ssh(ctx, timeout_s=60)
-        ssh = ctx.ssh
         vlan_if = await _ensure_lab_mgmt_vlan_for_ping(ctx)
-        verify_v4 = (
-            str(cfg.get("_preflight_bts_lan_ipv4", "")).split("/")[0]
-            or await _resolve_bts_lan_ipv4(ctx)
-        )
-        verify_v4 = normalize_ip(verify_v4)
-        ctx.notes.append(f"IP_03: BTS LAN {verify_v4}, ping via {vlan_if}")
+        verify_v4 = await _verified_bts_lan_ipv4(ctx)
+        ctx.notes.append(f"IP_03: BTS LAN {verify_v4} (preflight ping-verified), via {vlan_if}")
         local_stats = await _ping_from_lab_pc(
             vlan_if, verify_v4, count=int(cfg.get("ping_count_short", 4))
         )
         assert local_stats.ok, f"local ping {verify_v4} via {vlan_if}: {local_stats.raw[:200]}"
-        remote = normalize_ip(
-            str(
-                ctx.peer_host
-                or cfg.get("_preflight_cpe_ipv4", "")
-                or cfg.get("remote_ping_host", "")
-            ).split("/")[0]
-        )
-        if not remote:
-            pytest.fail("IP_03: no CPE remote IPv4 after preflight (link/secondary PC)")
+        remote = await _verified_cpe_lan_ipv4(ctx)
+        ctx.notes.append(f"IP_03: CPE remote {remote} (preflight ping-verified)")
         max_wait_s, interval_s = _remote_ping_wait_settings(cfg)
         remote_stats = await _ping_from_lab_pc(
             vlan_if, remote, count=int(cfg.get("ping_count_short", 4))
@@ -4382,8 +4420,10 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
         if not _stack_allowed(ctx, "v4"):
             pytest.skip("IPv4 not in scope")
         gw = str(cfg.get("ip04_gateway") or cfg.get("ipv4_gateway", "")).strip()
-        device_ip = await _resolve_bts_lan_ipv4(ctx)
-        ctx.notes.append(f"IP_04 gateway {gw}, backend ping to BTS {device_ip}")
+        device_ip = await _verified_bts_lan_ipv4(ctx)
+        ctx.notes.append(
+            f"IP_04 gateway {gw}, backend ping to BTS {device_ip} (preflight ping-verified)"
+        )
         await _apply_ipv4_gateway(ctx, gw)
         vlan_if = await _ensure_lab_mgmt_vlan_for_ping(ctx)
         stats = await _ping_from_lab_pc(

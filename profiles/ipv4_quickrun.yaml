@@ -102,6 +102,8 @@ ip_tests:
   ipv4_gateway: "192.168.2.254"
   ip01_apply_wait_s: 40
   ip01_apply_ping_interval_s: 3
+  ip01_restore_baseline_after_case: false
+  ip_skip_preflight_when_chain_ok: true
   # CPE ping poll: probe every 5s, stop on first success (90s max ceiling only)
   ip03_remote_wait_s: 90
   ip03_remote_wait_max_s: 90

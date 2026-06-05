@@ -466,6 +466,10 @@ async def run_ip_case_preflight_v6(
         return
 
     cid = ctx.case.case_id
+    if _preflight_skipped_chain_ok(ctx):
+        _log(ctx, f"=== {cid} IPv6 preflight skipped (previous case passed) ===")
+        return
+
     need_cpe = case_requires_cpe(cid) if require_cpe is None else require_cpe
     skip_ping = skip_device_v6_ping or cid == "IP_18"
 
@@ -579,6 +583,19 @@ async def run_post_event_testbed_recovery_v6(
     return link_ok
 
 
+def _preflight_skipped_chain_ok(ctx) -> bool:
+    """Skip heavy preflight when the previous IP case passed (config mismatch only after failure)."""
+    cfg = ctx.cfg
+    if not cfg.get("ip_skip_preflight_when_chain_ok", True):
+        return False
+    chain = cfg.get("_ip_suite_chain") or {}
+    if not chain.get("ok", False):
+        return False
+    if "destructive" in ctx.case.requires:
+        return False
+    return True
+
+
 async def run_ip_case_preflight(
     ctx,
     *,
@@ -598,16 +615,24 @@ async def run_ip_case_preflight(
         return
 
     cid = ctx.case.case_id
+    if _preflight_skipped_chain_ok(ctx):
+        _log(ctx, f"=== {cid} preflight skipped (previous case passed) ===")
+        return
     need_cpe = case_requires_cpe(cid) if require_cpe is None else require_cpe
     skip_bts = skip_bts_precheck or cid in ("IP_01", "IP_15", "IP_34")
 
     if minimal:
+        from config.ip_test_cases import case_requires_bts_lan_ping
+
         _log(ctx, f"=== {cid} preflight (fast) ===")
         await preflight_step1_fallback_ssh(ctx)
         await preflight_step3_lab_mgmt_interface(ctx)
+        skip_bts = skip_bts_precheck or cid in ("IP_01", "IP_15", "IP_34")
+        if case_requires_bts_lan_ping(cid):
+            skip_bts = False
         await preflight_step4_reachability(
             ctx,
-            skip_bts_precheck=True,
+            skip_bts_precheck=skip_bts,
             require_cpe=need_cpe,
             strict=False,
         )

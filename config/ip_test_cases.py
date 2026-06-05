@@ -169,6 +169,28 @@ def is_fast_path_ip_case(case_id: str) -> bool:
     return case_id in IP_FAST_PATH_CASE_IDS
 
 
+# Lab PC mgmt-VLAN ping to BTS LAN must be verified before the case body (not just SSH/UCI guess).
+IP_BTS_LAN_PING_CASE_IDS: frozenset[str] = frozenset(
+    {
+        "IP_02",
+        "IP_03",
+        "IP_04",
+        "IP_16",
+        "IP_19",
+        "IP_20",
+        "IP_21",
+    }
+)
+
+
+def case_requires_bts_lan_ping(case_id: str) -> bool:
+    return case_id in IP_BTS_LAN_PING_CASE_IDS
+
+
+# Throughput / traffic-only — no full link-formation post-case recovery.
+IP_LIGHT_POST_CASE_IDS: frozenset[str] = frozenset({"IP_05", "IP_22"})
+
+
 def device_targets(case: IpTestCase) -> tuple[str, ...]:
     if case.devices == "bts":
         return ("bts",)

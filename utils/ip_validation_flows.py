@@ -233,6 +233,7 @@ async def run_ip_validation(
     cfg["_strict_ipv6"] = bool(dut.get("strict_ipv6") or tb.get("strict_ipv6"))
     cfg["ssh_allow_ipv4_fallback"] = True
     cfg["_password"] = device_creds["pass"]
+    cfg["_device_creds"] = device_creds
     rec = tb.get("recovery", {}) or {}
     if cfg["_strict_ipv6"]:
         cfg["_cli_fallback_ip"] = normalize_ip(
@@ -248,6 +249,9 @@ async def run_ip_validation(
     cfg["_device_target"] = target
     cfg["_profile"] = profile_bundle.active
     cfg["_profile_bundle"] = profile_bundle
+    if not hasattr(request.config, "_ip_suite_chain"):
+        request.config._ip_suite_chain = {"ok": True}
+    cfg["_ip_suite_chain"] = request.config._ip_suite_chain
 
     ssh, host, fallbacks = await open_ip_ssh_session(
         case_id=case_id,
