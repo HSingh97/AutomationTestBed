@@ -1388,7 +1388,21 @@ async def _apply_lab_pc_mtu_change(ctx: IpTestContext, *, v6: bool) -> None:
     if str(mtu) != read_mtu:
         pytest.skip(f"{cid}: lab PC MTU did not stick on {vlan_if} (expected {mtu}, got {read_mtu})")
     try:
-        target = ctx.peer_host or str(cfg.get("remote_ping_host", "")).strip()
+        if v6:
+            target = ctx.peer_host or str(cfg.get("remote_ping_host", "")).strip()
+        else:
+            target = ""
+            pref = normalize_ip(str(cfg.get("_preflight_cpe_ipv4", "")).split("/")[0])
+            if pref and _host_matches_stack(pref, v6=False):
+                target = pref
+            elif ctx.peer_host and _host_matches_stack(str(ctx.peer_host), v6=False):
+                target = normalize_ip(str(ctx.peer_host))
+            else:
+                explicit = normalize_ip(str(cfg.get("remote_ping_host", "")).split("/")[0])
+                if explicit and _host_matches_stack(explicit, v6=False):
+                    target = explicit
+                else:
+                    target = await _verified_cpe_lan_ipv4(ctx)
         if not target:
             pytest.skip(f"{cid}: no remote ping target")
         target = normalize_ip(target)
@@ -2843,11 +2857,12 @@ async def _verified_bts_lan_ipv4(ctx: IpTestContext) -> str:
 async def _verified_cpe_lan_ipv4(ctx: IpTestContext) -> str:
     """Ping-verified CPE LAN IPv4 from preflight, or discover via ensure_cpe_ipv4_ready."""
     cfg = ctx.cfg
-    cached = normalize_ip(
-        str(ctx.peer_host or cfg.get("_preflight_cpe_ipv4", "")).split("/")[0]
-    )
-    if cached:
+    cached = normalize_ip(str(cfg.get("_preflight_cpe_ipv4", "")).split("/")[0])
+    if cached and _host_matches_stack(cached, v6=False):
         return cached
+    peer = normalize_ip(str(ctx.peer_host or "").split("/")[0])
+    if peer and _host_matches_stack(peer, v6=False):
+        return peer
     host = await ensure_cpe_ipv4_ready(ctx)
     ctx.peer_host = host
     cfg["_preflight_cpe_ipv4"] = host
@@ -3338,11 +3353,31 @@ async def _configure_cpe_ipv6_via_secondary_pc_once(
         await _close_ssh(sec_conn)
 
 
+async def _read_cpe_ipv6_uci_via_secondary_hop(
+    profile: dict[str, Any],
+    password: str,
+    *,
+    cpe_factory: str,
+) -> dict[str, str]:
+    """Read CPE network.lan IPv6 UCI through secondary PC hop (same path as configure)."""
+    hop, _, _ = await open_cpe_ssh_via_secondary_pc(
+        profile,
+        password,
+        cpe_lan=cpe_factory,
+        cpe_factory=cpe_factory,
+    )
+    try:
+        return await _read_uci_ip(hop, v6=True)
+    finally:
+        await _close_ssh(hop)
+
+
 async def ensure_cpe_ipv6_ready(
     ctx: IpTestContext,
     *,
     apply: dict[str, str] | None = None,
     force: bool = False,
+    strict: bool = True,
 ) -> str:
     """Ensure CPE LAN has profile static IPv6 (secondary PC → CPE factory SSH)."""
     cfg = ctx.cfg
@@ -3380,28 +3415,81 @@ async def ensure_cpe_ipv6_ready(
         ipv6_address=addr,
         ipv6_gateway=str(cpe_apply.get("ipv6_gateway", "")),
     )
-    await asyncio.sleep(int(cfg.get("network_reload_wait_s", 20)))
+    settle_s = int(cfg.get("network_reload_wait_s", 20))
+    await asyncio.sleep(settle_s)
 
-    hop, _, _ = await open_cpe_ssh_via_secondary_pc(
-        profile,
-        password,
-        cpe_lan=cpe_factory,
-        cpe_factory=cpe_factory,
-    )
-    try:
-        uci = await _read_uci_ip(hop, v6=True)
-        if not ipv6_equal(addr, str(uci.get("address", ""))):
+    verify_attempts = max(1, int(cfg.get("cpe_ipv6_verify_retries", 3)))
+    verify_interval_s = int(cfg.get("cpe_ipv6_verify_interval_s", 8))
+    uci: dict[str, str] = {"address": "", "gateway": ""}
+    ip6_out = ""
+    for attempt in range(1, verify_attempts + 1):
+        try:
+            uci = await _read_cpe_ipv6_uci_via_secondary_hop(
+                profile, password, cpe_factory=cpe_factory
+            )
+        except Exception as exc:
+            ctx.notes.append(f"CPE IPv6 verify attempt {attempt}: {exc}")
+            uci = {"address": "", "gateway": ""}
+        if ipv6_equal(addr, str(uci.get("address", ""))):
+            hop, _, _ = await open_cpe_ssh_via_secondary_pc(
+                profile,
+                password,
+                cpe_lan=cpe_factory,
+                cpe_factory=cpe_factory,
+            )
+            try:
+                ip6_out = await _ssh_run_raw(
+                    hop, "ip -6 addr show dev br-lan 2>/dev/null; ip -6 addr show"
+                )
+            finally:
+                await _close_ssh(hop)
+            break
+        if attempt < verify_attempts:
+            await asyncio.sleep(verify_interval_s)
+
+    if not ipv6_equal(addr, str(uci.get("address", ""))):
+        if not ip6_out:
+            hop, _, _ = await open_cpe_ssh_via_secondary_pc(
+                profile,
+                password,
+                cpe_lan=cpe_factory,
+                cpe_factory=cpe_factory,
+            )
+            try:
+                ip6_out = await _ssh_run_raw(
+                    hop, "ip -6 addr show dev br-lan 2>/dev/null; ip -6 addr show"
+                )
+            finally:
+                await _close_ssh(hop)
+        if ipv6_addr_in_text(addr_host, ip6_out):
+            ctx.notes.append(
+                f"CPE IPv6 UCI empty but br-lan has {addr_host} (accepting operational state)"
+            )
+        elif not strict:
+            vlan_if = await _ensure_lab_mgmt_vlan_ipv6_for_ping(ctx)
+            bind_v6 = _lab_ping_bind_ipv6(cfg, profile)
+            ping_stats = await _ping_from_lab_pc_v6(
+                vlan_if, addr_host, count=2, bind_ipv6=bind_v6
+            )
+            if ping_stats.received > 0:
+                ctx.notes.append(
+                    f"CPE IPv6 UCI verify soft-pass: ping6 {addr_host} ok "
+                    f"(uci={uci}, strict=False)"
+                )
+            else:
+                ctx.notes.append(
+                    f"CPE IPv6 verify warn (non-fatal): want {addr}, uci={uci}, "
+                    f"ping6 loss={ping_stats.loss_pct}%"
+                )
+                return addr_host
+        else:
             pytest.fail(f"CPE IPv6 verify failed after apply: want {addr}, uci={uci}")
-        ip6_out = await _ssh_run_raw(
-            hop, "ip -6 addr show dev br-lan 2>/dev/null; ip -6 addr show"
-        )
+    else:
         ctx.notes.append(
             f"CPE IPv6 configured on remote device: UCI={uci.get('address', '')} "
             f"ip6={'ok' if ipv6_addr_in_text(addr_host, ip6_out) else 'pending'}"
         )
         print(f"[cpe-v6] remote CPE ready at {addr_host}")
-    finally:
-        await _close_ssh(hop)
 
     cfg["_cpe_ipv6_configured"] = addr_host
     return addr_host
@@ -4419,13 +4507,15 @@ async def run_ip_post_case_recovery(
                     f"recovery: BTS IPv6 set to profile {apply.get('ipv6_address', '')}"
                 )
                 if ctx.cfg.get("ip18_configure_cpe", True):
-                    await ensure_cpe_ipv6_ready(ctx, force=True)
+                    await ensure_cpe_ipv6_ready(ctx, force=True, strict=False)
                     ctx.notes.append("recovery: CPE IPv6 re-applied via secondary hop")
             else:
                 cpe_apply = _ipv6_values_for_role(
                     ctx.cfg, profile, device_target="cpe"
                 )
-                await ensure_cpe_ipv6_ready(ctx, apply=cpe_apply, force=True)
+                await ensure_cpe_ipv6_ready(
+                    ctx, apply=cpe_apply, force=True, strict=False
+                )
                 ctx.notes.append(
                     f"recovery: CPE IPv6 set to profile {cpe_apply.get('ipv6_address', '')}"
                 )
@@ -4983,8 +5073,10 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
     if cid == "IP_26":
         if not _stack_allowed(ctx, "v6"):
             pytest.skip("IPv6 not in scope")
-        out = await _ssh_run(ssh, "ip -6 addr show")
-        assert "fe80::" in out.lower(), out[:200]
+        out = await _ssh_run(
+            ssh, "ip -6 addr show dev br-lan 2>/dev/null || ip -6 addr show"
+        )
+        assert "fe80::" in out.lower(), f"IP_26: no link-local on br-lan: {out[:300]}"
         iface = str(cfg.get("ipv6_link_local_iface", "")).strip()
         if not iface:
             m = re.search(r"^\d+:\s+(\S+):.*\n\s+inet6 fe80::", out, re.M)

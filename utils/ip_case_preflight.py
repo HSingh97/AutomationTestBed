@@ -589,7 +589,7 @@ async def run_post_event_testbed_recovery_v6(
         from utils.ip_test_flows import ensure_cpe_ipv6_ready
 
         try:
-            await ensure_cpe_ipv6_ready(ctx)
+            await ensure_cpe_ipv6_ready(ctx, strict=strict)
         except Exception as exc:
             if strict:
                 raise

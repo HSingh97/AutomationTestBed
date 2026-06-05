@@ -11,7 +11,21 @@ def parseMarkerList(String raw) {
         .split(',')
         .collect { it.trim() }
         .findAll { it }
-        .collect { it.toUpperCase() }
+        .collect { token ->
+            def u = token.toUpperCase()
+            if (u == 'IPV4') {
+                return 'IPv4'
+            }
+            if (u == 'IPV6') {
+                return 'IPv6'
+            }
+            return u
+        }
+}
+
+/** True when marker list selects any IP suite path (full IP or stack-specific). */
+def markersIncludeIpSuite(List markers) {
+    return markers.contains('IP') || markers.contains('IPv4') || markers.contains('IPv6')
 }
 
 /** True when -k token looks like an IPv4-only IP case (IP_01–IP_17). */
@@ -27,8 +41,14 @@ def isIpv4OnlyIpFilterToken(String token) {
 
 /** Pick profiles/<name>.yaml from markers and optional -k filter (no manual profile pick). */
 def resolveProfileName(List markers, List kParts) {
-    if (!markers.contains('IP')) {
+    if (!markersIncludeIpSuite(markers)) {
         return 'default'
+    }
+    if (markers.contains('IPv4') && !markers.contains('IPv6') && !markers.contains('IP')) {
+        return 'ipv4_quickrun'
+    }
+    if (markers.contains('IPv6') && !markers.contains('IPv4') && !markers.contains('IP')) {
+        return 'ipv6_quickrun'
     }
     if (kParts && kParts.every { isIpv4OnlyIpFilterToken(it) }) {
         return 'ipv4_quickrun'
@@ -43,7 +63,7 @@ pipeline {
         string(
             name: 'TEST_MARKERS',
             defaultValue: 'GUI',
-            description: 'Comma-separated pytest suites: GUI, IP, Regression, JumboFrames (e.g. GUI or IP or GUI,IP)'
+            description: 'Comma-separated pytest suites: GUI, IP, IPv4, IPv6, Regression, JumboFrames (e.g. IPv4 or IP or GUI,IP)'
         )
         string(
             name: 'TEST_FILTER',
@@ -88,7 +108,7 @@ pipeline {
                 script {
                     def markers = parseMarkerList(params.TEST_MARKERS)
                     if (markers.isEmpty()) {
-                        error('TEST_MARKERS is empty. Use at least one of: GUI, IP, Regression, JumboFrames')
+                        error('TEST_MARKERS is empty. Use at least one of: GUI, IP, IPv4, IPv6, Regression, JumboFrames')
                     }
 
                     def paths = []
@@ -101,12 +121,20 @@ pipeline {
                     if (params.SKIP_TESTBED_BOOTSTRAP) {
                         extraFlags << '--skip-testbed-bootstrap'
                     }
-                    if (markers.contains('IP')) {
+                    if (markersIncludeIpSuite(markers)) {
                         paths << 'tests/IP/'
-                        mParts << 'IP'
                         extraFlags << '--allow-ip-suite'
                         extraFlags << '--allow-ip-destructive'
                         extraFlags << '--no-ip-stop-on-first-fail'
+                    }
+                    if (markers.contains('IP')) {
+                        mParts << 'IP'
+                    }
+                    if (markers.contains('IPv4')) {
+                        mParts << 'IPv4'
+                    }
+                    if (markers.contains('IPv6')) {
+                        mParts << 'IPv6'
                     }
                     if (markers.contains('REGRESSION')) {
                         paths << 'tests/Regression/'
@@ -121,10 +149,10 @@ pipeline {
                     }
 
                     def unknown = markers.findAll { m ->
-                        !['GUI', 'IP', 'REGRESSION', 'JUMBOFRAMES'].contains(m)
+                        !['GUI', 'IP', 'IPv4', 'IPv6', 'REGRESSION', 'JUMBOFRAMES'].contains(m)
                     }
                     if (!unknown.isEmpty()) {
-                        error("Unknown TEST_MARKERS: ${unknown.join(', ')}. Use GUI, IP, Regression, JumboFrames")
+                        error("Unknown TEST_MARKERS: ${unknown.join(', ')}. Use GUI, IP, IPv4, IPv6, Regression, JumboFrames")
                     }
 
                     def kParts = (params.TEST_FILTER ?: '').split(',')
@@ -141,11 +169,21 @@ pipeline {
                         if (guiOnlyFilter) {
                             kExpr = "(${kExpr}) or ${ipScope}"
                         }
-                    } else if (markers.contains('IP') && !runIpCpe) {
+                    } else if (markersIncludeIpSuite(markers) && !runIpCpe) {
                         kExpr = ipScope
                     }
                     env.TEST_PATHS = paths.join(' ')
-                    env.TEST_M_EXPR = (markers.size() == 1 && mParts.size() == 1) ? "-m \"${mParts[0]}\"" : ''
+                    def legacyGuiIp = markers.contains('GUI') && markers.contains('IP') &&
+                        !markers.contains('IPv4') && !markers.contains('IPv6')
+                    if (legacyGuiIp) {
+                        env.TEST_M_EXPR = ''
+                    } else if (mParts.size() == 1) {
+                        env.TEST_M_EXPR = "-m \"${mParts[0]}\""
+                    } else if (mParts.size() > 1) {
+                        env.TEST_M_EXPR = "-m \"${mParts.join(' or ')}\""
+                    } else {
+                        env.TEST_M_EXPR = ''
+                    }
                     env.TEST_EXTRA_FLAGS = extraFlags.join(' ')
                     env.PROFILE_NAME = resolveProfileName(markers, kParts)
                     env.TEST_K_FILTER = kExpr ? "-k \"${kExpr}\"" : ''
@@ -160,7 +198,7 @@ pipeline {
                     if (guiOnlyFilter) {
                         echo "IP scope:       ${runIpCpe ? 'BTS + CPE' : 'BTS only (enable RUN_IP_CPE for CPE)'}"
                         echo "GUI filter:     applies to tests/GUI/ only; IP suite via ${ipScope}"
-                    } else if (markers.contains('IP') && !runIpCpe) {
+                    } else if (markersIncludeIpSuite(markers) && !runIpCpe) {
                         echo 'IP scope:       BTS only (enable RUN_IP_CPE or -k cpe for CPE cases)'
                     }
                     echo "Extra flags:    ${env.TEST_EXTRA_FLAGS ?: '(none)'}"

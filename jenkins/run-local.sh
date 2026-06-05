@@ -5,6 +5,8 @@
 # Examples:
 #   ./jenkins/run-local.sh
 #   TEST_MARKERS=IP ./jenkins/run-local.sh
+#   TEST_MARKERS=IPv4 ./jenkins/run-local.sh
+#   TEST_MARKERS=IPv6 ./jenkins/run-local.sh
 #   TEST_MARKERS=IP TEST_FILTER=IP_01 or IP_02 ./jenkins/run-local.sh
 #   TEST_MARKERS=GUI,IP TEST_FILTER='Summary, TopPanel' ./jenkins/run-local.sh
 
@@ -33,16 +35,26 @@ IP_SMOKE_FILTER="${IP_SMOKE_FILTER:-}"
 
 upper() { echo "$1" | tr '[:lower:]' '[:upper:]'; }
 
+normalize_marker() {
+  local m u
+  m="$(echo "$1" | xargs)"
+  u="$(upper "$m")"
+  case "$u" in
+    IPV4) echo "IPv4" ;;
+    IPV6) echo "IPv6" ;;
+    *) echo "$u" ;;
+  esac
+}
+
 # Parse markers
-MARKERS_RAW="$(upper "${TEST_MARKERS}")"
-IFS=',' read -ra MARKER_ARR <<< "${MARKERS_RAW}"
+IFS=',' read -ra MARKER_ARR <<< "${TEST_MARKERS}"
 MARKERS=()
 for m in "${MARKER_ARR[@]}"; do
-  m="$(echo "$m" | xargs)"
+  m="$(normalize_marker "$m")"
   [[ -n "$m" ]] && MARKERS+=("$m")
 done
 if [[ ${#MARKERS[@]} -eq 0 ]]; then
-  echo "TEST_MARKERS is empty. Use GUI, IP, Regression, and/or JumboFrames." >&2
+  echo "TEST_MARKERS is empty. Use GUI, IP, IPv4, IPv6, Regression, and/or JumboFrames." >&2
   exit 1
 fi
 
@@ -66,10 +78,20 @@ has_marker() {
   return 1
 }
 
+markers_include_ip_suite() {
+  has_marker IP || has_marker IPv4 || has_marker IPv6
+}
+
 # Profile resolution (mirrors resolveProfileName)
 PROFILE_NAME="default"
-if has_marker IP; then
-  PROFILE_NAME="ipv6_quickrun"
+if markers_include_ip_suite; then
+  if has_marker IPv4 && ! has_marker IPv6 && ! has_marker IP; then
+    PROFILE_NAME="ipv4_quickrun"
+  elif has_marker IPv6 && ! has_marker IPv4 && ! has_marker IP; then
+    PROFILE_NAME="ipv6_quickrun"
+  else
+    PROFILE_NAME="ipv6_quickrun"
+  fi
   if [[ -n "${TEST_FILTER}" ]]; then
     IFS=',' read -ra KPARTS <<< "${TEST_FILTER}"
     all_ipv4_only=true
@@ -100,10 +122,18 @@ fi
 if [[ "${SKIP_TESTBED_BOOTSTRAP}" == "true" ]]; then
   EXTRA_FLAGS+=("--skip-testbed-bootstrap")
 fi
-if has_marker IP; then
+if markers_include_ip_suite; then
   TEST_PATHS+=("tests/IP/")
-  M_PARTS+=("IP")
   EXTRA_FLAGS+=("--allow-ip-suite" "--allow-ip-destructive" "--no-ip-stop-on-first-fail")
+fi
+if has_marker IP; then
+  M_PARTS+=("IP")
+fi
+if has_marker IPv4; then
+  M_PARTS+=("IPv4")
+fi
+if has_marker IPv6; then
+  M_PARTS+=("IPv6")
 fi
 if has_marker REGRESSION; then
   TEST_PATHS+=("tests/Regression/")
@@ -118,7 +148,7 @@ fi
 
 for m in "${MARKERS[@]}"; do
   case "$m" in
-    GUI|IP|REGRESSION|JUMBOFRAMES) ;;
+    GUI|IP|IPv4|IPv6|REGRESSION|JUMBOFRAMES) ;;
     *) echo "Unknown TEST_MARKERS entry: $m" >&2; exit 1 ;;
   esac
 done
@@ -177,7 +207,7 @@ if [[ ${#K_PARTS[@]} -gt 0 ]]; then
   if $GUI_ONLY_FILTER; then
     K_EXPR="(${K_EXPR}) or ${IP_SCOPE}"
   fi
-elif has_marker IP && ! $RUN_IP_CPE_BOOL; then
+elif markers_include_ip_suite && ! $RUN_IP_CPE_BOOL; then
   K_EXPR="${IP_SCOPE}"
 fi
 
@@ -194,8 +224,16 @@ if [[ -n "${IP_SMOKE_FILTER}" ]]; then
 fi
 
 TEST_M_EXPR=""
-if [[ ${#MARKERS[@]} -eq 1 && ${#M_PARTS[@]} -eq 1 ]]; then
-  TEST_M_EXPR="-m ${M_PARTS[0]}"
+LEGACY_GUI_IP=false
+if has_marker GUI && has_marker IP && ! has_marker IPv4 && ! has_marker IPv6; then
+  LEGACY_GUI_IP=true
+fi
+if ! $LEGACY_GUI_IP; then
+  if [[ ${#M_PARTS[@]} -eq 1 ]]; then
+    TEST_M_EXPR="-m ${M_PARTS[0]}"
+  elif [[ ${#M_PARTS[@]} -gt 1 ]]; then
+    TEST_M_EXPR="-m $(join_or "${M_PARTS[@]}")"
+  fi
 fi
 
 # venv (same as Jenkins Install Dependencies stage)

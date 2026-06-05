@@ -5,7 +5,11 @@ IP_15/IP_34 restore backup always runs (enable_ip15_factory_restore forced True)
 IP_27, IP_28–IP_34, IP_35–IP_36: test_ip_extended_case (parametrized).
 IP_37–IP_60: catalog only — not collected.
 
-Run: pytest tests/IP/ -m IP --allow-ip-suite ...
+Run:
+  pytest tests/IP/ -m IP --allow-ip-suite ...          # all IP cases
+  pytest tests/IP/ -m IPv4 --allow-ip-suite ...        # IP_01–IP_17 (+ dual-stack)
+  pytest tests/IP/ -m IPv6 --allow-ip-suite ...        # IP_18–IP_34 (+ dual-stack)
+  pytest tests/IP/ -m "IPv4 and IP_05" --allow-ip-suite ...
 """
 
 from __future__ import annotations

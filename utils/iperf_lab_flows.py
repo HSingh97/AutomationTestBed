@@ -317,11 +317,12 @@ def _validate_session_throughput(
     *,
     expected_mbps: float,
     min_ratio: float,
+    case_id: str = "IP_05",
 ) -> None:
     floor = expected_mbps * min_ratio
     if not result.ok or result.mbps <= 0:
         pytest.fail(
-            f"IP_05 {result.label}: iperf failed or zero throughput — {result.raw[-400:]}"
+            f"{case_id} {result.label}: iperf failed or zero throughput — {result.raw[-400:]}"
         )
     pct = (result.mbps / expected_mbps * 100.0) if expected_mbps > 0 else 0.0
     detail = (
@@ -329,7 +330,7 @@ def _validate_session_throughput(
         f"(expected {expected_mbps:.1f} Mbps, floor {floor:.1f} Mbps = {min_ratio*100:.0f}%)"
     )
     if result.mbps < floor:
-        pytest.fail(f"IP_05 {detail} — below acceptable throughput floor")
+        pytest.fail(f"{case_id} {detail} — below acceptable throughput floor")
     elif result.mbps < expected_mbps:
         # Above floor but below nominal: pass with note (RF variance on bench).
         pass
@@ -814,7 +815,10 @@ async def run_ip22_ipv6_lab_throughput(ctx: Any) -> None:
     profile = cfg.get("_profile") or {}
     port = int(cfg.get("iperf_port", 5201))
     duration = int(cfg.get("iperf_duration_s", 10))
-    min_ratio = float(cfg.get("iperf_min_throughput_ratio", 0.70))
+    min_ratio = float(
+        cfg.get("iperf_ipv6_min_throughput_ratio")
+        or cfg.get("iperf_min_throughput_ratio", 0.70)
+    )
     udp_bw = str(cfg.get("iperf_udp_bandwidth", "50M"))
     sessions = max(1, int(cfg.get("iperf_session_count", 1)))
 
@@ -860,6 +864,7 @@ async def run_ip22_ipv6_lab_throughput(ctx: Any) -> None:
                     res,
                     expected_mbps=expected_udp if udp else expected_tcp,
                     min_ratio=min_ratio,
+                    case_id="IP_22",
                 )
                 await asyncio.sleep(1)
     finally:

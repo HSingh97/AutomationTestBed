@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Iterable, Literal
 
 Category = Literal["Functional", "Validation", "Negative"]
 Stack = Literal["v4", "v6", "dual", "any"]
@@ -147,6 +147,39 @@ def case_by_id(case_id: str) -> IpTestCase:
 
 def is_active_ip_case(case_id: str) -> bool:
     return case_id in ACTIVE_IP_CASE_IDS
+
+
+IP_STACK_MARKER_IPV4 = "IPv4"
+IP_STACK_MARKER_IPV6 = "IPv6"
+
+
+def stack_markers_for_case(case_id: str) -> tuple[str, ...]:
+    """Pytest markers for IP stack filtering (-m IPv4 / -m IPv6)."""
+    stack = case_by_id(case_id).stack
+    if stack == "v4":
+        return (IP_STACK_MARKER_IPV4,)
+    if stack == "v6":
+        return (IP_STACK_MARKER_IPV6,)
+    if stack == "dual":
+        return (IP_STACK_MARKER_IPV4, IP_STACK_MARKER_IPV6)
+    return ()
+
+
+def ip_case_id_from_item(nodeid: str, marker_names: Iterable[str]) -> str | None:
+    """Resolve IP_XX from pytest nodeid and declared markers."""
+    import re
+
+    for name in marker_names:
+        if re.fullmatch(r"IP_\d{2}", str(name), re.I):
+            return str(name).upper()
+    param = re.search(r"\[(IP_\d+)-", nodeid, re.I)
+    if param:
+        return param.group(1).upper()
+    fn = nodeid.split("::")[-1].split("[", 1)[0]
+    num = re.search(r"test_ip_(\d+)_", fn, re.I)
+    if num:
+        return f"IP_{int(num.group(1)):02d}"
+    return None
 
 
 # Ping / gateway / ARP / link-local — skip full link+CPE reconfigure between cases.

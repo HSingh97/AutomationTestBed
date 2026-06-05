@@ -273,6 +273,25 @@ def _is_ip_cpe_test_item(item) -> bool:
     return False
 
 
+def _apply_ip_stack_markers(items) -> None:
+    """Tag IP tests with IPv4 / IPv6 markers from config.ip_test_cases stack."""
+    from config.ip_test_cases import ip_case_id_from_item, stack_markers_for_case
+
+    for item in items:
+        if not item.get_closest_marker("IP"):
+            continue
+        marker_names = [mark.name for mark in item.iter_markers()]
+        case_id = ip_case_id_from_item(item.nodeid, marker_names)
+        if not case_id:
+            continue
+        try:
+            stack_marks = stack_markers_for_case(case_id)
+        except KeyError:
+            continue
+        for name in stack_marks:
+            item.add_marker(getattr(pytest.mark, name))
+
+
 def pytest_collection_modifyitems(config, items):
     if config.getoption("--bootstrap-only"):
         selected = [
@@ -287,6 +306,8 @@ def pytest_collection_modifyitems(config, items):
 
     if config.getoption("--allow-ip-suite") and not _ip_suite_include_cpe(config):
         items[:] = [item for item in items if not _is_ip_cpe_test_item(item)]
+
+    _apply_ip_stack_markers(items)
 
 
 @pytest.fixture(scope="session")
@@ -749,6 +770,14 @@ def pytest_configure(config):
 
     for case in IP_TEST_CASES:
         config.addinivalue_line("markers", f"{case.case_id}: {case.title} ({case.category})")
+    config.addinivalue_line(
+        "markers",
+        "IPv4: IP suite — IPv4 stack cases (pytest -m IPv4)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "IPv6: IP suite — IPv6 stack cases (pytest -m IPv6)",
+    )
 
     if config.getoption("--allow-ip-suite") and not config.getoption("--no-ip-stop-on-first-fail"):
         profile_name = config.getoption("--profile") or "default"
