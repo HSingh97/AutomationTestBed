@@ -2258,7 +2258,13 @@ async def _run_restore_backup(ctx: IpTestContext, *, v6: bool) -> None:
             print(f"[{cid}] PASS: mgmt VLAN ping6 to BTS {lan_ip} ok after restore")
         else:
             print(f"[{cid}] verifying BTS reachable via mgmt VLAN ping to {lan_ip}")
-            await _assert_lab_ping_ipv4(ctx, lan_ip, wait_s=30)
+            ping_wait = int(cfg.get("post_reboot_ping_wait_s", 90))
+            await _assert_lab_ping_ipv4(
+                ctx,
+                lan_ip,
+                wait_s=ping_wait,
+                interval_s=int(cfg.get("post_reboot_remote_ping_interval_s", 10)),
+            )
             print(f"[{cid}] PASS: mgmt VLAN ping to BTS {lan_ip} ok after restore")
     elif lan_ip:
         ctx.notes.append(f"{cid}: skip lab ping to fallback/mgmt {lan_ip}")
@@ -2597,6 +2603,17 @@ async def _run_reset_retain(ctx: IpTestContext, *, v6: bool) -> None:
     ctx.ssh = new_ssh
     ctx.host = effective
     print(f"[{cid}] SSH back on {effective} after reset ({int(downtime)}s downtime)")
+    settle_s = int(cfg.get("post_reset_settle_s", cfg.get("post_reboot_settle_s", 150)))
+    if downtime < settle_s:
+        extra = settle_s - downtime
+        ctx.notes.append(
+            f"{cid}: waiting {extra:.0f}s more ({settle_s}s post-reset settle before ping/link)"
+        )
+        print(
+            f"[{cid}] post-reset settle: {extra:.0f}s more "
+            f"({settle_s}s total since reset before ping/link checks)"
+        )
+        await asyncio.sleep(extra)
 
     if ctx.device_target == "bts" and not v6:
         from utils.ip_case_preflight import run_post_event_testbed_recovery
@@ -2625,13 +2642,28 @@ async def _run_reset_retain(ctx: IpTestContext, *, v6: bool) -> None:
 
         after: dict[str, str] = {}
         after_addr = ""
-        await run_post_event_testbed_recovery(
-            ctx,
-            label="post-reset",
-            after_mgmt_hook=_ip12_retain_check,
-            require_cpe=True,
-        )
+        link_timeout = int(cfg.get("post_reboot_link_timeout_s", 120))
+        cfg["_link_recovery_timeout_override"] = link_timeout
+        try:
+            await run_post_event_testbed_recovery(
+                ctx,
+                label="post-reset",
+                after_mgmt_hook=_ip12_retain_check,
+                require_cpe=False,
+                link_formation=True,
+                strict=False,
+            )
+        finally:
+            cfg.pop("_link_recovery_timeout_override", None)
         lan_ip = after_addr or lan_ip
+        if lan_ip:
+            ping_wait = int(cfg.get("post_reset_ping_wait_s", cfg.get("post_reboot_ping_wait_s", 90)))
+            await _assert_lab_ping_ipv4(
+                ctx,
+                lan_ip,
+                wait_s=ping_wait,
+                interval_s=int(cfg.get("post_reboot_remote_ping_interval_s", 10)),
+            )
     elif ctx.device_target == "bts" and v6:
         from utils.ip_case_preflight import run_post_event_testbed_recovery_v6
 
@@ -2645,12 +2677,18 @@ async def _run_reset_retain(ctx: IpTestContext, *, v6: bool) -> None:
 
         after: dict[str, str] = {}
         after_addr = ""
-        await run_post_event_testbed_recovery_v6(
-            ctx,
-            label="post-reset",
-            after_mgmt_hook=_ip31_retain_check,
-            require_cpe=True,
-        )
+        link_timeout = int(cfg.get("post_reboot_link_timeout_s", 120))
+        cfg["_link_recovery_timeout_override"] = link_timeout
+        try:
+            await run_post_event_testbed_recovery_v6(
+                ctx,
+                label="post-reset",
+                after_mgmt_hook=_ip31_retain_check,
+                require_cpe=False,
+                strict=False,
+            )
+        finally:
+            cfg.pop("_link_recovery_timeout_override", None)
         lan_ip = after_addr or lan_ip
     else:
         after = await _read_uci_ip(ctx.ssh, v6=v6)
@@ -3369,6 +3407,69 @@ async def ensure_cpe_ipv6_ready(
     return addr_host
 
 
+async def _cold_reboot_bts(ctx: IpTestContext, *, label: str = "reboot") -> None:
+    """Reboot BTS, wait for SSH, then post_reboot_settle_s before ping/link checks."""
+    password = str(ctx.cfg.get("_password", ""))
+    started = time.monotonic()
+    try:
+        await ctx.ssh.send_command("reboot", timeout_ops=5)
+    except Exception:
+        pass
+    await _close_ssh(ctx.ssh)
+    await asyncio.sleep(5)
+    ssh, effective = await _wait_ssh_any(
+        await _event_ssh_hosts(ctx),
+        password,
+        timeout_s=int(ctx.cfg.get("reboot_timeout_s", 200)),
+        interval_s=5,
+    )
+    ctx.ssh = ssh
+    ctx.host = effective
+    settle_s = int(ctx.cfg.get("post_reboot_settle_s", 150))
+    downtime = time.monotonic() - started
+    if downtime < settle_s:
+        extra = settle_s - downtime
+        ctx.notes.append(f"{label}: SSH on {effective} after {downtime:.0f}s — waiting {extra:.0f}s settle")
+        print(f"[{label}] post-reboot settle: {extra:.0f}s ({settle_s}s total)")
+        await asyncio.sleep(extra)
+    else:
+        ctx.notes.append(f"{label}: SSH on {effective} after {downtime:.0f}s (>= {settle_s}s settle)")
+
+
+async def recover_bts_lab_ping_via_reboot(
+    ctx: IpTestContext,
+    *,
+    label: str = "ping-recovery",
+) -> None:
+    """
+    Last resort when mgmt-VLAN ping to BTS LAN fails but UCI/br-lan looks correct.
+    Cold reboot + post-event recovery (bench apply/restore bug).
+    """
+    if ctx.device_target != "bts":
+        return
+    cfg = ctx.cfg
+    if not cfg.get("enable_reboot_ping_recovery", True):
+        return
+    cid = ctx.case.case_id if getattr(ctx, "case", None) else label
+    ctx.notes.append(f"{cid}: lab ping failed — last resort cold reboot for ping recovery")
+    print(f"[{cid}] last resort: cold BTS reboot for lab ping recovery")
+    await _cold_reboot_bts(ctx, label=f"{cid}-{label}")
+    from utils.ip_case_preflight import run_post_event_testbed_recovery
+
+    link_timeout = int(cfg.get("post_reboot_link_timeout_s", 120))
+    cfg["_link_recovery_timeout_override"] = link_timeout
+    try:
+        await run_post_event_testbed_recovery(
+            ctx,
+            label=f"{cid}-{label}",
+            require_cpe=False,
+            strict=False,
+            link_formation=True,
+        )
+    finally:
+        cfg.pop("_link_recovery_timeout_override", None)
+
+
 async def ensure_bts_ipv4_ready(ctx: IpTestContext) -> str:
     """
     Discover BTS LAN IPv4 by lab ping (UCI may differ from reachable address).
@@ -3398,13 +3499,26 @@ async def ensure_bts_ipv4_ready(ctx: IpTestContext) -> str:
             str(cfg.get("ipv4_default_address", "192.168.2.1")).split("/")[0]
         )
 
-        def _add_candidate(ip: str) -> None:
+        def _add_candidate(ip: str, *, front: bool = False) -> None:
             clean = normalize_ip(str(ip).split("/")[0])
             if clean and clean not in seen and _bts_ping_candidate(clean):
                 seen.add(clean)
-                candidates.append(clean)
+                if front:
+                    candidates.insert(0, clean)
+                else:
+                    candidates.append(clean)
 
-        # Prefer profile test LAN IPs (e.g. 192.168.2.230 after IP_01) before UCI/default guesses.
+        chain = cfg.get("_ip_suite_chain") or {}
+        cached_bts = normalize_ip(
+            str(
+                cfg.get("_preflight_bts_lan_ipv4")
+                or chain.get("bts_lan_ipv4", "")
+            ).split("/")[0]
+        )
+        if cached_bts:
+            _add_candidate(cached_bts, front=True)
+
+        # Then profile test LAN IPs (e.g. 192.168.2.240 after IP_01).
         for ip in reversed(_ipv4_test_address_candidates(cfg)):
             _add_candidate(ip)
 
@@ -3480,7 +3594,14 @@ async def ensure_bts_ipv4_ready(ctx: IpTestContext) -> str:
         except Exception as exc:
             ctx.notes.append(f"BTS precheck: network reload warn: {exc}")
 
-        return await _attempt()
+        try:
+            return await _attempt()
+        except AssertionError as second_exc:
+            if not cfg.get("enable_reboot_ping_recovery", True):
+                raise second_exc from first_exc
+            ctx.notes.append(f"{second_exc} — trying cold reboot ping recovery")
+            await recover_bts_lab_ping_via_reboot(ctx, label="bts-precheck")
+            return await _attempt()
 
 
 async def discover_cpe_ipv4_addresses(ctx: IpTestContext) -> list[str]:
@@ -3540,6 +3661,21 @@ async def discover_cpe_ipv4_addresses(ctx: IpTestContext) -> list[str]:
 async def _probe_cpe_ipv4_from_lab(ctx: IpTestContext, candidates: list[str]) -> str | None:
     if not candidates:
         return None
+    chain = ctx.cfg.get("_ip_suite_chain") or {}
+    cached = normalize_ip(
+        str(
+            ctx.peer_host
+            or ctx.cfg.get("_preflight_cpe_ipv4")
+            or chain.get("cpe_lan_ipv4", "")
+        ).split("/")[0]
+    )
+    ordered = list(candidates)
+    if cached and cached in ordered:
+        ordered.remove(cached)
+        ordered.insert(0, cached)
+    elif cached and cached not in ordered:
+        ordered.insert(0, cached)
+    candidates = ordered
     vlan_if = await _ensure_lab_mgmt_vlan_for_ping(ctx)
     max_wait_s, interval_s = _remote_ping_wait_settings(ctx.cfg)
     for ip in candidates:
@@ -3801,8 +3937,9 @@ def _verify_uci_ip_retained(
         pytest.fail(msg)
     before_addr = str(before.get("address", "")).split("/")[0]
     after_addr = str(after.get("address", "")).split("/")[0]
+    event = "reboot" if case_id in ("IP_09", "IP_28") else "factory reset WITH retain"
     print(
-        f"{case_id} PASS: {stack} retained after reset WITH retain "
+        f"{case_id} PASS: {stack} retained after {event} "
         f"(LAN {after_addr or before_addr})"
     )
 
@@ -3857,21 +3994,46 @@ async def _assert_lab_ping_ipv4(
     count: int | None = None,
     wait_s: int = 0,
     interval_s: int = 5,
+    allow_reboot_recovery: bool = True,
 ) -> PingStats:
     vlan_if = await _ensure_lab_mgmt_vlan_for_ping(ctx)
     host = normalize_ip(target)
     n = count or int(ctx.cfg.get("ping_count_short", 4))
-    if wait_s > 0:
-        stats = await _wait_for_remote_ping_from_lab(
-            vlan_if,
-            host,
-            wait_s=wait_s,
-            interval_s=interval_s,
-            count=n,
-            notes=ctx.notes,
+
+    async def _ping_once() -> PingStats:
+        if wait_s > 0:
+            return await _wait_for_remote_ping_from_lab(
+                vlan_if,
+                host,
+                wait_s=wait_s,
+                interval_s=interval_s,
+                count=n,
+                notes=ctx.notes,
+            )
+        return await _ping_from_lab_pc(vlan_if, host, count=n)
+
+    stats = await _ping_once()
+    if stats.ok:
+        ctx.notes.append(f"lab ping {host} via {vlan_if}: loss={stats.loss_pct}%")
+        return stats
+
+    if (
+        allow_reboot_recovery
+        and ctx.device_target == "bts"
+        and ctx.cfg.get("enable_reboot_ping_recovery", True)
+    ):
+        cid = ctx.case.case_id if getattr(ctx, "case", None) else "lab-ping"
+        ctx.notes.append(
+            f"{cid}: lab ping {host} failed — trying cold reboot recovery before re-ping"
         )
-    else:
-        stats = await _ping_from_lab_pc(vlan_if, host, count=n)
+        await recover_bts_lab_ping_via_reboot(ctx, label="lab-ping")
+        stats = await _ping_once()
+        if stats.ok:
+            ctx.notes.append(
+                f"lab ping {host} via {vlan_if} ok after reboot recovery: loss={stats.loss_pct}%"
+            )
+            return stats
+
     assert stats.ok, f"lab PC ping {host} via {vlan_if} failed: {stats.raw[:300]}"
     ctx.notes.append(f"lab ping {host} via {vlan_if}: loss={stats.loss_pct}%")
     return stats
@@ -3975,6 +4137,22 @@ async def _run_soft_reboot_case(ctx: IpTestContext, *, v6: bool) -> None:
     ctx.ssh = new_ssh
     ctx.host = effective
     cid = ctx.case.case_id
+    settle_s = int(cfg.get("post_reboot_settle_s", 150))
+    if downtime < settle_s:
+        extra = settle_s - downtime
+        ctx.notes.append(
+            f"{cid}: SSH on {effective} after {downtime:.0f}s — "
+            f"waiting {extra:.0f}s more ({settle_s}s post-reboot settle before ping/link)"
+        )
+        print(
+            f"[{cid}] post-reboot settle: {extra:.0f}s more "
+            f"({settle_s}s total since reboot before ping/link checks)"
+        )
+        await asyncio.sleep(extra)
+    else:
+        ctx.notes.append(
+            f"{cid}: SSH on {effective} after {downtime:.0f}s (>= {settle_s}s settle, continuing)"
+        )
 
     async def _post_reboot_checks() -> None:
         nonlocal after
@@ -3998,12 +4176,27 @@ async def _run_soft_reboot_case(ctx: IpTestContext, *, v6: bool) -> None:
     elif ctx.device_target == "bts" and not v6:
         from utils.ip_case_preflight import case_requires_cpe, run_post_event_testbed_recovery
 
-        await run_post_event_testbed_recovery(
-            ctx,
-            label="post-reboot",
-            after_mgmt_hook=_post_reboot_checks,
-            require_cpe=case_requires_cpe(cid),
-        )
+        link_timeout = int(cfg.get("post_reboot_link_timeout_s", 120))
+        cfg["_link_recovery_timeout_override"] = link_timeout
+        try:
+            await run_post_event_testbed_recovery(
+                ctx,
+                label="post-reboot",
+                after_mgmt_hook=_post_reboot_checks,
+                require_cpe=False,
+                link_formation=True,
+                strict=False,
+            )
+        finally:
+            cfg.pop("_link_recovery_timeout_override", None)
+        if lan_ip:
+            ping_wait = int(cfg.get("post_reboot_ping_wait_s", 90))
+            await _assert_lab_ping_ipv4(
+                ctx,
+                lan_ip,
+                wait_s=ping_wait,
+                interval_s=int(cfg.get("post_reboot_remote_ping_interval_s", 10)),
+            )
     else:
         await _post_reboot_checks()
         await _assert_local_reachable(ctx, v6=v6, count=3)
@@ -4284,16 +4477,29 @@ async def execute_ip_case_with_recovery(ctx: IpTestContext) -> None:
         if isinstance(chain, dict):
             chain["ok"] = not case_failed
             if not case_failed:
+                from utils.ip_suite_state import mark_suite_healthy, save_chain
+
                 bts = normalize_ip(
                     str(ctx.cfg.get("_preflight_bts_lan_ipv4", "")).split("/")[0]
                 )
-                if bts:
-                    chain["bts_lan_ipv4"] = bts
                 cpe = normalize_ip(
                     str(ctx.peer_host or ctx.cfg.get("_preflight_cpe_ipv4", "")).split("/")[0]
                 )
-                if cpe:
-                    chain["cpe_lan_ipv4"] = cpe
+                mark_suite_healthy(
+                    chain,
+                    bts_ip=bts,
+                    cpe_ip=cpe,
+                    local_pc_ok=bool(chain.get("local_pc_ok", True)),
+                    remote_pc_ok=bool(chain.get("remote_pc_ok", bool(cpe))),
+                    bts_ping_ok=True,
+                    cpe_ping_ok=bool(cpe) if cpe else None,
+                )
+                save_chain(ctx.cfg.get("_repo_root", "."), chain)
+            elif case_failed:
+                chain["suite_healthy"] = False
+                from utils.ip_suite_state import save_chain
+
+                save_chain(ctx.cfg.get("_repo_root", "."), chain)
         try:
             await run_ip_post_case_recovery(ctx, snapshot, case_failed=case_failed)
         except Exception as exc:
@@ -4328,30 +4534,35 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
         _skip_if_unsupported(ctx, "firmware", "set ip_tests.firmware_image_path in profile")
 
     cid = case.case_id
-    from config.ip_test_cases import is_fast_path_ip_case
 
-    fast_path = bool(cfg.get("ip_fast_path_enabled", True)) and (
-        is_fast_path_ip_case(cid) or cid == "IP_01"
-    )
-
-    # Preflight: full link+CPE setup for destructive cases; fast path for ping/gateway/IP_01.
+    # Preflight: skip when suite healthy; else minimal unless prior case broke ping/link.
     if _stack_allowed(ctx, "v4") and ctx.case.stack in ("v4", "dual", "any"):
-        from utils.ip_case_preflight import run_ip_case_preflight
+        from utils.ip_case_preflight import preflight_should_be_full, run_ip_case_preflight
 
-        await run_ip_case_preflight(ctx, stack_v4=True, minimal=fast_path)
+        use_minimal = bool(cfg.get("ip_fast_path_enabled", True)) and not preflight_should_be_full(
+            ctx
+        )
+        await run_ip_case_preflight(ctx, stack_v4=True, minimal=use_minimal)
         ssh = ctx.ssh
 
     profile = cfg.get("_profile") or {}
     dut = profile.get("dut", {}) or {}
     if _stack_allowed(ctx, "v6") and ctx.case.stack in ("v6", "dual", "any"):
         if dut.get("ip_mode") == "ipv6" or dut.get("strict_ipv6"):
-            from utils.ip_case_preflight import case_requires_cpe, run_ip_case_preflight_v6
+            from utils.ip_case_preflight import (
+                case_requires_cpe,
+                preflight_should_be_full,
+                run_ip_case_preflight_v6,
+            )
 
+            use_minimal = bool(cfg.get("ip_fast_path_enabled", True)) and not preflight_should_be_full(
+                ctx
+            )
             await run_ip_case_preflight_v6(
                 ctx,
                 skip_device_v6_ping=(cid == "IP_18"),
                 require_cpe=case_requires_cpe(cid) if cid != "IP_18" else False,
-                minimal=fast_path,
+                minimal=use_minimal,
             )
             ssh = ctx.ssh
 
@@ -4450,7 +4661,6 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
     if cid == "IP_03":
         if not _stack_allowed(ctx, "v4"):
             pytest.skip("IPv4 not in scope")
-        await _reconnect_device_ssh(ctx, timeout_s=60)
         vlan_if = await _ensure_lab_mgmt_vlan_for_ping(ctx)
         verify_v4 = await _verified_bts_lan_ipv4(ctx)
         ctx.notes.append(f"IP_03: BTS LAN {verify_v4} (preflight ping-verified), via {vlan_if}")

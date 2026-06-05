@@ -195,7 +195,8 @@ pipeline {
                     def ipv6Remote = remoteIP ? "--remote-ipv6 \"${remoteIP}\"" : ''
 
                     sh '''
-                        rm -f reports/artifacts/report.json reports/artifacts/testbed_summary.json \
+                        rm -f reports/artifacts/report.json reports/artifacts/ip_suite_progress.json \
+                              reports/artifacts/testbed_summary.json \
                               reports/artifacts/Senao_UBR_*.html reports/artifacts/Senao_UBR_*.csv \
                               reports/artifacts/Senao_GUI_*.html reports/artifacts/Senao_GUI_*.csv \
                               Senao_UBR_*.html Senao_GUI_*.html || true
@@ -231,8 +232,16 @@ pipeline {
                     def csvFile = "reports/artifacts/${basename}.csv"
 
                     if (!fileExists('reports/artifacts/report.json')) {
-                        unstable('reports/artifacts/report.json missing — skipping report generation')
-                        return
+                        echo 'report.json missing — attempting recovery from IP suite progress checkpoint...'
+                        def recoverRc = sh(
+                            script: 'PYTHONPATH=. venv/bin/python -m utils.json_report_checkpoint --recover',
+                            returnStatus: true
+                        )
+                        if (recoverRc != 0 || !fileExists('reports/artifacts/report.json')) {
+                            unstable('reports/artifacts/report.json missing — no recoverable partial results')
+                            return
+                        }
+                        echo 'Recovered partial report.json from completed test checkpoints'
                     }
 
                     echo 'Building Senao UBR HTML & CSV (report_generator.py)...'
@@ -253,6 +262,7 @@ pipeline {
                 archiveArtifacts 'reports/artifacts/Senao_UBR_*.html'
                 archiveArtifacts 'reports/artifacts/Senao_UBR_*.csv,allowEmptyArchive:true'
                 archiveArtifacts 'reports/artifacts/report.json,allowEmptyArchive:true'
+                archiveArtifacts 'reports/artifacts/ip_suite_progress.json,allowEmptyArchive:true'
                 archiveArtifacts 'reports/artifacts/testbed_summary.json,allowEmptyArchive:true'
             }
         }

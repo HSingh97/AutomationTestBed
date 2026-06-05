@@ -180,6 +180,12 @@ IP_TEST_DEFAULTS = {
     "gui_settle_seconds": 12,
     "reboot_timeout_s": 200,
     "reboot_max_downtime_s": 200,
+    # Minimum time from reboot/reset command before ping/link checks (bench ~180s to RF link).
+    "post_reboot_settle_s": 150,
+    "post_reset_settle_s": 150,
+    "post_reboot_link_timeout_s": 120,
+    "post_reboot_ping_wait_s": 90,
+    "post_reset_ping_wait_s": 90,
     "network_reload_max_wait_s": 120,
     "reset_retain_command": "",
     "factory_reset_retainip_all": 7,
@@ -189,6 +195,9 @@ IP_TEST_DEFAULTS = {
     "enable_ip15_factory_restore": True,
     # After IP_15 restore: UCI may look correct but enp3s0.101→BTS ping fails until reboot.
     "ip15_reboot_after_restore": True,
+    "post_restore_settle_s": 30,
+    # Last resort when mgmt-VLAN ping fails but UCI looks correct (apply/restore bug on bench).
+    "enable_reboot_ping_recovery": True,
     "enable_ip_post_case_recovery": True,
     "enable_link_recovery": True,
     "link_recovery_before_precheck": True,

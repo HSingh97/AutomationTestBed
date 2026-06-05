@@ -439,6 +439,10 @@ def pytest_runtest_makereport(item, call):
             outcome=outcome_from_report(report),
             duration_s=float(duration),
         )
+    if report.when == "call" and item.config.getoption("json_report_file", default=""):
+        from utils.json_report_checkpoint import flush_json_report
+
+        flush_json_report(item.config, partial=True)
     if report.when != "call" or "Regression" not in item.keywords:
         return
     try:
@@ -501,6 +505,11 @@ def _write_testbed_summary(config) -> None:
 @pytest.hookimpl(tryfirst=True)
 def pytest_sessionfinish(session, exitstatus):
     """Generates customer CSV and regression HTML summaries at end of run."""
+    if session.config.getoption("json_report_file", default=""):
+        from utils.json_report_checkpoint import flush_json_report, recover_report_json
+
+        if not flush_json_report(session.config, partial=exitstatus != 0, exitcode=exitstatus):
+            recover_report_json()
     _write_testbed_summary(session.config)
     reports_dir = str(ARTIFACTS_DIR)
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -800,6 +809,11 @@ def pytest_configure(config):
         config._ubr_recovery_manager = manager
     except Exception:
         config._ubr_recovery_manager = None
+
+    if config.getoption("json_report_file", default=""):
+        from utils.json_report_checkpoint import register_abort_handlers
+
+        register_abort_handlers(config)
 
 
 # =====================================================================

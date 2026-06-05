@@ -111,7 +111,10 @@ async def recover_testbed_link_ssh(
     """
     cfg = cfg or {}
     link = profile.get("link", {}) or {}
-    timeout_s = int(cfg.get("link_recovery_timeout_s", link.get("health_check_timeout_s", 90)))
+    timeout_s = int(
+        cfg.get("_link_recovery_timeout_override")
+        or cfg.get("link_recovery_timeout_s", link.get("health_check_timeout_s", 90))
+    )
     poll_s = max(2, int(cfg.get("link_recovery_poll_s", 3)))
     bts_idx = int(link.get("radio_idx", 1))
 
@@ -141,8 +144,12 @@ async def recover_testbed_link_ssh(
         notes.append(f"link BTS static SSID={creds.ssid}")
 
     if creds is not None:
-        cpe_ok = await ensure_cpe_link_credentials_always(profile, creds, force=True)
-        notes.append(f"link CPE credentials via secondary PC ok={cpe_ok}")
+        try:
+            cpe_ok = await ensure_cpe_link_credentials_always(profile, creds, force=True)
+            notes.append(f"link CPE credentials via secondary PC ok={cpe_ok}")
+        except Exception as exc:
+            notes.append(f"link CPE credential push skipped ({exc}); polling RF link")
+            print(f"[link] CPE credential push skipped: {exc}")
 
     deadline = time.monotonic() + max(10, timeout_s)
     while time.monotonic() < deadline:

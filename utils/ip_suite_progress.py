@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from prettytable import PrettyTable
+
+IP_SUITE_PROGRESS_PATH = Path("reports/artifacts/ip_suite_progress.json")
 
 _CASE_ID_RE = re.compile(r"(IP_\d+)", re.I)
 _TARGET_RE = re.compile(r"_(bts|cpe)(?:\[|$)", re.I)
@@ -23,6 +27,7 @@ class _IpSuiteRow:
 
 class IpSuiteProgress:
     def __init__(self, nodeids: list[str]) -> None:
+        self._nodeids = list(nodeids)
         self._rows: list[_IpSuiteRow] = []
         self._index: dict[str, int] = {}
         self._started = time.monotonic()
@@ -37,6 +42,7 @@ class IpSuiteProgress:
         self.total = len(self._rows)
         if self.total:
             print(f"\n[IP suite] {self.total} test(s) queued — progress table after each case\n")
+            self._persist()
 
     def record(self, nodeid: str, *, outcome: str, duration_s: float) -> None:
         idx = self._index.get(nodeid)
@@ -48,7 +54,30 @@ class IpSuiteProgress:
         row.outcome = outcome
         row.duration_s = duration_s
         self._completed += 1
+        self._persist()
         self._print_table()
+
+    def _persist(self) -> None:
+        payload = {
+            "partial": self._completed < self.total,
+            "completed": self._completed,
+            "total": self.total,
+            "elapsed_s": time.monotonic() - self._started,
+            "tests": [
+                {
+                    "nodeid": self._nodeids[idx],
+                    "case_id": row.case_id,
+                    "target": row.target,
+                    "outcome": row.outcome,
+                    "duration_s": row.duration_s,
+                }
+                for idx, row in enumerate(self._rows)
+                if row.outcome != "PENDING"
+            ],
+        }
+        IP_SUITE_PROGRESS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with IP_SUITE_PROGRESS_PATH.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
 
     def _print_table(self) -> None:
         done = self._completed
@@ -115,6 +144,13 @@ def _format_duration(seconds: int) -> str:
         return f"{minutes}m {secs}s"
     hours, minutes = divmod(minutes, 60)
     return f"{hours}h {minutes}m"
+
+
+def flush_ip_suite_progress(config) -> None:
+    """Persist latest IP suite table (e.g. on abort)."""
+    progress = getattr(config, "_ip_suite_progress", None)
+    if progress is not None:
+        progress._persist()
 
 
 def outcome_from_report(report) -> str:

@@ -254,16 +254,30 @@ async def preflight_step4_reachability(
         cfg["_preflight_bts_lan_ipv4"] = bts_ip
         _log(ctx, f"step 4 OK: BTS reachable at {bts_ip} via mgmt VLAN")
 
-    if require_cpe or ctx.peer_host or cfg.get("_preflight_cpe_candidates"):
+    if require_cpe:
         try:
             cpe_ip = await ensure_cpe_ipv4_ready(ctx)
             ctx.peer_host = cpe_ip
             cfg["_preflight_cpe_ipv4"] = cpe_ip
             _log(ctx, f"step 4 OK: CPE reachable at {cpe_ip} via mgmt VLAN")
+            chain = cfg.get("_ip_suite_chain")
+            if isinstance(chain, dict):
+                from utils.ip_suite_state import mark_suite_healthy, save_chain
+
+                mark_suite_healthy(
+                    chain,
+                    bts_ip=str(cfg.get("_preflight_bts_lan_ipv4", "")),
+                    cpe_ip=cpe_ip,
+                    remote_pc_ok=True,
+                    cpe_ping_ok=True,
+                )
+                save_chain(cfg.get("_repo_root", "."), chain)
         except Exception as exc:
-            if require_cpe and strict:
+            if strict:
                 pytest.fail(f"{cid}: step 4 — CPE not reachable: {exc}")
             _log(ctx, f"step 4: CPE reachability warn: {exc}")
+    elif ctx.peer_host:
+        cfg["_preflight_cpe_ipv4"] = normalize_ip(str(ctx.peer_host).split("/")[0])
 
 
 async def preflight_step4_link_and_reachability(
@@ -475,7 +489,12 @@ async def run_ip_case_preflight_v6(
         if cached_cpe:
             ctx.peer_host = normalize_ip(cached_cpe.split("/")[0])
             cfg["_preflight_cpe_ipv4"] = ctx.peer_host
-        _log(ctx, f"=== {cid} IPv6 preflight skipped (previous case passed) ===")
+        _log(
+            ctx,
+            f"=== {cid} IPv6 preflight skipped (suite healthy: "
+            f"BTS={cfg.get('_preflight_bts_lan_ipv4', '')} "
+            f"CPE={ctx.peer_host or 'n/a'}) ===",
+        )
         return
 
     need_cpe = case_requires_cpe(cid) if require_cpe is None else require_cpe
@@ -592,21 +611,38 @@ async def run_post_event_testbed_recovery_v6(
 
 
 def _preflight_skipped_chain_ok(ctx) -> bool:
-    """Skip full preflight only for non-fast cases when the previous IP case passed."""
-    from config.ip_test_cases import IP_NEVER_SKIP_PREFLIGHT_CASE_IDS
+    """Skip preflight when suite is healthy (cached BTS/CPE IPs + lab PCs verified)."""
+    from config.ip_test_cases import IP_ALWAYS_PREFLIGHT_CASE_IDS
+    from utils.ip_suite_state import chain_allows_preflight_skip
 
     cfg = ctx.cfg
     cid = ctx.case.case_id
-    if cid in IP_NEVER_SKIP_PREFLIGHT_CASE_IDS:
+    if cid in IP_ALWAYS_PREFLIGHT_CASE_IDS:
         return False
     if not cfg.get("ip_skip_preflight_when_chain_ok", True):
         return False
     chain = cfg.get("_ip_suite_chain") or {}
+    need_cpe = case_requires_cpe(cid)
+    return chain_allows_preflight_skip(chain, case_id=cid, require_cpe=need_cpe)
+
+
+def preflight_should_be_full(ctx) -> bool:
+    """
+    Full preflight (VLAN + link formation) only when bench health is unknown or broken.
+    Otherwise use minimal fast preflight (SSH + lab VLAN + ping only).
+    """
+    from config.ip_test_cases import IP_ALWAYS_PREFLIGHT_CASE_IDS
+
+    cfg = ctx.cfg
+    chain = cfg.get("_ip_suite_chain") or {}
+    cid = ctx.case.case_id
+    if cid in IP_ALWAYS_PREFLIGHT_CASE_IDS:
+        return False
     if not chain.get("ok", False):
-        return False
-    if "destructive" in ctx.case.requires:
-        return False
-    return True
+        return True
+    if not chain.get("suite_healthy", False):
+        return True
+    return False
 
 
 async def run_ip_case_preflight(
@@ -637,7 +673,12 @@ async def run_ip_case_preflight(
         if cached_cpe:
             ctx.peer_host = normalize_ip(cached_cpe.split("/")[0])
             cfg["_preflight_cpe_ipv4"] = ctx.peer_host
-        _log(ctx, f"=== {cid} preflight skipped (previous case passed) ===")
+        _log(
+            ctx,
+            f"=== {cid} preflight skipped (suite healthy: "
+            f"BTS={cfg.get('_preflight_bts_lan_ipv4', '')} "
+            f"CPE={ctx.peer_host or 'n/a'} local+remote PC ok) ===",
+        )
         return
     need_cpe = case_requires_cpe(cid) if require_cpe is None else require_cpe
     skip_bts = skip_bts_precheck or cid in ("IP_01", "IP_15", "IP_34")
@@ -657,6 +698,19 @@ async def run_ip_case_preflight(
             require_cpe=need_cpe,
             strict=False,
         )
+        chain = cfg.get("_ip_suite_chain")
+        if isinstance(chain, dict):
+            from utils.ip_suite_state import mark_suite_healthy, save_chain
+
+            mark_suite_healthy(
+                chain,
+                bts_ip=str(cfg.get("_preflight_bts_lan_ipv4", "")),
+                cpe_ip=str(ctx.peer_host or cfg.get("_preflight_cpe_ipv4", "")),
+                local_pc_ok=True,
+                remote_pc_ok=bool(need_cpe),
+                cpe_ping_ok=bool(need_cpe and ctx.peer_host),
+            )
+            save_chain(cfg.get("_repo_root", "."), chain)
         _log(ctx, f"=== {cid} preflight (fast) done ===")
         return
 
@@ -763,49 +817,74 @@ async def ensure_bts_testbed_baseline(ctx) -> None:
     await run_post_event_testbed_recovery(ctx, label="baseline")
 
 
-async def reboot_bts_then_recovery(ctx, *, label: str = "post-reboot", v6: bool = False) -> None:
-    """Cold reboot BTS, wait for SSH, then full post-event recovery."""
-    from utils.ip_test_flows import _close_ssh, _event_ssh_hosts, _wait_ssh_any
+async def reboot_bts_then_recovery(
+    ctx,
+    *,
+    label: str = "post-reboot",
+    v6: bool = False,
+    strict: bool = False,
+    require_cpe: bool | None = None,
+) -> None:
+    """Cold reboot BTS, settle, then post-event recovery."""
+    from utils.ip_test_flows import _cold_reboot_bts
 
-    password = str(ctx.cfg.get("_password", ""))
-    try:
-        await ctx.ssh.send_command("reboot", timeout_ops=5)
-    except Exception:
-        pass
-    await _close_ssh(ctx.ssh)
-    await asyncio.sleep(5)
-    ssh, effective = await _wait_ssh_any(
-        await _event_ssh_hosts(ctx),
-        password,
-        timeout_s=int(ctx.cfg.get("reboot_timeout_s", 200)),
-        interval_s=5,
-    )
-    ctx.ssh = ssh
-    ctx.host = effective
+    await _cold_reboot_bts(ctx, label=label)
+    need_cpe = case_requires_cpe(ctx.case.case_id) if require_cpe is None else require_cpe
     if v6:
-        await run_post_event_testbed_recovery_v6(ctx, label=label, require_cpe=True)
+        await run_post_event_testbed_recovery_v6(
+            ctx, label=label, require_cpe=need_cpe, strict=strict
+        )
     else:
-        await run_post_event_testbed_recovery(ctx, label=label)
+        await run_post_event_testbed_recovery(
+            ctx,
+            label=label,
+            require_cpe=need_cpe,
+            strict=strict,
+        )
 
 
 async def run_ip15_post_restore_recovery(ctx, *, v6: bool = False) -> None:
     """
-    IP_15/IP_34: after sysupgrade restore, run baseline recovery then cold reboot.
+    IP_15/IP_34: after sysupgrade restore, mgmt baseline then cold reboot.
 
     Bench: UCI can show the correct LAN while lab mgmt-VLAN ping to BTS fails until reboot.
+    Skip link formation / ping before reboot — they waste time and fail on stale bridge state.
     """
     cid = ctx.case.case_id if getattr(ctx, "case", None) else ("IP_34" if v6 else "IP_15")
+    settle_s = int(ctx.cfg.get("post_restore_settle_s", 30))
+    if settle_s > 0:
+        ctx.notes.append(f"{cid}: post-restore settle {settle_s}s before recovery")
+        await asyncio.sleep(settle_s)
+
     if v6:
-        await run_post_event_testbed_recovery_v6(ctx, label=f"{cid}-baseline", require_cpe=True)
+        await preflight_step1_fallback_ssh(ctx)
+        await preflight_step2_device_config(ctx)
+        await preflight_step3_lab_mgmt_ipv6(ctx)
     else:
-        await ensure_bts_testbed_baseline(ctx)
+        await run_post_reset_preflight(ctx)
+
     if not ctx.cfg.get("ip15_reboot_after_restore", True):
+        if v6:
+            await run_post_event_testbed_recovery_v6(
+                ctx, label=f"{cid}-baseline", require_cpe=False, strict=False
+            )
+        else:
+            await run_post_event_testbed_recovery(
+                ctx, label=f"{cid}-baseline", require_cpe=False, strict=False
+            )
         return
+
     ctx.notes.append(
         f"{cid}: cold reboot after restore (mgmt-VLAN ping to BTS failed until reboot on bench)"
     )
     print(f"[{cid}] cold reboot after restore — required for lab ping to BTS LAN")
-    await reboot_bts_then_recovery(ctx, label=f"{cid}-post-reboot", v6=v6)
+    await reboot_bts_then_recovery(
+        ctx,
+        label=f"{cid}-post-reboot",
+        v6=v6,
+        strict=False,
+        require_cpe=False,
+    )
 
 
 async def ensure_non_default_bts_lan_ipv4(ctx) -> tuple[str, dict[str, str]]:

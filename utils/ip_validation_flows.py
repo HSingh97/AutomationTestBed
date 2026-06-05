@@ -252,11 +252,11 @@ async def run_ip_validation(
     if not hasattr(request.config, "_ip_suite_chain"):
         import subprocess
 
-        request.config._ip_suite_chain = {
-            "ok": False,
-            "bts_lan_ipv4": "",
-            "cpe_lan_ipv4": "",
-        }
+        from utils.ip_suite_state import default_chain, load_chain
+
+        request.config._ip_suite_chain = load_chain(request.config.rootpath)
+        if not request.config._ip_suite_chain.get("bts_lan_ipv4"):
+            request.config._ip_suite_chain = default_chain()
         rev = "unknown"
         try:
             rev = (
@@ -271,10 +271,11 @@ async def run_ip_validation(
         except Exception:
             pass
         print(
-            "[IP suite] preflight policy v2 "
-            f"(git {rev}) — chain starts ok=False; IP_01/02–04 never skip preflight"
+            "[IP suite] preflight policy v4 "
+            f"(git {rev}) — skip when suite healthy; minimal preflight unless prior fail/ping loss"
         )
     cfg["_ip_suite_chain"] = request.config._ip_suite_chain
+    cfg["_repo_root"] = str(request.config.rootpath)
 
     ssh, host, fallbacks = await open_ip_ssh_session(
         case_id=case_id,

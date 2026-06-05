@@ -1,0 +1,1772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UBR Automation Testbed — Architecture Overview</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-color: #eef2f6;
+            --panel-bg: #ffffff;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+
+            --brand-dark-blue: #0f172a;
+            --brand-blue: #1d4ed8;
+            --brand-light-blue: #eff6ff;
+            --brand-green: #15803d;
+            --brand-orange: #ea580c;
+            --brand-red: #b91c1c;
+            --brand-yellow: #a16207;
+            --brand-purple: #7e22ce;
+
+            --layer-people: #f8fafc;
+            --layer-core: #eff6ff;
+            --layer-suites: #f0fdf4;
+            --layer-traffic: #ecfdf5;
+            --layer-lab: #fefce8;
+
+            --live-color: #16a34a;
+            --partial-color: #d97706;
+            --planned-color: #94a3b8;
+
+            --border-color: #cbd5e1;
+            --border-radius: 8px;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            padding: 24px;
+            color: var(--text-main);
+            display: flex;
+            justify-content: center;
+        }
+
+        .diagram-container {
+            background-color: var(--panel-bg);
+            border-radius: 14px;
+            box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.1);
+            width: 100%;
+            max-width: 1680px;
+            padding: 28px 32px 32px;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            border: 1px solid var(--border-color);
+        }
+
+        /* --- HEADER --- */
+        .header {
+            background: linear-gradient(135deg, var(--brand-dark-blue) 0%, #1e3a8a 100%);
+            color: white;
+            text-align: center;
+            padding: 22px 20px 18px;
+            border-radius: var(--border-radius);
+        }
+        .header h1 {
+            font-size: 26px;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+        .header .subtitle {
+            font-size: 14px;
+            font-weight: 500;
+            opacity: 0.9;
+            margin-bottom: 12px;
+        }
+        .header-stats {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .stat-chip {
+            background: rgba(255,255,255,0.12);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 20px;
+            padding: 4px 14px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* --- LEGEND --- */
+        .legend {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 20px;
+            padding: 10px 16px;
+            background: #f8fafc;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .legend-item { display: flex; align-items: center; gap: 8px; color: var(--text-muted); }
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+        .legend-dot.live { background: var(--live-color); }
+        .legend-dot.partial { background: var(--partial-color); }
+        .legend-dot.planned { background: var(--planned-color); }
+        .legend-box {
+            width: 28px;
+            height: 14px;
+            border-radius: 3px;
+            border: 2px solid var(--planned-color);
+            border-style: dashed;
+        }
+
+        /* --- LAYER WRAPPERS --- */
+        .layer {
+            border-radius: var(--border-radius);
+            padding: 16px;
+            position: relative;
+            border: 1px solid var(--border-color);
+        }
+        .layer-label {
+            position: absolute;
+            top: -10px;
+            left: 16px;
+            background: inherit;
+            padding: 0 8px;
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-muted);
+        }
+        .layer-people { background: var(--layer-people); }
+        .layer-core { background: var(--layer-core); }
+        .layer-suites { background: var(--layer-suites); }
+        .layer-traffic { background: var(--layer-traffic); }
+        .layer-lab { background: var(--layer-lab); }
+
+        /* --- STATUS BADGES --- */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            padding: 2px 7px;
+            border-radius: 10px;
+            margin-left: auto;
+            flex-shrink: 0;
+        }
+        .badge.live { background: #dcfce7; color: #166534; }
+        .badge.partial { background: #fef3c7; color: #92400e; }
+        .badge.planned { background: #f1f5f9; color: #64748b; }
+
+        .box-planned {
+            border-style: dashed !important;
+            opacity: 0.85;
+        }
+
+        /* --- WORKFLOW ROW --- */
+        .workflow-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: stretch;
+            gap: 10px;
+            margin-top: 6px;
+        }
+
+        .workflow-box {
+            background: white;
+            border: 2px solid var(--border-color);
+            border-radius: var(--border-radius);
+            padding: 14px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            box-shadow: var(--shadow-sm);
+            position: relative;
+        }
+        .workflow-box.live { border-color: var(--brand-blue); }
+        .workflow-box.orange { border-color: var(--brand-orange); }
+
+        .step-num {
+            position: absolute;
+            top: -10px;
+            left: 12px;
+            background: var(--brand-dark-blue);
+            color: white;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            font-size: 11px;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .wf-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+            margin-top: 4px;
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--brand-dark-blue);
+        }
+        .wf-header i { font-size: 20px; }
+        .wf-list { list-style: none; font-size: 12px; color: var(--text-muted); }
+        .wf-list li { margin-bottom: 5px; display: flex; align-items: center; gap: 6px; }
+        .wf-list li::before { content: "•"; color: var(--text-main); font-weight: bold; }
+
+        .arrow-flex {
+            display: flex;
+            align-items: center;
+            color: var(--text-muted);
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+
+        /* Jenkins sub-pipelines */
+        .jenkins-pipes {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            margin-top: 4px;
+        }
+        .pipe-item {
+            font-size: 10px;
+            font-weight: 600;
+            background: #fef2f2;
+            color: #991b1b;
+            padding: 3px 8px;
+            border-radius: 4px;
+            border-left: 3px solid #d33833;
+        }
+
+        /* --- MID SECTION --- */
+        .mid-section {
+            display: grid;
+            grid-template-columns: 260px 1fr 260px;
+            gap: 16px;
+            margin-top: 6px;
+            align-items: stretch;
+        }
+
+        .side-col { display: flex; flex-direction: column; gap: 0; min-height: 100%; }
+        .side-col .side-box.unified-side {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            border-color: var(--brand-green);
+        }
+        .side-mini-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+            margin-top: 4px;
+        }
+        .mini-stat {
+            background: #f0fdf4;
+            border: 1px solid #86efac;
+            border-radius: 6px;
+            padding: 8px 4px;
+            text-align: center;
+        }
+        .mini-stat .num { font-size: 20px; font-weight: 800; color: #166534; line-height: 1; }
+        .mini-stat .lbl { font-size: 8px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-top: 3px; }
+        .pipe-list { list-style: none; font-size: 10px; color: var(--text-muted); margin-top: 4px; }
+        .pipe-list li {
+            padding: 5px 8px;
+            margin-bottom: 4px;
+            background: #fef2f2;
+            border-left: 3px solid #d33833;
+            border-radius: 0 4px 4px 0;
+            font-weight: 600;
+        }
+
+        .side-box {
+            background: white;
+            border: 2px solid var(--border-color);
+            border-radius: var(--border-radius);
+            padding: 14px;
+            box-shadow: var(--shadow-sm);
+            flex: 1;
+        }
+        .side-box.purple { border-color: var(--brand-purple); }
+        .side-box.green { border-color: var(--brand-green); }
+        .side-box.dark { border-color: var(--brand-dark-blue); }
+
+        .side-box h3 {
+            font-size: 12px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            text-transform: uppercase;
+            flex-wrap: wrap;
+        }
+        .side-box ul { list-style: none; font-size: 12px; color: var(--text-muted); }
+        .side-box li { margin-bottom: 5px; display: flex; align-items: center; gap: 6px; }
+        .side-box li::before { content: "•"; font-weight: bold; }
+
+        /* Logging & captures artifact panel */
+        .artifact-section-label {
+            font-size: 9px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin: 10px 0 6px;
+            padding-top: 8px;
+            border-top: 1px solid var(--border-color);
+        }
+        .artifact-section-label:first-of-type { border-top: none; padding-top: 0; margin-top: 4px; }
+        .artifact-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+        }
+        .artifact-tile {
+            background: #f8fafc;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 7px 8px;
+            display: flex;
+            align-items: flex-start;
+            gap: 7px;
+            font-size: 10px;
+            line-height: 1.3;
+        }
+        .artifact-tile i {
+            font-size: 14px;
+            color: var(--brand-dark-blue);
+            margin-top: 1px;
+            flex-shrink: 0;
+        }
+        .artifact-tile strong {
+            display: block;
+            font-size: 10px;
+            color: var(--text-main);
+            margin-bottom: 1px;
+        }
+        .artifact-tile span { color: var(--text-muted); font-size: 9px; }
+        .artifact-tile.planned { opacity: 0.75; border-style: dashed; background: #fafafa; }
+        .artifact-tile.planned i { color: var(--planned-color); }
+        .artifact-store {
+            margin-top: 10px;
+            padding: 8px;
+            background: var(--brand-dark-blue);
+            color: #cbd5e1;
+            border-radius: 6px;
+            font-size: 9px;
+            text-align: center;
+            line-height: 1.4;
+        }
+        .artifact-store strong { color: white; display: block; font-size: 10px; margin-bottom: 2px; }
+
+        /* Framework */
+        .framework-box {
+            border: 2px solid var(--brand-blue);
+            background: white;
+            border-radius: var(--border-radius);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            box-shadow: var(--shadow-sm);
+            flex: 1;
+            height: 100%;
+        }
+
+        .fw-session {
+            margin-top: auto;
+            background: linear-gradient(180deg, #f8fafc 0%, #eff6ff 100%);
+            border: 1px solid #bfdbfe;
+            border-radius: var(--border-radius);
+            padding: 14px;
+        }
+        .fw-session h4 {
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            color: var(--brand-blue);
+            text-align: center;
+            margin-bottom: 12px;
+            letter-spacing: 0.5px;
+        }
+        .session-steps {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+        .session-step {
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px 8px;
+            text-align: center;
+            position: relative;
+        }
+        .session-step:not(:last-child)::after {
+            content: "→";
+            position: absolute;
+            right: -10px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--brand-blue);
+            font-weight: 700;
+            font-size: 12px;
+            z-index: 1;
+        }
+        .session-step i {
+            font-size: 18px;
+            color: var(--brand-blue);
+            margin-bottom: 6px;
+        }
+        .session-step strong {
+            display: block;
+            font-size: 10px;
+            color: var(--brand-dark-blue);
+            margin-bottom: 3px;
+        }
+        .session-step span {
+            font-size: 9px;
+            color: var(--text-muted);
+            line-height: 1.35;
+        }
+        .fw-coverage-bar {
+            display: flex;
+            height: 10px;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-top: 12px;
+            border: 1px solid var(--border-color);
+        }
+        .fw-coverage-bar span { height: 100%; }
+        .fw-coverage-bar .bar-fn { flex: 110; background: #16a34a; }
+        .fw-coverage-bar .bar-tp { flex: 192; background: #2563eb; }
+        .fw-coverage-bar .bar-rg { flex: 3; background: #d97706; min-width: 4px; }
+        .fw-coverage-legend {
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+            margin-top: 8px;
+            font-size: 9px;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+        .fw-coverage-legend span { display: flex; align-items: center; gap: 4px; }
+        .fw-coverage-legend .dot {
+            width: 8px; height: 8px; border-radius: 50%;
+        }
+
+        .fw-title {
+            text-align: center;
+            color: var(--brand-blue);
+            font-size: 17px;
+            font-weight: 800;
+            text-transform: uppercase;
+        }
+        .fw-subtitle {
+            text-align: center;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-main);
+            margin-top: -6px;
+        }
+
+        .modules-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+
+        .module-card {
+            background: var(--brand-light-blue);
+            border: 1px solid #bfdbfe;
+            border-radius: 6px;
+            padding: 12px 8px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .module-card h4 {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--brand-blue);
+            text-transform: uppercase;
+            margin-bottom: 2px;
+        }
+        .module-card .count {
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--live-color);
+            background: #dcfce7;
+            padding: 2px 8px;
+            border-radius: 10px;
+            margin-bottom: 6px;
+        }
+        .module-card span.sub { font-size: 10px; color: var(--text-muted); font-weight: 600; margin-bottom: 6px; }
+        .module-card i.icon { font-size: 24px; margin-bottom: 6px; color: var(--text-main); }
+        .module-card p { font-size: 10px; color: var(--text-muted); line-height: 1.35; }
+
+        .bootstrap-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .bootstrap-card {
+            background: #fff7ed;
+            border: 1px solid #fed7aa;
+            border-radius: 6px;
+            padding: 10px;
+            text-align: center;
+        }
+        .bootstrap-card h4 {
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--brand-orange);
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+        .bootstrap-card p { font-size: 10px; color: var(--text-muted); line-height: 1.3; }
+
+        .common-libs, .reporting-row {
+            background: var(--brand-light-blue);
+            border-radius: 6px;
+            border: 1px solid #bfdbfe;
+            padding: 10px;
+            text-align: center;
+        }
+        .common-libs h4, .reporting-row h4 {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+            color: var(--brand-blue);
+        }
+        .lib-items, .rep-items {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        .lib-items div, .rep-items div { display: flex; align-items: center; gap: 5px; }
+
+        /* Data flow inset */
+        .data-flow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 6px;
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-muted);
+            padding: 8px;
+            background: white;
+            border: 1px dashed var(--border-color);
+            border-radius: 6px;
+        }
+        .data-flow .df-step {
+            background: #f1f5f9;
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+        .data-flow i { font-size: 10px; color: var(--brand-blue); }
+
+        /* --- EXECUTIVE COVERAGE --- */
+        .suites-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 14px;
+            margin-top: 6px;
+        }
+        .suite-card {
+            background: white;
+            border: 2px solid var(--brand-green);
+            border-radius: var(--border-radius);
+            padding: 20px 14px;
+            text-align: center;
+            box-shadow: var(--shadow-md);
+        }
+        .suite-card .suite-count {
+            font-size: 42px;
+            font-weight: 800;
+            color: var(--brand-green);
+            line-height: 1;
+        }
+        .suite-card h4 {
+            font-size: 13px;
+            font-weight: 800;
+            color: var(--brand-dark-blue);
+            margin: 10px 0 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+        .suite-card p {
+            font-size: 11px;
+            color: var(--text-muted);
+            line-height: 1.45;
+        }
+        .suite-card .suite-icon {
+            font-size: 22px;
+            color: var(--brand-blue);
+            margin-bottom: 4px;
+        }
+        .suite-total {
+            background: linear-gradient(135deg, var(--brand-dark-blue) 0%, #1e3a8a 100%);
+            color: white;
+            border-color: var(--brand-dark-blue);
+        }
+        .suite-total .suite-count { color: white; font-size: 48px; }
+        .suite-total h4 { color: white; }
+        .suite-total p { color: #cbd5e1; }
+        .suite-total .suite-icon { color: #93c5fd; }
+        .coverage-subtitle {
+            text-align: center;
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 10px;
+            font-weight: 500;
+        }
+
+        /* --- TRAFFIC --- */
+        .traffic-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-top: 6px;
+        }
+        .traffic-card {
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 12px;
+            box-shadow: var(--shadow-sm);
+        }
+        .traffic-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        .traffic-card h3 { font-size: 18px; font-weight: 800; color: var(--text-main); }
+        .traffic-card.trex h3 { color: #166534; }
+        .traffic-card ul { list-style: none; font-size: 11px; color: var(--text-muted); }
+        .traffic-card li { margin-bottom: 3px; }
+        .traffic-card li::before { content: "•"; font-weight: bold; margin-right: 4px; }
+
+        /* --- LAB TOPOLOGY --- */
+        .lab-topology {
+            margin-top: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* --- UNIFIED TESTBED TOPOLOGY --- */
+        .testbed-unified {
+            background: linear-gradient(180deg, #fffbeb 0%, #ffffff 120px);
+            border: 2px solid var(--brand-yellow);
+            border-radius: var(--border-radius);
+            padding: 24px 20px 18px;
+            position: relative;
+        }
+
+        /* --- PHYSICAL TESTBED (CSS-only, no SVG) --- */
+        .phy-board {
+            max-width: 880px;
+            margin: 12px auto 0;
+        }
+        .phy-trex-wrap {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 0;
+        }
+        .phy-body {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-top: 0;
+        }
+        .phy-col {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: #f8fbff;
+            border: 2px solid #93c5fd;
+            border-radius: var(--border-radius);
+            padding: 14px 12px 16px;
+            box-shadow: var(--shadow-sm);
+        }
+        .phy-col-label {
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: #1d4ed8;
+            margin-bottom: 10px;
+        }
+        .phy-trex-cables {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .phy-cable-tag {
+            font-size: 8px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .phy-cable-tag::before {
+            content: "↓";
+            font-size: 10px;
+        }
+        .phy-cable-tag.mgmt { background: #e0e7ff; color: #3730a3; }
+        .phy-cable-tag.data { background: #dcfce7; color: #166534; }
+        .phy-vline {
+            width: 4px;
+            height: 24px;
+            border-radius: 2px;
+            flex-shrink: 0;
+        }
+        .phy-vline.lan { background: #2563eb; }
+        .phy-dut-band {
+            grid-column: 1 / -1;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            gap: 12px;
+            padding: 0 8px;
+        }
+        .phy-dut-stack {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            flex: 1;
+            max-width: 200px;
+        }
+        .phy-dut-rf-mid {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex: 1.2;
+            gap: 0;
+            padding-bottom: 18px;
+        }
+        .phy-rf-seg {
+            flex: 1;
+            max-width: 80px;
+            height: 8px;
+            background: var(--brand-orange);
+            border-top: 2px dashed white;
+            border-bottom: 2px dashed white;
+            position: relative;
+        }
+        .phy-rf-seg .rf-lbl {
+            position: absolute;
+            top: -14px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 8px;
+            font-weight: 800;
+            color: var(--brand-orange);
+            white-space: nowrap;
+        }
+        .phy-rf-center {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            padding: 0 8px;
+        }
+        .phy-rf-center .conducted-label {
+            font-size: 9px;
+            font-weight: 800;
+            text-transform: uppercase;
+            color: var(--brand-orange);
+            text-align: center;
+        }
+
+        .switch-ports-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            justify-content: center;
+            margin-top: 8px;
+            max-width: 200px;
+        }
+        .sw-port-chip {
+            font-size: 8px;
+            font-weight: 700;
+            padding: 3px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.2px;
+        }
+        .sw-port-chip.lan { background: #dbeafe; color: #1d4ed8; }
+        .sw-port-chip.mgmt { background: #e0e7ff; color: #3730a3; }
+        .sw-port-chip.data { background: #dcfce7; color: #166534; }
+
+        .topo-rf-bridge .rf-bar {
+            width: 120%;
+            height: 8px;
+            background: var(--brand-orange);
+            border-top: 2px dashed white;
+            border-bottom: 2px dashed white;
+            border-radius: 2px;
+            position: relative;
+        }
+        .topo-rf-bridge .rf-bar-label {
+            position: absolute;
+            top: -14px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 8px;
+            font-weight: 800;
+            color: var(--brand-orange);
+            background: #fffbeb;
+            padding: 0 4px;
+            white-space: nowrap;
+        }
+
+        .topo-dut-col {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0;
+        }
+        .topo-dut-drop {
+            width: 3px;
+            height: 28px;
+            background: var(--brand-blue);
+        }
+
+        .topo-flow-hint {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 16px;
+        }
+        .flow-hint-card {
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px 12px;
+            font-size: 10px;
+            color: var(--text-muted);
+            line-height: 1.45;
+        }
+        .flow-hint-card strong {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 10px;
+            color: var(--brand-dark-blue);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+        }
+        .flow-hint-card strong i { color: var(--brand-blue); }
+        .testbed-unified-title {
+            position: absolute;
+            top: -10px;
+            left: 16px;
+            background: var(--layer-lab);
+            padding: 0 8px;
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            color: var(--brand-yellow);
+            letter-spacing: 0.5px;
+        }
+
+        .trex-row {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 8px;
+        }
+        .lab-node.trex-server {
+            border: 2px solid #166534;
+            background: #f0fdf4;
+            min-width: 280px;
+            padding: 14px 20px;
+        }
+        .lab-node.trex-server i { color: #166534; }
+        .trex-ports {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+        .port-tag {
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            padding: 4px 10px;
+            border-radius: 4px;
+            letter-spacing: 0.3px;
+        }
+        .port-tag.mgmt { background: #e0e7ff; color: #3730a3; border: 1px solid #a5b4fc; }
+        .port-tag.data { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+
+        .tb-main {
+            display: grid;
+            grid-template-columns: 1fr 120px 1fr;
+            grid-template-rows: auto auto;
+            gap: 12px 12px;
+            align-items: start;
+            margin-top: 12px;
+        }
+        .tb-side-col { display: flex; flex-direction: column; align-items: center; }
+        .tb-device-row {
+            grid-column: 1 / 4;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0;
+            padding: 8px 20px 0;
+        }
+        .tb-device-row .conducted-segment {
+            flex: 1;
+            height: 6px;
+            background: var(--brand-orange);
+            border-top: 2px dashed white;
+            border-bottom: 2px dashed white;
+            position: relative;
+            min-width: 40px;
+            max-width: 120px;
+        }
+
+        .tb-side-inner {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+            border: 1px dashed var(--border-color);
+            border-radius: var(--border-radius);
+            padding: 14px 10px 12px;
+            background: #fafafa;
+        }
+        .tb-side-label {
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: var(--text-muted);
+            margin-bottom: 10px;
+        }
+        .tb-vline {
+            width: 3px;
+            height: 22px;
+            background: var(--brand-blue);
+            flex-shrink: 0;
+        }
+        .tb-vline.orange { background: var(--brand-orange); }
+        .tb-vline.green { background: #166534; }
+        .tb-vline.purple { background: #6366f1; }
+
+        .tb-center {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 6px;
+            padding-top: 28px;
+        }
+        .conducted-label {
+            font-size: 9px;
+            font-weight: 800;
+            text-transform: uppercase;
+            color: var(--brand-orange);
+            letter-spacing: 0.4px;
+            text-align: center;
+            line-height: 1.3;
+        }
+        .trex-cables {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin-bottom: 4px;
+            position: relative;
+            min-height: 36px;
+        }
+        .trex-cable {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-size: 8px;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+        .trex-cable .tb-vline { height: 18px; }
+        .trex-cable.mgmt .tb-vline { background: #6366f1; }
+        .trex-cable.data1 .tb-vline { background: #166534; }
+        .trex-cable.data2 .tb-vline { background: #166534; }
+
+        .port-legend {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-top: 14px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-color);
+            font-size: 10px;
+            color: var(--text-muted);
+        }
+        .port-legend span { display: flex; align-items: center; gap: 6px; }
+        .port-legend .swatch {
+            width: 14px;
+            height: 3px;
+            border-radius: 1px;
+        }
+        .swatch.lan { background: var(--brand-blue); }
+        .swatch.mgmt { background: #6366f1; }
+        .swatch.data { background: #166534; }
+        .swatch.rf { background: var(--brand-orange); height: 5px; border-top: 1px dashed white; border-bottom: 1px dashed white; }
+
+        .switch-node {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            background: #1e293b;
+            color: white;
+            border-radius: 8px;
+            padding: 12px 16px;
+            min-width: 110px;
+            box-shadow: var(--shadow-md);
+            z-index: 2;
+        }
+        .switch-node i { font-size: 26px; margin-bottom: 5px; color: #93c5fd; }
+        .switch-node h4 { font-size: 12px; font-weight: 800; margin-bottom: 2px; }
+        .switch-node p { font-size: 9px; color: #cbd5e1; line-height: 1.3; }
+
+        .lab-node {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px 14px;
+            box-shadow: var(--shadow-md);
+            min-width: 110px;
+            z-index: 2;
+        }
+        .lab-node.device { border: 2px solid #fca5a5; background: #fef2f2; }
+        .lab-node.vaunix { background: var(--brand-red); color: white; border-color: #991b1b; min-width: 100px; padding: 10px 12px; }
+        .lab-node.pc { border: 2px solid var(--brand-blue); background: var(--brand-light-blue); min-width: 120px; }
+
+        .lab-node i { font-size: 26px; margin-bottom: 6px; color: var(--brand-blue); }
+        .lab-node.vaunix i { color: white; font-size: 22px; margin-bottom: 4px; }
+        .lab-node h4 { font-size: 12px; font-weight: 700; margin-bottom: 3px; }
+        .lab-node p { font-size: 10px; color: var(--text-muted); line-height: 1.3; }
+        .lab-node.vaunix p { color: #fecaca; font-size: 9px; }
+        .lab-node.vaunix h4 { font-size: 11px; }
+        .lab-node.pc p { color: var(--brand-blue); font-weight: 600; }
+
+        .link-text {
+            position: absolute;
+            top: -16px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 8px;
+            font-weight: 700;
+            color: var(--text-main);
+            background: var(--layer-lab);
+            padding: 0 4px;
+            white-space: nowrap;
+        }
+
+        .lab-notes {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 14px;
+        }
+        .lab-note {
+            background: white;
+            border: 1px solid #fde68a;
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 10px;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+        .lab-note strong { color: var(--brand-dark-blue); display: block; margin-bottom: 2px; font-size: 10px; }
+
+        /* --- TECH STACK (single line) --- */
+        .tech-stack-row {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-wrap: nowrap;
+            gap: 0;
+            padding: 12px 16px;
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+        .tech-stack-label {
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            letter-spacing: 0.6px;
+            margin-right: 16px;
+            flex-shrink: 0;
+        }
+        .tech-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-main);
+            flex-shrink: 0;
+        }
+        .tech-item i { font-size: 16px; }
+        .tech-sep {
+            color: var(--border-color);
+            margin: 0 14px;
+            font-weight: 300;
+            flex-shrink: 0;
+        }
+
+        /* --- PRINT --- */
+        @media print {
+            body { padding: 0; background: white; }
+            .diagram-container { box-shadow: none; border: none; max-width: 100%; }
+        }
+
+        @media (max-width: 1200px) {
+            .mid-section { grid-template-columns: 1fr; }
+            .session-steps { grid-template-columns: repeat(2, 1fr); }
+            .session-step:not(:last-child)::after { display: none; }
+            .modules-grid { grid-template-columns: repeat(2, 1fr); }
+            .suites-grid { grid-template-columns: repeat(2, 1fr); }
+            .traffic-grid { grid-template-columns: repeat(2, 1fr); }
+            .phy-body { grid-template-columns: 1fr; }
+            .phy-dut-band { flex-wrap: wrap; gap: 10px; padding: 12px; }
+            .phy-rf-seg { max-width: 40px; }
+            .lab-notes { grid-template-columns: 1fr; }
+            .tech-stack-row { justify-content: flex-start; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="diagram-container">
+
+    <div class="header">
+        <h1>UBR Automation Testbed</h1>
+        <p class="subtitle">End-to-end validation platform — functional, performance &amp; stability testing on a unified framework</p>
+        <div class="header-stats">
+            <span class="stat-chip"><i class="fas fa-vial"></i> 305+ Automated Cases</span>
+            <span class="stat-chip"><i class="fas fa-check-circle"></i> 110 Functional</span>
+            <span class="stat-chip"><i class="fas fa-tachometer-alt"></i> 192 Throughput</span>
+            <span class="stat-chip"><i class="fas fa-sync-alt"></i> 3 Regression</span>
+            <span class="stat-chip"><i class="fab fa-jenkins"></i> Jenkins CI/CD</span>
+        </div>
+    </div>
+
+    <div class="legend">
+        <div class="legend-item"><span class="legend-dot live"></span> Operational today</div>
+        <div class="legend-item"><span class="legend-dot planned"></span> On roadmap</div>
+    </div>
+
+    <!-- LAYER 1: People & CI -->
+    <div class="layer layer-people">
+        <span class="layer-label">Layer 1 — People &amp; CI/CD</span>
+        <div class="workflow-row">
+            <div class="workflow-box live">
+                <span class="step-num">1</span>
+                <div class="wf-header"><i class="fas fa-users"></i> Users / Testers</div>
+                <ul class="wf-list">
+                    <li>Test requests &amp; validation scope</li>
+                    <li>Bug reports &amp; feedback</li>
+                    <li>Manual lab sign-off</li>
+                </ul>
+            </div>
+            <div class="arrow-flex"><i class="fas fa-arrow-right"></i></div>
+
+            <div class="workflow-box live">
+                <span class="step-num">2</span>
+                <div class="wf-header">
+                    <i class="fab fa-gitlab" style="color:#fc6d26;"></i>
+                    <i class="fab fa-github" style="color:#181717;"></i>
+                    Source Control
+                    <span class="badge live">Live</span>
+                </div>
+                <ul class="wf-list">
+                    <li>Code repository</li>
+                    <li>Test profiles &amp; configs</li>
+                    <li>Version history</li>
+                </ul>
+            </div>
+            <div class="arrow-flex"><i class="fas fa-arrow-right"></i></div>
+
+            <div class="workflow-box live">
+                <span class="step-num">3</span>
+                <div class="wf-header">
+                    <i class="fab fa-jenkins" style="color:#d33833;"></i>
+                    Jenkins CI/CD
+                    <span class="badge live">Live</span>
+                </div>
+                <div class="jenkins-pipes">
+                    <div class="pipe-item">Feature Validation — GUI, IP, networking &amp; protocol tests</div>
+                    <div class="pipe-item">Stability Regression — reboot, reload &amp; firmware cycles</div>
+                    <div class="pipe-item">Throughput Performance — 192-point TRex matrix</div>
+                </div>
+            </div>
+            <div class="arrow-flex"><i class="fas fa-arrow-right"></i></div>
+
+            <div class="workflow-box orange">
+                <span class="step-num">4</span>
+                <div class="wf-header">
+                    <i class="fas fa-bell"></i> Notifications
+                    <span class="badge live">Live</span>
+                </div>
+                <ul class="wf-list">
+                    <li><i class="fas fa-envelope"></i> Pipeline completion email</li>
+                    <li><i class="fas fa-chart-line"></i> HTML report per build</li>
+                    <li><i class="fas fa-file-alt"></i> Archived test results</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- LAYER 2: Automation Core -->
+    <div class="layer layer-core">
+        <span class="layer-label">Layer 2 — Automation Framework</span>
+        <div class="mid-section">
+            <div class="side-col">
+                <div class="side-box green unified-side">
+                    <h3 style="color:var(--brand-green);">
+                        <i class="fas fa-sliders"></i> Test Management &amp; Config
+                        <span class="badge live">Live</span>
+                    </h3>
+
+                    <div class="artifact-section-label" style="color:#7e22ce;">Test management</div>
+                    <div class="artifact-tile planned" style="margin-bottom:6px;">
+                        <i class="fas fa-leaf"></i>
+                        <div><strong>Kiwi TCMS</strong><span>Plans · runs · defects — planned</span></div>
+                    </div>
+
+                    <div class="artifact-section-label">Profiles &amp; inventory</div>
+                    <div class="artifact-grid">
+                        <div class="artifact-tile">
+                            <i class="fas fa-file-code"></i>
+                            <div><strong>YAML Profiles</strong><span>Lab topology config</span></div>
+                        </div>
+                        <div class="artifact-tile">
+                            <i class="fas fa-server"></i>
+                            <div><strong>Device Inventory</strong><span>IPs · credentials</span></div>
+                        </div>
+                        <div class="artifact-tile">
+                            <i class="fas fa-search"></i>
+                            <div><strong>CPE Discovery</strong><span>Auto-detect subscriber</span></div>
+                        </div>
+                        <div class="artifact-tile">
+                            <i class="fas fa-info-circle"></i>
+                            <div><strong>Live Summary</strong><span>FW · model · VLAN</span></div>
+                        </div>
+                    </div>
+
+                    <div class="artifact-section-label">Coverage at a glance</div>
+                    <div class="side-mini-stats">
+                        <div class="mini-stat"><div class="num">110</div><div class="lbl">Functional</div></div>
+                        <div class="mini-stat"><div class="num">192</div><div class="lbl">Throughput</div></div>
+                        <div class="mini-stat"><div class="num">3</div><div class="lbl">Regression</div></div>
+                    </div>
+
+                    <div class="artifact-section-label">Jenkins pipelines</div>
+                    <ul class="pipe-list">
+                        <li>Feature validation</li>
+                        <li>Stability regression</li>
+                        <li>Throughput matrix</li>
+                    </ul>
+
+                    <div class="artifact-store" style="margin-top:auto;">
+                        <strong><i class="fas fa-folder"></i> profiles/</strong>
+                        default · link_formation · factory_provision
+                    </div>
+                </div>
+            </div>
+
+            <div class="framework-box">
+                <div class="fw-title">Unified Automation Framework</div>
+                <div class="fw-subtitle">Single platform for functional, performance &amp; stability validation</div>
+
+                <div class="modules-grid">
+                    <div class="module-card">
+                        <h4>UI Validation</h4>
+                        <span class="sub">Playwright + SSH</span>
+                        <i class="fas fa-masks-theater icon" style="color:#16a34a;"></i>
+                        <p>Web interface<br>Feature &amp; config checks</p>
+                    </div>
+                    <div class="module-card">
+                        <h4>Device &amp; Network</h4>
+                        <span class="sub">SSH · SNMP · iPerf</span>
+                        <i class="fas fa-terminal icon"></i>
+                        <p>CLI / UCI validation<br>IPv4 · IPv6 · VLAN</p>
+                    </div>
+                    <div class="module-card">
+                        <h4>Performance</h4>
+                        <span class="sub">TRex · Ixia · Matrix</span>
+                        <i class="fas fa-chart-line icon" style="color:#166534;"></i>
+                        <p>Throughput sweeps<br>BW × MCS × DL/UL</p>
+                    </div>
+                    <div class="module-card">
+                        <h4>Stability</h4>
+                        <span class="sub">Recovery · Bootstrap</span>
+                        <i class="fas fa-sync-alt icon" style="color:#d97706;"></i>
+                        <p>Reboot / reload<br>Firmware upgrade</p>
+                    </div>
+                </div>
+
+                <div class="bootstrap-row">
+                    <div class="bootstrap-card">
+                        <h4><i class="fas fa-rocket"></i> Session Bootstrap</h4>
+                        <p>QinQ / VLAN setup · mgmt IPv6 · CPE discovery · lab PC config · state persistence</p>
+                    </div>
+                    <div class="bootstrap-card">
+                        <h4><i class="fas fa-life-ring"></i> Recovery Manager</h4>
+                        <p>Link health checks · soft recovery · factory reset · archive restore · factory provision</p>
+                    </div>
+                </div>
+
+                <div class="common-libs">
+                    <h4>Common Libraries &amp; Utilities</h4>
+                    <div class="lib-items">
+                        <div><i class="fas fa-cog"></i> Profile Manager</div>
+                        <div><i class="fas fa-database"></i> YAML Data Drivers</div>
+                        <div><i class="fas fa-file-alt"></i> Logging</div>
+                        <div><i class="fas fa-redo"></i> Recovery</div>
+                        <div><i class="fas fa-check-square"></i> pytest-check Assertions</div>
+                        <div><i class="fas fa-table"></i> IP Suite Progress</div>
+                    </div>
+                </div>
+
+                <div class="reporting-row">
+                    <h4>Reporting &amp; Results Delivery</h4>
+                    <div class="rep-items">
+                        <div><i class="fas fa-chart-bar" style="color:#e11d48;"></i> HTML Dashboard Reports</div>
+                        <div><i class="fas fa-file-csv" style="color:#16a34a;"></i> Customer CSV Summary</div>
+                        <div><i class="fas fa-tachometer-alt" style="color:#d97706;"></i> Performance Reports</div>
+                        <div><i class="fas fa-envelope" style="color:#2563eb;"></i> Email on Completion</div>
+                        <div><i class="fas fa-file-excel" style="color:#15803d;"></i> Coverage Workbook</div>
+                    </div>
+                </div>
+
+                <div class="data-flow">
+                    <span class="df-step">Execute tests</span>
+                    <i class="fas fa-arrow-right"></i>
+                    <span class="df-step">Generate reports</span>
+                    <i class="fas fa-arrow-right"></i>
+                    <span class="df-step">Publish to Jenkins</span>
+                    <i class="fas fa-arrow-right"></i>
+                    <span class="df-step">Notify stakeholders</span>
+                </div>
+
+                <div class="fw-session">
+                    <h4>Automated Test Session Lifecycle</h4>
+                    <div class="session-steps">
+                        <div class="session-step">
+                            <i class="fas fa-rocket"></i>
+                            <strong>1 · Bootstrap</strong>
+                            <span>VLAN/QinQ · CPE discovery · link formation</span>
+                        </div>
+                        <div class="session-step">
+                            <i class="fas fa-vial"></i>
+                            <strong>2 · Execute</strong>
+                            <span>305+ cases — functional · throughput · regression</span>
+                        </div>
+                        <div class="session-step">
+                            <i class="fas fa-box-archive"></i>
+                            <strong>3 · Capture</strong>
+                            <span>Logs · PCAP · traces · SNMP · state JSON</span>
+                        </div>
+                        <div class="session-step">
+                            <i class="fas fa-paper-plane"></i>
+                            <strong>4 · Deliver</strong>
+                            <span>HTML report · CSV · email · Jenkins archive</span>
+                        </div>
+                    </div>
+                    <div class="fw-coverage-bar" title="305+ total automated cases">
+                        <span class="bar-fn"></span>
+                        <span class="bar-tp"></span>
+                        <span class="bar-rg"></span>
+                    </div>
+                    <div class="fw-coverage-legend">
+                        <span><span class="dot" style="background:#16a34a;"></span> 110 Functional</span>
+                        <span><span class="dot" style="background:#2563eb;"></span> 192 Throughput</span>
+                        <span><span class="dot" style="background:#d97706;"></span> 3 Regression</span>
+                        <span style="font-weight:800; color:var(--brand-dark-blue);">305+ Total</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="side-col">
+                <div class="side-box dark" style="display:flex; flex-direction:column;">
+                    <h3 style="color:var(--brand-dark-blue);">
+                        <i class="fas fa-box-archive"></i> Logging &amp; Captures
+                        <span class="badge live">Live</span>
+                    </h3>
+
+                    <div class="artifact-section-label">Runtime logs</div>
+                    <div class="artifact-grid">
+                        <div class="artifact-tile">
+                            <i class="fas fa-terminal"></i>
+                            <div><strong>Jenkins Console</strong><span>Live pipeline output</span></div>
+                        </div>
+                        <div class="artifact-tile">
+                            <i class="fas fa-file-alt"></i>
+                            <div><strong>Automation Logs</strong><span>Pytest session trace</span></div>
+                        </div>
+                        <div class="artifact-tile">
+                            <i class="fas fa-server"></i>
+                            <div><strong>Device Logs</strong><span>logread via SSH</span></div>
+                        </div>
+                        <div class="artifact-tile">
+                            <i class="fas fa-chart-line"></i>
+                            <div><strong>SNMP Snapshots</strong><span>Link stats during runs</span></div>
+                        </div>
+                    </div>
+
+                    <div class="artifact-section-label">Captures &amp; evidence</div>
+                    <div class="artifact-grid">
+                        <div class="artifact-tile">
+                            <i class="fas fa-network-wired"></i>
+                            <div><strong>PCAP Files</strong><span>tcpdump on lab PCs</span></div>
+                        </div>
+                        <div class="artifact-tile">
+                            <i class="fas fa-camera"></i>
+                            <div><strong>Playwright Traces</strong><span>GUI session replay</span></div>
+                        </div>
+                        <div class="artifact-tile">
+                            <i class="fas fa-image"></i>
+                            <div><strong>TRex Charts</strong><span>Throughput PNG graphs</span></div>
+                        </div>
+                        <div class="artifact-tile planned">
+                            <i class="fas fa-database"></i>
+                            <div><strong>Central Log Store</strong><span>JCAP — planned</span></div>
+                        </div>
+                    </div>
+
+                    <div class="artifact-section-label">State &amp; reports</div>
+                    <div class="artifact-grid">
+                        <div class="artifact-tile">
+                            <i class="fas fa-map-pin"></i>
+                            <div><strong>Testbed State</strong><span>Bootstrap snapshot</span></div>
+                        </div>
+                        <div class="artifact-tile">
+                            <i class="fas fa-info-circle"></i>
+                            <div><strong>Testbed Summary</strong><span>FW · model · VLAN</span></div>
+                        </div>
+                        <div class="artifact-tile">
+                            <i class="fas fa-file-code"></i>
+                            <div><strong>JSON Results</strong><span>Machine-readable</span></div>
+                        </div>
+                        <div class="artifact-tile">
+                            <i class="fas fa-archive"></i>
+                            <div><strong>Jenkins Archive</strong><span>Per-build artifacts</span></div>
+                        </div>
+                    </div>
+
+                    <div class="artifact-store">
+                        <strong><i class="fas fa-folder-open"></i> reports/artifacts/</strong>
+                        HTML · CSV · JSON · PCAP · performance matrix folders
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- LAYER 3: Test Coverage -->
+    <div class="layer layer-suites">
+        <span class="layer-label">Layer 3 — Automated Test Coverage</span>
+        <div class="suites-grid">
+            <div class="suite-card">
+                <div class="suite-icon"><i class="fas fa-check-double"></i></div>
+                <div class="suite-count">110</div>
+                <h4>Functional</h4>
+                <p>GUI, IP networking, jumbo frames, protocol &amp; feature validation — BTS &amp; CPE</p>
+            </div>
+            <div class="suite-card">
+                <div class="suite-icon"><i class="fas fa-tachometer-alt"></i></div>
+                <div class="suite-count">192</div>
+                <h4>Throughput</h4>
+                <p>Performance matrix — bandwidth, MCS &amp; DL/UL ratio combinations via TRex</p>
+            </div>
+            <div class="suite-card">
+                <div class="suite-icon"><i class="fas fa-sync-alt"></i></div>
+                <div class="suite-count">3</div>
+                <h4>Regression</h4>
+                <p>Long-run stability — soft reboot, network reload &amp; firmware upgrade cycles</p>
+            </div>
+            <div class="suite-card suite-total">
+                <div class="suite-icon"><i class="fas fa-layer-group"></i></div>
+                <div class="suite-count">305+</div>
+                <h4>Total Automated</h4>
+                <p>Full UBR P2MP validation scope — executed via Jenkins with HTML &amp; CSV reports</p>
+            </div>
+        </div>
+        <p class="coverage-subtitle">Functional cases cover web UI, dual-stack networking, MTU/jumbo validation and device configuration checks.</p>
+    </div>
+
+    <!-- LAYER 4: Traffic Tools -->
+    <div class="layer layer-traffic">
+        <span class="layer-label">Layer 4 — Traffic &amp; Performance Instruments</span>
+        <div class="traffic-grid">
+            <div class="traffic-card trex">
+                <div class="traffic-card-header">
+                    <h3>TRex</h3>
+                    <span class="badge live">Live</span>
+                </div>
+                <ul>
+                    <li>192-point performance matrix</li>
+                    <li>Automated throughput validation</li>
+                    <li>Jenkins throughput pipeline</li>
+                </ul>
+            </div>
+            <div class="traffic-card">
+                <div class="traffic-card-header">
+                    <h3 style="letter-spacing:-1px;">ixia</h3>
+                    <span class="badge live">Live</span>
+                </div>
+                <ul>
+                    <li>Benchmark &amp; RFC testing</li>
+                    <li>PDF performance reports</li>
+                </ul>
+            </div>
+            <div class="traffic-card">
+                <div class="traffic-card-header">
+                    <h3 style="color:#b91c1c;">iPerf3</h3>
+                    <span class="badge live">Live</span>
+                </div>
+                <ul>
+                    <li>Bandwidth validation</li>
+                    <li>IPv4 / IPv6 throughput</li>
+                </ul>
+            </div>
+            <div class="traffic-card box-planned">
+                <div class="traffic-card-header">
+                    <h3>OSTINATO</h3>
+                    <span class="badge planned">Planned</span>
+                </div>
+                <ul>
+                    <li>Multi-protocol traffic</li>
+                    <li>Custom stream scenarios</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- LAYER 5: Lab -->
+    <div class="layer layer-lab">
+        <span class="layer-label">Layer 5 — Physical Testbed</span>
+        <div class="lab-topology">
+
+            <div class="testbed-unified">
+                <span class="testbed-unified-title">Physical Testbed — Dual Switch · TRex · Conducted RF</span>
+
+                <div class="phy-board">
+
+                    <!-- TRex -->
+                    <div class="phy-trex-wrap">
+                        <div class="lab-node trex-server">
+                            <i class="fas fa-chart-line"></i>
+                            <h4>TRex Server</h4>
+                            <p>Traffic generator · 3 NICs</p>
+                            <div class="trex-ports">
+                                <span class="port-tag mgmt">Mgmt → BTS Sw</span>
+                                <span class="port-tag data">Data 1 → BTS Sw</span>
+                                <span class="port-tag data">Data 2 → CPE Sw</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="phy-body">
+
+                        <!-- BTS Side -->
+                        <div class="phy-col">
+                            <div class="phy-col-label">BTS Side LAN</div>
+                            <div class="phy-trex-cables">
+                                <span class="phy-cable-tag mgmt">TRex Mgmt</span>
+                                <span class="phy-cable-tag data">TRex Data 1</span>
+                            </div>
+                            <div class="lab-node pc">
+                                <i class="fas fa-desktop"></i>
+                                <h4>BTS Lab PC</h4>
+                                <p>Jenkins · Pytest</p>
+                            </div>
+                            <div class="phy-vline lan"></div>
+                            <div class="switch-node">
+                                <i class="fas fa-network-wired"></i>
+                                <h4>BTS Switch</h4>
+                                <p>L2 · QinQ ports</p>
+                                <div class="switch-ports-list">
+                                    <span class="sw-port-chip lan">Lab PC</span>
+                                    <span class="sw-port-chip lan">BTS Eth</span>
+                                    <span class="sw-port-chip mgmt">TRex Mgmt</span>
+                                    <span class="sw-port-chip data">Data 1</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- CPE Side -->
+                        <div class="phy-col">
+                            <div class="phy-col-label">CPE Side LAN</div>
+                            <div class="phy-trex-cables">
+                                <span class="phy-cable-tag data">TRex Data 2</span>
+                            </div>
+                            <div class="lab-node pc">
+                                <i class="fas fa-server"></i>
+                                <h4>CPE Lab PC</h4>
+                                <p>Capture · iperf</p>
+                            </div>
+                            <div class="phy-vline lan"></div>
+                            <div class="switch-node">
+                                <i class="fas fa-network-wired"></i>
+                                <h4>CPE Switch</h4>
+                                <p>L2 · untagged</p>
+                                <div class="switch-ports-list">
+                                    <span class="sw-port-chip lan">Lab PC</span>
+                                    <span class="sw-port-chip lan">CPE Eth</span>
+                                    <span class="sw-port-chip data">Data 2</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- DUTs + RF — aligned under each switch column -->
+                        <div class="phy-dut-band">
+                            <div class="phy-dut-stack">
+                                <div class="phy-vline lan"></div>
+                                <div class="lab-node device">
+                                    <i class="fas fa-broadcast-tower"></i>
+                                    <h4>BTS</h4>
+                                    <p>Base Station · DUT</p>
+                                </div>
+                            </div>
+                            <div class="phy-dut-rf-mid">
+                                <div class="phy-rf-seg"><span class="rf-lbl">A1/A2</span></div>
+                                <div class="phy-rf-center">
+                                    <div class="conducted-label">Conducted RF</div>
+                                    <div class="lab-node vaunix">
+                                        <i class="fas fa-sliders-h"></i>
+                                        <h4>Vaunix</h4>
+                                        <p>LDA-602</p>
+                                    </div>
+                                </div>
+                                <div class="phy-rf-seg"><span class="rf-lbl">A1/A2</span></div>
+                            </div>
+                            <div class="phy-dut-stack">
+                                <div class="phy-vline lan"></div>
+                                <div class="lab-node device">
+                                    <i class="fas fa-satellite-dish"></i>
+                                    <h4>CPE</h4>
+                                    <p>Subscriber · DUT</p>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- Flow hints -->
+                <div class="topo-flow-hint">
+                    <div class="flow-hint-card">
+                        <strong><i class="fas fa-play-circle"></i> Start tests</strong>
+                        BTS PC SSH to TRex mgmt NIC → start traffic engine → run 192-point matrix or functional suite
+                    </div>
+                    <div class="flow-hint-card">
+                        <strong><i class="fas fa-exchange-alt"></i> Traffic path</strong>
+                        Data port 1 injects load via BTS switch · Data port 2 via CPE switch · RF carries over Vaunix link
+                    </div>
+                    <div class="flow-hint-card">
+                        <strong><i class="fas fa-sliders-h"></i> RF control</strong>
+                        Vaunix attenuator sweeps A1/A2 chains — repeatable SNR and link-margin testing
+                    </div>
+                </div>
+
+                <div class="port-legend">
+                    <span><span class="swatch lan"></span> LAN — PC · switch · DUT</span>
+                    <span><span class="swatch mgmt"></span> TRex mgmt — SSH control</span>
+                    <span><span class="swatch data"></span> TRex data — traffic injection</span>
+                    <span><span class="swatch rf"></span> Conducted RF — BTS ↔ CPE</span>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Tools & stack — single line -->
+    <div class="tech-stack-row">
+        <span class="tech-stack-label">Tools &amp; Stack</span>
+        <span class="tech-item"><i class="fab fa-python" style="color:#3776ab;"></i> Python 3.10</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item"><i class="fas fa-vial" style="color:#0ea5e9;"></i> Pytest-async</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item"><i class="fas fa-masks-theater" style="color:#16a34a;"></i> Playwright</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item"><i class="fas fa-terminal" style="color:#334155;"></i> Scrapli</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item"><i class="fas fa-file-code" style="color:#64748b;"></i> YAML</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item"><i class="fab fa-jenkins" style="color:#d33833;"></i> Jenkins</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item"><i class="fab fa-gitlab" style="color:#fc6d26;"></i> GitLab</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item"><i class="fab fa-github" style="color:#181717;"></i> GitHub</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item"><i class="fas fa-leaf" style="color:#65a30d;"></i> Kiwi TCMS</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item"><i class="fas fa-network-wired" style="color:#2563eb;"></i> SNMP CLI</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item"><i class="fas fa-check-double" style="color:#7c3aed;"></i> pytest-check</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item"><i class="fas fa-file-alt" style="color:#2563eb;"></i> pytest-json-report</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item" style="color:#166534;">TRex</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item">IxNetwork</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item" style="color:#b91c1c;">iPerf3</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item">Ostinato</span>
+        <span class="tech-sep">·</span>
+        <span class="tech-item"><i class="fas fa-sliders-h" style="color:#991b1b;"></i> Vaunix LDA</span>
+    </div>
+
+</div>
+
+</body>
+</html>

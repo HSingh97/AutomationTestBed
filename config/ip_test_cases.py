@@ -190,10 +190,11 @@ def case_requires_bts_lan_ping(case_id: str) -> bool:
 # No full link-formation post-case recovery (SSH check only).
 IP_LIGHT_POST_CASE_IDS: frozenset[str] = frozenset({"IP_01", "IP_05", "IP_22"})
 
-# Always run preflight (config / ping cases) — never skip on chain-ok.
-IP_NEVER_SKIP_PREFLIGHT_CASE_IDS: frozenset[str] = frozenset(
-    IP_FAST_PATH_CASE_IDS | {"IP_01", "IP_18"}
-)
+# Always run full preflight (apply static IP / IPv6 — bench state changes).
+IP_ALWAYS_PREFLIGHT_CASE_IDS: frozenset[str] = frozenset({"IP_01", "IP_18"})
+
+# Back-compat alias (only IP_01/IP_18 always run preflight when not skipped).
+IP_NEVER_SKIP_PREFLIGHT_CASE_IDS: frozenset[str] = IP_ALWAYS_PREFLIGHT_CASE_IDS
 
 
 def device_targets(case: IpTestCase) -> tuple[str, ...]:

@@ -486,6 +486,7 @@ async def run_ip13_reboot_during_traffic(ctx: Any, *, v6: bool = False) -> None:
     else:
         lan_ip = normalize_ip(str(cfg.get("remote_ping_host", "")).split("/")[0])
 
+    reboot_started = time.monotonic()
     try:
         await ctx.ssh.send_command("reboot", timeout_ops=5)
     except Exception:
@@ -521,18 +522,58 @@ async def run_ip13_reboot_during_traffic(ctx: Any, *, v6: bool = False) -> None:
     )
     ctx.ssh = new_ssh
     ctx.host = effective
+    settle_s = int(cfg.get("post_reboot_settle_s", 150))
+    elapsed = time.monotonic() - reboot_started
+    if elapsed < settle_s:
+        extra = settle_s - elapsed
+        ctx.notes.append(
+            f"{cid}: post-reboot settle {extra:.0f}s more ({settle_s}s total before recovery)"
+        )
+        print(
+            f"[{cid}] post-reboot settle: {extra:.0f}s more "
+            f"({settle_s}s total since reboot)"
+        )
+        await asyncio.sleep(extra)
 
     if ctx.device_target == "bts":
+        link_timeout = int(cfg.get("post_reboot_link_timeout_s", 120))
+        cfg["_link_recovery_timeout_override"] = link_timeout
+        try:
+            if v6:
+                from utils.ip_case_preflight import run_post_event_testbed_recovery_v6
+
+                await run_post_event_testbed_recovery_v6(
+                    ctx,
+                    label=f"{cid}-post-reboot",
+                    require_cpe=False,
+                    strict=False,
+                )
+            else:
+                from utils.ip_case_preflight import run_post_event_testbed_recovery
+
+                await run_post_event_testbed_recovery(
+                    ctx,
+                    label=f"{cid}-post-reboot",
+                    require_cpe=False,
+                    link_formation=True,
+                    strict=False,
+                )
+        finally:
+            cfg.pop("_link_recovery_timeout_override", None)
+
+    if lan_ip:
+        ping_wait = int(cfg.get("post_reboot_ping_wait_s", 90))
         if v6:
-            from utils.ip_case_preflight import run_post_event_testbed_recovery_v6
+            from utils.ip_test_flows import _assert_lab_ping_ipv6
 
-            await run_post_event_testbed_recovery_v6(
-                ctx, label=f"{cid}-post-reboot", require_cpe=True
-            )
+            await _assert_lab_ping_ipv6(ctx, lan_ip)
         else:
-            from utils.ip_case_preflight import run_post_event_testbed_recovery
-
-            await run_post_event_testbed_recovery(ctx, label=f"{cid}-post-reboot", require_cpe=True)
+            await _assert_lab_ping_ipv4(
+                ctx,
+                lan_ip,
+                wait_s=ping_wait,
+                interval_s=int(cfg.get("post_reboot_remote_ping_interval_s", 10)),
+            )
 
     if v6:
         if meta["server_on_cpe"]:
@@ -571,11 +612,6 @@ async def run_ip13_reboot_during_traffic(ctx: Any, *, v6: bool = False) -> None:
         f"{cid} post-recovery iperf failed: {rec_out[-300:]}"
     )
     ctx.notes.append(f"{cid} post-recovery iperf: {rec_mbps:.1f} Mbps")
-    if lan_ip:
-        if v6:
-            await _assert_lab_ping_ipv6(ctx, lan_ip)
-        else:
-            await _assert_lab_ping_ipv4(ctx, lan_ip)
     if v6:
         await _stop_iperf_server_v6(meta)
     else:

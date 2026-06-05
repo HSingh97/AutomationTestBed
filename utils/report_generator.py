@@ -305,6 +305,18 @@ def generate():
     report_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     testbed_summary = _load_testbed_summary(profile_name, ip_addr)
     testbed_table = _render_testbed_summary_table(testbed_summary)
+    is_partial_run = bool(data.get("partial") or (data.get("summary") or {}).get("partial"))
+    partial_banner = ""
+    if is_partial_run:
+        source = data.get("recovered_from") or (data.get("summary") or {}).get("recovered_from") or "checkpoint"
+        partial_banner = (
+            '<div style="max-width:1100px;margin:0 auto 14px;padding:12px 16px;'
+            'background:#fff7ed;border:1px solid #fdba74;border-radius:10px;color:#9a3412;'
+            'font-size:14px;font-weight:500;">'
+            f"Partial run — this report includes {stats['total']} completed test(s) only "
+            f"(run aborted or interrupted; recovered from {source})."
+            "</div>"
+        )
 
     # Generate Professional HTML
     html = f"""
@@ -444,6 +456,7 @@ def generate():
                     <img src="{SENAO_LOGO_URL}" alt="Senao Networks"/>
                 </div>
             </header>
+            {partial_banner}
 
             <div class="container">
             <section class="panel-top">

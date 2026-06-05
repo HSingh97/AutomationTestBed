@@ -212,7 +212,7 @@ fi
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-${ROOT}/.playwright-browsers}"
 
 mkdir -p reports/artifacts
-rm -f reports/artifacts/report.json reports/artifacts/testbed_summary.json \
+rm -f reports/artifacts/report.json reports/artifacts/ip_suite_progress.json reports/artifacts/testbed_summary.json \
       reports/artifacts/Senao_UBR_*.html reports/artifacts/Senao_UBR_*.csv \
       reports/artifacts/Senao_GUI_*.html reports/artifacts/Senao_GUI_*.csv \
       Senao_UBR_*.html Senao_GUI_*.html 2>/dev/null || true
@@ -267,6 +267,10 @@ stdbuf -oL -eL "${PYTHON}" "${PYTEST_ARGS[@]}"
 PYTEST_RC=$?
 set -e
 
+if [[ ! -f reports/artifacts/report.json ]]; then
+  echo "[run-local] report.json missing — recovering from IP suite progress if available..."
+  PYTHONPATH=. "${PYTHON}" -m utils.json_report_checkpoint --recover || true
+fi
 if [[ -f reports/artifacts/report.json ]]; then
   echo "[run-local] Generating customer report..."
   PYTHONPATH=. "${PYTHON}" utils/report_generator.py \
