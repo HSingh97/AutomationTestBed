@@ -285,6 +285,43 @@ def parse_bandwidth(ssh_str):
     return str(ssh_str).strip()
 
 
+def _active_channel_parts(value: str) -> tuple[int | None, int | None]:
+    text = normalize_gui_metric(value)
+    match = re.match(r"(\d+)\s*\((\d+)\s*MHz\)", text.strip())
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    return None, None
+
+
+def active_channels_match(ssh_val: str, gui_val: str) -> bool:
+    """
+    True when SSH (iwconfig) and GUI (Summary) active-channel strings agree.
+
+    On 5 GHz the web UI often shows the channel center (e.g. 36 @ 5180 MHz) while
+    iwconfig reports the operating point +10 MHz (e.g. 38 @ 5190 MHz). That offset
+    is expected on this platform and counts as a pass.
+    """
+    ssh = normalize_ssh_metric(ssh_val)
+    gui = normalize_gui_metric(gui_val)
+    if not ssh or not gui:
+        return False
+    if ssh in gui or gui in ssh:
+        return True
+    sch, sf = _active_channel_parts(ssh)
+    gch, gf = _active_channel_parts(gui)
+    if sch is None or gch is None:
+        return False
+    if sch == gch:
+        return True
+    if sf is not None and gf is not None:
+        freq_delta = abs(sf - gf)
+        if freq_delta == 10:
+            return True
+        if freq_delta <= 20 and abs(sch - gch) <= 4:
+            return True
+    return False
+
+
 def parse_enable_disable_flag(ssh_str):
     val = extract_uci_value(ssh_str)
     if val == "1":

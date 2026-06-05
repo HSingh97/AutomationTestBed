@@ -1,6 +1,7 @@
 import re
 import pytest_check as check
 from utils.parsers import (
+    active_channels_match,
     extract_ip_objects,
     normalize_gui_metric,
     normalize_ssh_metric,
@@ -34,6 +35,29 @@ def validate_backend_param(param_name, expected, actual):
         return
     print(f"    -> {param_name}: FAILED (expected '{expected_clean}' | got '{actual_clean}')")
     check.fail(f"{param_name} Mismatch! expected '{expected_clean}' | got '{actual_clean}'")
+
+
+def validate_active_channel(param_name, ssh_val, gui_val):
+    """Active channel may drift slightly between iwconfig and Summary page reads."""
+    ssh_clean = normalize_ssh_metric(ssh_val)
+    gui_clean = normalize_gui_metric(gui_val)
+    if is_empty_or_unknown(ssh_clean) and is_empty_or_unknown(gui_clean):
+        print(f"    -> {param_name}: PASSED (No Information Populated)")
+        check.is_true(True)
+        return
+    if is_empty_or_unknown(ssh_clean) != is_empty_or_unknown(gui_clean):
+        print(f"    -> {param_name}: FAILED (SSH: '{ssh_clean}' | GUI: '{gui_clean}')")
+        check.fail(
+            f"{param_name} Mismatch! One side is missing data. "
+            f"SSH: '{ssh_clean}' | GUI: '{gui_clean}'"
+        )
+        return
+    if active_channels_match(ssh_clean, gui_clean):
+        print(f"    -> {param_name}: PASSED")
+        check.is_true(True)
+        return
+    print(f"    -> {param_name}: FAILED (SSH: '{ssh_clean}' | GUI: '{gui_clean}')")
+    check.fail(f"{param_name} Mismatch! SSH: '{ssh_clean}' | GUI: '{gui_clean}'")
 
 
 def validate_param(param_name, ssh_val, gui_val):

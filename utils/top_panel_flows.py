@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from pages.commands import RootCommands
 from pages.locators import TopPanelLocators
 from utils.parsers import clean_ssh_output, extract_hostname_value, parse_desc_info
@@ -5,11 +7,19 @@ from utils.validators import validate_param, validate_uptime
 
 
 async def assert_top_panel_logo(gui_page, bsu_ip):
+    del bsu_ip  # GUI session may use factory IPv4 (10.0.0.1) while profile primary is mgmt IPv6.
     logo_element = gui_page.locator(TopPanelLocators.LOGO)
     assert await logo_element.count() > 0, "Senao Logo is not present on the top panel."
+    before_host = urlparse(gui_page.url).hostname
     await logo_element.click()
     await gui_page.wait_for_load_state("networkidle")
-    assert bsu_ip in gui_page.url, f"Expected URL to contain IP {bsu_ip}, but got {gui_page.url}"
+    after_host = urlparse(gui_page.url).hostname
+    assert after_host == before_host, (
+        f"Logo click changed device host ({before_host} → {after_host}): {gui_page.url}"
+    )
+    assert "/admin/home" in gui_page.url or "cgi-bin/luci" in gui_page.url, (
+        f"Logo click did not return to LuCI home: {gui_page.url}"
+    )
 
 
 async def assert_top_panel_parameters(root_ssh, gui_page):

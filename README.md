@@ -490,15 +490,25 @@ Destructive IP and jumbo cases run automatically when those markers are selected
 | Full IP suite | `IP` | *(empty)* |
 | One IPv6 case | `IP` | `IP_18` |
 | IPv4-only cases | `IP` | `IP_01 or IP_05` |
-| GUI + IP | `GUI,IP` | `Summary or IP_19` |
+| GUI subset + **all** IP (BTS only) | `GUI,IP` | `Summary, TopPanel` |
+| GUI subset + IP BTS **and** CPE | `GUI,IP` + `RUN_IP_CPE=true` | `Summary, TopPanel` |
+| GUI subset + one IP case | `GUI,IP` | `Summary or IP_19` |
+| Full IP BTS + CPE | `IP` | *(empty)* + `RUN_IP_CPE=true` |
 
 **Optional overrides:** `Remote IPv6 Address`, `FALLBACK_IP`, `SKIP_TESTBED_BOOTSTRAP`.
 
 **Local run (matches Jenkins IP marker defaults):**
 
 ```bash
+# BTS only (default)
 pytest tests/IP/ -m IP -v --allow-ip-suite --allow-ip-destructive \
   --profile ipv6_quickrun --fallback-ip 10.0.0.1 --no-ip-stop-on-first-fail
+
+# Include CPE-side cases
+pytest tests/IP/ -m IP -v --allow-ip-suite --allow-ip-cpe ...
+
+# One CPE case only (no --allow-ip-cpe needed when -k names cpe)
+pytest tests/IP/ -v --allow-ip-suite -k "IP_19 and cpe"
 ```
 
 ### 2. Regression (standalone job)

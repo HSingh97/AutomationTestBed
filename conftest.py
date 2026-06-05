@@ -1,5 +1,6 @@
 import builtins
 import logging
+import re
 import pytest
 import csv
 import json
@@ -189,6 +190,12 @@ def pytest_addoption(parser):
         help="Keep running remaining IP tests after the first failure (default: stop at first fail).",
     )
     group.addoption(
+        "--allow-ip-cpe",
+        action="store_true",
+        default=False,
+        help="Include CPE-side IP tests (default: BTS only). Also enabled when -k contains 'cpe'.",
+    )
+    group.addoption(
         "--skip-testbed-bootstrap",
         action="store_true",
         default=False,
@@ -248,18 +255,38 @@ async def testbed_ready(request, profile_bundle, device_creds):
     return profile_bundle
 
 
+def _ip_suite_include_cpe(config) -> bool:
+    if config.getoption("--allow-ip-cpe"):
+        return True
+    keyword = str(getattr(config.option, "keyword", "") or "")
+    return bool(re.search(r"\bcpe\b", keyword, re.IGNORECASE))
+
+
+def _is_ip_cpe_test_item(item) -> bool:
+    if not item.get_closest_marker("IP"):
+        return False
+    tail = item.nodeid.split("::")[-1].lower()
+    if tail.endswith("_cpe") or "_cpe[" in tail:
+        return True
+    if "-cpe]" in item.nodeid.lower():
+        return True
+    return False
+
+
 def pytest_collection_modifyitems(config, items):
-    if not config.getoption("--bootstrap-only"):
+    if config.getoption("--bootstrap-only"):
+        selected = [
+            item
+            for item in items
+            if "testbed" in item.nodeid or "tests/ip/" in item.nodeid.lower()
+        ]
+        if not selected and items:
+            selected = items[:1]
+        items[:] = selected[:1]
         return
-    # Keep a single lightweight item so session fixtures still run.
-    selected = [
-        item
-        for item in items
-        if "testbed" in item.nodeid or "tests/ip/" in item.nodeid.lower()
-    ]
-    if not selected and items:
-        selected = items[:1]
-    items[:] = selected[:1]
+
+    if config.getoption("--allow-ip-suite") and not _ip_suite_include_cpe(config):
+        items[:] = [item for item in items if not _is_ip_cpe_test_item(item)]
 
 
 @pytest.fixture(scope="session")
@@ -806,12 +833,16 @@ def pytest_generate_tests(metafunc):
         return
     from config.ip_test_cases import IP_TEST_CASES, ACTIVE_IP_CASE_IDS, device_targets
 
+    include_cpe = _ip_suite_include_cpe(metafunc.config)
     params = []
     for case in IP_TEST_CASES:
         num = int(case.case_id.split("_", 1)[1])
         if num < 27 or case.case_id not in ACTIVE_IP_CASE_IDS:
             continue
-        for target in device_targets(case):
+        targets = device_targets(case)
+        if not include_cpe:
+            targets = tuple(t for t in targets if t == "bts")
+        for target in targets:
             params.append(
                 pytest.param((case, target), id=f"{case.case_id}-{target.upper()}")
             )

@@ -48,7 +48,7 @@ pipeline {
         string(
             name: 'TEST_FILTER',
             defaultValue: 'Summary, TopPanel, WirelessProperties',
-            description: 'Optional pytest -k filter (comma = OR). Examples: GUI_05, IP_18, IP_28. Leave empty to run all tests in selected marker paths. Profile is chosen automatically from TEST_MARKERS.'
+            description: 'Optional pytest -k filter (comma = OR). GUI-only when TEST_MARKERS includes GUI+IP (all IP cases still run). Examples: Summary, TopPanel, WirelessProperties, IP_18. Leave empty to run everything in selected paths.'
         )
         string(
             name: 'RECOVERY_PROFILE_NAME',
@@ -74,6 +74,11 @@ pipeline {
             name: 'SKIP_TESTBED_BOOTSTRAP',
             defaultValue: false,
             description: 'Skip session bootstrap (use when BTS/CPE mgmt link and RF are already up)'
+        )
+        booleanParam(
+            name: 'RUN_IP_CPE',
+            defaultValue: false,
+            description: 'IP suite: also run CPE-side cases (default BTS only). Or put cpe in TEST_FILTER / -k IP_18_cpe locally.'
         )
     }
 
@@ -125,16 +130,25 @@ pipeline {
                     def kParts = (params.TEST_FILTER ?: '').split(',')
                         .collect { it.trim() }
                         .findAll { it }
+                    def runIpCpe = params.RUN_IP_CPE ||
+                        kParts.any { (it ?: '').trim().equalsIgnoreCase('cpe') }
+                    def ipScope = runIpCpe ? 'IP_' : '(IP_ and bts)'
+                    def guiOnlyFilter = markers.contains('GUI') && markers.contains('IP') && kParts &&
+                        !kParts.any { (it ?: '').trim().toUpperCase() =~ /^IP_/ }
+                    def kExpr = ''
+                    if (kParts) {
+                        kExpr = kParts.join(' or ')
+                        if (guiOnlyFilter) {
+                            kExpr = "(${kExpr}) or ${ipScope}"
+                        }
+                    } else if (markers.contains('IP') && !runIpCpe) {
+                        kExpr = ipScope
+                    }
                     env.TEST_PATHS = paths.join(' ')
                     env.TEST_M_EXPR = (markers.size() == 1 && mParts.size() == 1) ? "-m \"${mParts[0]}\"" : ''
                     env.TEST_EXTRA_FLAGS = extraFlags.join(' ')
                     env.PROFILE_NAME = resolveProfileName(markers, kParts)
-                    env.TEST_K_FILTER = kParts ? "-k \"${kParts.join(' or ')}\"" : ''
-
-                    if (markers.contains('IP') && !markers.contains('GUI') && kParts &&
-                        !kParts.any { (it ?: '').trim().toUpperCase() =~ /^IP_/ }) {
-                        echo 'WARNING: TEST_FILTER has no IP_* names — clear it for the full IP suite or set e.g. IP_18'
-                    }
+                    env.TEST_K_FILTER = kExpr ? "-k \"${kExpr}\"" : ''
 
                     echo '----------------------------------------'
                     echo 'UBR Validation (pytest, marker-driven)'
@@ -142,7 +156,13 @@ pipeline {
                     echo "Markers:        ${markers.join(', ')}"
                     echo "Test paths:     ${env.TEST_PATHS}"
                     echo "pytest -m:      ${env.TEST_M_EXPR ?: '(paths only)'}"
-                    echo "pytest -k:      ${kParts ? kParts.join(' or ') : '(none)'}"
+                    echo "pytest -k:      ${kExpr ?: '(none — all tests in paths)'}"
+                    if (guiOnlyFilter) {
+                        echo "IP scope:       ${runIpCpe ? 'BTS + CPE' : 'BTS only (enable RUN_IP_CPE for CPE)'}"
+                        echo "GUI filter:     applies to tests/GUI/ only; IP suite via ${ipScope}"
+                    } else if (markers.contains('IP') && !runIpCpe) {
+                        echo 'IP scope:       BTS only (enable RUN_IP_CPE or -k cpe for CPE cases)'
+                    }
                     echo "Extra flags:    ${env.TEST_EXTRA_FLAGS ?: '(none)'}"
                     echo "Profile:        ${env.PROFILE_NAME} (auto from markers/filter)"
                     echo "Recovery:       ${params.RECOVERY_PROFILE_NAME}"
