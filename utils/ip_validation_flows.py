@@ -250,7 +250,30 @@ async def run_ip_validation(
     cfg["_profile"] = profile_bundle.active
     cfg["_profile_bundle"] = profile_bundle
     if not hasattr(request.config, "_ip_suite_chain"):
-        request.config._ip_suite_chain = {"ok": True}
+        import subprocess
+
+        request.config._ip_suite_chain = {
+            "ok": False,
+            "bts_lan_ipv4": "",
+            "cpe_lan_ipv4": "",
+        }
+        rev = "unknown"
+        try:
+            rev = (
+                subprocess.check_output(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    cwd=str(request.config.rootpath),
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                )
+                .strip()
+            )
+        except Exception:
+            pass
+        print(
+            "[IP suite] preflight policy v2 "
+            f"(git {rev}) — chain starts ok=False; IP_01/02–04 never skip preflight"
+        )
     cfg["_ip_suite_chain"] = request.config._ip_suite_chain
 
     ssh, host, fallbacks = await open_ip_ssh_session(

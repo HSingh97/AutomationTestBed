@@ -255,6 +255,8 @@ IP_TEST_DEFAULTS = {
     "configure_static_ip": False,
     "ip01_apply_wait_s": 40,
     "ip01_apply_ping_interval_s": 3,
+    # After ucidyn apply: keep SSH open this long before br-lan check + lab ping (IP_01).
+    "ip01_post_reload_wait_s": 40,
     # When false, leave IP_01 applied LAN IP for subsequent suite cases (restore at suite end only).
     "ip01_restore_baseline_after_case": False,
     # Skip heavy preflight when the previous IP case in the session passed.

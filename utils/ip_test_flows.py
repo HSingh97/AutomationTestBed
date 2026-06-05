@@ -408,6 +408,21 @@ async def _ssh_run(ssh: AsyncGenericDriver, command: str, *, timeout: int = 60) 
     return clean_ssh_output(str(result.result or ""))
 
 
+def _ucidyn_set_line(key: str, value: str) -> str:
+    """Shell line: ucidyn set <uci-key> <value> (in-house apply path, same as LuCI)."""
+    return f"ucidyn set {key} {shlex.quote(str(value).strip())}"
+
+
+async def _ucidyn_set(
+    ssh: AsyncGenericDriver, key: str, value: str, *, timeout: int = 60
+) -> None:
+    await _ssh_run(ssh, _ucidyn_set_line(key, value), timeout=timeout)
+
+
+async def _ucidyn_apply(ssh: AsyncGenericDriver, *, timeout: int = 120) -> None:
+    await _ssh_run(ssh, "ucidyn apply", timeout=timeout)
+
+
 async def _ping(
     ssh: AsyncGenericDriver,
     target: str,
@@ -501,12 +516,11 @@ async def _cli_apply_ipv6_static(
     gw = str(apply.get("ipv6_gateway", "")).strip()
     if not addr:
         pytest.fail("IPv6 address missing for UCI apply")
-    await _ssh_run(ssh, "uci set network.lan.ip6proto=static 2>/dev/null || true")
-    await _ssh_run(ssh, f"uci set network.lan.ip6addr={shlex.quote(addr)}")
+    await _ucidyn_set(ssh, "network.lan.ip6proto", "static")
+    await _ucidyn_set(ssh, "network.lan.ip6addr", addr)
     if gw:
-        await _ssh_run(ssh, f"uci set network.lan.ip6gw={shlex.quote(gw)}")
-    await _ssh_run(ssh, "uci commit network")
-    await _ssh_run(ssh, "/etc/init.d/network reload >/dev/null 2>&1", timeout=60)
+        await _ucidyn_set(ssh, "network.lan.ip6gw", gw)
+    await _ucidyn_apply(ssh)
     await asyncio.sleep(int(cfg.get("network_reload_wait_s", 20)))
 
     uci_addr = _uci_scalar_clean(await _ssh_run(ssh, RootCommands.GET_NET_IP6))
@@ -858,6 +872,7 @@ async def _wait_for_lab_ping_during_apply(
     host = normalize_ip(target)
     deadline = time.monotonic() + max(1, wait_s)
     attempt = 0
+    last_raw: str = ""
     while time.monotonic() < deadline:
         attempt += 1
         stats = await _ping_from_lab_pc(vlan_if, host, count=1)
@@ -866,11 +881,15 @@ async def _wait_for_lab_ping_during_apply(
                 f"lab ping to {host} via {vlan_if} ok during apply wait (attempt {attempt})"
             )
             return vlan_if
+        last_raw = stats.raw or last_raw
         remaining = int(deadline - time.monotonic())
         ctx.notes.append(
             f"apply wait ping {attempt}: {host} not up yet ({remaining}s left)"
         )
         await asyncio.sleep(max(1, interval_s))
+    ctx.notes.append(
+        f"apply wait ping FAILED after {wait_s}s: {host} via {vlan_if} last='{last_raw[:120]}'"
+    )
     return vlan_if
 
 
@@ -1335,13 +1354,11 @@ def _assert_backup_matches_live_uci(
 
 async def _cli_set_mtu(ssh: AsyncGenericDriver, iface: str, mtu: int, cfg: dict[str, Any]) -> None:
     await _ssh_run(ssh, f"ip link set {shlex.quote(iface)} mtu {int(mtu)}")
-    await _ssh_run(
-        ssh,
-        f"uci set network.lan.mtu={int(mtu)} 2>/dev/null || "
-        f"uci set network.@device[0].mtu={int(mtu)} 2>/dev/null || true",
-    )
-    await _ssh_run(ssh, "uci commit network 2>/dev/null || true")
-    await _ssh_run(ssh, "/etc/init.d/network reload >/dev/null 2>&1", timeout=60)
+    try:
+        await _ucidyn_set(ssh, "network.lan.mtu", str(int(mtu)))
+    except Exception:
+        await _ucidyn_set(ssh, "network.@device[0].mtu", str(int(mtu)))
+    await _ucidyn_apply(ssh)
     await asyncio.sleep(int(cfg.get("network_reload_wait_s", 15)))
 
 
@@ -2890,22 +2907,29 @@ async def _cli_apply_ipv4_static(
     ssh: AsyncGenericDriver,
     apply: dict[str, str],
     cfg: dict[str, Any],
+    *,
+    post_apply_wait_s: int | None = None,
 ) -> None:
-    """Apply dynamic/static IPv4 on LAN via UCI (IP_01 SSH path)."""
+    """Apply static IPv4 on LAN via ucidyn set/apply (IP_01 SSH path; same as LuCI)."""
     ipaddr = normalize_ip(str(apply.get("ipv4_address", "")).split("/")[0])
     netmask = str(apply.get("ipv4_netmask", "255.255.255.0")).strip()
     gateway = str(apply.get("ipv4_gateway", "")).strip()
     if not ipaddr:
         pytest.fail("IP_01: no IPv4 address to apply via CLI")
-    await _ssh_run(ssh, "uci set network.lan.proto=static 2>/dev/null || true")
-    await _ssh_run(ssh, f"uci set network.lan.ipaddr={shlex.quote(ipaddr)}")
+    await _ucidyn_set(ssh, "network.lan.proto", "static")
+    await _ucidyn_set(ssh, "network.lan.ipaddr", ipaddr)
     if netmask:
-        await _ssh_run(ssh, f"uci set network.lan.netmask={shlex.quote(netmask)}")
+        await _ucidyn_set(ssh, "network.lan.netmask", netmask)
     if gateway:
-        await _ssh_run(ssh, f"uci set network.lan.gateway={shlex.quote(gateway)}")
-    await _ssh_run(ssh, "uci commit network")
-    await _ssh_run(ssh, "/etc/init.d/network reload >/dev/null 2>&1", timeout=60)
-    await asyncio.sleep(int(cfg.get("network_reload_wait_s", 20)))
+        await _ucidyn_set(ssh, "network.lan.gateway", gateway)
+    await _ucidyn_apply(ssh)
+    wait = (
+        int(post_apply_wait_s)
+        if post_apply_wait_s is not None
+        else int(cfg.get("network_reload_wait_s", 20))
+    )
+    if wait > 0:
+        await asyncio.sleep(wait)
 
 
 async def _cli_set_static_ip(
@@ -2921,30 +2945,27 @@ async def _cli_set_static_ip(
         await _cli_apply_ipv6_static(ssh, values, cfg)
         return
     else:
-        # Ensure protocol is set to static so the device actually applies the configured address.
-        await _ssh_run(ssh, "uci set network.lan.proto=static 2>/dev/null || true")
-        ipaddr = str(cfg.get("ipv4_address", "")).strip()
-        netmask = str(cfg.get("ipv4_netmask", "")).strip()
-        gw = str(cfg.get("ipv4_gateway", "")).strip()
+        ipaddr = str(values.get("ipv4_address", "")).strip()
+        netmask = str(values.get("ipv4_netmask", "")).strip()
+        gw = str(values.get("ipv4_gateway", "")).strip()
         if not ipaddr:
             pytest.fail("IPv4 address missing in profile for CLI static-IP path")
-        await _ssh_run(ssh, f"uci set network.lan.ipaddr={shlex.quote(ipaddr)}")
+        await _ucidyn_set(ssh, "network.lan.proto", "static")
+        await _ucidyn_set(ssh, "network.lan.ipaddr", ipaddr)
         if netmask:
-            await _ssh_run(ssh, f"uci set network.lan.netmask={shlex.quote(netmask)}")
+            await _ucidyn_set(ssh, "network.lan.netmask", netmask)
         if gw:
-            await _ssh_run(ssh, f"uci set network.lan.gateway={shlex.quote(gw)}")
-    await _ssh_run(ssh, "uci commit network")
-    await _ssh_run(ssh, "/etc/init.d/network reload")
-    await asyncio.sleep(int(cfg.get("network_reload_wait_s", 20)))
+            await _ucidyn_set(ssh, "network.lan.gateway", gw)
+        await _ucidyn_apply(ssh)
+        await asyncio.sleep(int(cfg.get("network_reload_wait_s", 20)))
 
 
 async def _cli_set_ipv4_gateway(ssh: AsyncGenericDriver, gateway: str, cfg: dict[str, Any]) -> None:
     gw = str(gateway).strip()
     if not gw:
         pytest.skip("no gateway configured for IP_04")
-    await _ssh_run(ssh, f"uci set network.lan.gateway={shlex.quote(gw)}")
-    await _ssh_run(ssh, "uci commit network")
-    await _ssh_run(ssh, "/etc/init.d/network reload >/dev/null 2>&1", timeout=60)
+    await _ucidyn_set(ssh, "network.lan.gateway", gw)
+    await _ucidyn_apply(ssh)
     await asyncio.sleep(int(cfg.get("network_reload_wait_s", 15)))
 
 
@@ -3053,19 +3074,13 @@ async def _configure_cpe_ipv4_and_mgmt_vlan_once(
     ]
     cmds = [
         *vlan_cmds,
-        "uci set network.lan.proto='static'",
-        f"uci set network.lan.ipaddr='{normalize_ip(remote_ipv4)}'",
-        f"uci set network.lan.netmask='{netmask}'",
+        _ucidyn_set_line("network.lan.proto", "static"),
+        _ucidyn_set_line("network.lan.ipaddr", normalize_ip(remote_ipv4)),
+        _ucidyn_set_line("network.lan.netmask", netmask),
     ]
     if str(gateway).strip():
-        cmds.append(f"uci set network.lan.gateway='{gateway}'")
-    cmds.extend(
-        [
-            "uci commit vlan",
-            "uci commit network",
-            "/etc/init.d/network reload 2>/dev/null || true",
-        ]
-    )
+        cmds.append(_ucidyn_set_line("network.lan.gateway", gateway))
+    cmds.extend(["uci commit vlan", "ucidyn apply"])
     await _ssh_run_raw(cpe_ssh, " && ".join(cmds), timeout=120)
 
 
@@ -3111,18 +3126,17 @@ async def _configure_cpe_via_secondary_pc_once(
     ]
     cpe_cmds = [
         *vlan_cmds,
-        "uci set network.lan.proto='static'",
-        f"uci set network.lan.ipaddr='{normalize_ip(remote_ipv4)}'",
-        f"uci set network.lan.netmask='{netmask}'",
+        _ucidyn_set_line("network.lan.proto", "static"),
+        _ucidyn_set_line("network.lan.ipaddr", normalize_ip(remote_ipv4)),
+        _ucidyn_set_line("network.lan.netmask", netmask),
     ]
     if str(gateway).strip():
-        cpe_cmds.append(f"uci set network.lan.gateway='{gateway}'")
+        cpe_cmds.append(_ucidyn_set_line("network.lan.gateway", gateway))
     cpe_cmds.extend(
         [
             "uci commit vlan",
-            "uci commit network",
-            "/etc/init.d/network reload 2>/dev/null || true",
-            "uci get network.lan.ipaddr 2>/dev/null",
+            "ucidyn apply",
+            "ucidyn get network.lan.ipaddr 2>/dev/null || uci get network.lan.ipaddr 2>/dev/null",
         ]
     )
     sec_conn = AsyncGenericDriver(
@@ -3226,19 +3240,16 @@ async def _configure_cpe_ipv6_via_secondary_pc_once(
     ]
     cpe_cmds = [
         *vlan_cmds,
-        "uci set network.lan.ip6proto=static 2>/dev/null || true",
-        f"uci set network.lan.ip6addr={shlex.quote(str(ipv6_address).strip())}",
+        _ucidyn_set_line("network.lan.ip6proto", "static"),
+        _ucidyn_set_line("network.lan.ip6addr", str(ipv6_address).strip()),
     ]
     if str(ipv6_gateway).strip():
-        cpe_cmds.append(
-            f"uci set network.lan.ip6gw={shlex.quote(str(ipv6_gateway).strip())}"
-        )
+        cpe_cmds.append(_ucidyn_set_line("network.lan.ip6gw", str(ipv6_gateway).strip()))
     cpe_cmds.extend(
         [
             "uci commit vlan",
-            "uci commit network",
-            "/etc/init.d/network reload 2>/dev/null || true",
-            "uci get network.lan.ip6addr 2>/dev/null",
+            "ucidyn apply",
+            "ucidyn get network.lan.ip6addr 2>/dev/null || uci get network.lan.ip6addr 2>/dev/null",
         ]
     )
 
@@ -3363,85 +3374,113 @@ async def ensure_bts_ipv4_ready(ctx: IpTestContext) -> str:
     Discover BTS LAN IPv4 by lab ping (UCI may differ from reachable address).
     """
     cfg = ctx.cfg
-    vlan_if = await _ensure_lab_mgmt_vlan_for_ping(ctx)
-    candidates: list[str] = []
-    seen: set[str] = set()
-    def _bts_ping_candidate(ip: str) -> bool:
-        clean = normalize_ip(str(ip).split("/")[0])
-        if not clean or clean.startswith("10.0.0."):
-            return False
+
+    async def _attempt() -> str:
+        vlan_if = await _ensure_lab_mgmt_vlan_for_ping(ctx)
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        def _bts_ping_candidate(ip: str) -> bool:
+            clean = normalize_ip(str(ip).split("/")[0])
+            if not clean or clean.startswith("10.0.0."):
+                return False
+            try:
+                return isinstance(ipaddress.ip_address(clean), ipaddress.IPv4Address)
+            except ValueError:
+                return False
+
         try:
-            return isinstance(ipaddress.ip_address(clean), ipaddress.IPv4Address)
-        except ValueError:
-            return False
+            await _reconnect_device_ssh(ctx, timeout_s=60)
+        except Exception as exc:
+            ctx.notes.append(f"precheck: BTS SSH reconnect skipped: {exc}")
 
-    try:
-        await _reconnect_device_ssh(ctx, timeout_s=60)
-    except Exception as exc:
-        ctx.notes.append(f"precheck: BTS SSH reconnect skipped: {exc}")
+        default_ip = normalize_ip(
+            str(cfg.get("ipv4_default_address", "192.168.2.1")).split("/")[0]
+        )
 
-    default_ip = normalize_ip(
-        str(cfg.get("ipv4_default_address", "192.168.2.1")).split("/")[0]
-    )
+        def _add_candidate(ip: str) -> None:
+            clean = normalize_ip(str(ip).split("/")[0])
+            if clean and clean not in seen and _bts_ping_candidate(clean):
+                seen.add(clean)
+                candidates.append(clean)
 
-    def _add_candidate(ip: str) -> None:
-        clean = normalize_ip(str(ip).split("/")[0])
-        if clean and clean not in seen and _bts_ping_candidate(clean):
-            seen.add(clean)
-            candidates.append(clean)
-
-    # Prefer profile test LAN IPs (e.g. 192.168.2.230 after IP_01) before UCI/default guesses.
-    for ip in reversed(_ipv4_test_address_candidates(cfg)):
-        _add_candidate(ip)
-
-    try:
-        lan_ips = await _read_device_lan_ipv4s(ctx.ssh, cfg)
-    except Exception as exc:
-        ctx.notes.append(f"precheck: skip UCI LAN read over SSH: {exc}")
-        lan_ips = []
-    for ip in sorted(lan_ips):
-        if normalize_ip(ip) != default_ip:
-            _add_candidate(ip)
-    for ip in lan_ips:
-        if normalize_ip(ip) == default_ip:
+        # Prefer profile test LAN IPs (e.g. 192.168.2.230 after IP_01) before UCI/default guesses.
+        for ip in reversed(_ipv4_test_address_candidates(cfg)):
             _add_candidate(ip)
 
-    _add_candidate(str(cfg.get("ipv4_address", "")).split("/")[0])
-    ssh_host = normalize_ip(str(ctx.host).split("/")[0])
-    if ssh_host and _bts_ping_candidate(ssh_host):
-        _add_candidate(ssh_host)
-    if default_ip:
-        _add_candidate(default_ip)
+        try:
+            lan_ips = await _read_device_lan_ipv4s(ctx.ssh, cfg)
+        except Exception as exc:
+            ctx.notes.append(f"precheck: skip UCI LAN read over SSH: {exc}")
+            lan_ips = []
+        for ip in sorted(lan_ips):
+            if normalize_ip(ip) != default_ip:
+                _add_candidate(ip)
+        for ip in lan_ips:
+            if normalize_ip(ip) == default_ip:
+                _add_candidate(ip)
 
-    max_wait_s, interval_s = _remote_ping_wait_settings(cfg)
-    per_candidate_wait = min(int(cfg.get("bts_precheck_ping_wait_s", 20)), max_wait_s)
-    last_raw = ""
-    ping_kw = _lab_ping_kwargs(cfg)
-    for target in candidates:
-        stats = await _ping_from_lab_pc(
-            vlan_if, target, count=1, per_packet_wait_s=1, **ping_kw
-        )
-        if stats.ok:
-            ctx.notes.append(f"precheck BTS IPv4 {target} via {vlan_if} ok")
-            return target
-        stats = await _wait_for_remote_ping_from_lab(
-            vlan_if,
-            target,
-            wait_s=per_candidate_wait,
-            interval_s=interval_s,
-            notes=ctx.notes,
-            **ping_kw,
-        )
-        if stats.ok:
-            ctx.notes.append(f"precheck BTS IPv4 {target} via {vlan_if} ok (after wait)")
-            return target
-        last_raw = stats.raw
+        _add_candidate(str(cfg.get("ipv4_address", "")).split("/")[0])
+        ssh_host = normalize_ip(str(ctx.host).split("/")[0])
+        if ssh_host and _bts_ping_candidate(ssh_host):
+            _add_candidate(ssh_host)
+        if default_ip:
+            _add_candidate(default_ip)
 
-    raise AssertionError(
-        f"BTS IPv4 pre-check failed for {candidates} via {vlan_if} "
-        f"(mgmt VLAN ping from {ctx.cfg.get('lab_pc_mgmt_ipv4', '192.168.2.10')}): {last_raw[:220]}. "
-        "Confirm BTS vlan.ath1.mode=transparent and vlan.ath1.mgmtvlan=101 before br-lan ping."
-    )
+        max_wait_s, interval_s = _remote_ping_wait_settings(cfg)
+        per_candidate_wait = min(int(cfg.get("bts_precheck_ping_wait_s", 20)), max_wait_s)
+        last_raw = ""
+        ping_kw = _lab_ping_kwargs(cfg)
+        for target in candidates:
+            stats = await _ping_from_lab_pc(
+                vlan_if, target, count=1, per_packet_wait_s=1, **ping_kw
+            )
+            if stats.ok:
+                ctx.notes.append(f"precheck BTS IPv4 {target} via {vlan_if} ok")
+                return target
+            stats = await _wait_for_remote_ping_from_lab(
+                vlan_if,
+                target,
+                wait_s=per_candidate_wait,
+                interval_s=interval_s,
+                notes=ctx.notes,
+                **ping_kw,
+            )
+            if stats.ok:
+                ctx.notes.append(
+                    f"precheck BTS IPv4 {target} via {vlan_if} ok (after wait)"
+                )
+                return target
+            last_raw = stats.raw
+
+        raise AssertionError(
+            f"BTS IPv4 pre-check failed for {candidates} via {vlan_if} "
+            f"(mgmt VLAN ping from {ctx.cfg.get('lab_pc_mgmt_ipv4', '192.168.2.10')}): {last_raw[:220]}. "
+            "Confirm BTS vlan.ath1.mode=transparent and vlan.ath1.mgmtvlan=101 before br-lan ping."
+        )
+
+    try:
+        return await _attempt()
+    except AssertionError as first_exc:
+        if not cfg.get("enable_link_recovery", True):
+            raise
+
+        # If ping just dropped (bench is sometimes slow after IP changes), try
+        # a minimal recovery and re-run the ping verification once.
+        ctx.notes.append(f"{first_exc} — running RF+network recovery for BTS precheck")
+        try:
+            from utils.ip_link_recovery import ensure_testbed_link_ready
+
+            await ensure_testbed_link_ready(ctx)
+        except Exception as exc:
+            ctx.notes.append(f"BTS precheck: RF recovery warn: {exc}")
+
+        try:
+            await _trigger_network_reload_sync(ctx.ssh, cfg)
+        except Exception as exc:
+            ctx.notes.append(f"BTS precheck: network reload warn: {exc}")
+
+        return await _attempt()
 
 
 async def discover_cpe_ipv4_addresses(ctx: IpTestContext) -> list[str]:
@@ -3898,7 +3937,7 @@ async def _assert_post_event_reachability(
 
 async def _trigger_network_reload_sync(ssh: AsyncGenericDriver, cfg: dict[str, Any]) -> None:
     try:
-        await ssh.send_command("/etc/init.d/network reload", timeout_ops=60)
+        await ssh.send_command("ucidyn apply", timeout_ops=120)
     except ScrapliTimeout:
         pass
     await asyncio.sleep(int(cfg.get("network_reload_wait_s", 20)))
@@ -4141,7 +4180,11 @@ async def run_ip_post_case_recovery(
     light_post = cid in IP_LIGHT_POST_CASE_IDS or (
         bool(ctx.cfg.get("ip_fast_path_enabled", True)) and is_fast_path_ip_case(cid)
     )
-    if light_post:
+    # For fast-path/throughput cases we normally keep post-case recovery lightweight
+    # (SSH reachability only). If the case actually failed (often during preflight),
+    # we need to try heavier recovery (VLAN/link/reachability) to fix real bench
+    # reachability issues like "mgmt-VLAN ping doesn't work".
+    if light_post and not case_failed:
         from utils.ip_case_preflight import preflight_step1_fallback_ssh
 
         try:
@@ -4240,6 +4283,17 @@ async def execute_ip_case_with_recovery(ctx: IpTestContext) -> None:
         chain = ctx.cfg.get("_ip_suite_chain")
         if isinstance(chain, dict):
             chain["ok"] = not case_failed
+            if not case_failed:
+                bts = normalize_ip(
+                    str(ctx.cfg.get("_preflight_bts_lan_ipv4", "")).split("/")[0]
+                )
+                if bts:
+                    chain["bts_lan_ipv4"] = bts
+                cpe = normalize_ip(
+                    str(ctx.peer_host or ctx.cfg.get("_preflight_cpe_ipv4", "")).split("/")[0]
+                )
+                if cpe:
+                    chain["cpe_lan_ipv4"] = cpe
         try:
             await run_ip_post_case_recovery(ctx, snapshot, case_failed=case_failed)
         except Exception as exc:
@@ -4276,9 +4330,11 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
     cid = case.case_id
     from config.ip_test_cases import is_fast_path_ip_case
 
-    fast_path = bool(cfg.get("ip_fast_path_enabled", True)) and is_fast_path_ip_case(cid)
+    fast_path = bool(cfg.get("ip_fast_path_enabled", True)) and (
+        is_fast_path_ip_case(cid) or cid == "IP_01"
+    )
 
-    # Preflight: full link+CPE setup for destructive/config cases; fast path for ping/gateway.
+    # Preflight: full link+CPE setup for destructive cases; fast path for ping/gateway/IP_01.
     if _stack_allowed(ctx, "v4") and ctx.case.stack in ("v4", "dual", "any"):
         from utils.ip_case_preflight import run_ip_case_preflight
 
@@ -4308,17 +4364,37 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
         expected = apply["ipv4_address"]
         if configured_before:
             ctx.notes.append(f"IP_01 device LAN before apply: {sorted(configured_before)}")
+        post_apply_wait_s = int(cfg.get("ip01_post_reload_wait_s", 40))
         if ctx.gui_page is not None:
             ctx.notes.append(f"IP_01 applying new LAN IP {expected} via GUI (not 192.168.2.1)")
             await _gui_set_static_ip(ctx.gui_page, cfg, v6=False, apply_values=apply)
+            ctx.notes.append(
+                f"IP_01: ucidyn apply via GUI — keeping SSH open {post_apply_wait_s}s before br-lan + ping"
+            )
+            await asyncio.sleep(post_apply_wait_s)
         else:
-            ctx.notes.append(f"IP_01 applying new LAN IP {expected} via CLI/UCI (not 192.168.2.1)")
-            await _cli_apply_ipv4_static(ssh, apply, cfg)
-        wait_s = int(cfg.get("ip01_apply_wait_s", 40))
-        interval_s = int(cfg.get("ip01_apply_ping_interval_s", 3))
-        ctx.notes.append(f"IP_01: waiting {wait_s}s with lab ping while apply completes")
-        await _wait_for_lab_ping_during_apply(
-            ctx, expected, wait_s=wait_s, interval_s=interval_s
+            ctx.notes.append(
+                f"IP_01 applying new LAN IP {expected} via ucidyn on open SSH (not 192.168.2.1)"
+            )
+            await _cli_apply_ipv4_static(ssh, apply, cfg, post_apply_wait_s=post_apply_wait_s)
+        if_out = await _assert_br_lan_ipv4(
+            ctx.ssh, cfg, expected, notes=ctx.notes
+        )
+        ctx.notes.append(f"IP_01 br-lan verify ok: {if_out[:200]}")
+        vlan_if = await _ensure_lab_mgmt_vlan_for_ping(ctx)
+        ping_kw = _lab_ping_kwargs(cfg)
+        ping_stats = await _ping_from_lab_pc(
+            vlan_if,
+            expected,
+            count=int(cfg.get("ping_count_short", 4)),
+            **ping_kw,
+        )
+        assert ping_stats.ok, (
+            f"IP_01: lab ping to {expected} via {vlan_if} failed after "
+            f"{post_apply_wait_s}s post-apply wait: {ping_stats.raw[:300]}"
+        )
+        ctx.notes.append(
+            f"IP_01 lab ping {expected} via {vlan_if}: loss={ping_stats.loss_pct}%"
         )
         verify_ssh = None
         verify_hosts = _all_mgmt_hosts(
@@ -4335,23 +4411,15 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
         if verify_ssh is None:
             pytest.fail(
                 f"IP_01: cannot SSH to applied LAN IP {expected} "
-                f"(tried {verify_hosts}) after {wait_s}s ping wait"
+                f"(tried {verify_hosts}) after post-reload br-lan + lab ping"
             )
-        lan_ips = await _read_device_lan_ipv4s(verify_ssh, cfg)
-        assert expected in lan_ips, (
-            f"IP_01: {expected} not on br-lan after apply; seen {sorted(lan_ips)}"
-        )
         uci = await _read_uci_ip(verify_ssh, v6=False)
         assert expected in uci.get("address", ""), f"UCI IP mismatch: {uci}"
-        bridge = str(cfg.get("verify_lan_bridge", "br-lan"))
-        if_out = await _ssh_run_raw(
-            verify_ssh, f"ifconfig {shlex.quote(bridge)} 2>/dev/null"
-        )
-        assert expected in if_out, (
-            f"{expected} not on {bridge} after {wait_s}s apply wait; ifconfig:\n{if_out[:400]}"
-        )
-        ctx.notes.append(f"ifconfig {bridge}: {if_out[:200]}")
         await _close_ssh(verify_ssh)
+        cfg["_preflight_bts_lan_ipv4"] = expected
+        chain = cfg.get("_ip_suite_chain")
+        if isinstance(chain, dict):
+            chain["bts_lan_ipv4"] = expected
         return
 
     if cid == "IP_02":

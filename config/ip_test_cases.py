@@ -187,8 +187,13 @@ def case_requires_bts_lan_ping(case_id: str) -> bool:
     return case_id in IP_BTS_LAN_PING_CASE_IDS
 
 
-# Throughput / traffic-only — no full link-formation post-case recovery.
-IP_LIGHT_POST_CASE_IDS: frozenset[str] = frozenset({"IP_05", "IP_22"})
+# No full link-formation post-case recovery (SSH check only).
+IP_LIGHT_POST_CASE_IDS: frozenset[str] = frozenset({"IP_01", "IP_05", "IP_22"})
+
+# Always run preflight (config / ping cases) — never skip on chain-ok.
+IP_NEVER_SKIP_PREFLIGHT_CASE_IDS: frozenset[str] = frozenset(
+    IP_FAST_PATH_CASE_IDS | {"IP_01", "IP_18"}
+)
 
 
 def device_targets(case: IpTestCase) -> tuple[str, ...]:

@@ -157,10 +157,11 @@ async def _run_pc_network_command(pc_cfg: dict[str, Any], password: str, joined:
         rc, out = await asyncio.to_thread(_run_local, f"sudo -n sh -c {shlex.quote(joined)}")
         if rc != 0:
             rc, out = await asyncio.to_thread(_run_local, joined)
+        tag = _lab_pc_log_prefix(pc_cfg)
         if rc != 0:
-            print(f"[lab-pc] {label} failed: {out[:200]}")
+            print(f"{tag} {label} failed: {out[:200]}")
             return False
-        print(f"[lab-pc] {label}")
+        print(f"{tag} {label}")
         return True
     if not ssh_target:
         return False
@@ -168,7 +169,7 @@ async def _run_pc_network_command(pc_cfg: dict[str, Any], password: str, joined:
     conn = await _open_pc_ssh(host, user, password)
     try:
         await conn.send_command(joined, timeout_ops=60)
-        print(f"[lab-pc] {label} on {user}@{host}")
+        print(f"{_lab_pc_log_prefix(pc_cfg)} {label} on {user}@{host}")
         return True
     finally:
         await conn.close()

@@ -467,6 +467,14 @@ async def run_ip_case_preflight_v6(
 
     cid = ctx.case.case_id
     if _preflight_skipped_chain_ok(ctx):
+        chain = cfg.get("_ip_suite_chain") or {}
+        cached_bts = str(chain.get("bts_lan_ipv4") or cfg.get("_preflight_bts_lan_ipv4") or "")
+        if cached_bts:
+            cfg["_preflight_bts_lan_ipv4"] = normalize_ip(cached_bts.split("/")[0])
+        cached_cpe = str(chain.get("cpe_lan_ipv4") or cfg.get("_preflight_cpe_ipv4") or "")
+        if cached_cpe:
+            ctx.peer_host = normalize_ip(cached_cpe.split("/")[0])
+            cfg["_preflight_cpe_ipv4"] = ctx.peer_host
         _log(ctx, f"=== {cid} IPv6 preflight skipped (previous case passed) ===")
         return
 
@@ -584,8 +592,13 @@ async def run_post_event_testbed_recovery_v6(
 
 
 def _preflight_skipped_chain_ok(ctx) -> bool:
-    """Skip heavy preflight when the previous IP case passed (config mismatch only after failure)."""
+    """Skip full preflight only for non-fast cases when the previous IP case passed."""
+    from config.ip_test_cases import IP_NEVER_SKIP_PREFLIGHT_CASE_IDS
+
     cfg = ctx.cfg
+    cid = ctx.case.case_id
+    if cid in IP_NEVER_SKIP_PREFLIGHT_CASE_IDS:
+        return False
     if not cfg.get("ip_skip_preflight_when_chain_ok", True):
         return False
     chain = cfg.get("_ip_suite_chain") or {}
@@ -616,6 +629,14 @@ async def run_ip_case_preflight(
 
     cid = ctx.case.case_id
     if _preflight_skipped_chain_ok(ctx):
+        chain = cfg.get("_ip_suite_chain") or {}
+        cached_bts = str(chain.get("bts_lan_ipv4") or cfg.get("_preflight_bts_lan_ipv4") or "")
+        if cached_bts:
+            cfg["_preflight_bts_lan_ipv4"] = normalize_ip(cached_bts.split("/")[0])
+        cached_cpe = str(chain.get("cpe_lan_ipv4") or cfg.get("_preflight_cpe_ipv4") or "")
+        if cached_cpe:
+            ctx.peer_host = normalize_ip(cached_cpe.split("/")[0])
+            cfg["_preflight_cpe_ipv4"] = ctx.peer_host
         _log(ctx, f"=== {cid} preflight skipped (previous case passed) ===")
         return
     need_cpe = case_requires_cpe(cid) if require_cpe is None else require_cpe
@@ -813,9 +834,12 @@ async def ensure_non_default_bts_lan_ipv4(ctx) -> tuple[str, dict[str, str]]:
             "ipv4_netmask": str(cfg.get("ipv4_test_netmask") or cfg.get("ipv4_netmask", "")),
             "ipv4_gateway": str(cfg.get("ipv4_test_gateway") or cfg.get("ipv4_gateway", "")),
         }
-        ctx.notes.append(f"{cid}: applying test LAN {target_ip} (not {default_ip})")
-        await _cli_apply_ipv4_static(ctx.ssh, apply, cfg)
-        await asyncio.sleep(int(cfg.get("network_reload_wait_s", 20)))
+        wait_s = int(cfg.get("ip01_post_reload_wait_s", cfg.get("network_reload_wait_s", 40)))
+        ctx.notes.append(
+            f"{cid}: applying test LAN {target_ip} via ucidyn (not {default_ip}); "
+            f"keeping SSH open {wait_s}s before reconnect"
+        )
+        await _cli_apply_ipv4_static(ctx.ssh, apply, cfg, post_apply_wait_s=wait_s)
         await _reconnect_device_ssh(ctx, timeout_s=120)
 
     before = await _read_uci_ip(ctx.ssh, v6=False)

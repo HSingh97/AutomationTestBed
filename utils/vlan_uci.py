@@ -133,12 +133,12 @@ def build_bts_network_ipv6_commands(profile: dict[str, Any]) -> list[str]:
     cidr = v6 if "/" in v6 else f"{v6}/{prefix}"
     gw6 = str(mgmt.get("ipv6_gateway", "") or profile.get("ip_tests", {}).get("ipv6_gateway", "")).strip()
     cmds = [
-        "uci set network.lan.ip6proto=static 2>/dev/null || true",
-        f"uci set network.lan.ip6addr='{cidr}'",
+        f"ucidyn set network.lan.ip6proto static",
+        f"ucidyn set network.lan.ip6addr '{cidr}'",
     ]
     if gw6:
-        cmds.append(f"uci set network.lan.ip6gw='{gw6}'")
-    cmds.extend(["uci commit network", "/etc/init.d/network reload 2>/dev/null || true"])
+        cmds.append(f"ucidyn set network.lan.ip6gw '{gw6}'")
+    cmds.append("ucidyn apply")
     return cmds
 
 
@@ -162,12 +162,12 @@ def build_cpe_network_ipv6_commands(profile: dict[str, Any]) -> list[str]:
         or mgmt.get("ipv6_gateway", "")
     ).strip()
     cmds = [
-        "uci set network.lan.ip6proto=static 2>/dev/null || true",
-        f"uci set network.lan.ip6addr='{cidr}'",
+        f"ucidyn set network.lan.ip6proto static",
+        f"ucidyn set network.lan.ip6addr '{cidr}'",
     ]
     if gw6:
-        cmds.append(f"uci set network.lan.ip6gw='{gw6}'")
-    cmds.extend(["uci commit network", "/etc/init.d/network reload 2>/dev/null || true"])
+        cmds.append(f"ucidyn set network.lan.ip6gw '{gw6}'")
+    cmds.append("ucidyn apply")
     return cmds
 
 
