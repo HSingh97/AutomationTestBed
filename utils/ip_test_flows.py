@@ -1102,9 +1102,14 @@ async def _run_ip21_ipv6_gateway(ctx: IpTestContext) -> None:
     await ensure_device_ipv6_configured(ctx)
     await _assert_local_reachable(ctx, v6=True, count=int(cfg.get("ping_count_short", 4)))
 
-    gw = await _resolve_ipv6_gateway(ctx)
+    # Prefer profile ip6gw (bench lab PC) over stale UCI logical gateway (::…:1).
+    apply = _ipv6_values_for_target(ctx)
+    gw = str(apply.get("ipv6_gateway", "")).strip()
+    if not gw:
+        gw = await _resolve_ipv6_gateway(ctx)
     if not gw:
         pytest.skip("IP_21: no IPv6 gateway (run IP_18 or set ip_tests.ipv6_gateway_*)")
+    gw = normalize_ip(gw.split("/")[0])
 
     ctx.notes.append(f"IP_21 gateway {gw}")
     stats = await _ping(ssh, gw, count=int(cfg.get("ping_count_short", 4)), v6=True)
@@ -5073,7 +5078,8 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
     if cid == "IP_26":
         if not _stack_allowed(ctx, "v6"):
             pytest.skip("IPv6 not in scope")
-        out = await _ssh_run(
+        # Multiline ``ip -6 addr``; clean_ssh_output keeps only the last line (drops fe80::).
+        out = await _ssh_run_raw(
             ssh, "ip -6 addr show dev br-lan 2>/dev/null || ip -6 addr show"
         )
         assert "fe80::" in out.lower(), f"IP_26: no link-local on br-lan: {out[:300]}"
@@ -5083,7 +5089,7 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
             iface = m.group(1) if m else "br-lan"
         peer_ll = str(cfg.get("ipv6_link_local_peer", "")).strip()
         if not peer_ll and ctx.peer_host:
-            peer_out = await _ssh_run(ssh, f"ip -6 neigh show dev {shlex.quote(iface)}")
+            peer_out = await _ssh_run_raw(ssh, f"ip -6 neigh show dev {shlex.quote(iface)}")
             m = re.search(r"(fe80::[0-9a-f:]+)", peer_out, re.I)
             if m:
                 peer_ll = f"{m.group(1)}%{iface}"
@@ -5091,7 +5097,7 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
             if "%" not in peer_ll:
                 peer_ll = f"{peer_ll}%{iface}"
             stats = _parse_ping_stats(
-                await _ssh_run(ssh, f"ping6 -c 4 {shlex.quote(peer_ll)}")
+                await _ssh_run_raw(ssh, f"ping6 -c 4 {shlex.quote(peer_ll)}")
             )
             assert stats.ok, f"IP_26 link-local ping failed: {stats.raw[:300]}"
             ctx.notes.append(f"IP_26 link-local ok: {peer_ll}")

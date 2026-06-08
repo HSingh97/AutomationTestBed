@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en" class="no-js">
+<head>
+	<meta charset="UTF-8">
+	<meta http-equiv="X-UA-Compatible" content="IE=edge">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>iPerf - Download iPerf3 and original iPerf pre-compiled binaries</title>
+	<meta name="description" content="iPerf3 binaries for Windows, Linux, MacOS X">
+	<meta name="keywords" content="iPerf3, iPerf binaries, download iPerf">
+	<meta name="author" content="Vivien GUEANT">
+	<link rel="shortcut icon" href="favicon.ico">
+	<link rel="stylesheet" type="text/css" href="/css/default.css">
+	<link rel="stylesheet" type="text/css" href="/css/component.css">
+	<script src="js/modernizr.custom.js"></script>
+</head>
+
+<body>
+		<div class="container">	
+			<header>
+				<a href="/"><img src="/images/logo_iperf.png" alt="iPerf.fr"></a>
+
+				<h1>iPerf - The ultimate speed test tool for TCP, UDP and SCTP<span>Test the limits of your network + Internet neutrality test</span></h1>	
+			</header>
+			<div class="main clearfix">
+				<nav id="menu" class="nav">					
+					<ul>
+						<li>
+							<a href=".">
+								<span class="icon">
+									<i aria-hidden="true" class="icon-home"></i>
+								</span>
+								<span>Home</span>
+							</a>
+						</li>
+						<li>
+							<a href="iperf-download.php">
+								<span class="icon"> 
+									<i aria-hidden="true" class="icon-download"></i>
+								</span>
+								<span>Download iPerf binaries</span>
+							</a>
+						</li>
+						<li>
+							<a href="iperf-servers.php">
+								<span class="icon">
+									<i aria-hidden="true" class="icon-servers"></i>
+								</span>
+								<span>Public iPerf3 servers</span>
+							</a>
+						</li>
+						<li>
+							<a href="iperf-doc.php">
+								<span class="icon">
+									<i aria-hidden="true" class="icon-doc"></i>
+								</span>
+								<span>iPerf user docs</span>
+							</a>
+						</li>
+						<li>
+							<a href="https://lafibre.info/iperf/" target="_blank">
+								<span class="icon">
+									<i aria-hidden="true" class="icon-forum"></i>
+								</span>
+								<span>French iPerf forum</span>
+							</a>
+						</li>
+						<li>
+							<a href="contact.php">
+								<span class="icon">
+									<i aria-hidden="true" class="icon-contact"></i>
+								</span>
+								<span>Contact</span>
+							</a>
+						</li>
+					</ul>
+				</nav>
+			</div>
+		</div><!-- /container -->
+		<script>
+			//  The function to change the class
+			var changeClass = function (r,className1,className2) {
+				var regex = new RegExp("(?:^|\\s+)" + className1 + "(?:\\s+|$)");
+				if( regex.test(r.className) ) {
+					r.className = r.className.replace(regex,' '+className2+' ');
+			    }
+			    else{
+					r.className = r.className.replace(new RegExp("(?:^|\\s+)" + className2 + "(?:\\s+|$)"),' '+className1+' ');
+			    }
+			    return r.className;
+			};	
+
+			//  Creating our button in JS for smaller screens
+			var menuElements = document.getElementById('menu');
+			menuElements.insertAdjacentHTML('afterBegin','<button type="button" id="menutoggle" class="navtoogle" aria-hidden="true"><i aria-hidden="true" class="icon-menu"> </i> Menu</button>');
+
+			//  Toggle the class on click to show / hide the menu
+			document.getElementById('menutoggle').onclick = function() {
+				changeClass(this, 'navtoogle active', 'navtoogle');
+			}
+
+			// http://tympanus.net/codrops/2013/05/08/responsive-retina-ready-menu/comment-page-2/#comment-438918
+			document.onclick = function(e) {
+				var mobileButton = document.getElementById('menutoggle'),
+					buttonStyle =  mobileButton.currentStyle ? mobileButton.currentStyle.display : getComputedStyle(mobileButton, null).display;
+
+				if(buttonStyle === 'block' && e.target !== mobileButton && new RegExp(' ' + 'active' + ' ').test(' ' + mobileButton.className + ' ')) {
+					changeClass(mobileButton, 'navtoogle active', 'navtoogle');
+				}
+			}
+		</script>
+
+<a href="#windows"><img src="images/logo_windows.png" alt="Windows" id="windows">
+<strong>Windows</strong></a>
+<p>Binaries are available at :
+<ul>
+    <li><a href="https://files.budman.pw" target="_blank">https://files.budman.pw</a></li>
+    <li><a href="https://github.com/ar51an/iperf3-win-builds" target="_blank">https://github.com/ar51an/iperf3-win-builds</a></li>
+</ul>
+<br>
+
+<a href="#macos"><img src="images/logo_apple.png" alt="macOS" id="macos">
+<strong>macOS</strong></a> :
+<ul>
+    <li>HomeBrew : <span class="textebleu">brew install iperf3</span></li>
+    <li>MacPorts : <span class="textebleu">sudo port install iperf3</span></li>
+</ul>
+<br>
+
+<a href="#android"><img src="images/logo_android.png" alt="Android" id="android">
+<strong>Android</strong></a> :
+<p>Building iperf3 for Android : <a href=" https://github.com/davidBar-On/android-iperf3/" target="_blank"> https://github.com/davidBar-On/android-iperf3/</a></p>
+<br>
+
+
+<a href="#ubuntu"><img src="images/logo_ubuntu.png" alt="Ubuntu" id="ubuntu">
+<strong>Ubuntu</strong> / Debian / Mint</a>
+<p>launch a terminal and type <span class="textebleu">sudo apt-get install iperf3</span></p>
+<br>
+
+<a href="#fedora"><img src="images/logo_fedora.png" alt="Fedora" id="fedora">
+<strong>Fedora</strong> / Red Hat / CentOS / Rocky</a>
+<p>launch a terminal and type <span class="textebleu">yum install iperf3</span></p>
+<br>
+
+<a href="#freebsd"><img src="images/logo_freebsd.png" alt="FreeBSD" id="freebsd">
+<strong>FreeBSD</strong></a>
+<p>launch a terminal and type <span class="textebleu">sudo pkg install benchmarks/iperf3</span></p>
+<br>
+
+<p><img src="images/logo_fr.png" alt="french"> <a href="https://lafibre.info/iperf/" target="_blank">French forum for iPerf</a></p>
+<br>
+<hr>
+<h2 id="log">iPerf3 server log script :</h2>
+
+<img src="images/logo_kgersen.png" alt="iperf3tocsv" id="iperf3tocsv">
+<a href="download/scripts/iperf3tocsv.py" target="_blank">iperf3tocsv.py</a> (2.5 KiB) by <a href="https://github.com/kgersen/iperf3protect" target="_blank">Kirth Gersen</a> 
+<br>Log for iPerf3 : display "date,ip,localport,remoteport,duration,protocol,num_streams,cookie,sent,sent_mbps,rcvd,rcvd_mbps,totalsent,totalreceived"
+
+<br>
+<hr>
+<h2 id="more-recent">How to perform a more recent installation of Iperf than the one included in Ubuntu / Debian / Mint ?</h2>
+<ol>
+    <li>Removing the old version: <span class="textebleu">sudo apt remove iperf3 libiperf0</span></li>
+    <li>Install the dependency: <span class="textebleu">sudo apt install libsctp1</span></li>
+    <li>Take a recent Ubuntu distribution from <a href="https://launchpad.net/ubuntu/+source/iperf3" target="_blank">https://launchpad.net/ubuntu/+source/iperf3</a></li>
+    <li>Download <span class="textebleu">iperf3_3.xx-1_amd64.deb</span> and <span class="textebleu">libiperf0_3.xx-1_amd64.deb</span> packages (use amd64 version for a standard version of Ubuntu)</li>
+    <li>Install downloaded packages: <span class="textebleu">sudo dpkg -i libiperf0_3.xx-1_amd64.deb iperf3_3.xx-1_amd64.deb</span></li>
+    <li>Remove downloaded packages that are now unnecessary: <span class="textebleu">rm libiperf0_3.xx-1_amd64.deb iperf3_3.xx-1_amd64.deb</span></li>
+</ol>
+
+</body></html>

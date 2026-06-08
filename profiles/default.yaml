@@ -185,9 +185,10 @@ ip_tests:
   ipv6_address_bts: "2401:4900:d0:40d4:0:17b8:0:330/120"
   ipv6_address_cpe: "2401:4900:d0:40d4::17b8:0:331/120"
   ipv6_address: "2401:4900:d0:40d4:0:17b8:0:330/120"
-  ipv6_gateway_bts: "2401:4900:d0:40d4::17b8:0:1"
-  ipv6_gateway_cpe: "2401:4900:d0:40d4::17b8:0:1"
-  ipv6_gateway: "2401:4900:d0:40d4::17b8:0:1"
+  # Bench default: lab PC mgmt IPv6 as pingable ip6gw (see dut.bts_pc_ipv6 / cpe_pc_ipv6).
+  ipv6_gateway_bts: "2401:4900:d0:40d4::17b8:0:301"
+  ipv6_gateway_cpe: "2401:4900:d0:40d4::17b8:0:302"
+  ipv6_gateway: "2401:4900:d0:40d4::17b8:0:301"
   ipv6_fragmentation_ping_size: 2000
   ping_count_short: 4
   ping_count_long: 50

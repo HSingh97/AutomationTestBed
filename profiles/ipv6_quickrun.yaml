@@ -91,10 +91,11 @@ ip_tests:
   ipv6_prefix_len: 120
   ipv6_address_bts: "2401:4900:d0:40d4:0:17b8:0:330/120"
   ipv6_address_cpe: "2401:4900:d0:40d4::17b8:0:331/120"
-  ipv6_gateway_bts: "2401:4900:d0:40d4::17b8:0:1"
-  ipv6_gateway_cpe: "2401:4900:d0:40d4::17b8:0:1"
+  # Bench: use lab PC mgmt IPv6 as ip6gw so IP_21 ping6 to gateway succeeds (not logical ::…:1).
+  ipv6_gateway_bts: "2401:4900:d0:40d4::17b8:0:301"
+  ipv6_gateway_cpe: "2401:4900:d0:40d4::17b8:0:302"
   ipv6_address: "2401:4900:d0:40d4:0:17b8:0:330/120"
-  ipv6_gateway: "2401:4900:d0:40d4::17b8:0:1"
+  ipv6_gateway: "2401:4900:d0:40d4::17b8:0:301"
   fallback_ipv4: ""
   fallback_ipv6: ""
   reachability_use_device_fallback: false
