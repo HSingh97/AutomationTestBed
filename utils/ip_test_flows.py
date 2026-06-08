@@ -1111,6 +1111,15 @@ async def _run_ip21_ipv6_gateway(ctx: IpTestContext) -> None:
         pytest.skip("IP_21: no IPv6 gateway (run IP_18 or set ip_tests.ipv6_gateway_*)")
     gw = normalize_ip(gw.split("/")[0])
 
+    uci_gw = _uci_scalar_clean(await _ssh_run(ssh, RootCommands.GET_NET_GW6))
+    profile_gw = normalize_ip(gw.split("/")[0])
+    if profile_gw and uci_gw and not ipv6_equal(profile_gw, uci_gw):
+        ctx.notes.append(f"IP_21: syncing UCI ip6gw {uci_gw} -> profile bench gw {profile_gw}")
+        await _ucidyn_set(ssh, "network.lan.ip6gw", profile_gw)
+        await _ucidyn_apply(ssh)
+        await asyncio.sleep(int(cfg.get("network_reload_wait_s", 15)))
+        gw = profile_gw
+
     ctx.notes.append(f"IP_21 gateway {gw}")
     stats = await _ping(ssh, gw, count=int(cfg.get("ping_count_short", 4)), v6=True)
     if not stats.ok and "unreachable" in stats.raw.lower():
@@ -1396,18 +1405,7 @@ async def _apply_lab_pc_mtu_change(ctx: IpTestContext, *, v6: bool) -> None:
         if v6:
             target = ctx.peer_host or str(cfg.get("remote_ping_host", "")).strip()
         else:
-            target = ""
-            pref = normalize_ip(str(cfg.get("_preflight_cpe_ipv4", "")).split("/")[0])
-            if pref and _host_matches_stack(pref, v6=False):
-                target = pref
-            elif ctx.peer_host and _host_matches_stack(str(ctx.peer_host), v6=False):
-                target = normalize_ip(str(ctx.peer_host))
-            else:
-                explicit = normalize_ip(str(cfg.get("remote_ping_host", "")).split("/")[0])
-                if explicit and _host_matches_stack(explicit, v6=False):
-                    target = explicit
-                else:
-                    target = await _verified_cpe_lan_ipv4(ctx)
+            target = await _verified_cpe_lan_ipv4(ctx)
         if not target:
             pytest.skip(f"{cid}: no remote ping target")
         target = normalize_ip(target)
