@@ -198,6 +198,7 @@ class RootCommands:
     def get_link_stat_associd(radio_idx: int, assoc_idx: int):
         return RootCommands.get_link_stat_field(radio_idx, assoc_idx, "associd")
 
+    GET_BRCTL_SHOW = "brctl show br-lan 2>/dev/null"
     GET_BRCTL_SHOWMACS = "brctl showmacs br-lan 2>/dev/null"
     GET_ARP_TABLE = "ip neigh show 2>/dev/null"
     GET_ARP_TABLE_PROC = "cat /proc/net/arp 2>/dev/null"

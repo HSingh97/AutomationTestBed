@@ -1,7 +1,9 @@
 import pytest
 import csv
+import json
 import os
 import asyncio
+import time
 from datetime import datetime
 import httpx
 from playwright.async_api import async_playwright
@@ -283,33 +285,182 @@ def link_test_config(request, profile_bundle):
 # =====================================================================
 # 3. SSH ENGINES
 # =====================================================================
-@pytest.fixture(scope="session")
-async def root_ssh(bsu_ip, device_creds, recovery_manager):
-    """SSH connection to the Linux backend as 'root'."""
-    os.makedirs("logs", exist_ok=True)
-    device = {
-        "host": bsu_ip,
-        "auth_username": "root",
-        "auth_password": device_creds["pass"],
-        "auth_strict_key": False,
-        "transport": "asyncssh",
-        "channel_log": f"logs/root_cli_{bsu_ip}.log",
+_ROOT_SSH_DEBUG_LOG = (
+    "/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-065ec6.log"
+)
+
+
+def _debug_log_root_ssh(
+    location: str,
+    message: str,
+    data: dict,
+    *,
+    hypothesis_id: str,
+    run_id: str = "pre-fix",
+) -> None:
+    # region agent log
+    entry = {
+        "sessionId": "065ec6",
+        "location": location,
+        "message": message,
+        "data": data,
+        "hypothesisId": hypothesis_id,
+        "runId": run_id,
+        "timestamp": int(time.time() * 1000),
     }
-    conn = AsyncGenericDriver(**device)
-    open_errors = []
-    for wait_s in (0, 15, 20, 20):
-        if wait_s:
-            await asyncio.sleep(wait_s)
-        try:
-            await conn.open()
-            break
-        except Exception as exc:
-            open_errors.append(str(exc))
-    else:
-        raise RuntimeError(f"Unable to open root SSH to {bsu_ip} after retries: {' | '.join(open_errors)}")
+    try:
+        with open(_ROOT_SSH_DEBUG_LOG, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass
+    # endregion
+
+
+async def _is_bts_ssh_target(conn: AsyncGenericDriver) -> bool:
+    """True when SSH landed on the BTS (AP), not the CPE (STA)."""
+    try:
+        mode = (await conn.send_command(
+            "uci get wireless.@wifi-iface[0].mode 2>/dev/null || echo unknown"
+        )).result.strip().lower()
+        if mode == "ap":
+            return True
+        remote_exec = (await conn.send_command(
+            "test -x /usr/sbin/remote_exec.sh && echo yes || echo no"
+        )).result.strip()
+        return remote_exec == "yes"
+    except Exception:
+        return False
+
+
+async def _open_root_ssh_with_fallback(
+    primary_host: str,
+    fallback_host: str,
+    device_creds: dict,
+    *,
+    extra_candidates: list[str] | None = None,
+) -> tuple[AsyncGenericDriver, str]:
+    """Open BTS root SSH; try fallback / alternate lab IPs when .10 is down."""
+    os.makedirs("logs", exist_ok=True)
+    candidates: list[str] = []
+    for host in (primary_host, fallback_host, *(extra_candidates or [])):
+        host = normalize_ip(host)
+        if host and host not in candidates:
+            candidates.append(host)
+
+    # region agent log
+    _debug_log_root_ssh(
+        "conftest.py:_open_root_ssh_with_fallback",
+        "SSH candidate hosts",
+        {"primary": primary_host, "candidates": candidates},
+        hypothesis_id="H1",
+    )
+    # endregion
+
+    open_errors: list[str] = []
+    for host in candidates:
+        conn = AsyncGenericDriver(
+            host=host,
+            auth_username="root",
+            auth_password=device_creds["pass"],
+            auth_strict_key=False,
+            transport="asyncssh",
+            channel_log=f"logs/root_cli_{host}.log",
+        )
+        for wait_s in (0, 5, 10):
+            if wait_s:
+                await asyncio.sleep(wait_s)
+            try:
+                await conn.open()
+                is_bts = await _is_bts_ssh_target(conn)
+                # region agent log
+                _debug_log_root_ssh(
+                    "conftest.py:_open_root_ssh_with_fallback",
+                    "SSH open result",
+                    {"host": host, "is_bts": is_bts, "wait_s": wait_s},
+                    hypothesis_id="H2",
+                )
+                # endregion
+                if not is_bts:
+                    open_errors.append(f"{host}: connected but device is CPE (not BTS)")
+                    await conn.close()
+                    break
+                if host != normalize_ip(primary_host):
+                    print(
+                        f"[LAB] BTS SSH via fallback {host} "
+                        f"(primary {primary_host} unreachable)"
+                    )
+                return conn, host
+            except Exception as exc:
+                open_errors.append(f"{host}: {exc}")
+                try:
+                    await conn.close()
+                except Exception:
+                    pass
+
+    # region agent log
+    _debug_log_root_ssh(
+        "conftest.py:_open_root_ssh_with_fallback",
+        "SSH open failed for all candidates",
+        {"candidates": candidates, "errors": open_errors},
+        hypothesis_id="H3",
+    )
+    # endregion
+    raise RuntimeError(
+        f"Unable to open root SSH to BTS ({' | '.join(candidates)}): "
+        + " | ".join(open_errors)
+    )
+
+
+@pytest.fixture(scope="session")
+async def root_ssh(request, bsu_ip, device_creds, recovery_manager):
+    """SSH connection to the Linux backend as 'root'."""
+    fallback_ip = request.config.getoption("--fallback-ip")
+    remote_ip = request.config.getoption("--remote-ip")
+    conn, ssh_host = await _open_root_ssh_with_fallback(
+        bsu_ip,
+        fallback_ip,
+        device_creds,
+        extra_candidates=[remote_ip],
+    )
+    if ssh_host != normalize_ip(bsu_ip):
+        await _ensure_bts_lab_ipv4(conn, bsu_ip)
     await recovery_manager.ensure_link_or_recover(bsu_ip=bsu_ip, device_creds=device_creds, root_ssh=conn)
     yield conn
     await conn.close()
+
+
+async def _ensure_bts_lab_ipv4(root_ssh, lab_ip: str) -> None:
+    """Re-add BTS lab IPv4 on br-lan when only fallback or wrong LAN IP is up."""
+    lab_ip = normalize_ip(lab_ip)
+    if not lab_ip:
+        return
+    raw = (await root_ssh.send_command("ip -4 addr show dev br-lan 2>/dev/null")).result
+    if lab_ip in raw:
+        return
+    wrong_ip = ""
+    for line in raw.splitlines():
+        if "inet " in line and lab_ip not in line:
+            wrong_ip = line.strip().split()[1].split("/")[0]
+            break
+    del_cmd = f"ip addr del {wrong_ip}/24 dev br-lan 2>/dev/null; " if wrong_ip else ""
+    await root_ssh.send_command(
+        f"uci set network.lan.proto='static'; "
+        f"uci set network.lan.ipaddr='{lab_ip}'; "
+        f"uci set network.lan.netmask='255.255.255.0'; "
+        f"uci commit network; "
+        f"{del_cmd}"
+        f"ip addr add {lab_ip}/24 dev br-lan 2>/dev/null || "
+        f"ip addr replace {lab_ip}/24 dev br-lan"
+    )
+    # region agent log
+    _debug_log_root_ssh(
+        "conftest.py:_ensure_bts_lab_ipv4",
+        "Restored BTS lab IPv4",
+        {"lab_ip": lab_ip, "removed_wrong_ip": wrong_ip or None},
+        hypothesis_id="H4",
+    )
+    # endregion
+    print(f"[LAB] restored BTS lab IPv4 {lab_ip} on br-lan")
 
 
 @pytest.fixture(scope="session")

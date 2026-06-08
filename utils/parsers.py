@@ -28,6 +28,21 @@ def ssh_scalar(raw_output):
     return clean_ssh_output(raw_output).replace("'", "")
 
 
+def _is_ssh_banner_line(line: str) -> bool:
+    """Skip MOTD / ASCII-art lines that leak into the first SSH command output."""
+    if re.search(r"[/\\|_]{4,}", line):
+        return True
+    for marker in ("OpenWrt", "LEDE", "BusyBox", "https://openwrt.org"):
+        if marker in line:
+            return True
+    return False
+
+
+def _looks_like_ssh_scalar(line: str) -> bool:
+    """True for simple uci/shell scalar values (proto, IP, hostname, etc.)."""
+    return bool(re.fullmatch(r"[\w.:@/-]+", line)) and len(line) <= 128
+
+
 def clean_ssh_output(raw_output):
     """
     Normalizes noisy interactive SSH output to the last meaningful line.
@@ -49,7 +64,13 @@ def clean_ssh_output(raw_output):
     for line in lines:
         if any(re.match(pat, line) for pat in prompt_or_echo_patterns):
             continue
+        if _is_ssh_banner_line(line):
+            continue
         filtered.append(line)
+
+    scalar_lines = [line for line in filtered if _looks_like_ssh_scalar(line)]
+    if scalar_lines:
+        return scalar_lines[-1]
 
     if not filtered:
         return lines[-1]

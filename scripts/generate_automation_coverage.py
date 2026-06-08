@@ -281,9 +281,13 @@ def classify_case(case: dict, automated_ids: set[str]) -> tuple[str, str, str]:
         return "Not automated", "Medium (feature module)", "1–3 days"
 
     if cid.startswith("ARPBRIDGE"):
-        if cid.endswith("_01") or cid.endswith("_02"):
-            return "Partial coverage", "Partial (GUI_105–108 tables)", "0.5 day"
-        return "Not automated", "Manual / no GUI", "N/A"
+        if cid in automated_ids:
+            return "Automated", "tests/ArpBridgeTable/", "done"
+        if cid in ("ARPBRIDGE_01", "ARPBRIDGE_06", "ARPBRIDGE_08", "ARPBRIDGE_09", "ARPBRIDGE_10", "ARPBRIDGE_13"):
+            return "Automated", "tests/ArpBridgeTable/Arp&BridgeTable.py", "done"
+        if cid in ("ARPBRIDGE_02", "ARPBRIDGE_07"):
+            return "Partial coverage", "Partial (GUI_107 ARP table)", "0.5 day"
+        return "Not automated", "Manual / lab injection", "1–2 days"
 
     if sheet in ("Sanity", "Ethernet_Test", "Speed Test"):
         return "Not automated", "Medium (mixed sanity)", "1–2 days"
