@@ -130,28 +130,36 @@ jenkins_api() {
   curl -fsS -u "${AUTH}" "$@" "${url}"
 }
 
+read_job_build_numbers() {
+  jenkins_api "${JOB_API}/api/json" 2>/dev/null \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); b=d.get("lastBuild") or {}; print(b.get("number") or 0); print(d.get("nextBuildNumber") or 0)' 2>/dev/null \
+    || echo -e "0\n0"
+}
+
 read_last_build_number() {
-  jenkins_api "${JOB_API}/api/json?tree=lastBuild[number]" 2>/dev/null \
-    | python3 -c 'import json,sys; b=(json.load(sys.stdin).get("lastBuild") or {}); print(b.get("number") or 0)' 2>/dev/null \
-    || echo "0"
+  read_job_build_numbers | head -1
+}
+
+read_next_build_number() {
+  read_job_build_numbers | tail -1
 }
 
 job_is_busy() {
   local building queued
-  building="$(jenkins_api "${JOB_API}/api/json?tree=lastBuild[building]" 2>/dev/null \
+  building="$(jenkins_api "${JOB_API}/api/json" 2>/dev/null \
     | python3 -c 'import json,sys; b=(json.load(sys.stdin).get("lastBuild") or {}); print(bool(b.get("building")))' 2>/dev/null || echo False)"
-  queued="$(jenkins_api "${BASE_URL}/queue/api/json?tree=items[task[url]]" 2>/dev/null \
+  queued="$(jenkins_api "${BASE_URL}/queue/api/json" 2>/dev/null \
     | python3 -c 'import json,sys; u=sys.argv[1]; d=json.load(sys.stdin); print(any(u in (i.get("task",{}).get("url") or "") for i in d.get("items",[])))' "${JOB_API}/" 2>/dev/null || echo False)"
   [[ "${building}" == "True" || "${queued}" == "True" ]]
 }
 
-wait_for_new_build() {
-  local before="$1"
+wait_for_build_number() {
+  local expected="$1"
   local deadline=$(( $(date +%s) + 120 ))
   local current=""
   while [[ $(date +%s) -lt ${deadline} ]]; do
     current="$(read_last_build_number)"
-    if [[ -n "${current}" && "${current}" != "0" && "${current}" -gt "${before}" ]]; then
+    if [[ -n "${current}" && "${expected}" -gt 0 && "${current}" -ge "${expected}" ]]; then
       echo "${current}"
       return 0
     fi
@@ -163,7 +171,7 @@ wait_for_new_build() {
 
 wait_for_job_idle() {
   local active
-  active="$(jenkins_api "${JOB_API}/api/json?tree=lastBuild[number,building]" 2>/dev/null \
+  active="$(jenkins_api "${JOB_API}/api/json" 2>/dev/null \
     | python3 -c 'import json,sys; b=(json.load(sys.stdin).get("lastBuild") or {}); print("{} building={}".format(b.get("number","?"), b.get("building", False)))' 2>/dev/null || echo "unknown")"
   echo "[jenkins] Waiting for idle job (current: ${active})..."
   while job_is_busy; do
@@ -189,7 +197,7 @@ if [[ "${WAIT_FOR_IDLE}" == "true" ]] && job_is_busy; then
   wait_for_job_idle
 fi
 
-PRE_BUILD_NUMBER="$(read_last_build_number)"
+EXPECTED_BUILD_NUMBER="$(read_next_build_number)"
 
 CRUMB_JSON="$(curl -fsS -u "${AUTH}" "${BASE_URL}/crumbIssuer/api/json" 2>/dev/null || true)"
 CRUMB_FIELD=""
@@ -233,15 +241,15 @@ fi
 
 QUEUE_URL="$(grep -Fi '^Location:' /tmp/jenkins-trigger.headers 2>/dev/null | tail -1 | tr -d '\r' | awk '{print $2}' || true)"
 
-echo "[jenkins] Waiting for new build number (was #${PRE_BUILD_NUMBER})..."
-BUILD_NUMBER="$(wait_for_new_build "${PRE_BUILD_NUMBER}")" || true
+echo "[jenkins] Waiting for build #${EXPECTED_BUILD_NUMBER}..."
+BUILD_NUMBER="$(wait_for_build_number "${EXPECTED_BUILD_NUMBER}")" || true
 if [[ -z "${BUILD_NUMBER}" ]]; then
-  echo "[jenkins] ERROR: POST returned ${HTTP_CODE} but lastBuild did not advance within 120s." >&2
+  echo "[jenkins] ERROR: POST returned ${HTTP_CODE} but build #${EXPECTED_BUILD_NUMBER} did not appear within 120s." >&2
   [[ -n "${QUEUE_URL}" ]] && echo "[jenkins] Queue item: ${QUEUE_URL}" >&2
   exit 1
 fi
 
-BUILD_URL="$(jenkins_api "${JOB_API}/${BUILD_NUMBER}/api/json?tree=url" 2>/dev/null \
+BUILD_URL="$(jenkins_api "${JOB_API}/${BUILD_NUMBER}/api/json" 2>/dev/null \
   | python3 -c 'import json,sys; print(json.load(sys.stdin).get("url",""))' 2>/dev/null || true)"
 echo "[jenkins] Build #${BUILD_NUMBER} queued"
 echo "[jenkins] ${BUILD_URL:-${BASE_URL}/${JOB_PATH}/${BUILD_NUMBER}/}"
