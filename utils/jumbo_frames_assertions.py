@@ -124,13 +124,14 @@ async def _wait_until_gui_reachable(ip: str, *, timeout_s: int = 200, interval_s
     return False
 
 
-async def _open_temp_root_ssh(host: str, password: str):
+async def _open_temp_root_ssh(host: str, password: str, *, timeout_socket: int = 30):
     conn = AsyncGenericDriver(
         host=host,
         auth_username="root",
         auth_password=password,
         auth_strict_key=False,
         transport="asyncssh",
+        timeout_socket=timeout_socket,
     )
     await conn.open()
     return conn
@@ -222,10 +223,44 @@ async def _restore_backend_mtus_via_ssh(root_ssh, original: dict[str, str]):
 
 
 async def _open_remote_cpe_ssh(device_creds):
+    """
+    Open CPE root SSH for remote LAN MTU changes.
+
+    Bench default: secondary CPE lab PC → CPE factory IPv4 (10.0.0.1).
+    Direct mgmt IPv6 from the BTS PC is often unreachable before/without RF path.
+    """
+    manager = get_active_recovery_manager()
+    if not manager:
+        return None
+    profile = manager.profile_bundle.active
+    tb = profile.get("testbed", {}) or {}
+    sec = tb.get("secondary_pc", {}) or {}
+    password = str(device_creds.get("pass") or profile.get("dut", {}).get("password") or "")
+
+    if sec.get("enabled", True) and str(sec.get("ssh", "")).strip():
+        from utils.ip_test_flows import open_cpe_ssh_via_secondary_pc
+        from utils.link_formation import cpe_ssh_access
+
+        access = cpe_ssh_access(profile)
+        cpe_factory = access["host"]
+        cpe_lan = ""
+        remote_ipv6s = (profile.get("dut", {}) or {}).get("remote_ipv6s") or []
+        if remote_ipv6s:
+            cpe_lan = str(remote_ipv6s[0]).strip()
+        driver, _, label = await open_cpe_ssh_via_secondary_pc(
+            profile,
+            password,
+            cpe_lan=cpe_lan or cpe_factory,
+            cpe_factory=cpe_factory,
+        )
+        _log_case("REMOTE", f"CPE SSH via {label}")
+        return driver
+
     remote_host = _remote_dut_host_from_profile()
     if not remote_host:
         return None
-    return await _open_temp_root_ssh(remote_host, device_creds["pass"])
+    _log_case("REMOTE", f"CPE SSH direct to {remote_host}")
+    return await _open_temp_root_ssh(remote_host, password)
 
 
 async def _read_backend_mtu_map(root_ssh) -> dict[str, str]:
