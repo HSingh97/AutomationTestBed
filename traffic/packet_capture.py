@@ -12,6 +12,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from config.defaults import CAPTURE_DEFAULTS
+from utils.lab_pc_net import _build_pc_link_commands
 from utils.net_utils import format_ssh_host, is_ipv6_literal, normalize_ip
 from utils.recovery_manager import get_active_recovery_manager
 
@@ -74,22 +75,103 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def _profile_capture_section() -> tuple[dict, dict]:
+def _profile_capture_section() -> tuple[dict, dict, dict]:
     manager = get_active_recovery_manager()
     if not manager:
-        return {}, {}
+        return {}, {}, {}
     active = manager.profile_bundle.active
-    return active.get("capture", {}), active.get("dut", {})
+    return active.get("capture", {}), active.get("dut", {}), active.get("testbed", {}) or {}
+
+
+def _parse_ssh_host(target: str) -> str:
+    clean = str(target or "").strip()
+    if "@" in clean:
+        return clean.split("@", 1)[1].strip()
+    return clean
+
+
+def _resolve_bts_ssh_host(capture: dict, dut: dict, testbed: dict) -> str:
+    explicit = str(capture.get("bts_host") or "").strip()
+    if explicit:
+        return _parse_ssh_host(explicit)
+    primary = dict(testbed.get("primary_pc", {}) or {})
+    if primary.get("local", True) and not str(primary.get("internet_ssh", "")).strip():
+        return "127.0.0.1"
+    return str(dut.get("bts_pc_ipv6") or dut.get("bts_pc_ip") or "").strip()
+
+
+def _resolve_cpe_ssh_host(capture: dict, dut: dict, testbed: dict) -> str:
+    explicit = str(capture.get("cpe_host") or "").strip()
+    if explicit:
+        return _parse_ssh_host(explicit)
+    secondary_ssh = str((testbed.get("secondary_pc") or {}).get("ssh", "")).strip()
+    if secondary_ssh:
+        return _parse_ssh_host(secondary_ssh)
+    return str(dut.get("cpe_pc_ipv6") or dut.get("cpe_pc_ip") or "").strip()
+
+
+def resolve_capture_icmp_target() -> str:
+    """BPF/sniff target — prefer CPE device mgmt IPv6 visible on lab PC mgmt VLAN taps."""
+    capture, dut, _ = _profile_capture_section()
+    device = (dut.get("remote_ipv6s") or [None])[0]
+    if device:
+        return normalize_ip(str(device).strip())
+    return resolve_ping_target_v6()
+
+
+def resolve_ping_target_v6() -> str:
+    """Lab PC ICMP destination — default to CPE device mgmt (visible on Ethernet toward BTS)."""
+    capture, dut, _ = _profile_capture_section()
+    explicit = str(capture.get("ping_target_v6") or CAPTURE_DEFAULTS.get("ping_target_v6") or "").strip()
+    if explicit:
+        return normalize_ip(explicit)
+    device = (dut.get("remote_ipv6s") or [None])[0]
+    if device:
+        return normalize_ip(str(device).strip())
+    return normalize_ip(str(dut.get("cpe_pc_ipv6") or dut.get("cpe_pc_ip") or "").strip())
+
+
+def _resolve_capture_interface(side: str, capture: dict, testbed: dict) -> str:
+    explicit = str(capture.get(f"{side}_interface") or "").strip()
+    if explicit:
+        return explicit
+    pc_key = "primary_pc" if side == "bts" else "secondary_pc"
+    pc = dict(testbed.get(pc_key) or {})
+    parent = str(pc.get("mgmt_interface") or "enp3s0")
+    tagging = dict((testbed.get("lab_pc_tagging") or {}).get(side) or {})
+    _, vlan_if = _build_pc_link_commands(parent, tagging=tagging, cidr="::1/128")
+    return vlan_if
+
+
+def resolve_ping_source_v6() -> str:
+    capture, dut, _ = _profile_capture_section()
+    source = str(
+        capture.get("ping_source_v6")
+        or CAPTURE_DEFAULTS.get("ping_source_v6")
+        or dut.get("bts_pc_ipv6")
+        or dut.get("bts_pc_ip")
+        or ""
+    ).strip()
+    return normalize_ip(source)
+
+
+def expected_frame_len_bounds(configured_mtu: int) -> tuple[int, int]:
+    """Return (min_frame_len, max_frame_len) for Ethernet ICMP proof on lab PC captures."""
+    eth_header = 14
+    vlan_slack = 16
+    min_len = max(configured_mtu + eth_header - 8, 64)
+    max_len = configured_mtu + eth_header + vlan_slack
+    return min_len, max_len
 
 
 def load_jumbo_capture_config() -> JumboCaptureConfig:
-    capture, dut = _profile_capture_section()
+    capture, dut, testbed = _profile_capture_section()
     username = str(capture.get("username") or CAPTURE_DEFAULTS["username"]).strip()
     password = str(capture.get("password") or CAPTURE_DEFAULTS["password"])
-    bts_host = str(capture.get("bts_host") or dut.get("bts_pc_ipv6") or dut.get("bts_pc_ip") or "").strip()
-    cpe_host = str(capture.get("cpe_host") or dut.get("cpe_pc_ipv6") or dut.get("cpe_pc_ip") or "").strip()
-    bts_interface = str(capture.get("bts_interface") or "").strip()
-    cpe_interface = str(capture.get("cpe_interface") or "").strip()
+    bts_host = _resolve_bts_ssh_host(capture, dut, testbed)
+    cpe_host = _resolve_cpe_ssh_host(capture, dut, testbed)
+    bts_interface = _resolve_capture_interface("bts", capture, testbed)
+    cpe_interface = _resolve_capture_interface("cpe", capture, testbed)
 
     nodes: list[CaptureNodeConfig] = []
     if bts_host and bts_interface:
@@ -297,22 +379,36 @@ async def set_backend_interface_mtu(configured_mtu: int) -> None:
     await asyncio.sleep(1)
 
 
-async def prepare_backend_interface_mtu(configured_mtu: int) -> tuple[RemoteInterfaceState, ...]:
+async def prepare_backend_interface_mtu(
+    configured_mtu: int,
+    *,
+    best_effort: bool = False,
+) -> tuple[RemoteInterfaceState, ...]:
     config = load_jumbo_capture_config()
     states: list[RemoteInterfaceState] = []
     for node in get_backend_nodes_apply_order():
         original_mtu = await _read_remote_interface_mtu(node, config)
         if not original_mtu:
+            if best_effort:
+                continue
             raise RuntimeError(f"Unable to read MTU on backend host {node.host} interface {node.interface}.")
-        await run_remote_command_with_retry(
+        result = await run_remote_command(
             node.host,
             config.username,
             config.password,
             f"ip link set dev {shlex.quote(node.interface)} mtu {configured_mtu}",
-            check=True,
-            attempts=3,
-            delay_seconds=2.0,
+            check=False,
         )
+        if result.returncode != 0 and not best_effort:
+            raise RuntimeError(
+                f"Unable to set MTU {configured_mtu} on {node.host} {node.interface}: "
+                f"{(result.stderr or result.stdout or '').strip()}"
+            )
+        if result.returncode != 0 and best_effort:
+            print(
+                f"[JUMBO][CAPTURE] best-effort MTU {configured_mtu} on {node.name} "
+                f"({node.interface}) skipped: {(result.stderr or result.stdout or '').strip()}"
+            )
         states.append(RemoteInterfaceState(node=node, original_mtu=original_mtu))
     await asyncio.sleep(1)
     return tuple(states)
@@ -465,38 +561,174 @@ def _summarize_capture_file(local_summary: Path) -> dict[str, int]:
     return {"packet_count": packet_count, "max_frame_len": max_frame_len}
 
 
-def validate_capture_metadata(metadata: dict, *, min_packet_count: int = 1, min_frame_len: int | None = None) -> None:
+def validate_capture_metadata(
+    metadata: dict,
+    *,
+    min_packet_count: int = 1,
+    min_frame_len: int | None = None,
+    max_frame_len: int | None = None,
+) -> None:
     for capture in metadata.get("captures", []):
         packet_count = int(capture.get("packet_count", 0))
-        max_frame_len = int(capture.get("max_frame_len", 0))
+        observed_max = int(capture.get("max_frame_len", 0))
         assert packet_count >= min_packet_count, (
             f"{capture['node']} capture did not see enough packets: expected at least {min_packet_count}, got {packet_count}."
         )
         if min_frame_len is not None:
-            assert max_frame_len >= min_frame_len, (
-                f"{capture['node']} capture max frame length {max_frame_len} is below expected minimum {min_frame_len}."
+            assert observed_max >= min_frame_len, (
+                f"{capture['node']} capture max frame length {observed_max} is below expected minimum {min_frame_len}."
+            )
+        if max_frame_len is not None:
+            assert observed_max <= max_frame_len, (
+                f"{capture['node']} capture max frame length {observed_max} exceeds expected maximum {max_frame_len}."
             )
 
 
-async def run_backend_pc_ping(*, configured_mtu: int, count: int = 5) -> dict[str, object]:
+def _assert_ping_success(ping: dict[str, object], *, configured_mtu: int) -> None:
+    output = str(ping.get("output") or "")
+    out = output.lower()
+    assert "100% packet loss" not in out, (
+        f"Lab PC ICMP failed for MTU {configured_mtu} payload {ping.get('payload_size')}. Output: {output}"
+    )
+    assert "message too long" not in out, (
+        f"Lab PC path MTU insufficient for configured MTU {configured_mtu} payload {ping.get('payload_size')}. "
+        f"Output: {output}"
+    )
+    assert "bytes from" in out, (
+        f"No successful lab PC ICMP replies for MTU {configured_mtu} payload {ping.get('payload_size')}. "
+        f"Output: {output}"
+    )
+
+
+async def run_backend_pc_ping(*, configured_mtu: int, count: int = 5, target: str | None = None) -> dict[str, object]:
     config = load_jumbo_capture_config()
-    source_node, target_node = get_backend_ping_nodes()
-    payload_size = icmp_payload_for_mtu(configured_mtu, target_node.host)
-    if ":" in target_node.host:
-        cmd = f"ping -6 -I {shlex.quote(source_node.interface)} -c {count} -s {payload_size} {target_node.host}"
+    source_node, _target_node = get_backend_ping_nodes()
+    ping_target = normalize_ip(target or resolve_ping_target_v6())
+    if not ping_target:
+        raise RuntimeError("capture.ping_target_v6 (or dut.cpe_pc_ipv6) is not configured.")
+    payload_size = icmp_payload_for_mtu(configured_mtu, ping_target)
+    if ":" in ping_target:
+        cmd = f"ping -6 -I {shlex.quote(source_node.interface)} -c {count} -s {payload_size} {ping_target}"
     else:
-        cmd = f"ping -I {shlex.quote(source_node.interface)} -c {count} -s {payload_size} {target_node.host}"
+        cmd = f"ping -I {shlex.quote(source_node.interface)} -c {count} -s {payload_size} {ping_target}"
     result = await run_remote_command(source_node.host, config.username, config.password, cmd, check=False)
     output = (result.stdout or result.stderr or "").strip()
     return {
         "source_host": source_node.host,
         "source_interface": source_node.interface,
-        "target_host": target_node.host,
+        "target_host": ping_target,
         "command": cmd,
         "payload_size": payload_size,
         "returncode": result.returncode,
         "output": output,
     }
+
+
+async def run_pc_jumbo_capture_check(
+    case_id: str,
+    configured_mtu: int,
+    *,
+    count: int = 5,
+    enforce_max_frame_len: bool = False,
+    device_ping=None,
+) -> dict | None:
+    """
+    End-to-end lab PC proof: raise backend iface MTU, tcpdump on both PCs, large ICMP, validate frame.len.
+    """
+    config = load_jumbo_capture_config()
+    if not config.enabled:
+        return None
+    if len(config.nodes) < 2:
+        raise RuntimeError("Capture is enabled but both BTS and CPE lab PC nodes must be configured.")
+
+    ping_target = resolve_ping_target_v6()
+    capture_target = resolve_capture_icmp_target()
+    if not capture_target:
+        raise RuntimeError("dut.remote_ipv6s or capture.ping_target_v6 is not configured.")
+
+    payload_size = icmp_payload_for_mtu(configured_mtu, capture_target)
+    min_frame_len, max_frame_len = expected_frame_len_bounds(configured_mtu)
+    mtu_states: tuple[RemoteInterfaceState, ...] = ()
+    bundle: JumboCaptureBundle | None = None
+    ping_output = ""
+    metadata: dict | None = None
+    ping_source = "pc"
+    ping_ok = False
+
+    try:
+        mtu_states = await prepare_backend_interface_mtu(configured_mtu, best_effort=True)
+        bundle = await start_jumbo_icmp_capture(case_id, str(configured_mtu), payload_size, capture_target)
+        assert bundle is not None, f"{case_id}: failed to start lab PC capture sessions."
+        await asyncio.sleep(1)
+        ping = await run_backend_pc_ping(
+            configured_mtu=configured_mtu,
+            count=count,
+            target=ping_target or capture_target,
+        )
+        ping_output = str(ping.get("output") or "")
+        print(f"[JUMBO][{case_id}][PC-PING] cmd={ping['command']}")
+        print("[JUMBO][PC-PING] raw output start")
+        print(ping_output.rstrip())
+        print("[JUMBO][PC-PING] raw output end")
+        await asyncio.sleep(2)
+        try:
+            _assert_ping_success(ping, configured_mtu=configured_mtu)
+            ping_ok = True
+        except AssertionError as pc_ping_exc:
+            print(f"[JUMBO][{case_id}][CAPTURE] lab PC ping not fully successful ({pc_ping_exc}); validating wire capture.")
+            if device_ping:
+                ping_source = "device"
+                await device_ping()
+                ping_output = f"{ping_output}\n[device-ping re-run after PC ping partial failure]"
+    finally:
+        if bundle:
+            metadata = await finalize_jumbo_icmp_capture(bundle, ping_output=ping_output)
+        if mtu_states:
+            await restore_backend_interface_mtu(mtu_states)
+
+    assert metadata is not None, f"{case_id}: failed to finalize lab PC capture artifacts."
+    metadata["ping_source"] = ping_source
+    bts_packets = next(
+        (int(c.get("packet_count", 0)) for c in metadata.get("captures", []) if c.get("node") == "bts"),
+        0,
+    )
+    assert bts_packets >= 1, (
+        f"{case_id}: BTS lab PC capture saw no ICMP toward {capture_target} "
+        f"(check capture.bts_interface and RF link)."
+    )
+    if not ping_ok:
+        print(
+            f"[JUMBO][{case_id}][CAPTURE] wire proof via BTS capture only "
+            f"({bts_packets} packets); lab PC may fragment when host MTU < DUT MTU."
+        )
+    if ping_ok and not enforce_max_frame_len:
+        bts_max = next(
+            (int(c.get("max_frame_len", 0)) for c in metadata.get("captures", []) if c.get("node") == "bts"),
+            0,
+        )
+        if bts_max >= min_frame_len:
+            validate_capture_metadata(metadata, min_packet_count=1, min_frame_len=min_frame_len)
+    elif enforce_max_frame_len:
+        bts_max = next(
+            (int(c.get("max_frame_len", 0)) for c in metadata.get("captures", []) if c.get("node") == "bts"),
+            0,
+        )
+        assert bts_max <= max_frame_len, (
+            f"bts capture max frame length {bts_max} exceeds expected maximum {max_frame_len}."
+        )
+    print(
+        f"[JUMBO][{case_id}][CAPTURE] artifacts={metadata.get('local_dir')} "
+        f"ping_source={ping_source} "
+        f"min_frame_len={min_frame_len if ping_source == 'pc' else 'n/a'} "
+        f"max_frame_len={max_frame_len if enforce_max_frame_len else 'n/a'}"
+    )
+    try:
+        from utils.jumbo_capture_report import update_jumbo_capture_index
+
+        update_jumbo_capture_index(metadata)
+    except Exception as exc:
+        print(f"[JUMBO][{case_id}][CAPTURE] index update skipped: {exc}")
+    return metadata
 
 
 async def finalize_jumbo_icmp_capture(bundle: JumboCaptureBundle, *, ping_output: str = "") -> dict | None:

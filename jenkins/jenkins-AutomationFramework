@@ -302,6 +302,8 @@ pipeline {
                 archiveArtifacts 'reports/artifacts/report.json,allowEmptyArchive:true'
                 archiveArtifacts 'reports/artifacts/ip_suite_progress.json,allowEmptyArchive:true'
                 archiveArtifacts 'reports/artifacts/testbed_summary.json,allowEmptyArchive:true'
+                archiveArtifacts 'reports/artifacts/jumbo_captures/**/*,allowEmptyArchive:true'
+                archiveArtifacts 'reports/artifacts/jumbo_captures_index.json,allowEmptyArchive:true'
             }
         }
     }

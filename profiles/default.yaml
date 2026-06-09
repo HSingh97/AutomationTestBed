@@ -219,8 +219,12 @@ capture:
   tool: tcpdump
   artifact_dir: reports/artifacts/jumbo_captures
   remote_tmp_dir: /tmp/ubr_jumbo_captures
-  # Internet IP of lab PCs (SSH/tcpdump) — not device mgmt IPv6
+  # SSH targets for tcpdump on lab PCs (internet/mgmt IP). Empty bts_host → localhost when primary_pc.local.
   bts_host: ""
   cpe_host: "10.0.150.187"
-  bts_interface: enp3s0.100.101
-  cpe_interface: enp3s0
+  # Empty = derive from testbed.lab_pc_tagging (enp3s0.101 single-VLAN or enp3s0.100.101 QinQ)
+  bts_interface: ""
+  cpe_interface: ""
+  # End-to-end RF-path ICMP: BTS PC mgmt IPv6 → CPE PC mgmt IPv6 (not device mgmt IPv6)
+  ping_target_v6: "2401:4900:d0:40d4::17b8:0:331"
+  ping_source_v6: "2401:4900:d0:40d4::17b8:0:301"

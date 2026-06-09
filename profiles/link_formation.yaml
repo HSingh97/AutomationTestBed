@@ -100,3 +100,5 @@ capture:
   cpe_host: ""
   bts_interface: enp3s0
   cpe_interface: enp3s0
+  ping_target_v6: "2401:4900:d0:40d4::17b8:0:302"
+  ping_source_v6: "2401:4900:d0:40d4::17b8:0:301"

@@ -11,7 +11,7 @@ import pytest
 from scrapli.driver.generic import AsyncGenericDriver
 
 from pages.locators import EthernetLocators as EL, NetworkLocators as NL, UITimeouts
-from traffic.packet_capture import icmp_payload_for_mtu
+from traffic.packet_capture import icmp_payload_for_mtu, load_jumbo_capture_config, run_pc_jumbo_capture_check
 from utils.gui_login import login_if_needed
 from utils.network_flows import navigate_to_ethernet
 from utils.parsers import ssh_scalar
@@ -328,8 +328,36 @@ def _icmp_target_from_profile() -> str | None:
     return None
 
 
+async def _pc_jumbo_check_with_capture(
+    case_id: str,
+    configured_mtu: int,
+    *,
+    root_ssh=None,
+    count: int = 5,
+    enforce_max_frame_len: bool = False,
+):
+    config = load_jumbo_capture_config()
+    if not config.enabled:
+        _log_case(case_id, "PC capture disabled in profile — skipping Wireshark/tcpdump proof.")
+        return
+    if len(config.nodes) < 2:
+        pytest.skip(f"{case_id}: capture needs both BTS and CPE lab PC nodes (capture.bts_host/cpe_host + interfaces).")
+    _log_case(case_id, f"Running end-to-end lab PC ICMP + tcpdump proof for MTU={configured_mtu}.")
+    device_ping_cb = None
+    if root_ssh is not None:
+        async def device_ping_cb():
+            await _icmp_jumbo_check(root_ssh, configured_mtu=configured_mtu, count=count, case_id=case_id)
+
+    await run_pc_jumbo_capture_check(
+        case_id,
+        configured_mtu,
+        count=count,
+        enforce_max_frame_len=enforce_max_frame_len,
+        device_ping=device_ping_cb,
+    )
+
+
 async def _icmp_jumbo_check(root_ssh, configured_mtu: int, *, count: int = 5, case_id: str = "JUMBO"):
-    _ = case_id
     target_host = _icmp_target_from_profile()
     assert target_host, "Remote DUT IP is not defined in the active profile."
     payload_size = icmp_payload_for_mtu(configured_mtu, target_host)
@@ -435,6 +463,7 @@ async def assert_jmb_03_min_mid_mtu(root_ssh, gui_page, bsu_ip, device_creds):
             await _assert_backend_all(root_ssh, lan_total, mtu)
             _log_case("JMB_03", f"Running device-to-device ICMP validation for MTU={mtu}.")
             await _icmp_jumbo_check(root_ssh, configured_mtu=int(mtu), case_id="JMB_03")
+            await _pc_jumbo_check_with_capture("JMB_03", int(mtu), root_ssh=root_ssh)
     finally:
         _log_case("JMB_03", "Restoring original MTU values.")
         await _restore_local_and_remote_mtus(
@@ -458,6 +487,7 @@ async def assert_jmb_04_max_mtu_9000(root_ssh, gui_page, bsu_ip, device_creds):
         await _assert_backend_all(root_ssh, lan_total, "9000")
         _log_case("JMB_04", "Running device-to-device ICMP validation for MTU=9000.")
         await _icmp_jumbo_check(root_ssh, configured_mtu=9000, case_id="JMB_04")
+        await _pc_jumbo_check_with_capture("JMB_04", 9000, root_ssh=root_ssh)
     finally:
         _log_case("JMB_04", "Restoring original MTU values.")
         await _restore_local_and_remote_mtus(
@@ -501,6 +531,7 @@ async def assert_jmb_06_jumbo_with_p2mp(root_ssh, gui_page, bsu_ip, device_creds
         await _assert_backend_all(root_ssh, lan_total, "9000")
         _log_case("JMB_06", "Running device-to-device ICMP validation for MTU=9000 (same as JMB_04).")
         await _icmp_jumbo_check(root_ssh, configured_mtu=9000, case_id="JMB_06")
+        await _pc_jumbo_check_with_capture("JMB_06", 9000, root_ssh=root_ssh)
     finally:
         _log_case("JMB_06", "Restoring original MTU values.")
         await _restore_local_and_remote_mtus(
@@ -554,6 +585,9 @@ async def assert_jmb_08_mtu_1500(root_ssh, gui_page, bsu_ip, device_creds):
         await _set_mtu_all_lans(gui_page, "1500")
         await _apply(gui_page, settle_seconds=6)
         await _assert_backend_all(root_ssh, lan_total, "1500")
+        _log_case("JMB_08", "Running device-to-device ICMP validation for MTU=1500.")
+        await _icmp_jumbo_check(root_ssh, configured_mtu=1500, case_id="JMB_08")
+        await _pc_jumbo_check_with_capture("JMB_08", 1500, root_ssh=root_ssh, enforce_max_frame_len=True)
     finally:
         _log_case("JMB_08", "Restoring original MTU values.")
         await _restore_local_and_remote_mtus(

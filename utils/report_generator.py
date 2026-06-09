@@ -11,6 +11,12 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from utils.jumbo_capture_report import (
+    JUMBO_CAPTURE_REPORT_CSS,
+    load_jumbo_capture_index,
+    parse_jmb_case_id,
+    render_jumbo_capture_evidence_html,
+)
 from utils.regression_report import _render_testbed_summary_table
 
 SENAO_LOGO_URL = (
@@ -34,6 +40,10 @@ def get_group_marker(keywords):
         if kw not in ignore_list and not kw.startswith('GUI_') and not kw.startswith('test_') and '.py' not in kw:
             if re.match(r"IP_\d+", kw, re.I):
                 return "IP"
+            if re.match(r"JMB_\d+", kw, re.I):
+                return "JumboFrames"
+            if kw.lower() in ("jumboframes", "jumbo"):
+                return "JumboFrames"
             return kw.capitalize()
 
     return "Ungrouped"
@@ -163,6 +173,7 @@ def generate():
 
     groups = {}
     stats = {'total': 0, 'passed': 0, 'partial': 0, 'failed': 0}
+    jumbo_capture_index = load_jumbo_capture_index()
 
     for test in data.get('tests', []):
         stats['total'] += 1
@@ -187,18 +198,23 @@ def generate():
                 parsed_ip = True
 
         if not parsed_ip:
-            match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
-            if match:
-                test_id = match.group(1).upper()
-                raw_name = match.group(2)
-                parts = raw_name.split('_')
-                if len(parts) >= 2 and parts[0] == 'summary':
-                    test_name = '-'.join(p.capitalize() for p in parts[::-1])
-                else:
-                    test_name = '-'.join(p.capitalize() for p in parts)
+            jmb_id = parse_jmb_case_id(nodeid)
+            if jmb_id:
+                test_id = jmb_id
+                test_name = nodeid.split("::")[-1].replace("test_", "").replace("_", " ").title()
             else:
-                test_id = "N/A"
-                test_name = nodeid.split('::')[-1]
+                match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
+                if match:
+                    test_id = match.group(1).upper()
+                    raw_name = match.group(2)
+                    parts = raw_name.split('_')
+                    if len(parts) >= 2 and parts[0] == 'summary':
+                        test_name = '-'.join(p.capitalize() for p in parts[::-1])
+                    else:
+                        test_name = '-'.join(p.capitalize() for p in parts)
+                else:
+                    test_id = "N/A"
+                    test_name = nodeid.split('::')[-1]
 
         group_name = get_group_marker(test.get('keywords', []))
         outcome = _effective_outcome_for_report(test).upper()
@@ -270,6 +286,11 @@ def generate():
             reason_csv = f"Critical Execution Error:\n- {err_line}"
             color = "#ef4444"
             bg = "#fef2f2"
+
+        capture_html, capture_csv = render_jumbo_capture_evidence_html(test_id, jumbo_capture_index)
+        if capture_html:
+            reason_html = f"{reason_html}{capture_html}"
+            reason_csv = f"{reason_csv}\n{capture_csv}".strip()
 
         record = {
             'id': test_id,
@@ -397,6 +418,7 @@ def generate():
             .failure-item {{ position: relative; padding-left: 14px; margin-bottom: 8px; }}
             .failure-item::before {{ content: "•"; position: absolute; left: 0; color: #ef4444; font-weight: bold; }}
             .failure-item b {{ color: #0f172a; }}
+            {JUMBO_CAPTURE_REPORT_CSS}
         </style>
         <script>
             let currentStatus = 'ALL';

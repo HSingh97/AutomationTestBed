@@ -383,4 +383,7 @@ CAPTURE_DEFAULTS = {
     "tool": "tcpdump",
     "artifact_dir": "reports/artifacts/jumbo_captures",
     "remote_tmp_dir": "/tmp/ubr_jumbo_captures",
+    # RF-path ICMP targets (lab PC mgmt IPv6). SSH hosts (bts_host/cpe_host) are separate.
+    "ping_target_v6": "",
+    "ping_source_v6": "",
 }
