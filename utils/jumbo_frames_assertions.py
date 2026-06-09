@@ -222,12 +222,38 @@ async def _restore_backend_mtus_via_ssh(root_ssh, original: dict[str, str]):
         await root_ssh.send_command(command)
 
 
-async def _open_remote_cpe_ssh(device_creds):
-    """
-    Open CPE root SSH for remote LAN MTU changes.
+async def _cpe_link_up_via_bts(root_ssh, cpe_host: str, *, attempts: int = 8, delay_s: float = 3.0) -> bool:
+    """True when BTS can reach CPE (RF/mgmt path up) before nested CPE SSH attempts."""
+    target = str(cpe_host or "").strip()
+    if not target:
+        return False
+    if ":" in target:
+        command = f"ping -6 -c 1 -W 2 {shlex.quote(target)}"
+    else:
+        command = f"ping -c 1 -W 2 {shlex.quote(target)}"
+    for attempt in range(1, attempts + 1):
+        out = str((await root_ssh.send_command(command, timeout_ops=15)).result or "")
+        if (
+            "0% packet loss" in out
+            or " 0% packet loss" in out
+            or "1 received" in out
+            or "1 packets received" in out
+        ):
+            _log_case("REMOTE", f"BTS→CPE ping ok ({target}) on attempt {attempt}")
+            return True
+        if attempt < attempts:
+            await asyncio.sleep(delay_s)
+    _log_case("REMOTE", f"BTS→CPE ping not ready ({target}) after {attempts} attempts")
+    return False
 
-    Bench default: secondary CPE lab PC → CPE factory IPv4 (10.0.0.1).
-    Direct mgmt IPv6 from the BTS PC is often unreachable before/without RF path.
+
+async def _open_remote_cpe_ssh(device_creds, *, root_ssh=None):
+    """
+    Open CPE root SSH for remote LAN MTU changes (best-effort).
+
+    Prefer secondary CPE lab PC → factory IPv4 when the hop is ready.
+    Falls back to direct mgmt reachability only when secondary is not configured.
+    Returns None when CPE CLI is unavailable so BTS-only jumbo flows can continue.
     """
     manager = get_active_recovery_manager()
     if not manager:
@@ -236,31 +262,52 @@ async def _open_remote_cpe_ssh(device_creds):
     tb = profile.get("testbed", {}) or {}
     sec = tb.get("secondary_pc", {}) or {}
     password = str(device_creds.get("pass") or profile.get("dut", {}).get("password") or "")
+    remote_ipv6s = (profile.get("dut", {}) or {}).get("remote_ipv6s") or []
+    cpe_mgmt = str(remote_ipv6s[0]).strip() if remote_ipv6s else ""
+
+    if root_ssh is not None and cpe_mgmt:
+        await _cpe_link_up_via_bts(root_ssh, cpe_mgmt)
 
     if sec.get("enabled", True) and str(sec.get("ssh", "")).strip():
         from utils.ip_test_flows import open_cpe_ssh_via_secondary_pc
+        from utils.lab_pc_net import ensure_secondary_pc_cpe_hop_ready
         from utils.link_formation import cpe_ssh_access
 
         access = cpe_ssh_access(profile)
         cpe_factory = access["host"]
-        cpe_lan = ""
-        remote_ipv6s = (profile.get("dut", {}) or {}).get("remote_ipv6s") or []
-        if remote_ipv6s:
-            cpe_lan = str(remote_ipv6s[0]).strip()
-        driver, _, label = await open_cpe_ssh_via_secondary_pc(
-            profile,
-            password,
-            cpe_lan=cpe_lan or cpe_factory,
-            cpe_factory=cpe_factory,
+        cpe_lan = cpe_mgmt or cpe_factory
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                await ensure_secondary_pc_cpe_hop_ready(profile, password)
+                driver, _, label = await open_cpe_ssh_via_secondary_pc(
+                    profile,
+                    password,
+                    cpe_lan=cpe_lan,
+                    cpe_factory=cpe_factory,
+                )
+                _log_case("REMOTE", f"CPE SSH via {label} (attempt {attempt})")
+                return driver
+            except Exception as exc:
+                last_exc = exc
+                _log_case("REMOTE", f"secondary CPE SSH attempt {attempt} failed: {exc}")
+                if attempt < 3:
+                    await asyncio.sleep(4)
+        _log_case(
+            "REMOTE",
+            f"CPE secondary SSH unavailable after retries: {last_exc}; continuing BTS-only MTU flow.",
         )
-        _log_case("REMOTE", f"CPE SSH via {label}")
-        return driver
+        return None
 
     remote_host = _remote_dut_host_from_profile()
     if not remote_host:
         return None
-    _log_case("REMOTE", f"CPE SSH direct to {remote_host}")
-    return await _open_temp_root_ssh(remote_host, password)
+    try:
+        _log_case("REMOTE", f"CPE SSH direct to {remote_host}")
+        return await _open_temp_root_ssh(remote_host, password)
+    except Exception as exc:
+        _log_case("REMOTE", f"direct CPE SSH failed: {exc}; continuing BTS-only MTU flow.")
+        return None
 
 
 async def _read_backend_mtu_map(root_ssh) -> dict[str, str]:
@@ -293,7 +340,7 @@ async def _restore_remote_cpe_mtus_via_ssh(remote_ssh, original: dict[str, str])
 
 async def _backup_local_and_remote_mtus(root_ssh, gui_page, bsu_ip, device_creds):
     lan_total, local_original = await _backup_and_enter_ethernet(root_ssh, gui_page, bsu_ip, device_creds)
-    remote_ssh = await _open_remote_cpe_ssh(device_creds)
+    remote_ssh = await _open_remote_cpe_ssh(device_creds, root_ssh=root_ssh)
     remote_original = None
     if remote_ssh is not None:
         remote_original = await _read_backend_mtu_map(remote_ssh)

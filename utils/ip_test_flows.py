@@ -3931,7 +3931,7 @@ async def _probe_cpe_ssh_via_secondary(
         probe = (
             f"sshpass -p {shlex.quote(cpe_pass)} "
             "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 "
-            f"{shlex.quote(cpe_user)}@{factory} 'echo cpe_ok'"
+            f"{shlex.quote(cpe_user)}@{factory} 'echo cpe_ok' 2>&1"
         )
         out = await _ssh_run_raw(sec_conn, probe, timeout=25)
         if "cpe_ok" in out:
