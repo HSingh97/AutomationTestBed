@@ -107,6 +107,7 @@ async def _open_mgmt_strict(
     retries: int = 3,
     retry_s: int = 5,
     source_ipv6: str = "",
+    profile: dict[str, Any] | None = None,
 ) -> tuple[AsyncGenericDriver, str]:
     """SSH to device on mgmt IPv6 only (no IPv4 fallbacks)."""
     host = normalize_ip(primary)
@@ -135,6 +136,29 @@ async def _open_mgmt_strict(
                     last = f"{last}; source-bind({source})={src_exc}"
             if attempt + 1 < retries:
                 await asyncio.sleep(retry_s)
+    if profile:
+        from utils.lab_pc_net import recovery_ethernet_mtu_for_ssh
+
+        print(f"[testbed] {label} mgmt IPv6 SSH failed — reverting ethernet MTU to 1500 and retrying once")
+        await recovery_ethernet_mtu_for_ssh(profile, password)
+        try:
+            return await _open_root_ssh(host, password), host
+        except Exception as exc:
+            last = str(exc)
+            if source and ":" in host:
+                try:
+                    conn = AsyncGenericDriver(
+                        host=host,
+                        auth_username="root",
+                        auth_password=password,
+                        auth_strict_key=False,
+                        transport="asyncssh",
+                        transport_options={"local_addr": source},
+                    )
+                    await conn.open()
+                    return conn, host
+                except Exception as src_exc:
+                    last = f"{last}; source-bind({source})={src_exc}"
     raise ConnectionError(f"{label} mgmt IPv6 SSH failed for {host}: {last}")
 
 
@@ -144,9 +168,10 @@ async def _open_with_recovery_fallbacks(
     fallbacks: list[str],
     *,
     label: str = "device",
+    profile: dict[str, Any] | None = None,
 ) -> tuple[AsyncGenericDriver, str]:
     """SSH during recovery — mgmt IPv6 first, then factory IPv4 chain."""
-    return await _open_with_fallbacks(primary, password, fallbacks, label=label)
+    return await _open_with_fallbacks(primary, password, fallbacks, label=label, profile=profile)
 
 
 async def _setup_lab_pcs(
@@ -203,6 +228,7 @@ async def _open_with_fallbacks(
     fallbacks: list[str],
     *,
     label: str = "device",
+    profile: dict[str, Any] | None = None,
 ) -> tuple[AsyncGenericDriver, str]:
     hosts = [normalize_ip(primary)] + [normalize_ip(h) for h in fallbacks if h]
     seen: set[str] = set()
@@ -213,14 +239,32 @@ async def _open_with_fallbacks(
             ordered.append(h)
     last = ""
     primary_n = normalize_ip(primary)
-    for host in ordered:
-        try:
-            ssh = await _open_root_ssh(host, password)
-            if host != primary_n:
-                print(f"[testbed] {label} SSH via fallback {host} (primary {primary_n} unreachable)")
-            return ssh, host
-        except Exception as exc:
-            last = str(exc)
+
+    async def _try_hosts() -> tuple[AsyncGenericDriver, str] | None:
+        nonlocal last
+        for host in ordered:
+            try:
+                ssh = await _open_root_ssh(host, password)
+                if host != primary_n:
+                    print(f"[testbed] {label} SSH via fallback {host} (primary {primary_n} unreachable)")
+                return ssh, host
+            except Exception as exc:
+                last = str(exc)
+        return None
+
+    found = await _try_hosts()
+    if found:
+        return found
+
+    if profile:
+        from utils.lab_pc_net import recovery_ethernet_mtu_for_ssh
+
+        print(f"[testbed] {label} SSH failed — reverting ethernet MTU to 1500 and retrying once")
+        await recovery_ethernet_mtu_for_ssh(profile, password)
+        found = await _try_hosts()
+        if found:
+            return found
+
     raise ConnectionError(f"SSH failed for {ordered}: {last}")
 
 
@@ -412,6 +456,7 @@ async def bootstrap_testbed(
             password,
             label="BTS",
             source_ipv6=state.bts_pc_ipv6,
+            profile=active,
         )
         print(f"[testbed] BTS SSH via mgmt IPv6 {host}")
         return ssh, host
@@ -420,7 +465,7 @@ async def bootstrap_testbed(
         nonlocal used_recovery
         used_recovery = True
         ssh, host = await _open_with_recovery_fallbacks(
-            state.bts_mgmt_ipv6, password, bts_recovery, label="BTS recovery"
+            state.bts_mgmt_ipv6, password, bts_recovery, label="BTS recovery", profile=active
         )
         print(f"[testbed] BTS SSH via recovery path {host}")
         state.notes.append(f"BTS recovery SSH via {host}")

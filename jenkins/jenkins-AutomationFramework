@@ -65,6 +65,10 @@ def resolveProfileName(List markers, List kParts) {
 pipeline {
     agent { node { label "${TARGET_STAND}" } }
 
+    options {
+        disableConcurrentBuilds()
+    }
+
     parameters {
         string(
             name: 'TEST_MARKERS',

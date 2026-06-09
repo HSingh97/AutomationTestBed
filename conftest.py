@@ -404,6 +404,7 @@ async def root_ssh(request, bsu_ip, device_creds, recovery_manager):
         device_creds["pass"],
         timeout_s=90,
         interval_s=5,
+        mtu_recovery_profile=profile,
     )
     if effective != normalize_ip(bsu_ip):
         print(f"[ssh] root_ssh session on {effective} (profile primary {bsu_ip})")

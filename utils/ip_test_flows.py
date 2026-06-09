@@ -343,18 +343,38 @@ async def _wait_ssh_any(
     *,
     timeout_s: int,
     interval_s: int = 5,
+    mtu_recovery_profile: dict[str, Any] | None = None,
 ) -> tuple[AsyncGenericDriver, str]:
     deadline = time.monotonic() + timeout_s
     last_error = ""
-    while time.monotonic() < deadline:
-        for host in hosts:
-            try:
-                conn = await _open_ssh(host, password)
-                await conn.send_command("echo ok", timeout_ops=15)
-                return conn, host
-            except Exception as exc:
-                last_error = str(exc)
-        await asyncio.sleep(interval_s)
+    mtu_recovery_done = False
+
+    async def _attempt_until(deadline_ts: float) -> tuple[AsyncGenericDriver, str] | None:
+        nonlocal last_error
+        while time.monotonic() < deadline_ts:
+            for host in hosts:
+                try:
+                    conn = await _open_ssh(host, password)
+                    await conn.send_command("echo ok", timeout_ops=15)
+                    return conn, host
+                except Exception as exc:
+                    last_error = str(exc)
+            await asyncio.sleep(interval_s)
+        return None
+
+    found = await _attempt_until(deadline)
+    if found:
+        return found
+
+    if mtu_recovery_profile and not mtu_recovery_done:
+        from utils.lab_pc_net import recovery_ethernet_mtu_for_ssh
+
+        mtu_recovery_done = True
+        await recovery_ethernet_mtu_for_ssh(mtu_recovery_profile, password)
+        found = await _attempt_until(time.monotonic() + 45)
+        if found:
+            return found
+
     raise TimeoutError(f"SSH not ready on {hosts} within {timeout_s}s: {last_error}")
 
 

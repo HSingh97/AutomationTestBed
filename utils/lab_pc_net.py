@@ -166,11 +166,19 @@ async def _run_pc_network_command(pc_cfg: dict[str, Any], password: str, joined:
     if not ssh_target:
         return False
     host, user = _parse_ssh_target(ssh_target)
-    conn = await _open_pc_ssh(host, user, password)
+    tag = _lab_pc_log_prefix(pc_cfg)
+    try:
+        conn = await _open_pc_ssh(host, user, password)
+    except Exception as exc:
+        print(f"{tag} {label} skipped ({user}@{host} unreachable): {exc}")
+        return False
     try:
         await conn.send_command(joined, timeout_ops=60)
-        print(f"{_lab_pc_log_prefix(pc_cfg)} {label} on {user}@{host}")
+        print(f"{tag} {label} on {user}@{host}")
         return True
+    except Exception as exc:
+        print(f"{tag} {label} failed on {user}@{host}: {exc}")
+        return False
     finally:
         await conn.close()
 
@@ -419,6 +427,111 @@ def build_lab_pc_mtu_restore_script(
         ]
     )
     return "\n".join(lines)
+
+
+def _lab_pc_side_plan(profile: dict[str, Any], side: str) -> tuple[dict[str, Any], str, str]:
+    """Return (pc_cfg, leaf_iface, mgmt_ipv6_cidr) for ``bts`` or ``cpe`` lab PC."""
+    from utils.vlan_uci import lab_pc_vlan_plan
+
+    tb = profile.get("testbed", {}) or {}
+    dut = profile.get("dut", {}) or {}
+    mgmt = tb.get("mgmt_vlan", {}) or {}
+    prefix_len = int(mgmt.get("prefix_len", 120))
+    pc_key = "primary_pc" if side == "bts" else "secondary_pc"
+    pc = dict(tb.get(pc_key) or {})
+    parent = str(pc.get("mgmt_interface", "enp3s0"))
+    tagging = lab_pc_vlan_plan(tb, side=side)
+    if side == "bts":
+        host_ip = str(dut.get("bts_pc_ipv6") or mgmt.get("ipv6_bts_pc") or "")
+    else:
+        host_ip = str(dut.get("cpe_pc_ipv6") or mgmt.get("ipv6_cpe_pc") or "")
+    cidr = f"{normalize_ip(host_ip.split('/')[0])}/{prefix_len}"
+    _, vlan_if = _build_pc_link_commands(parent, tagging=tagging, cidr=cidr)
+    return pc, vlan_if, cidr
+
+
+async def restore_lab_pcs_ethernet_mtu(
+    profile: dict[str, Any],
+    password: str,
+    *,
+    mtu: int = 1500,
+) -> None:
+    """Parent-first MTU restore on BTS + CPE lab PCs (re-applies mgmt IPv6 on leaf if)."""
+    for side in ("bts", "cpe"):
+        pc, vlan_if, cidr = _lab_pc_side_plan(profile, side)
+        if side == "cpe" and not pc.get("enabled", True):
+            continue
+        if not pc and side == "cpe":
+            continue
+        pc_pass = str(pc.get("password") or password).strip() or password
+        script = build_lab_pc_mtu_apply_script(vlan_if, mtu, mgmt_ipv6_cidr=cidr)
+        ok = await _run_pc_network_command(
+            pc,
+            pc_pass,
+            script,
+            label=f"restore {vlan_if} mtu {mtu}",
+        )
+        if not ok:
+            print(f"[mtu-recovery] {side} lab PC MTU restore incomplete — continuing")
+
+
+async def restore_bts_dut_ethernet_mtu_via_fallback(
+    profile: dict[str, Any],
+    password: str,
+    *,
+    mtu: int = 1500,
+) -> bool:
+    """Best-effort BTS DUT ethernet/br-lan MTU restore over factory/fallback IPv4."""
+    tb = profile.get("testbed", {}) or {}
+    recovery = tb.get("recovery", {}) or {}
+    fb = normalize_ip(str(recovery.get("bts_fallback_ipv4") or "10.0.0.1"))
+    mtu_s = str(int(mtu))
+    conn = AsyncGenericDriver(
+        host=fb,
+        auth_username="root",
+        auth_password=password,
+        auth_strict_key=False,
+        transport="asyncssh",
+        timeout_socket=20,
+    )
+    try:
+        await conn.open()
+        for i in range(4):
+            key = f"eth{i}"
+            await conn.send_command(f"uci set ethernet.{key}.mtu={mtu_s} 2>/dev/null || true", timeout_ops=15)
+            await conn.send_command(
+                f"ip link set dev {key} mtu {mtu_s} 2>/dev/null || ifconfig {key} mtu {mtu_s} || true",
+                timeout_ops=15,
+            )
+        await conn.send_command(
+            f"ip link set dev br-lan mtu {mtu_s} 2>/dev/null || ifconfig br-lan mtu {mtu_s} || true",
+            timeout_ops=15,
+        )
+        await conn.send_command("uci commit ethernet 2>/dev/null || true", timeout_ops=15)
+        print(f"[mtu-recovery] BTS DUT ethernet MTU set to {mtu_s} via {fb}")
+        return True
+    except Exception as exc:
+        print(f"[mtu-recovery] BTS DUT fallback MTU restore skipped ({fb}): {exc}")
+        return False
+    finally:
+        await conn.close()
+
+
+async def recovery_ethernet_mtu_for_ssh(
+    profile: dict[str, Any],
+    password: str,
+    *,
+    mtu: int = 1500,
+) -> None:
+    """
+    When SSH/mgmt is flaky after jumbo runs, revert lab PC + BTS ethernet MTU to 1500.
+
+    Matches the manual bench fix: parent enp3s0 then VLAN subif, then re-assign mgmt IPv6.
+    """
+    print(f"[mtu-recovery] SSH path failing — reverting ethernet MTU to {mtu} on lab PCs + BTS DUT")
+    await restore_lab_pcs_ethernet_mtu(profile, password, mtu=mtu)
+    await restore_bts_dut_ethernet_mtu_via_fallback(profile, password, mtu=mtu)
+    await asyncio.sleep(2)
 
 
 def read_local_iface_mtu(iface: str) -> str:
