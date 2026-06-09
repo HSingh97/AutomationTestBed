@@ -485,10 +485,13 @@ async def run_ip_case_preflight_v6(
         cached_bts = str(chain.get("bts_lan_ipv4") or cfg.get("_preflight_bts_lan_ipv4") or "")
         if cached_bts:
             cfg["_preflight_bts_lan_ipv4"] = normalize_ip(cached_bts.split("/")[0])
-        cached_cpe = str(chain.get("cpe_lan_ipv4") or cfg.get("_preflight_cpe_ipv4") or "")
+        cached_cpe = str(
+            chain.get("cpe_lan_ipv6")
+            or cfg.get("_preflight_cpe_ipv6")
+            or ""
+        )
         if cached_cpe:
             ctx.peer_host = normalize_ip(cached_cpe.split("/")[0])
-            cfg["_preflight_cpe_ipv4"] = ctx.peer_host
         _log(
             ctx,
             f"=== {cid} IPv6 preflight skipped (suite healthy: "
@@ -671,13 +674,20 @@ async def run_ip_case_preflight(
             cfg["_preflight_bts_lan_ipv4"] = normalize_ip(cached_bts.split("/")[0])
         cached_cpe = str(chain.get("cpe_lan_ipv4") or cfg.get("_preflight_cpe_ipv4") or "")
         if cached_cpe:
-            ctx.peer_host = normalize_ip(cached_cpe.split("/")[0])
-            cfg["_preflight_cpe_ipv4"] = ctx.peer_host
+            cpe_v4 = normalize_ip(cached_cpe.split("/")[0])
+            try:
+                import ipaddress
+
+                if isinstance(ipaddress.ip_address(cpe_v4), ipaddress.IPv4Address):
+                    ctx.peer_host = cpe_v4
+                    cfg["_preflight_cpe_ipv4"] = cpe_v4
+            except ValueError:
+                pass
         _log(
             ctx,
             f"=== {cid} preflight skipped (suite healthy: "
             f"BTS={cfg.get('_preflight_bts_lan_ipv4', '')} "
-            f"CPE={ctx.peer_host or 'n/a'} local+remote PC ok) ===",
+            f"CPE={cfg.get('_preflight_cpe_ipv4') or ctx.peer_host or 'n/a'} local+remote PC ok) ===",
         )
         return
     need_cpe = case_requires_cpe(cid) if require_cpe is None else require_cpe
