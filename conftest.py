@@ -14,6 +14,30 @@ from utils.link_test_config import resolve_link_test_config
 from utils.profile_manager import load_profile_bundle
 from utils.recovery_manager import RecoveryManager, set_active_recovery_manager
 
+# region agent log
+def _dbg65(location: str, message: str, data: dict, *, hypothesis_id: str, run_id: str = "pre-fix") -> None:
+    """Write NDJSON debug logs for session 65ce72 (no secrets)."""
+    try:
+        payload = {
+            "sessionId": "65ce72",
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(
+            "/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-65ce72.log",
+            "a",
+            encoding="utf-8",
+        ) as fp:
+            fp.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+
+# endregion
+
 # =====================================================================
 # EVENT LOOP MANAGER (Fixes the "Attached to different loop" crash)
 # =====================================================================
@@ -319,16 +343,40 @@ def _debug_log_root_ssh(
 async def _is_bts_ssh_target(conn: AsyncGenericDriver) -> bool:
     """True when SSH landed on the BTS (AP), not the CPE (STA)."""
     try:
-        mode = (await conn.send_command(
-            "uci get wireless.@wifi-iface[0].mode 2>/dev/null || echo unknown"
-        )).result.strip().lower()
+        mode = (
+            await conn.send_command("uci get wireless.@wifi-iface[0].mode 2>/dev/null || echo unknown")
+        ).result.strip().lower()
         if mode == "ap":
+            # region agent log
+            _dbg65(
+                "conftest.py:_is_bts_ssh_target",
+                "Role check",
+                {"mode": mode, "remote_exec": "n/a", "is_bts": True},
+                hypothesis_id="H5",
+            )
+            # endregion
             return True
-        remote_exec = (await conn.send_command(
-            "test -x /usr/sbin/remote_exec.sh && echo yes || echo no"
-        )).result.strip()
+        remote_exec = (
+            await conn.send_command("test -x /usr/sbin/remote_exec.sh && echo yes || echo no")
+        ).result.strip().lower()
+        # region agent log
+        _dbg65(
+            "conftest.py:_is_bts_ssh_target",
+            "Role check",
+            {"mode": mode, "remote_exec": remote_exec, "is_bts": remote_exec == "yes"},
+            hypothesis_id="H5",
+        )
+        # endregion
         return remote_exec == "yes"
-    except Exception:
+    except Exception as exc:
+        # region agent log
+        _dbg65(
+            "conftest.py:_is_bts_ssh_target",
+            "Role check exception",
+            {"error": str(exc)[:160]},
+            hypothesis_id="H5",
+        )
+        # endregion
         return False
 
 
@@ -381,7 +429,8 @@ async def _open_root_ssh_with_fallback(
                 )
                 # endregion
                 if not is_bts:
-                    open_errors.append(f"{host}: connected but device is CPE (not BTS)")
+                    # Note: details are written to debug-65ce72.log by _is_bts_ssh_target
+                    open_errors.append(f"{host}: connected but device is not BTS (see debug log)")
                     await conn.close()
                     break
                 if host != normalize_ip(primary_host):
@@ -423,35 +472,81 @@ async def root_ssh(request, bsu_ip, device_creds, recovery_manager):
         extra_candidates=[remote_ip],
     )
     if ssh_host != normalize_ip(bsu_ip):
-        await _ensure_bts_lab_ipv4(conn, bsu_ip)
+        # region agent log
+        _dbg65(
+            "conftest.py:root_ssh",
+            "Connected via fallback; ensuring lab IPv4",
+            {
+                "ssh_host": normalize_ip(ssh_host),
+                "bsu_ip": normalize_ip(bsu_ip),
+                "fallback_ip": normalize_ip(fallback_ip),
+            },
+            hypothesis_id="H1",
+        )
+        # endregion
+        await _ensure_bts_lab_ipv4(conn, bsu_ip, ssh_host=ssh_host)
     await recovery_manager.ensure_link_or_recover(bsu_ip=bsu_ip, device_creds=device_creds, root_ssh=conn)
     yield conn
     await conn.close()
 
 
-async def _ensure_bts_lab_ipv4(root_ssh, lab_ip: str) -> None:
+async def _ensure_bts_lab_ipv4(root_ssh, lab_ip: str, *, ssh_host: str = "") -> None:
     """Re-add BTS lab IPv4 on br-lan when only fallback or wrong LAN IP is up."""
     lab_ip = normalize_ip(lab_ip)
+    ssh_host = normalize_ip(ssh_host)
     if not lab_ip:
         return
     raw = (await root_ssh.send_command("ip -4 addr show dev br-lan 2>/dev/null")).result
+    # region agent log
+    _dbg65(
+        "conftest.py:_ensure_bts_lab_ipv4",
+        "br-lan addresses before restore",
+        {"lab_ip": lab_ip, "ssh_host": ssh_host, "raw_head": (raw or "").splitlines()[:8]},
+        hypothesis_id="H2",
+    )
+    # endregion
     if lab_ip in raw:
         return
     wrong_ip = ""
     for line in raw.splitlines():
         if "inet " in line and lab_ip not in line:
-            wrong_ip = line.strip().split()[1].split("/")[0]
+            wrong_ip = normalize_ip(line.strip().split()[1].split("/")[0])
             break
-    del_cmd = f"ip addr del {wrong_ip}/24 dev br-lan 2>/dev/null; " if wrong_ip else ""
-    await root_ssh.send_command(
+    # Never delete the address the runner SSH'd through (e.g. 10.0.0.1 fallback).
+    del_cmd = ""
+    if wrong_ip and wrong_ip != ssh_host:
+        del_cmd = f"ip addr del {wrong_ip}/24 dev br-lan 2>/dev/null; "
+    cmd = (
         f"uci set network.lan.proto='static'; "
         f"uci set network.lan.ipaddr='{lab_ip}'; "
         f"uci set network.lan.netmask='255.255.255.0'; "
         f"uci commit network; "
         f"{del_cmd}"
-        f"ip addr add {lab_ip}/24 dev br-lan 2>/dev/null || "
-        f"ip addr replace {lab_ip}/24 dev br-lan"
+        f"ip addr add {lab_ip}/24 dev br-lan 2>/dev/null; "
+        f"echo LAB_IP_{lab_ip}_OK"
     )
+    # region agent log
+    _dbg65(
+        "conftest.py:_ensure_bts_lab_ipv4",
+        "Applying lab IP command",
+        {
+            "lab_ip": lab_ip,
+            "ssh_host": ssh_host,
+            "wrong_ip": wrong_ip or None,
+            "will_delete_wrong_ip": bool(del_cmd),
+        },
+        hypothesis_id="H3",
+    )
+    # endregion
+    out = await root_ssh.send_command(cmd)
+    # region agent log
+    _dbg65(
+        "conftest.py:_ensure_bts_lab_ipv4",
+        "Lab IP command completed",
+        {"lab_ip": lab_ip, "result_tail": (out.result or "")[-200:]},
+        hypothesis_id="H4",
+    )
+    # endregion
     # region agent log
     _debug_log_root_ssh(
         "conftest.py:_ensure_bts_lab_ipv4",

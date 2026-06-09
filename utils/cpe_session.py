@@ -11,8 +11,8 @@ from pathlib import Path
 from pages.locators import CommonLocators, LoginPageLocators, SummaryLocators, SummaryNetworkLocators, UITimeouts
 from utils.net_utils import format_luci_url, ip_in_text, is_ipv6_literal, normalize_ip
 
-DEBUG_LOG_PATH = Path("/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-a9118f.log")
-DEBUG_SESSION_ID = "a9118f"
+DEBUG_LOG_PATH = Path("/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-65ce72.log")
+DEBUG_SESSION_ID = "65ce72"
 DEBUG_RUN_ID = "pre-fix"
 
 
@@ -72,9 +72,24 @@ async def _wait_for_any_visible(page, locators: tuple[str, ...], timeout_ms: int
         return False
 
 
+async def _is_luci_page(page) -> bool:
+    """True when the loaded page is LuCI (not a stray Apache/404 on port 80)."""
+    url = page.url or ""
+    if "/cgi-bin/luci" not in url:
+        return False
+    sample = (await _safe_body_sample(page, 400)).lower()
+    if "not found" in sample and "apache" in sample:
+        return False
+    return await _wait_for_any_visible(
+        page,
+        (LoginPageLocators.USERNAME_INPUT, SummaryLocators.MODEL, CommonLocators.MENU_MONITOR),
+        UITimeouts.SHORT_WAIT_MS,
+    )
+
+
 async def goto_cpe_luci(cpe_page, cpe_ip: str) -> None:
     """Open CPE LuCI; tolerate slow CPE UI and partial page loads."""
-    schemes = ("https", "http") if is_ipv6_literal(cpe_ip) else ("http", "https")
+    schemes = ("https", "http") if is_ipv6_literal(cpe_ip) else ("https", "http")
     last_error = None
     timeouts = (UITimeouts.PAGE_LOAD_MS, UITimeouts.PAGE_LOAD_MS * 2)
     for timeout_ms in timeouts:
@@ -85,20 +100,14 @@ async def goto_cpe_luci(cpe_page, cpe_ip: str) -> None:
                     timeout=timeout_ms,
                     wait_until="domcontentloaded",
                 )
-                return
+                if await _is_luci_page(cpe_page):
+                    return
+                last_error = RuntimeError(f"{scheme} returned non-LuCI content at {cpe_page.url or ''}")
             except Exception as exc:
                 last_error = exc
                 try:
-                    on_target = ip_in_text(cpe_ip, cpe_page.url or "") and "/cgi-bin/luci" in (cpe_page.url or "")
-                    if on_target:
-                        login_visible = await cpe_page.locator(LoginPageLocators.USERNAME_INPUT).is_visible(
-                            timeout=UITimeouts.SHORT_WAIT_MS
-                        )
-                        model_visible = await cpe_page.locator(SummaryLocators.MODEL).is_visible(
-                            timeout=UITimeouts.SHORT_WAIT_MS
-                        )
-                        if login_visible or model_visible:
-                            return
+                    if await _is_luci_page(cpe_page):
+                        return
                 except Exception:
                     pass
     raise RuntimeError(f"Unable to open CPE LuCI for {cpe_ip}: {last_error}")
