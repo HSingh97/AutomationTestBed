@@ -2,8 +2,14 @@
 // Select suites via TEST_MARKERS (GUI, IP, Regression, JumboFrames).
 // Optional TEST_FILTER (-k). Report: Senao_UBR_<build>_Report_<date>.html + CSV.
 
-def archiveArtifacts(pattern) {
-    step([$class: 'ArtifactArchiver', artifacts: pattern, fingerprint: true, onlyIfSuccessful: false])
+def archiveArtifacts(pattern, allowEmpty = false) {
+    step([
+        $class: 'ArtifactArchiver',
+        artifacts: pattern,
+        fingerprint: true,
+        onlyIfSuccessful: false,
+        allowEmptyArchive: allowEmpty,
+    ])
 }
 
 def parseMarkerList(String raw) {
@@ -297,13 +303,13 @@ pipeline {
 
         stage('Archive Report') {
             steps {
-                archiveArtifacts artifacts: 'reports/artifacts/Senao_UBR_*.html'
-                archiveArtifacts artifacts: 'reports/artifacts/Senao_UBR_*.csv', allowEmptyArchive: true
-                archiveArtifacts artifacts: 'reports/artifacts/report.json', allowEmptyArchive: true
-                archiveArtifacts artifacts: 'reports/artifacts/ip_suite_progress.json', allowEmptyArchive: true
-                archiveArtifacts artifacts: 'reports/artifacts/testbed_summary.json', allowEmptyArchive: true
-                archiveArtifacts artifacts: 'reports/artifacts/jumbo_captures/**/*', allowEmptyArchive: true
-                archiveArtifacts artifacts: 'reports/artifacts/jumbo_captures_index.json', allowEmptyArchive: true
+                archiveArtifacts('reports/artifacts/Senao_UBR_*.html')
+                archiveArtifacts('reports/artifacts/Senao_UBR_*.csv', true)
+                archiveArtifacts('reports/artifacts/report.json', true)
+                archiveArtifacts('reports/artifacts/ip_suite_progress.json', true)
+                archiveArtifacts('reports/artifacts/testbed_summary.json', true)
+                archiveArtifacts('reports/artifacts/jumbo_captures/**/*', true)
+                archiveArtifacts('reports/artifacts/jumbo_captures_index.json', true)
             }
         }
     }
