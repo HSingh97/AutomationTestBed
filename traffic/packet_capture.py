@@ -310,21 +310,24 @@ def _bpf_filter_for_target(target: str) -> str:
 
 
 def _summary_command(remote_pcap: str, remote_summary: str, *, target: str) -> str:
+    """Write a short ICMP echo summary CSV (not used alone for max frame.len stats)."""
     if ":" in target:
         tshark_cmd = (
-            f"tshark -r {shlex.quote(remote_pcap)} -c 20 "
+            f"tshark -r {shlex.quote(remote_pcap)} "
+            '-Y "icmpv6.type==128 || icmpv6.type==129" '
             "-T fields -E header=y -E separator=, "
             "-e frame.number -e frame.len -e ipv6.src -e ipv6.dst -e _ws.col.Protocol -e icmpv6.type "
-            f"> {shlex.quote(remote_summary)}"
+            f"| head -n 13 > {shlex.quote(remote_summary)}"
         )
     else:
         tshark_cmd = (
-            f"tshark -r {shlex.quote(remote_pcap)} -c 20 "
+            f"tshark -r {shlex.quote(remote_pcap)} "
+            '-Y "icmp.type==8 || icmp.type==0" '
             "-T fields -E header=y -E separator=, "
             "-e frame.number -e frame.len -e ip.src -e ip.dst -e _ws.col.Protocol -e icmp.type "
-            f"> {shlex.quote(remote_summary)}"
+            f"| head -n 13 > {shlex.quote(remote_summary)}"
         )
-    fallback_cmd = f"tcpdump -nn -r {shlex.quote(remote_pcap)} -c 20 > {shlex.quote(remote_summary)}"
+    fallback_cmd = f"tcpdump -nn -r {shlex.quote(remote_pcap)} -c 12 > {shlex.quote(remote_summary)}"
     return f"if command -v tshark >/dev/null 2>&1; then {tshark_cmd}; else {fallback_cmd}; fi"
 
 
@@ -448,11 +451,23 @@ async def prepare_backend_interface_mtu(
             )
             continue
         if result.returncode == 0:
-            chain_summary = ", ".join(f"{dev}={mtu}" for dev, mtu in chain_mtus.items())
+            chain_before = ", ".join(f"{dev}={mtu}" for dev, mtu in chain_mtus.items())
+            chain_after = await _read_remote_mtu_chain(node, config)
+            after_summary = ", ".join(f"{dev}={mtu}" for dev, mtu in chain_after.items())
             print(
                 f"[JUMBO][CAPTURE] MTU {configured_mtu} on {node.name} ({node.interface}); "
-                f"restored mgmt {mgmt_cidr or 'n/a'}; chain before: {chain_summary or original_mtu}"
+                f"restored mgmt {mgmt_cidr or 'n/a'}; "
+                f"chain before: {chain_before or original_mtu}; after: {after_summary}"
             )
+            for dev, mtu in chain_after.items():
+                if int(mtu) != int(configured_mtu):
+                    msg = (
+                        f"MTU verify failed on {node.host} {dev}: expected {configured_mtu}, got {mtu}"
+                    )
+                    if best_effort:
+                        print(f"[JUMBO][CAPTURE] {msg}")
+                    else:
+                        raise RuntimeError(msg)
         states.append(
             RemoteInterfaceState(
                 node=node,
@@ -586,7 +601,53 @@ def _write_evidence_svg(bundle: JumboCaptureBundle, metadata: dict) -> str:
     return str(output_path)
 
 
-def _summarize_capture_file(local_summary: Path) -> dict[str, int]:
+def _tshark_icmp_stats_from_pcap(local_pcap: Path, *, ipv6: bool) -> dict[str, int] | None:
+    """Scan full pcap for ICMP echo frames (accurate max frame.len for jumbo proof)."""
+    if not local_pcap.is_file():
+        return None
+    display_filter = "icmpv6.type==128 || icmpv6.type==129" if ipv6 else "icmp.type==8 || icmp.type==0"
+    try:
+        result = subprocess.run(
+            [
+                "tshark",
+                "-r",
+                str(local_pcap),
+                "-Y",
+                display_filter,
+                "-T",
+                "fields",
+                "-e",
+                "frame.len",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    packet_count = 0
+    max_frame_len = 0
+    for line in (result.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            frame_len = int(line)
+        except ValueError:
+            continue
+        packet_count += 1
+        max_frame_len = max(max_frame_len, frame_len)
+    if packet_count == 0:
+        return None
+    return {"packet_count": packet_count, "max_frame_len": max_frame_len}
+
+
+def _summarize_capture_file(local_summary: Path, *, local_pcap: Path | None = None, ipv6: bool = True) -> dict[str, int]:
+    if local_pcap is not None:
+        from_pcap = _tshark_icmp_stats_from_pcap(local_pcap, ipv6=ipv6)
+        if from_pcap:
+            return from_pcap
+
     packet_count = 0
     max_frame_len = 0
     if not local_summary.exists():
@@ -700,16 +761,18 @@ async def run_pc_jumbo_capture_check(
     payload_size = icmp_payload_for_mtu(configured_mtu, capture_target)
     min_frame_len, max_frame_len = expected_frame_len_bounds(configured_mtu)
     mtu_states: tuple[RemoteInterfaceState, ...] = ()
-    bundle: JumboCaptureBundle | None = None
     ping_output = ""
     metadata: dict | None = None
     ping_source = "pc"
     ping_ok = False
+    pc_ping_exc: AssertionError | None = None
 
     try:
         mtu_states = await prepare_backend_interface_mtu(configured_mtu, best_effort=True)
-        bundle = await start_jumbo_icmp_capture(case_id, str(configured_mtu), payload_size, capture_target)
-        assert bundle is not None, f"{case_id}: failed to start lab PC capture sessions."
+        await asyncio.sleep(1)
+
+        bundle_pc = await start_jumbo_icmp_capture(case_id, str(configured_mtu), payload_size, capture_target)
+        assert bundle_pc is not None, f"{case_id}: failed to start lab PC capture sessions."
         await asyncio.sleep(1)
         ping = await run_backend_pc_ping(
             configured_mtu=configured_mtu,
@@ -725,20 +788,61 @@ async def run_pc_jumbo_capture_check(
         try:
             _assert_ping_success(ping, configured_mtu=configured_mtu)
             ping_ok = True
-        except AssertionError as pc_ping_exc:
-            print(f"[JUMBO][{case_id}][CAPTURE] lab PC ping not fully successful ({pc_ping_exc}); validating wire capture.")
-            if device_ping:
-                ping_source = "device"
-                await device_ping()
-                ping_output = f"{ping_output}\n[device-ping re-run after PC ping partial failure]"
+        except AssertionError as exc:
+            pc_ping_exc = exc
+            print(
+                f"[JUMBO][{case_id}][CAPTURE] lab PC ping not fully successful ({exc}); "
+                "finalizing PC capture before device ping."
+            )
+
+        metadata_pc = await finalize_jumbo_icmp_capture(bundle_pc, ping_output=ping_output)
+        metadata_pc["ping_source"] = "pc"
+        pc_bts_max = next(
+            (int(c.get("max_frame_len", 0)) for c in metadata_pc.get("captures", []) if c.get("node") == "bts"),
+            0,
+        )
+        if pc_bts_max and pc_bts_max < min_frame_len:
+            print(
+                f"[JUMBO][{case_id}][CAPTURE] PC-phase max frame.len {pc_bts_max} < expected {min_frame_len} "
+                "(lab PC likely still at 1500 MTU or path fragments)."
+            )
+
+        if ping_ok:
+            metadata = metadata_pc
+            ping_source = "pc"
+        elif device_ping:
+            print(f"[JUMBO][{case_id}][CAPTURE] starting fresh capture for device-originated jumbo ICMP.")
+            bundle_dev = await start_jumbo_icmp_capture(
+                case_id,
+                str(configured_mtu),
+                payload_size,
+                capture_target,
+            )
+            assert bundle_dev is not None, f"{case_id}: failed to start device ping capture sessions."
+            await asyncio.sleep(1)
+            await device_ping()
+            ping_source = "device"
+            ping_output = (
+                f"{ping_output}\n\n[device-ping after PC ping failure: {pc_ping_exc}]"
+                if pc_ping_exc
+                else ping_output
+            )
+            await asyncio.sleep(2)
+            metadata = await finalize_jumbo_icmp_capture(bundle_dev, ping_output=ping_output)
+            metadata["case_id"] = case_id
+            metadata["ping_source"] = "device"
+            metadata["pc_capture_dir"] = metadata_pc.get("local_dir")
+            metadata["pc_max_frame_len"] = pc_bts_max
+        else:
+            metadata = metadata_pc
+            ping_source = "pc"
     finally:
-        if bundle:
-            metadata = await finalize_jumbo_icmp_capture(bundle, ping_output=ping_output)
         if mtu_states:
             await restore_backend_interface_mtu(mtu_states)
 
     assert metadata is not None, f"{case_id}: failed to finalize lab PC capture artifacts."
     metadata["ping_source"] = ping_source
+    metadata.setdefault("pc_max_frame_len", 0)
     bts_packets = next(
         (int(c.get("packet_count", 0)) for c in metadata.get("captures", []) if c.get("node") == "bts"),
         0,
@@ -820,7 +924,11 @@ async def finalize_jumbo_icmp_capture(bundle: JumboCaptureBundle, *, ping_output
             check=False,
         )
 
-        stats = _summarize_capture_file(local_summary)
+        stats = _summarize_capture_file(
+            local_summary,
+            local_pcap=local_pcap if local_pcap.is_file() else None,
+            ipv6=":" in bundle.target,
+        )
         captures.append(
             {
                 "node": session.node.name,

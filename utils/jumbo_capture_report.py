@@ -43,18 +43,25 @@ def _bts_capture(metadata: dict) -> dict | None:
 
 def build_index_entry(metadata: dict) -> dict:
     bts = _bts_capture(metadata) or {}
+    configured_mtu = int(str(metadata.get("configured_mtu") or "0") or "0")
+    min_wire = configured_mtu + 6 if configured_mtu else 0
+    max_frame = int(bts.get("max_frame_len") or 0)
+    ping_source = str(metadata.get("ping_source") or "pc")
+    pc_max = int(metadata.get("pc_max_frame_len") or 0)
     return {
         "case_id": str(metadata.get("case_id") or "").upper(),
         "configured_mtu": str(metadata.get("configured_mtu") or ""),
         "target": str(metadata.get("target") or ""),
         "payload_size": int(metadata.get("payload_size") or 0),
-        "ping_source": str(metadata.get("ping_source") or "pc"),
+        "ping_source": ping_source,
         "local_dir_rel": _relative_artifact(metadata.get("local_dir") or ""),
         "evidence_svg_rel": _relative_artifact(metadata.get("evidence_svg") or ""),
         "bts_pcap_rel": _relative_artifact(bts.get("local_pcap") or ""),
         "bts_summary_rel": _relative_artifact(bts.get("local_summary") or ""),
         "bts_packet_count": int(bts.get("packet_count") or 0),
-        "bts_max_frame_len": int(bts.get("max_frame_len") or 0),
+        "bts_max_frame_len": max_frame,
+        "pc_max_frame_len": pc_max,
+        "jumbo_wire_ok": bool(max_frame >= min_wire) if min_wire else False,
         "captured_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     }
 
@@ -155,6 +162,9 @@ def render_jumbo_capture_evidence_html(case_id: str, index: dict | None = None) 
     if not entries:
         return "", ""
 
+    # Show only the latest capture run in the customer report (index keeps history).
+    entries = [entries[-1]]
+
     html_parts = [
         "<div class='jumbo-capture-block'>",
         "<div class='reason-title'>Wire Capture Evidence (tcpdump / tshark)</div>",
@@ -165,17 +175,33 @@ def render_jumbo_capture_evidence_html(case_id: str, index: dict | None = None) 
         mtu = entry.get("configured_mtu") or "?"
         pkt = int(entry.get("bts_packet_count") or 0)
         max_len = int(entry.get("bts_max_frame_len") or 0)
+        pc_max = int(entry.get("pc_max_frame_len") or 0)
         ping_src = entry.get("ping_source") or "pc"
+        jumbo_ok = bool(entry.get("jumbo_wire_ok"))
         pcap_rel = entry.get("bts_pcap_rel") or ""
         summary_rel = entry.get("bts_summary_rel") or ""
         svg_rel = entry.get("evidence_svg_rel") or ""
 
+        warn_html = "" if jumbo_ok else " · <span class='capture-warn'>not jumbo on wire</span>"
         html_parts.append(
             f"<div class='capture-run'>"
             f"<p class='capture-meta'><strong>MTU {escape(str(mtu))}</strong> · "
-            f"BTS packets: <strong>{pkt}</strong> · max frame.len: <strong>{max_len}</strong> · "
-            f"ping source: <strong>{escape(str(ping_src))}</strong></p>"
+            f"BTS ICMP echo packets: <strong>{pkt}</strong> · max frame.len: <strong>{max_len}</strong> · "
+            f"ping source: <strong>{escape(str(ping_src))}</strong>{warn_html}</p>"
         )
+        if ping_src == "device" and pc_max and pc_max < 1600:
+            expected_cmp = "≥" if jumbo_ok else "<"
+            expected_len = int(mtu) + 14
+            html_parts.append(
+                "<p class='capture-note'>Lab PC ping was fragmented (~"
+                f"{pc_max} byte frames, 0% replies). Device-originated ICMP from BTS "
+                f"({expected_cmp}{expected_len} expected) is used for wire proof.</p>"
+            )
+        elif ping_src == "pc" and not jumbo_ok and max_len:
+            html_parts.append(
+                "<p class='capture-note'>Frames are near 1500 bytes — raise parent + VLAN MTU on the "
+                "BTS lab PC (enp3s0 then enp3s0.101) before PC ping for end-to-end jumbo on the tap.</p>"
+            )
         if pcap_rel:
             html_parts.append(
                 f"<p class='capture-links'>"
@@ -221,4 +247,6 @@ JUMBO_CAPTURE_REPORT_CSS = """
             .capture-svg-wrap svg { display: block; max-width: 100%; height: auto; }
             .capture-pre { margin: 8px 0 0; padding: 8px; background: #0f172a; color: #e2e8f0; border-radius: 6px; font-size: 11px; overflow-x: auto; }
             .capture-muted { margin: 6px 0 0; font-size: 12px; color: #64748b; }
+            .capture-note { margin: 0 0 10px; font-size: 12px; color: #92400e; background: #fffbeb; border-left: 3px solid #f59e0b; padding: 8px 10px; border-radius: 4px; }
+            .capture-warn { color: #b45309; font-weight: 600; }
 """
