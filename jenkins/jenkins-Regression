@@ -187,9 +187,9 @@ pipeline {
 
         stage('Archive Report') {
             steps {
-                archiveArtifacts 'Senao_Regression_*.html,allowEmptyArchive:true'
-                archiveArtifacts 'reports/artifacts/Regression_Report.html,allowEmptyArchive:true'
-                archiveArtifacts 'reports/artifacts/regression_pytest.html,allowEmptyArchive:true'
+                archiveArtifacts artifacts: 'Senao_Regression_*.html', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'reports/artifacts/Regression_Report.html', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'reports/artifacts/regression_pytest.html', allowEmptyArchive: true
             }
         }
     }

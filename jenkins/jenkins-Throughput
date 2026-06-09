@@ -146,9 +146,9 @@ pipeline {
 
         stage('Archive Report') {
             steps {
-                archiveArtifacts 'Senao_Performance_*.html'
-                archiveArtifacts 'reports/artifacts/Performance_Report_*.html,allowEmptyArchive:true'
-                archiveArtifacts 'reports/artifacts/performance_*/**,allowEmptyArchive:true'
+                archiveArtifacts artifacts: 'Senao_Performance_*.html'
+                archiveArtifacts artifacts: 'reports/artifacts/Performance_Report_*.html', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'reports/artifacts/performance_*/**', allowEmptyArchive: true
             }
         }
     }

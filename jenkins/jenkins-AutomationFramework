@@ -297,13 +297,13 @@ pipeline {
 
         stage('Archive Report') {
             steps {
-                archiveArtifacts 'reports/artifacts/Senao_UBR_*.html'
-                archiveArtifacts 'reports/artifacts/Senao_UBR_*.csv,allowEmptyArchive:true'
-                archiveArtifacts 'reports/artifacts/report.json,allowEmptyArchive:true'
-                archiveArtifacts 'reports/artifacts/ip_suite_progress.json,allowEmptyArchive:true'
-                archiveArtifacts 'reports/artifacts/testbed_summary.json,allowEmptyArchive:true'
-                archiveArtifacts 'reports/artifacts/jumbo_captures/**/*,allowEmptyArchive:true'
-                archiveArtifacts 'reports/artifacts/jumbo_captures_index.json,allowEmptyArchive:true'
+                archiveArtifacts artifacts: 'reports/artifacts/Senao_UBR_*.html'
+                archiveArtifacts artifacts: 'reports/artifacts/Senao_UBR_*.csv', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'reports/artifacts/report.json', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'reports/artifacts/ip_suite_progress.json', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'reports/artifacts/testbed_summary.json', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'reports/artifacts/jumbo_captures/**/*', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'reports/artifacts/jumbo_captures_index.json', allowEmptyArchive: true
             }
         }
     }
