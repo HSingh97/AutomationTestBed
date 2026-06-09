@@ -2,7 +2,7 @@
 // Select suites via TEST_MARKERS (GUI, IP, Regression, JumboFrames).
 // Optional TEST_FILTER (-k). Report: Senao_UBR_<build>_Report_<date>.html + CSV.
 
-def archiveArtifacts(pattern, allowEmpty = false) {
+def archiveBuildArtifacts(pattern, allowEmpty = false) {
     step([
         $class: 'ArtifactArchiver',
         artifacts: pattern,
@@ -303,13 +303,15 @@ pipeline {
 
         stage('Archive Report') {
             steps {
-                archiveArtifacts('reports/artifacts/Senao_UBR_*.html')
-                archiveArtifacts('reports/artifacts/Senao_UBR_*.csv', true)
-                archiveArtifacts('reports/artifacts/report.json', true)
-                archiveArtifacts('reports/artifacts/ip_suite_progress.json', true)
-                archiveArtifacts('reports/artifacts/testbed_summary.json', true)
-                archiveArtifacts('reports/artifacts/jumbo_captures/**/*', true)
-                archiveArtifacts('reports/artifacts/jumbo_captures_index.json', true)
+                script {
+                    archiveBuildArtifacts('reports/artifacts/Senao_UBR_*.html')
+                    archiveBuildArtifacts('reports/artifacts/Senao_UBR_*.csv', true)
+                    archiveBuildArtifacts('reports/artifacts/report.json', true)
+                    archiveBuildArtifacts('reports/artifacts/ip_suite_progress.json', true)
+                    archiveBuildArtifacts('reports/artifacts/testbed_summary.json', true)
+                    archiveBuildArtifacts('reports/artifacts/jumbo_captures/**/*', true)
+                    archiveBuildArtifacts('reports/artifacts/jumbo_captures_index.json', true)
+                }
             }
         }
     }

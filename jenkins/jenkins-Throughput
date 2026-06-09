@@ -1,7 +1,7 @@
 // UBR TRex performance matrix — runs on TARGET_STAND.
 // Report: Senao_Performance_<build>_Report_<date>.html (hero + testbed summary + throughput table).
 
-def archiveArtifacts(pattern, allowEmpty = false) {
+def archiveBuildArtifacts(pattern, allowEmpty = false) {
     step([
         $class: 'ArtifactArchiver',
         artifacts: pattern,
@@ -152,9 +152,11 @@ pipeline {
 
         stage('Archive Report') {
             steps {
-                archiveArtifacts('Senao_Performance_*.html')
-                archiveArtifacts('reports/artifacts/Performance_Report_*.html', true)
-                archiveArtifacts('reports/artifacts/performance_*/**', true)
+                script {
+                    archiveBuildArtifacts('Senao_Performance_*.html')
+                    archiveBuildArtifacts('reports/artifacts/Performance_Report_*.html', true)
+                    archiveBuildArtifacts('reports/artifacts/performance_*/**', true)
+                }
             }
         }
     }

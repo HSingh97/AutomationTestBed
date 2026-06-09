@@ -1,7 +1,7 @@
 // UBR stability regression — runs on TARGET_STAND.
 // Select tests via checkboxes; per-test iteration counts; one merged HTML report.
 
-def archiveArtifacts(pattern, allowEmpty = false) {
+def archiveBuildArtifacts(pattern, allowEmpty = false) {
     step([
         $class: 'ArtifactArchiver',
         artifacts: pattern,
@@ -193,9 +193,11 @@ pipeline {
 
         stage('Archive Report') {
             steps {
-                archiveArtifacts('Senao_Regression_*.html', true)
-                archiveArtifacts('reports/artifacts/Regression_Report.html', true)
-                archiveArtifacts('reports/artifacts/regression_pytest.html', true)
+                script {
+                    archiveBuildArtifacts('Senao_Regression_*.html', true)
+                    archiveBuildArtifacts('reports/artifacts/Regression_Report.html', true)
+                    archiveBuildArtifacts('reports/artifacts/regression_pytest.html', true)
+                }
             }
         }
     }
