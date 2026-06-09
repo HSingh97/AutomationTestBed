@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UBR NMS — Automation Plan</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+:root {
+    --bg:#eef2f6; --panel:#fff; --text:#1e293b; --muted:#64748b; --navy:#0f172a;
+    --blue:#1d4ed8; --violet:#6d28d9; --green:#16a34a; --amber:#d97706; --border:#e2e8f0; --radius:12px;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); padding:20px; display:flex; justify-content:center; }
+.page { background:var(--panel); border:1px solid var(--border); border-radius:16px; box-shadow:0 12px 32px -8px rgb(0 0 0 / 0.12); width:100%; max-width:1180px; padding:24px 28px 32px; display:flex; flex-direction:column; gap:16px; }
+.disclaimer { background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:12px 16px; font-size:12px; color:#92400e; display:flex; gap:10px; align-items:flex-start; }
+.disclaimer i { margin-top:2px; color:var(--amber); }
+.hero { background:linear-gradient(135deg,var(--navy) 0%,#312e81 55%,#1e3a8a 100%); color:white; border-radius:var(--radius); padding:22px 24px; text-align:center; }
+.hero h1 { font-size:24px; font-weight:800; margin-bottom:6px; }
+.hero p { font-size:13px; opacity:0.92; max-width:760px; margin:0 auto 12px; line-height:1.55; }
+.hero-chips { display:flex; justify-content:center; flex-wrap:wrap; gap:8px; }
+.hero-chips span { background:rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.22); border-radius:20px; padding:5px 13px; font-size:10px; font-weight:600; }
+.block { border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+.block-head { padding:10px 14px; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.6px; display:flex; align-items:center; gap:8px; }
+.block-head.blue { background:#eff6ff; color:var(--blue); border-bottom:2px solid #bfdbfe; }
+.block-head.violet { background:#eef2ff; color:#4338ca; border-bottom:2px solid #c7d2fe; }
+.block-body { padding:14px; }
+.tools-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+.tool { background:#f8fafc; border:1px solid var(--border); border-radius:10px; padding:12px 10px; text-align:center; }
+.tool-icon { width:40px;height:40px;border-radius:10px;margin:0 auto 8px;display:flex;align-items:center;justify-content:center;font-size:18px; }
+.tool h4 { font-size:11px; font-weight:800; margin-bottom:4px; }
+.tool p { font-size:9px; color:var(--muted); line-height:1.4; }
+.arch { display:grid; grid-template-columns:1fr auto 1fr auto 1fr; gap:8px; align-items:center; text-align:center; font-size:10px; }
+.arch-box { border:1px solid var(--border); border-radius:10px; padding:12px 8px; background:#fafafa; }
+.arch-box.highlight { background:linear-gradient(180deg,#eff6ff,#fff); border-color:#93c5fd; }
+.arch-box h4 { font-size:10px; font-weight:800; margin-bottom:4px; }
+.arch-box p { font-size:9px; color:var(--muted); line-height:1.35; }
+.arch-arrow { color:var(--muted); font-size:14px; }
+.cov-table { width:100%; border-collapse:collapse; font-size:10px; }
+.cov-table th { text-align:left; background:#f8fafc; padding:8px; border:1px solid var(--border); }
+.cov-table td { padding:8px; border:1px solid var(--border); vertical-align:top; line-height:1.45; }
+.ids { font-size:9px; color:var(--muted); }
+.badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:9px; font-weight:700; text-transform:uppercase; }
+.badge-high { background:#dbeafe; color:#1d4ed8; }
+.badge-med { background:#e0e7ff; color:#4338ca; }
+.badge-low { background:#f1f5f9; color:#64748b; }
+.badge-mix { background:#eef2ff; color:#4338ca; }
+.flow-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+.flow { border-radius:10px; padding:12px; border:1px solid var(--border); }
+.flow:nth-child(1) { background:linear-gradient(180deg,#eff6ff,#fff); border-color:#93c5fd; }
+.flow:nth-child(2) { background:linear-gradient(180deg,#eef2ff,#fff); border-color:#a5b4fc; }
+.flow:nth-child(3) { background:linear-gradient(180deg,#e0e7ff,#fff); border-color:#818cf8; }
+.flow h4 { font-size:11px; font-weight:800; margin-bottom:6px; }
+.flow ol { margin-left:16px; font-size:10px; color:var(--muted); line-height:1.5; }
+.footer { text-align:center; font-size:10px; color:var(--muted); padding-top:8px; }
+@media (max-width:900px) { .tools-grid { grid-template-columns:repeat(2,1fr); } .arch { grid-template-columns:1fr; } .flow-grid { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="page">
+<div class="disclaimer"><i class="fas fa-circle-info"></i><div><strong>Planned document.</strong> Tool choices, automation coverage, and integration approach will change as NMS APIs and GUI stabilise. Nothing here is a fixed delivery schedule.</div></div>
+<div class="hero">
+    <h1>UBR NMS — Automation Plan</h1>
+    <p>How the UBR Automation TestBed will automate NMS validation — reusing the same lab stack as wireless release testing, with pytest-driven regression tied to Requirements v1.4 REQ IDs.</p>
+    <div class="hero-chips">
+        <span><i class="fas fa-robot"></i> pytest + Playwright</span>
+        <span><i class="fas fa-plug"></i> WebSocket contracts</span>
+        <span><i class="fas fa-server"></i> Northbound API tests</span>
+        <span><i class="fas fa-repeat"></i> Jenkins regression</span>
+    </div>
+</div>
+<div class="block">
+    <div class="block-head blue"><i class="fas fa-toolbox"></i> Automation tool stack</div>
+    <div class="block-body"><div class="tools-grid"><div class="tool"><div class="tool-icon" style="background:#16a34a22;color:#16a34a"><i class="fas fa-vial"></i></div><h4>pytest</h4><p>Test framework & fixtures</p></div><div class="tool"><div class="tool-icon" style="background:#1d4ed822;color:#1d4ed8"><i class="fas fa-desktop"></i></div><h4>Playwright</h4><p>NMS GUI automation</p></div><div class="tool"><div class="tool-icon" style="background:#6d28d922;color:#6d28d9"><i class="fas fa-plug"></i></div><h4>WebSocket client</h4><p>Real-time alarm/KPI stream</p></div><div class="tool"><div class="tool-icon" style="background:#0f172a22;color:#0f172a"><i class="fas fa-terminal"></i></div><h4>Scrapli / SSH</h4><p>Device ground truth & UCI</p></div><div class="tool"><div class="tool-icon" style="background:#2563eb22;color:#2563eb"><i class="fas fa-cloud"></i></div><h4>httpx / Postman</h4><p>Northbound REST APIs</p></div><div class="tool"><div class="tool-icon" style="background:#dc262622;color:#dc2626"><i class="fas fa-stream"></i></div><h4>Kafka test consumer</h4><p>Netcool alarm stream</p></div><div class="tool"><div class="tool-icon" style="background:#d9770622;color:#d97706"><i class="fas fa-gauge-high"></i></div><h4>iPerf3 / TRex</h4><p>Throughput & link speed test</p></div><div class="tool"><div class="tool-icon" style="background:#7c3aed22;color:#7c3aed"><i class="fas fa-signal"></i></div><h4>Vaunix attenuator</h4><p>RF fault & alarm injection</p></div><div class="tool"><div class="tool-icon" style="background:#0891b222;color:#0891b2"><i class="fas fa-magnifying-glass"></i></div><h4>Wireshark / tcpdump</h4><p>Packet & syslog evidence</p></div><div class="tool"><div class="tool-icon" style="background:#6366f122;color:#6366f1"><i class="fas fa-folder-open"></i></div><h4>JCAP</h4><p>Log archive & post-run analysis</p></div><div class="tool"><div class="tool-icon" style="background:#33415522;color:#334155"><i class="fas fa-gears"></i></div><h4>Jenkins (local)</h4><p>Scheduled regression runs</p></div><div class="tool"><div class="tool-icon" style="background:#05966922;color:#059669"><i class="fas fa-clipboard-list"></i></div><h4>Kiwi TCMS</h4><p>Traceability REQ → test case</p></div><div class="tool"><div class="tool-icon" style="background:#64748b22;color:#64748b"><i class="fas fa-file-code"></i></div><h4>YAML profiles</h4><p>Lab topology & NMS endpoints</p></div><div class="tool"><div class="tool-icon" style="background:#9333ea22;color:#9333ea"><i class="fas fa-brackets-curly"></i></div><h4>JSON Schema</h4><p>WebSocket & API contracts</p></div></div></div>
+</div>
+<div class="block">
+    <div class="block-head blue"><i class="fas fa-diagram-project"></i> Test architecture</div>
+    <div class="block-body">
+        <div class="arch">
+            <div class="arch-box"><h4>NMS under test</h4><p>Local GUI · WebSocket · REST northbound</p></div>
+            <div class="arch-arrow"><i class="fas fa-arrows-left-right"></i></div>
+            <div class="arch-box highlight"><h4>Automation layer</h4><p>pytest · Playwright · WS client · httpx</p></div>
+            <div class="arch-arrow"><i class="fas fa-arrows-left-right"></i></div>
+            <div class="arch-box"><h4>Lab &amp; devices</h4><p>BTS/CPE/IDU · Vaunix · iPerf · syslog</p></div>
+        </div>
+    </div>
+</div>
+<div class="block">
+    <div class="block-head violet"><i class="fas fa-route"></i> Automated test flows (planned)</div>
+    <div class="block-body">
+        <div class="flow-grid">
+            <div class="flow"><h4>1 · Discovery → Inventory</h4><ol><li>Trigger discovery by IP/MAC/serial via GUI</li><li>Assert WebSocket device-appeared event</li><li>Cross-check fields via SSH on device</li><li>Verify inventory row and export file</li></ol></div>
+            <div class="flow"><h4>2 · Config → Device state</h4><ol><li>Apply template / bulk config from NMS</li><li>Poll job status until complete</li><li>Read UCI/network on CPE via Scrapli</li><li>Confirm syslog reflects change</li></ol></div>
+            <div class="flow"><h4>3 · Fault → Alarm → Netcool</h4><ol><li>Inject link loss (Vaunix attenuation)</li><li>WebSocket: alarm raised within SLA</li><li>Kafka consumer: Netcool message</li><li>Restore link; assert clear on both paths</li></ol></div>
+        </div>
+    </div>
+</div>
+<div class="block">
+    <div class="block-head blue"><i class="fas fa-table"></i> Requirements coverage — automation suitability</div>
+    <div class="block-body">
+        <table class="cov-table">
+            <thead><tr><th>Area</th><th>Automation</th><th>Planned approach</th></tr></thead>
+            <tbody><tr><td><strong>Discovery</strong><br><span class="ids">DIS-01–05</span></td><td><span class="badge badge-high">high</span></td><td>Playwright GUI flows + WebSocket subscription + SSH ground truth on serial/MAC/IP</td></tr><tr><td><strong>Inventory</strong><br><span class="ids">IV-01–08</span></td><td><span class="badge badge-high">high</span></td><td>Playwright search/export + REST contract tests + CSV/XLS diff</td></tr><tr><td><strong>Configuration</strong><br><span class="ids">CF-01–05</span></td><td><span class="badge badge-high">high</span></td><td>Template/bulk/schedule via GUI; Scrapli/UCI verify on device post-apply</td></tr><tr><td><strong>Alarms & Events</strong><br><span class="ids">EV-01–08</span></td><td><span class="badge badge-high">high</span></td><td>WebSocket client for real-time raise/clear; Vaunix RF fault injection; Kafka consumer for Netcool</td></tr><tr><td><strong>KPI Monitoring</strong><br><span class="ids">KM-01–07</span></td><td><span class="badge badge-med">medium</span></td><td>Scheduled export polling; graph data API checks; threshold alarm cross-check</td></tr><tr><td><strong>Troubleshooting</strong><br><span class="ids">AS-01–08</span></td><td><span class="badge badge-med">medium</span></td><td>iPerf3 link speed test orchestration; log pull via SSH; spectrum trigger acknowledgement</td></tr><tr><td><strong>Topology</strong><br><span class="ids">TP-01–09</span></td><td><span class="badge badge-mix">mixed</span></td><td>Playwright search/navigation; visual/icon checks remain manual; link health data automated</td></tr><tr><td><strong>Dashboard</strong><br><span class="ids">DB-01–03</span></td><td><span class="badge badge-mix">mixed</span></td><td>Widget data binding automated; chart rendering and layout manual spot-check</td></tr><tr><td><strong>Account Mgmt</strong><br><span class="ids">AM-01–07</span></td><td><span class="badge badge-low">low</span></td><td>RBAC matrix mostly manual; session audit log parsing can be scripted</td></tr><tr><td><strong>Redundancy</strong><br><span class="ids">RED-01–06</span></td><td><span class="badge badge-low">low</span></td><td>Failover orchestration manual in HA lab; switchover alarm timing script-assisted</td></tr><tr><td><strong>Security</strong><br><span class="ids">SEC-01–03</span></td><td><span class="badge badge-mix">mixed</span></td><td>TLS/cert checks automated; pen-test scenarios manual with security team</td></tr><tr><td><strong>General</strong><br><span class="ids">GEN-01–04</span></td><td><span class="badge badge-mix">mixed</span></td><td>IPv4/IPv6 reachability automated; upgrade/backup restore manual maintenance window</td></tr></tbody>
+        </table>
+        <p style="font-size:10px;color:var(--muted);margin-top:10px;"><strong>high</strong> = primary regression target · <strong>medium</strong> = hybrid (auto + manual spot-check) · <strong>mixed</strong> = partial · <strong>low</strong> = mostly manual, script-assisted evidence only</p>
+    </div>
+</div>
+<div class="block">
+    <div class="block-head blue"><i class="fas fa-cloud-arrow-up"></i> Northbound API automation (planned)</div>
+    <div class="block-body">
+        <div class="flow-grid">
+            <div class="flow"><h4>Inventory / GIS API</h4><ol><li>httpx contract tests against OpenAPI spec</li><li>Round-trip sync with mock northbound</li><li>Birth-certificate trigger for BTS</li></ol></div>
+            <div class="flow"><h4>Netcool (Kafka)</h4><ol><li>Test consumer on alarm topic</li><li>Schema validation + timestamp SLA</li><li>Raise/clear paired message check</li></ol></div>
+            <div class="flow"><h4>Syslog / Mycom</h4><ol><li>Syslog collector on lab IPv6 target</li><li>Verify ingest after device event</li><li>Mycom KPI file poll &amp; format diff</li></ol></div>
+        </div>
+    </div>
+</div>
+<p class="footer">UBR Automation TestBed · Automation plan · Evolves with NMS development</p>
+</div>
+</body>
+</html>

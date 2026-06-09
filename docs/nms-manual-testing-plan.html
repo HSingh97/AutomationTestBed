@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UBR NMS — Manual Testing Plan</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+:root {
+    --bg:#eef2f6; --panel:#fff; --text:#1e293b; --muted:#64748b; --navy:#0f172a;
+    --blue:#1d4ed8; --violet:#6d28d9; --green:#16a34a; --amber:#d97706; --border:#e2e8f0; --radius:12px;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); padding:20px; display:flex; justify-content:center; }
+.page { background:var(--panel); border:1px solid var(--border); border-radius:16px; box-shadow:0 12px 32px -8px rgb(0 0 0 / 0.12); width:100%; max-width:1180px; padding:24px 28px 32px; display:flex; flex-direction:column; gap:16px; }
+.disclaimer { background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:12px 16px; font-size:12px; color:#92400e; display:flex; gap:10px; align-items:flex-start; }
+.disclaimer i { margin-top:2px; color:var(--amber); }
+.hero { background:linear-gradient(135deg,var(--navy) 0%,#312e81 55%,#1e3a8a 100%); color:white; border-radius:var(--radius); padding:22px 24px; text-align:center; }
+.hero h1 { font-size:24px; font-weight:800; margin-bottom:6px; }
+.hero p { font-size:13px; opacity:0.92; max-width:760px; margin:0 auto 12px; line-height:1.55; }
+.hero-chips { display:flex; justify-content:center; flex-wrap:wrap; gap:8px; }
+.hero-chips span { background:rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.22); border-radius:20px; padding:5px 13px; font-size:10px; font-weight:600; }
+.block { border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+.block-head { padding:10px 14px; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.6px; display:flex; align-items:center; gap:8px; }
+.block-head.blue { background:#eff6ff; color:var(--blue); border-bottom:2px solid #bfdbfe; }
+.block-head.violet { background:#eef2ff; color:#4338ca; border-bottom:2px solid #c7d2fe; }
+.block-body { padding:14px; }
+.tools-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+.tool { background:#f8fafc; border:1px solid var(--border); border-radius:10px; padding:12px 10px; text-align:center; }
+.tool-icon { width:40px;height:40px;border-radius:10px;margin:0 auto 8px;display:flex;align-items:center;justify-content:center;font-size:18px; }
+.tool h4 { font-size:11px; font-weight:800; margin-bottom:4px; }
+.tool p { font-size:9px; color:var(--muted); line-height:1.4; }
+.arch { display:grid; grid-template-columns:1fr auto 1fr auto 1fr; gap:8px; align-items:center; text-align:center; font-size:10px; }
+.arch-box { border:1px solid var(--border); border-radius:10px; padding:12px 8px; background:#fafafa; }
+.arch-box.highlight { background:linear-gradient(180deg,#eff6ff,#fff); border-color:#93c5fd; }
+.arch-box h4 { font-size:10px; font-weight:800; margin-bottom:4px; }
+.arch-box p { font-size:9px; color:var(--muted); line-height:1.35; }
+.arch-arrow { color:var(--muted); font-size:14px; }
+.cov-table { width:100%; border-collapse:collapse; font-size:10px; }
+.cov-table th { text-align:left; background:#f8fafc; padding:8px; border:1px solid var(--border); }
+.cov-table td { padding:8px; border:1px solid var(--border); vertical-align:top; line-height:1.45; }
+.ids { font-size:9px; color:var(--muted); }
+.flow-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+.flow { border-radius:10px; padding:12px; border:1px solid var(--border); }
+.flow:nth-child(1) { background:linear-gradient(180deg,#eff6ff,#fff); border-color:#93c5fd; }
+.flow:nth-child(2) { background:linear-gradient(180deg,#eef2ff,#fff); border-color:#a5b4fc; }
+.flow:nth-child(3) { background:linear-gradient(180deg,#e0e7ff,#fff); border-color:#818cf8; }
+.flow h4 { font-size:11px; font-weight:800; margin-bottom:6px; }
+.flow ol { margin-left:16px; font-size:10px; color:var(--muted); line-height:1.5; }
+.footer { text-align:center; font-size:10px; color:var(--muted); padding-top:8px; }
+@media (max-width:900px) { .tools-grid { grid-template-columns:repeat(2,1fr); } .arch { grid-template-columns:1fr; } .flow-grid { grid-template-columns:1fr; } }
+@media print { body { padding:0; background:white; } .page { box-shadow:none; border:none; } }
+</style>
+</head>
+<body>
+<div class="page">
+<div class="disclaimer"><i class="fas fa-circle-info"></i><div><strong>Planned document.</strong> Validation scope and test cases will change as NMS development progresses. Nothing here is a fixed delivery schedule.</div></div>
+<div class="hero">
+    <h1>UBR NMS — Manual Testing Plan</h1>
+    <p>Human-in-the-loop validation of the Network Management System against Requirements v1.4 — GUI workflows, northbound integrations, and lab hardware interop on live BTS/CPE/IDU.</p>
+    <div class="hero-chips">
+        <span><i class="fas fa-file-lines"></i> Requirements v1.4</span>
+        <span><i class="fas fa-list-check"></i> 72 REQ IDs</span>
+        <span><i class="fas fa-broadcast-tower"></i> Live lab hardware</span>
+        <span><i class="fas fa-hand-pointer"></i> Human validation</span>
+    </div>
+</div>
+<div class="block">
+    <div class="block-head blue"><i class="fas fa-clipboard-check"></i> What we validate manually</div>
+    <div class="block-body"><div class="tools-grid">
+        <div class="tool"><div class="tool-icon" style="background:#1d4ed822;color:#1d4ed8"><i class="fas fa-radar"></i></div><h4>Discovery</h4><p>Automated — manual spot-check only: CPE on NMS connect API; BTS on NMS server IP set</p></div>
+        <div class="tool"><div class="tool-icon" style="background:#6d28d922;color:#6d28d9"><i class="fas fa-project-diagram"></i></div><h4>Topology</h4><p>Map view, GPS search, icons, link health</p></div>
+        <div class="tool"><div class="tool-icon" style="background:#2563eb22;color:#2563eb"><i class="fas fa-boxes-stacked"></i></div><h4>Inventory</h4><p>BTS/CPE fields, birth cert, tags, export</p></div>
+        <div class="tool"><div class="tool-icon" style="background:#16a34a22;color:#16a34a"><i class="fas fa-sliders"></i></div><h4>Configuration</h4><p>Per-device, templates, bulk &amp; scheduled</p></div>
+        <div class="tool"><div class="tool-icon" style="background:#d9770622;color:#d97706"><i class="fas fa-bell"></i></div><h4>Alarms &amp; Events</h4><p>Real-time raise/clear, Netcool, thresholds</p></div>
+        <div class="tool"><div class="tool-icon" style="background:#7c3aed22;color:#7c3aed"><i class="fas fa-user-shield"></i></div><h4>Account Mgmt</h4><p>RBAC, sessions, ITSAR, Airtel IAM</p></div>
+        <div class="tool"><div class="tool-icon" style="background:#05966922;color:#059669"><i class="fas fa-chart-line"></i></div><h4>KPI Monitoring</h4><p>Graphs, thresholds, export &amp; retention</p></div>
+        <div class="tool"><div class="tool-icon" style="background:#0891b222;color:#0891b2"><i class="fas fa-stethoscope"></i></div><h4>Troubleshooting</h4><p>Stats, log extract, speed test, spectrum</p></div>
+        <div class="tool"><div class="tool-icon" style="background:#9333ea22;color:#9333ea"><i class="fas fa-gauge-high"></i></div><h4>Dashboard</h4><p>CPE/BTS widgets, chart types, views</p></div>
+        <div class="tool"><div class="tool-icon" style="background:#33415522;color:#334155"><i class="fas fa-server"></i></div><h4>Redundancy</h4><p>Active/standby, geo-redundancy, switchover</p></div>
+        <div class="tool"><div class="tool-icon" style="background:#64748b22;color:#64748b"><i class="fas fa-globe"></i></div><h4>General</h4><p>FCAPS GUI, IPv4/IPv6, upgrade, backup</p></div>
+        <div class="tool"><div class="tool-icon" style="background:#dc262622;color:#dc2626"><i class="fas fa-lock"></i></div><h4>Security</h4><p>Encrypted comms, device auth, resilience</p></div>
+    </div></div>
+</div>
+<div class="block">
+    <div class="block-head blue"><i class="fas fa-diagram-project"></i> Validation approach</div>
+    <div class="block-body">
+        <div class="arch">
+            <div class="arch-box"><h4>Tester</h4><p>Kiwi TCMS · checklists · evidence capture</p></div>
+            <div class="arch-arrow"><i class="fas fa-arrows-left-right"></i></div>
+            <div class="arch-box highlight"><h4>NMS under test</h4><p>GUI · WebSocket · northbound APIs</p></div>
+            <div class="arch-arrow"><i class="fas fa-arrows-left-right"></i></div>
+            <div class="arch-box"><h4>Lab &amp; devices</h4><p>BTS/CPE/IDU · customer staging integrations</p></div>
+        </div>
+    </div>
+</div>
+<div class="block">
+    <div class="block-head violet"><i class="fas fa-route"></i> Manual test flows (planned)</div>
+    <div class="block-body">
+        <div class="flow-grid">
+            <div class="flow"><h4>1 · Auto-discovery → Verify</h4><ol><li><strong>CPE:</strong> call NMS connect API on device — device appears in NMS automatically</li><li><strong>BTS:</strong> configure NMS server IP on device — BTS appears in NMS automatically</li><li>Verify displayed fields, onboarding, and auth-failure alarm behaviour</li></ol></div>
+            <div class="flow"><h4>2 · Config → Verify</h4><ol><li>Apply config or template from NMS</li><li>Check job completes in GUI</li><li>Verify settings on device via SSH</li><li>Confirm change visible in inventory</li></ol></div>
+            <div class="flow"><h4>3 · Fault → Alarm → Netcool</h4><ol><li>Induce link/device fault in lab</li><li>Confirm alarm in NMS in real time</li><li>Verify Netcool receives raise/clear</li><li>Export alarm history CSV/XLS</li></ol></div>
+        </div>
+    </div>
+</div>
+<div class="block">
+    <div class="block-head blue"><i class="fas fa-table"></i> Requirements coverage — manual focus</div>
+    <div class="block-body">
+        <table class="cov-table">
+            <thead><tr><th>Area</th><th>What we validate</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Discovery</strong><br><span class="ids">DIS-01–05</span></td><td><em>Automated</em> — CPE discovered when NMS connect API is called; BTS discovered when NMS server IP is configured on device. Manual check: device appears in NMS, field display, auth-only onboarding, auth-failure alarm</td></tr>
+                <tr><td><strong>Topology</strong><br><span class="ids">TP-01–09</span></td><td>Topology &amp; map views, GPS 1 km search, device icons, link health, event history, offline map</td></tr>
+                <tr><td><strong>Inventory</strong><br><span class="ids">IV-01–08</span></td><td>BTS/CPE field completeness, birth certificate, tags, search, CSV/XLS export, API sync</td></tr>
+                <tr><td><strong>Configuration</strong><br><span class="ids">CF-01–05</span></td><td>Per-device settings, templates, bulk updates, scheduled windows, default template</td></tr>
+                <tr><td><strong>Alarms &amp; Events</strong><br><span class="ids">EV-01–08</span></td><td>Real-time raise/clear, 1-week retention, Netcool delivery, thresholds, alarm views, export</td></tr>
+                <tr><td><strong>Account Mgmt</strong><br><span class="ids">AM-01–07</span></td><td>RBAC roles, session limits, audit logs, ITSAR passwords, Airtel IAM integration</td></tr>
+                <tr><td><strong>KPI Monitoring</strong><br><span class="ids">KM-01–07</span></td><td>Parameter selection, real-time graphs, thresholds, scheduled export, 1-week storage</td></tr>
+                <tr><td><strong>Troubleshooting</strong><br><span class="ids">AS-01–08</span></td><td>Device stats, 24 h / 1-week graphs, log extract, link speed test, spectrum analysis</td></tr>
+                <tr><td><strong>Dashboard</strong><br><span class="ids">DB-01–03</span></td><td>Configurable CPE/BTS dashboards, chart types, custom views</td></tr>
+                <tr><td><strong>Redundancy</strong><br><span class="ids">RED-01–06</span></td><td>Active/standby, geo-redundancy, seamless switchover, switchover alarms</td></tr>
+                <tr><td><strong>General</strong><br><span class="ids">GEN-01–04</span></td><td>FCAPS GUI on standard browsers, IPv4/IPv6, upgrade, backup &amp; restore</td></tr>
+                <tr><td><strong>Security</strong><br><span class="ids">SEC-01–03</span></td><td>Encrypted device comms, Airtel-device auth only, DoS/MITM/API abuse resilience</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+<div class="block">
+    <div class="block-head blue"><i class="fas fa-plug"></i> Northbound API validation (planned)</div>
+    <div class="block-body">
+        <div class="flow-grid">
+            <div class="flow"><h4>Inventory / GIS</h4><ol><li>Sync with northbound inventory tools</li><li>Device delete API</li><li>BTS birth-certificate trigger from GIS</li></ol></div>
+            <div class="flow"><h4>Netcool / Mycom</h4><ol><li>Alarm raise/clear via Kafka</li><li>Message schema and timing</li><li>KPI export format and delivery</li></ol></div>
+            <div class="flow"><h4>NIAM / Syslog</h4><ol><li>Airtel identity platform login</li><li>Device log ingestion via syslog</li><li>IPv6 syslog target from provisioned CPE</li></ol></div>
+        </div>
+    </div>
+</div>
+<p class="footer">UBR Automation TestBed · Manual testing plan · Evolves with NMS development</p>
+</div>
+</body>
+</html>
