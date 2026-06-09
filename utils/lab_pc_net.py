@@ -315,6 +315,112 @@ def build_iface_mtu_command(iface: str, mtu: int) -> str:
     return f"ip link set {shlex.quote(iface)} mtu {int(mtu)}"
 
 
+_IFACE_MTU_CHAIN_HELPER = r"""
+_iface_mtu_chain() {
+  local leaf="$1"
+  local chain=""
+  local iface="$leaf"
+  while [[ -n "$iface" ]]; do
+    chain="$iface $chain"
+    local line
+    line=$(ip -o link show dev "$iface" 2>/dev/null | head -1) || break
+    if [[ "$line" == *@* ]]; then
+      local parent="${line#*@}"
+      parent="${parent%%:*}"
+      iface="$parent"
+    else
+      break
+    fi
+  done
+  echo "$chain"
+}
+""".strip()
+
+
+def build_lab_pc_mtu_chain_read_script(iface: str) -> str:
+    """Remote bash: print root-to-leaf ``dev=mtu`` lines for the interface stack."""
+    iface_q = shlex.quote(iface)
+    return (
+        f"{_IFACE_MTU_CHAIN_HELPER}\n"
+        f"IFACE={iface_q}\n"
+        'for dev in $(_iface_mtu_chain "$IFACE"); do\n'
+        '  mtu=$(ip -o link show dev "$dev" | awk \'{for (i=1; i<=NF; i++) if ($i == "mtu") {print $(i+1); exit}}\')\n'
+        '  echo "$dev=$mtu"\n'
+        "done"
+    )
+
+
+def build_lab_pc_mtu_apply_script(iface: str, mtu: int, *, mgmt_ipv6_cidr: str = "") -> str:
+    """
+    Apply jumbo MTU on a lab PC interface.
+
+    VLAN subinterfaces require parent MTU first (e.g. enp3s0 then enp3s0.101).
+    Re-applies management IPv6 on the leaf interface when ``mgmt_ipv6_cidr`` is set.
+    """
+    iface_q = shlex.quote(iface)
+    mtu_val = int(mtu)
+    lines = [
+        _IFACE_MTU_CHAIN_HELPER,
+        f"IFACE={iface_q}",
+        f"MTU={mtu_val}",
+    ]
+    if mgmt_ipv6_cidr:
+        lines.append(f"CID={shlex.quote(mgmt_ipv6_cidr)}")
+    else:
+        lines.append('CID=""')
+    lines.extend(
+        [
+            'CHAIN=$(_iface_mtu_chain "$IFACE")',
+            'if [[ "$IFACE" == *.* ]]; then ip link set dev "$IFACE" down 2>/dev/null || true; fi',
+            'for dev in $CHAIN; do ip link set dev "$dev" mtu "$MTU"; done',
+            'ip link set dev "$IFACE" up',
+            'if [[ -n "$CID" ]]; then',
+            '  ip -6 addr flush dev "$IFACE" 2>/dev/null || true',
+            '  ip -6 addr add "$CID" dev "$IFACE" 2>/dev/null || true',
+            "fi",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def build_lab_pc_mtu_restore_script(
+    iface: str,
+    original_mtus: dict[str, str | int],
+    *,
+    mgmt_ipv6_cidr: str = "",
+) -> str:
+    """Restore MTU on parent chain and re-apply management IPv6 on the leaf interface."""
+    iface_q = shlex.quote(iface)
+    case_lines = [
+        f"    {shlex.quote(str(dev))}) orig={int(mtu)} ;;" for dev, mtu in sorted(original_mtus.items())
+    ]
+    case_stmt = "case \"$dev\" in\n" + "\n".join(case_lines) + "\n    *) orig=1500 ;;\n    esac"
+    lines = [
+        _IFACE_MTU_CHAIN_HELPER,
+        f"IFACE={iface_q}",
+    ]
+    if mgmt_ipv6_cidr:
+        lines.append(f"CID={shlex.quote(mgmt_ipv6_cidr)}")
+    else:
+        lines.append('CID=""')
+    lines.extend(
+        [
+            'CHAIN=$(_iface_mtu_chain "$IFACE")',
+            'if [[ "$IFACE" == *.* ]]; then ip link set dev "$IFACE" down 2>/dev/null || true; fi',
+            "for dev in $CHAIN; do",
+            case_stmt,
+            '  ip link set dev "$dev" mtu "$orig"',
+            "done",
+            'ip link set dev "$IFACE" up',
+            'if [[ -n "$CID" ]]; then',
+            '  ip -6 addr flush dev "$IFACE" 2>/dev/null || true',
+            '  ip -6 addr add "$CID" dev "$IFACE" 2>/dev/null || true',
+            "fi",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def read_local_iface_mtu(iface: str) -> str:
     """Read current MTU from sysfs on the automation host."""
     path = f"/sys/class/net/{iface}/mtu"
@@ -353,9 +459,11 @@ async def set_lab_pc_iface_mtu(
     iface: str,
     mtu: int,
     password: str,
+    *,
+    mgmt_ipv6_cidr: str = "",
 ) -> bool:
     """Apply MTU on backend PC mgmt interface (local or SSH to primary_pc)."""
-    joined = build_iface_mtu_command(iface, mtu)
+    joined = build_lab_pc_mtu_apply_script(iface, mtu, mgmt_ipv6_cidr=mgmt_ipv6_cidr)
     return await _run_pc_network_command(
         pc_cfg,
         password,

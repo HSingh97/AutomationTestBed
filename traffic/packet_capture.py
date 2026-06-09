@@ -12,7 +12,12 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from config.defaults import CAPTURE_DEFAULTS
-from utils.lab_pc_net import _build_pc_link_commands
+from utils.lab_pc_net import (
+    _build_pc_link_commands,
+    build_lab_pc_mtu_apply_script,
+    build_lab_pc_mtu_chain_read_script,
+    build_lab_pc_mtu_restore_script,
+)
 from utils.net_utils import format_ssh_host, is_ipv6_literal, normalize_ip
 from utils.recovery_manager import get_active_recovery_manager
 
@@ -69,6 +74,8 @@ class JumboCaptureBundle:
 class RemoteInterfaceState:
     node: CaptureNodeConfig
     original_mtu: str
+    chain_original_mtus: tuple[tuple[str, str], ...] = ()
+    mgmt_ipv6_cidr: str = ""
 
 
 def _repo_root() -> Path:
@@ -341,6 +348,41 @@ async def _read_remote_interface_mtu(node: CaptureNodeConfig, config: JumboCaptu
     return mtu[-1].strip() if mtu else ""
 
 
+def _mgmt_ipv6_cidr_for_node(node_name: str) -> str:
+    """Management IPv6 CIDR for a capture backend (BTS or CPE lab PC)."""
+    _, dut, testbed = _profile_capture_section()
+    mgmt = (testbed.get("mgmt_vlan") or {}) if testbed else {}
+    prefix_len = int(mgmt.get("prefix_len", 120))
+    if node_name == "bts":
+        host = str(dut.get("bts_pc_ipv6") or mgmt.get("ipv6_bts_pc") or "").strip()
+    else:
+        host = str(dut.get("cpe_pc_ipv6") or mgmt.get("ipv6_cpe_pc") or "").strip()
+    if not host:
+        return ""
+    return f"{normalize_ip(host.split('/')[0])}/{prefix_len}"
+
+
+async def _read_remote_mtu_chain(
+    node: CaptureNodeConfig,
+    config: JumboCaptureConfig,
+) -> dict[str, str]:
+    result = await run_remote_command(
+        node.host,
+        config.username,
+        config.password,
+        build_lab_pc_mtu_chain_read_script(node.interface),
+        check=True,
+    )
+    chain: dict[str, str] = {}
+    for line in (result.stdout or "").splitlines():
+        if "=" not in line:
+            continue
+        dev, mtu = line.strip().split("=", 1)
+        if dev and mtu:
+            chain[dev.strip()] = mtu.strip()
+    return chain
+
+
 async def read_backend_interface_mtus() -> dict[str, str]:
     config = load_jumbo_capture_config()
     mtus: dict[str, str] = {}
@@ -355,23 +397,21 @@ async def read_backend_interface_mtus() -> dict[str, str]:
 async def force_backend_interface_mtu(configured_mtu: int, *, best_effort: bool = False) -> None:
     config = load_jumbo_capture_config()
     for node in get_backend_nodes_apply_order():
-        await run_remote_command(
-            node.host,
-            config.username,
-            config.password,
-            f"ip link set dev {shlex.quote(node.interface)} mtu {configured_mtu}",
-            check=not best_effort,
-        )
+        mgmt_cidr = _mgmt_ipv6_cidr_for_node(node.name)
+        script = build_lab_pc_mtu_apply_script(node.interface, configured_mtu, mgmt_ipv6_cidr=mgmt_cidr)
+        await run_remote_command(node.host, config.username, config.password, script, check=not best_effort)
 
 
 async def set_backend_interface_mtu(configured_mtu: int) -> None:
     config = load_jumbo_capture_config()
     for node in get_backend_nodes_apply_order():
+        mgmt_cidr = _mgmt_ipv6_cidr_for_node(node.name)
+        script = build_lab_pc_mtu_apply_script(node.interface, configured_mtu, mgmt_ipv6_cidr=mgmt_cidr)
         await run_remote_command_with_retry(
             node.host,
             config.username,
             config.password,
-            f"ip link set dev {shlex.quote(node.interface)} mtu {configured_mtu}",
+            script,
             check=True,
             attempts=3,
             delay_seconds=2.0,
@@ -387,18 +427,15 @@ async def prepare_backend_interface_mtu(
     config = load_jumbo_capture_config()
     states: list[RemoteInterfaceState] = []
     for node in get_backend_nodes_apply_order():
-        original_mtu = await _read_remote_interface_mtu(node, config)
+        chain_mtus = await _read_remote_mtu_chain(node, config)
+        original_mtu = chain_mtus.get(node.interface) or await _read_remote_interface_mtu(node, config)
         if not original_mtu:
             if best_effort:
                 continue
             raise RuntimeError(f"Unable to read MTU on backend host {node.host} interface {node.interface}.")
-        result = await run_remote_command(
-            node.host,
-            config.username,
-            config.password,
-            f"ip link set dev {shlex.quote(node.interface)} mtu {configured_mtu}",
-            check=False,
-        )
+        mgmt_cidr = _mgmt_ipv6_cidr_for_node(node.name)
+        script = build_lab_pc_mtu_apply_script(node.interface, configured_mtu, mgmt_ipv6_cidr=mgmt_cidr)
+        result = await run_remote_command(node.host, config.username, config.password, script, check=False)
         if result.returncode != 0 and not best_effort:
             raise RuntimeError(
                 f"Unable to set MTU {configured_mtu} on {node.host} {node.interface}: "
@@ -409,7 +446,21 @@ async def prepare_backend_interface_mtu(
                 f"[JUMBO][CAPTURE] best-effort MTU {configured_mtu} on {node.name} "
                 f"({node.interface}) skipped: {(result.stderr or result.stdout or '').strip()}"
             )
-        states.append(RemoteInterfaceState(node=node, original_mtu=original_mtu))
+            continue
+        if result.returncode == 0:
+            chain_summary = ", ".join(f"{dev}={mtu}" for dev, mtu in chain_mtus.items())
+            print(
+                f"[JUMBO][CAPTURE] MTU {configured_mtu} on {node.name} ({node.interface}); "
+                f"restored mgmt {mgmt_cidr or 'n/a'}; chain before: {chain_summary or original_mtu}"
+            )
+        states.append(
+            RemoteInterfaceState(
+                node=node,
+                original_mtu=original_mtu,
+                chain_original_mtus=tuple(chain_mtus.items()),
+                mgmt_ipv6_cidr=mgmt_cidr,
+            )
+        )
     await asyncio.sleep(1)
     return tuple(states)
 
@@ -419,13 +470,13 @@ async def restore_backend_interface_mtu(states: tuple[RemoteInterfaceState, ...]
         return
     config = load_jumbo_capture_config()
     for state in states:
-        await run_remote_command(
-            state.node.host,
-            config.username,
-            config.password,
-            f"ip link set dev {shlex.quote(state.node.interface)} mtu {shlex.quote(state.original_mtu)}",
-            check=False,
+        restore_mtus = dict(state.chain_original_mtus) if state.chain_original_mtus else {state.node.interface: state.original_mtu}
+        script = build_lab_pc_mtu_restore_script(
+            state.node.interface,
+            restore_mtus,
+            mgmt_ipv6_cidr=state.mgmt_ipv6_cidr,
         )
+        await run_remote_command(state.node.host, config.username, config.password, script, check=False)
 
 
 async def start_jumbo_icmp_capture(case_id: str, configured_mtu: str, payload_size: int, target: str) -> JumboCaptureBundle | None:
