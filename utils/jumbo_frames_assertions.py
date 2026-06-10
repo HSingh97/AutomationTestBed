@@ -513,7 +513,58 @@ async def _icmp_jumbo_check(root_ssh, configured_mtu: int, *, count: int = 5, ca
     )
 
 
+async def _jumbo_case_preflight(root_ssh) -> None:
+    """
+    Link checkup before each jumbo case (same idea as the IP case preflight):
+    verify RF link clients on BTS + BTS→CPE mgmt ping, and only reform the
+    link when it is actually down — avoids needless link reformation.
+    """
+    from utils.link_formation import ensure_p2mp_link_credentials, link_health_bts
+
+    manager = get_active_recovery_manager()
+    profile = manager.profile_bundle.active if manager else {}
+    remote_ipv6s = (profile.get("dut", {}) or {}).get("remote_ipv6s") or []
+    cpe_mgmt = str(remote_ipv6s[0]).strip() if remote_ipv6s else ""
+
+    try:
+        link_ok, clients = await link_health_bts(root_ssh, profile)
+        cpe_ok = (
+            await _cpe_link_up_via_bts(root_ssh, cpe_mgmt, attempts=2, delay_s=2.0)
+            if link_ok and cpe_mgmt
+            else False
+        )
+        if link_ok and (cpe_ok or not cpe_mgmt):
+            _log_case(
+                "PREFLIGHT",
+                f"RF link up ({clients} client(s)), CPE mgmt reachable — skipping link reformation.",
+            )
+            return
+
+        _log_case(
+            "PREFLIGHT",
+            f"link_up={link_ok} clients={clients} cpe_ok={cpe_ok} — reforming link.",
+        )
+        await ensure_p2mp_link_credentials(bts_ssh=root_ssh, profile=profile)
+        for _ in range(12):
+            await asyncio.sleep(5)
+            link_ok, clients = await link_health_bts(root_ssh, profile)
+            if link_ok:
+                break
+        cpe_ok = (
+            await _cpe_link_up_via_bts(root_ssh, cpe_mgmt, attempts=4, delay_s=3.0)
+            if cpe_mgmt
+            else True
+        )
+        _log_case(
+            "PREFLIGHT",
+            f"after reformation: link_up={link_ok} clients={clients} cpe_ok={cpe_ok}",
+        )
+    except Exception as exc:
+        _log_case("PREFLIGHT", f"checkup error ({type(exc).__name__}: {exc}) — continuing with test.")
+
+
 async def _backup_and_enter_ethernet(root_ssh, gui_page, bsu_ip, device_creds):
+    await _jumbo_case_preflight(root_ssh)
     await login_if_needed(gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.MEDIUM_WAIT_MS)
     await _ensure_ethernet_ready(gui_page)
     lan_total = await _lan_count(gui_page)
