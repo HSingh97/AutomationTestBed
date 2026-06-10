@@ -422,14 +422,20 @@ async def _assert_backend_all(root_ssh, lan_total: int, expected_mtu: str):
     print("[JUMBO][br-lan] raw output start")
     print(br_raw.rstrip())
     print("[JUMBO][br-lan] raw output end")
-    if br_mtu != expected_mtu:
-        # A previously pinned bridge MTU (explicit ip link set) stops auto-tracking port MTUs,
-        # so the GUI apply updates eth ports but leaves br-lan stale. Sync it over SSH.
-        print(f"[JUMBO][CHECK] br-lan at {br_mtu or 'unknown'}; syncing to {expected_mtu} via SSH")
+    # netifd can still be reloading right after GUI apply (race), and a previously
+    # pinned bridge MTU stops auto-tracking port MTUs. Poll and sync over SSH.
+    for attempt in range(4):
+        if br_mtu == expected_mtu:
+            break
+        print(
+            f"[JUMBO][CHECK] br-lan at {br_mtu or 'unknown'}; syncing to {expected_mtu} via SSH "
+            f"(attempt {attempt + 1})"
+        )
         await root_ssh.send_command(
             f"ip link set dev br-lan mtu {shlex.quote(expected_mtu)} "
             f"|| ifconfig br-lan mtu {shlex.quote(expected_mtu)} || true"
         )
+        await asyncio.sleep(3)
         br_mtu, br_raw = await _read_br_lan_mtu(root_ssh)
     if not br_mtu:
         print(
