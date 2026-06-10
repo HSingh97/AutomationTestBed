@@ -815,7 +815,9 @@ async def run_pc_jumbo_capture_check(
             print(f"[JUMBO][{case_id}][CAPTURE] device-originated ICMP only (MTU>{1500})")
             bundle = await start_jumbo_icmp_capture(case_id, str(configured_mtu), payload_size, capture_target)
             assert bundle is not None, f"{case_id}: failed to start lab PC capture sessions."
+            await asyncio.sleep(1)
             await device_ping()
+            await asyncio.sleep(2)
             ping_source = "device"
             ping_ok = False
             metadata = await finalize_jumbo_icmp_capture(bundle, ping_output="")
