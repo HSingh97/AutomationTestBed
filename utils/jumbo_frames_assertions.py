@@ -803,6 +803,10 @@ async def assert_jmb_09_boundary_values(root_ssh, gui_page, bsu_ip, device_creds
         # Wire proof once at the top boundary (9000); per-value captures would be too slow.
         await _pc_jumbo_check_with_capture("JMB_09", 9000, root_ssh=root_ssh)
 
+        # GUI session can go stale during the long capture window; re-login before
+        # the invalid-boundary phase (page may be parked on the apply URL).
+        await login_if_needed(gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.MEDIUM_WAIT_MS)
+
         for invalid in invalid_values:
             _log_case("JMB_09", f"Invalid boundary test: attempting MTU={invalid}.")
             await _ensure_ethernet_ready(gui_page)
@@ -829,10 +833,18 @@ async def assert_jmb_10_factory_reset_default(root_ssh, gui_page, bsu_ip, device
     _log_case("JMB_10", "Running factory reset via current UI session.")
     await _factory_reset_via_current_ui_session(gui_page, wait_seconds=180)
 
-    _log_case("JMB_10", "Waiting for default IP GUI (192.168.2.1) with buffer.")
-    default_ip = "192.168.2.1"
-    default_up = await _wait_until_gui_reachable(default_ip, timeout_s=200, interval_s=5)
-    assert default_up, "Default GUI 192.168.2.1 did not come up after factory reset."
+    _log_case("JMB_10", "Waiting for factory default GUI (10.0.0.1 / 192.168.2.1) with buffer.")
+    # This hardware resets to 10.0.0.1 (factory fallback); keep 192.168.2.1 as alternate.
+    candidates = ("10.0.0.1", "192.168.2.1")
+    default_ip = ""
+    deadline = time.monotonic() + 240
+    while time.monotonic() < deadline and not default_ip:
+        for cand in candidates:
+            if await _wait_until_gui_reachable(cand, timeout_s=6, interval_s=3):
+                default_ip = cand
+                break
+    assert default_ip, f"Factory default GUI did not come up on any of {candidates} after reset."
+    _log_case("JMB_10", f"Factory default GUI up at {default_ip}.")
 
     _log_case("JMB_10", "Accessing default IP and checking backend MTU=1500.")
     await _login_with_retries(gui_page, default_ip, device_creds, attempts=4)

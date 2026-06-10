@@ -142,16 +142,6 @@ def _render_summary_table(summary_rel: str) -> str:
     )
 
 
-def _render_inline_svg(svg_rel: str) -> str:
-    svg_path = _repo_root() / ARTIFACTS_DIR / svg_rel
-    if not svg_path.is_file():
-        return ""
-    svg_text = svg_path.read_text(encoding="utf-8", errors="ignore").strip()
-    if not svg_text.startswith("<svg"):
-        return ""
-    return f"<div class='capture-svg-wrap'>{svg_text}</div>"
-
-
 def _latest_run_entries(entries: list[dict]) -> list[dict]:
     """
     Tail of the history covering the most recent test run: walk backwards
@@ -245,9 +235,13 @@ def render_jumbo_capture_evidence_html(case_id: str, index: dict | None = None) 
         if table_html:
             html_parts.append("<div class='capture-table-wrap'>" + table_html + "</div>")
 
-        svg_html = _render_inline_svg(svg_rel) if svg_rel else ""
-        if svg_html:
-            html_parts.append(svg_html)
+        # The capture_evidence.svg snapshot duplicates the table above; keep it as a
+        # downloadable artifact only instead of inlining it in the report.
+        if svg_rel:
+            html_parts.append(
+                f"<p class='capture-links'><a class='capture-link' href='{escape(svg_rel)}' "
+                f"target='_blank' rel='noopener'>capture evidence snapshot (SVG)</a></p>"
+            )
 
         html_parts.append("</div>")
         csv_lines.append(
@@ -278,7 +272,7 @@ JUMBO_CAPTURE_REPORT_CSS = """
             .capture-link:hover { text-decoration: underline; }
             .capture-table-wrap { overflow-x: auto; margin: 8px 0 10px; }
             .capture-table { width: 100%; border-collapse: collapse; font-size: 11px; font-family: Consolas, Monaco, monospace; }
-            .capture-table th, .capture-table td { border: 1px solid #e2e8f0; padding: 4px 8px; text-align: left; }
+            .capture-table th, .capture-table td { border: 1px solid #e2e8f0; padding: 4px 10px; text-align: left; white-space: nowrap; }
             .capture-table th { background: #f1f5f9; color: #1e3a8a; }
             .capture-svg-wrap { margin-top: 10px; overflow-x: auto; background: #1e1e1e; border-radius: 6px; border: 1px solid #334155; }
             .capture-svg-wrap svg { display: block; max-width: 100%; height: auto; }

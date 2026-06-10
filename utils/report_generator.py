@@ -331,7 +331,7 @@ def generate():
     if is_partial_run:
         source = data.get("recovered_from") or (data.get("summary") or {}).get("recovered_from") or "checkpoint"
         partial_banner = (
-            '<div style="max-width:1100px;margin:0 auto 14px;padding:12px 16px;'
+            '<div style="max-width:min(1600px,96vw);margin:0 auto 14px;padding:12px 16px;'
             'background:#fff7ed;border:1px solid #fdba74;border-radius:10px;color:#9a3412;'
             'font-size:14px;font-weight:500;">'
             f"Partial run — this report includes {stats['total']} completed test(s) only "
@@ -348,7 +348,7 @@ def generate():
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
             body {{ font-family: 'Inter', sans-serif; background-color: #eef2f7; color: #334155; margin: 0; padding: 28px 18px; }}
-            .wrap {{ max-width: 1100px; margin: 0 auto; }}
+            .wrap {{ max-width: min(1600px, 96vw); margin: 0 auto; }}
             .hero {{
               background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #2563eb 100%);
               color: #fff; border-radius: 14px; padding: 22px 26px; margin-bottom: 18px;

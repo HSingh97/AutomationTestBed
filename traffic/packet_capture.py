@@ -583,10 +583,10 @@ def _write_evidence_svg(bundle: JumboCaptureBundle, metadata: dict) -> str:
 
     width = 1600
     line_height = 18
-    height = max(240, 40 + (len(lines) * line_height))
+    height = max(240, 72 + (len(lines) * line_height))
     text_elements = []
     for idx, line in enumerate(lines):
-        y = 32 + (idx * line_height)
+        y = 56 + (idx * line_height)
         text_elements.append(
             f'<text x="24" y="{y}" font-family="monospace" font-size="14" fill="#d4d4d4">{escape(line)}</text>'
         )
