@@ -10,10 +10,9 @@ import time
 import pytest
 from scrapli.driver.generic import AsyncGenericDriver
 
-from pages.locators import EthernetLocators as EL, NetworkLocators as NL, UITimeouts
+from pages.locators import UITimeouts
 from traffic.packet_capture import icmp_payload_for_mtu, load_jumbo_capture_config, run_pc_jumbo_capture_check
 from utils.gui_login import login_if_needed
-from utils.network_flows import navigate_to_ethernet
 from utils.parsers import ssh_scalar
 from utils.recovery_manager import get_active_recovery_manager
 
@@ -24,42 +23,6 @@ def _eth_key(idx: int) -> str:
 
 def _log_case(case_id: str, message: str):
     print(f"[JUMBO][{case_id}] {message}")
-
-
-async def _lan_count(gui_page) -> int:
-    tabs = gui_page.locator(EL.LAN_TABS)
-    await tabs.first.wait_for(state="visible", timeout=15000)
-    return len(await tabs.all())
-
-
-async def _ensure_ethernet_ready(gui_page):
-    """
-    Ensure Ethernet page tab menu is visible.
-    Recovers from intermittent router/apply intermediate screens.
-    """
-    for _ in range(3):
-        await navigate_to_ethernet(gui_page)
-        tabs = gui_page.locator(EL.LAN_TABS).first
-        if await tabs.is_visible(timeout=5000):
-            return
-        await gui_page.reload()
-        await gui_page.wait_for_load_state("networkidle")
-        await gui_page.wait_for_timeout(1500)
-    await gui_page.locator(EL.LAN_TABS).first.wait_for(state="visible", timeout=15000)
-
-
-async def _apply(gui_page, settle_seconds=4):
-    await gui_page.locator(EL.SAVE_BUTTON).first.click()
-    await gui_page.wait_for_timeout(2000)
-    apply_icon = gui_page.locator(NL.APPLY_ICON).first
-    if await apply_icon.is_visible(timeout=5000):
-        await apply_icon.click()
-        await gui_page.wait_for_timeout(2000)
-        confirm_btn = gui_page.locator(NL.CONFIRM_APPLY).first
-        # On some firmware/pages Apply commits directly without a confirm prompt.
-        if await confirm_btn.is_visible(timeout=4000):
-            await confirm_btn.click()
-        await asyncio.sleep(settle_seconds)
 
 
 async def _factory_reset_via_current_ui_session(gui_page, *, wait_seconds: int = 140):
@@ -157,28 +120,43 @@ async def _login_with_retries(gui_page, ip: str, device_creds, *, attempts: int 
     raise last_exc if last_exc else RuntimeError(f"Unable to login to {ip}")
 
 
-async def _set_mtu(gui_page, lan_idx: int, mtu: str):
-    await gui_page.locator(EL.LAN_TABS).nth(lan_idx).click()
-    await gui_page.wait_for_timeout(1500)
-    field = gui_page.locator(EL.MTU_INPUT).first
-    await field.wait_for(state="visible", timeout=10000)
-    await field.fill(mtu)
+async def _discovered_lan_ports(root_ssh) -> dict[str, str]:
+    """Read current ethernet MTU map (eth0..ethN) over SSH."""
+    mtus = await _read_backend_mtu_map(root_ssh)
+    return mtus if mtus else {"eth0": "1500"}
 
 
-async def _set_mtu_all_lans(gui_page, mtu: str):
-    await _ensure_ethernet_ready(gui_page)
-    lan_total = await _lan_count(gui_page)
-    for i in range(lan_total):
-        await _set_mtu(gui_page, i, mtu)
+async def _configure_bts_mtus_via_ssh(root_ssh, mtu: str, *, keys: list[str] | None = None) -> int:
+    eth_keys = keys or list((await _discovered_lan_ports(root_ssh)).keys())
+    for key in eth_keys:
+        await root_ssh.send_command(f"ucidyn set ethernet.{key}.mtu {shlex.quote(mtu)}")
+    await root_ssh.send_command("ucidyn apply")
+    await asyncio.sleep(1)
+    return len(eth_keys)
+
+
+async def _restore_bts_mtus_via_ssh(root_ssh, original: dict[str, str]) -> None:
+    for key, mtu in original.items():
+        await root_ssh.send_command(f"ucidyn set ethernet.{key}.mtu {shlex.quote(mtu)}")
+    await root_ssh.send_command("ucidyn apply")
+
+
+async def _set_all_lans_mtu_via_ssh(root_ssh, lan_total: int, mtu: str, *, case_id: str = "JUMBO") -> None:
+    keys = [_eth_key(i) for i in range(lan_total)]
+    _log_case(case_id, f"Setting BTS LAN MTU={mtu} via SSH (ucidyn).")
+    await _configure_bts_mtus_via_ssh(root_ssh, mtu, keys=keys)
 
 
 async def _read_backend_mtus(root_ssh, lan_total: int) -> dict[str, str]:
-    mtus = {}
+    mtus = await _read_backend_mtu_map(root_ssh)
+    if mtus:
+        return mtus
+    # Fallback when map read is empty but GUI previously reported lan_total ports.
+    out: dict[str, str] = {}
     for i in range(lan_total):
         key = _eth_key(i)
-        cmd = f"uci get ethernet.{key}.mtu"
-        mtus[key] = ssh_scalar((await root_ssh.send_command(cmd)).result)
-    return mtus
+        out[key] = ssh_scalar((await root_ssh.send_command(f"uci get ethernet.{key}.mtu")).result)
+    return out
 
 
 def _remote_dut_host_from_profile() -> str | None:
@@ -193,33 +171,6 @@ def _remote_dut_host_from_profile() -> str | None:
     if ipv4_targets:
         return str(ipv4_targets[0]).strip()
     return None
-
-
-async def _set_backend_mtus_via_ssh(root_ssh, lan_total: int, mtu: str):
-    commands = []
-    for i in range(lan_total):
-        key = _eth_key(i)
-        commands.append(f"uci set ethernet.{key}.mtu={shlex.quote(mtu)}")
-        commands.append(f"ifconfig {key} mtu {shlex.quote(mtu)} || ip link set dev {key} mtu {shlex.quote(mtu)} || true")
-    commands.append("uci commit ethernet")
-    commands.append(f"ifconfig br-lan mtu {shlex.quote(mtu)} || ip link set dev br-lan mtu {shlex.quote(mtu)} || true")
-    for command in commands:
-        await root_ssh.send_command(command)
-
-
-async def _restore_backend_mtus_via_ssh(root_ssh, original: dict[str, str]):
-    commands = []
-    for key, mtu in original.items():
-        commands.append(f"uci set ethernet.{key}.mtu={shlex.quote(mtu)}")
-        commands.append(f"ifconfig {key} mtu {shlex.quote(mtu)} || ip link set dev {key} mtu {shlex.quote(mtu)} || true")
-    commands.append("uci commit ethernet")
-    if original:
-        first_mtu = next(iter(original.values()))
-        commands.append(
-            f"ifconfig br-lan mtu {shlex.quote(first_mtu)} || ip link set dev br-lan mtu {shlex.quote(first_mtu)} || true"
-        )
-    for command in commands:
-        await root_ssh.send_command(command)
 
 
 async def _cpe_link_up_via_bts(root_ssh, cpe_host: str, *, attempts: int = 8, delay_s: float = 3.0) -> bool:
@@ -385,7 +336,7 @@ async def _restore_local_and_remote_mtus(
     finally:
         if remote_ssh is not None:
             await remote_ssh.close()
-    await _restore_mtus(root_ssh, gui_page, bsu_ip, device_creds, local_original)
+    await _restore_mtus(root_ssh, local_original)
 
 
 def _extract_ifconfig_mtu(ifconfig_output: str) -> str:
@@ -411,8 +362,8 @@ async def _read_br_lan_mtu(root_ssh) -> tuple[str, str]:
     return "", last_raw
 
 
-async def _assert_backend_all(root_ssh, lan_total: int, expected_mtu: str):
-    current = await _read_backend_mtus(root_ssh, lan_total)
+async def _assert_backend_all(root_ssh, expected_mtu: str):
+    current = await _read_backend_mtu_map(root_ssh)
     print(f"[JUMBO][CHECK] expected_mtu={expected_mtu}")
     for key, val in current.items():
         print(f"[JUMBO][UCI] {key} mtu={val}")
@@ -569,22 +520,22 @@ async def _jumbo_case_preflight(root_ssh) -> None:
         _log_case("PREFLIGHT", f"checkup error ({type(exc).__name__}: {exc}) — continuing with test.")
 
 
-async def _backup_and_enter_ethernet(root_ssh, gui_page, bsu_ip, device_creds):
+async def _backup_mtu_state(root_ssh):
     await _jumbo_case_preflight(root_ssh)
-    await login_if_needed(gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.MEDIUM_WAIT_MS)
-    await _ensure_ethernet_ready(gui_page)
-    lan_total = await _lan_count(gui_page)
-    original = await _read_backend_mtus(root_ssh, lan_total)
+    original = await _discovered_lan_ports(root_ssh)
+    lan_total = len(original)
     return lan_total, original
 
 
-async def _restore_mtus(root_ssh, gui_page, bsu_ip, device_creds, original: dict[str, str]):
+async def _backup_and_enter_ethernet(root_ssh, gui_page=None, bsu_ip=None, device_creds=None):
+    """Backup MTU state over SSH (no GUI navigation)."""
+    return await _backup_mtu_state(root_ssh)
+
+
+async def _restore_mtus(root_ssh, original: dict[str, str], **_ignored):
     try:
-        await login_if_needed(gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.MEDIUM_WAIT_MS)
-        await _ensure_ethernet_ready(gui_page)
-        for i, (_key, mtu) in enumerate(original.items()):
-            await _set_mtu(gui_page, i, mtu)
-        await _apply(gui_page, settle_seconds=8)
+        if original:
+            await _restore_bts_mtus_via_ssh(root_ssh, original)
     except Exception:
         pass
 
@@ -593,21 +544,16 @@ async def assert_jmb_01_configure_and_disable(root_ssh, gui_page, bsu_ip, device
     _log_case("JMB_01", "Starting test flow.")
     lan_total, original = await _backup_and_enter_ethernet(root_ssh, gui_page, bsu_ip, device_creds)
     try:
-        _log_case("JMB_01", "Setting all LAN MTU to 9000.")
-        await _set_mtu_all_lans(gui_page, "9000")
-        await _apply(gui_page)
-        await _assert_backend_all(root_ssh, lan_total, "9000")
+        await _set_all_lans_mtu_via_ssh(root_ssh, lan_total, "9000", case_id="JMB_01")
+        await _assert_backend_all(root_ssh, "9000")
         await _pc_jumbo_check_with_capture("JMB_01", 9000, root_ssh=root_ssh)
 
-        await _ensure_ethernet_ready(gui_page)
-        _log_case("JMB_01", "Setting all LAN MTU to 1500.")
-        await _set_mtu_all_lans(gui_page, "1500")
-        await _apply(gui_page)
-        await _assert_backend_all(root_ssh, lan_total, "1500")
+        await _set_all_lans_mtu_via_ssh(root_ssh, lan_total, "1500", case_id="JMB_01")
+        await _assert_backend_all(root_ssh, "1500")
         await _pc_jumbo_check_with_capture("JMB_01", 1500, root_ssh=root_ssh, enforce_max_frame_len=True)
     finally:
         _log_case("JMB_01", "Restoring original MTU values.")
-        await _restore_mtus(root_ssh, gui_page, bsu_ip, device_creds, original)
+        await _restore_mtus(root_ssh, original)
 
 
 async def assert_jmb_02_configure_9000(root_ssh, gui_page, bsu_ip, device_creds):
@@ -623,9 +569,8 @@ async def assert_jmb_02_configure_9000(root_ssh, gui_page, bsu_ip, device_creds)
         elif remote_ssh is not None:
             _log_case("JMB_02", "CPE SSH ok but no ethernet MTU keys — continuing BTS-only.")
         _log_case("JMB_02", "Setting all LAN MTU to 9000.")
-        await _set_mtu_all_lans(gui_page, "9000")
-        await _apply(gui_page)
-        await _assert_backend_all(root_ssh, lan_total, "9000")
+        await _set_all_lans_mtu_via_ssh(root_ssh, lan_total, "9000", case_id="JMB_02")
+        await _assert_backend_all(root_ssh, "9000")
         await _pc_jumbo_check_with_capture("JMB_02", 9000, root_ssh=root_ssh)
     finally:
         _log_case("JMB_02", "Restoring original MTU values.")
@@ -648,10 +593,8 @@ async def assert_jmb_03_min_mid_mtu(root_ssh, gui_page, bsu_ip, device_creds):
                 await _assert_remote_cpe_mtus(remote_ssh, mtu)
             elif remote_ssh is not None:
                 _log_case("JMB_03", "CPE SSH ok but no ethernet MTU keys — continuing BTS-only.")
-            await _ensure_ethernet_ready(gui_page)
-            await _set_mtu_all_lans(gui_page, mtu)
-            await _apply(gui_page, settle_seconds=4)
-            await _assert_backend_all(root_ssh, lan_total, mtu)
+            await _set_all_lans_mtu_via_ssh(root_ssh, lan_total, mtu, case_id="JMB_03")
+            await _assert_backend_all(root_ssh, mtu)
             await _pc_jumbo_check_with_capture("JMB_03", int(mtu), root_ssh=root_ssh)
     finally:
         _log_case("JMB_03", "Restoring original MTU values.")
@@ -673,9 +616,8 @@ async def assert_jmb_04_max_mtu_9000(root_ssh, gui_page, bsu_ip, device_creds):
         elif remote_ssh is not None:
             _log_case("JMB_04", "CPE SSH ok but no ethernet MTU keys — continuing BTS-only.")
         _log_case("JMB_04", "Setting all LAN MTU to 9000.")
-        await _set_mtu_all_lans(gui_page, "9000")
-        await _apply(gui_page)
-        await _assert_backend_all(root_ssh, lan_total, "9000")
+        await _set_all_lans_mtu_via_ssh(root_ssh, lan_total, "9000", case_id="JMB_04")
+        await _assert_backend_all(root_ssh, "9000")
         await _pc_jumbo_check_with_capture("JMB_04", 9000, root_ssh=root_ssh)
     finally:
         _log_case("JMB_04", "Restoring original MTU values.")
@@ -689,9 +631,8 @@ async def assert_jmb_05_mgmt_vlan_mtu(root_ssh, gui_page, bsu_ip, device_creds):
     lan_total, original = await _backup_and_enter_ethernet(root_ssh, gui_page, bsu_ip, device_creds)
     try:
         _log_case("JMB_05", "Setting all LAN MTU to 9000.")
-        await _set_mtu_all_lans(gui_page, "9000")
-        await _apply(gui_page)
-        await _assert_backend_all(root_ssh, lan_total, "9000")
+        await _set_all_lans_mtu_via_ssh(root_ssh, lan_total, "9000", case_id="JMB_05")
+        await _assert_backend_all(root_ssh, "9000")
         # If management VLAN exists, it should inherit high MTU policy.
         mgmt_if = await root_ssh.send_command("ip -o link show | awk -F': ' '{print $2}' | grep -E '^vlan|^br-' | head -n 1")
         if mgmt_if.result.strip():
@@ -702,7 +643,7 @@ async def assert_jmb_05_mgmt_vlan_mtu(root_ssh, gui_page, bsu_ip, device_creds):
         await _pc_jumbo_check_with_capture("JMB_05", 9000, root_ssh=root_ssh)
     finally:
         _log_case("JMB_05", "Restoring original MTU values.")
-        await _restore_mtus(root_ssh, gui_page, bsu_ip, device_creds, original)
+        await _restore_mtus(root_ssh, original)
 
 
 async def assert_jmb_06_jumbo_with_p2mp(root_ssh, gui_page, bsu_ip, device_creds):
@@ -718,9 +659,8 @@ async def assert_jmb_06_jumbo_with_p2mp(root_ssh, gui_page, bsu_ip, device_creds
         elif remote_ssh is not None:
             _log_case("JMB_06", "CPE SSH ok but no ethernet MTU keys — continuing BTS-only.")
         _log_case("JMB_06", "Setting all LAN MTU to 9000.")
-        await _set_mtu_all_lans(gui_page, "9000")
-        await _apply(gui_page)
-        await _assert_backend_all(root_ssh, lan_total, "9000")
+        await _set_all_lans_mtu_via_ssh(root_ssh, lan_total, "9000", case_id="JMB_06")
+        await _assert_backend_all(root_ssh, "9000")
         await _pc_jumbo_check_with_capture("JMB_06", 9000, root_ssh=root_ssh)
     finally:
         _log_case("JMB_06", "Restoring original MTU values.")
@@ -736,8 +676,8 @@ async def assert_jmb_07_reboot_persistence(root_ssh, gui_page, bsu_ip, device_cr
     lan_total, original = await _backup_and_enter_ethernet(root_ssh, gui_page, bsu_ip, device_creds)
     try:
         _log_case("JMB_07", "Setting all LAN MTU to 9000 before reboot.")
-        await _set_mtu_all_lans(gui_page, "9000")
-        await _apply(gui_page, settle_seconds=8)
+        await _set_all_lans_mtu_via_ssh(root_ssh, lan_total, "9000", case_id="JMB_07")
+        await _assert_backend_all(root_ssh, "9000")
         _log_case("JMB_07", "Sending reboot command.")
         await root_ssh.send_command("reboot")
         _log_case("JMB_07", "Waiting 150 seconds (2.5 minutes) for boot completion.")
@@ -745,7 +685,7 @@ async def assert_jmb_07_reboot_persistence(root_ssh, gui_page, bsu_ip, device_cr
         _log_case("JMB_07", "Re-login and post-reboot MTU verification.")
         await login_if_needed(gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.LONG_WAIT_MS)
         try:
-            await _assert_backend_all(root_ssh, lan_total, "9000")
+            await _assert_backend_all(root_ssh, "9000")
         except Exception as exc:
             # Reboot can invalidate existing SSH channel; reopen once and retry.
             _log_case("JMB_07", f"SSH channel stale after reboot ({type(exc).__name__}); reopening session and retrying.")
@@ -755,11 +695,11 @@ async def assert_jmb_07_reboot_persistence(root_ssh, gui_page, bsu_ip, device_cr
                 pass
             await asyncio.sleep(2)
             await root_ssh.open()
-            await _assert_backend_all(root_ssh, lan_total, "9000")
+            await _assert_backend_all(root_ssh, "9000")
         await _pc_jumbo_check_with_capture("JMB_07", 9000, root_ssh=root_ssh)
     finally:
         _log_case("JMB_07", "Restoring original MTU values.")
-        await _restore_mtus(root_ssh, gui_page, bsu_ip, device_creds, original)
+        await _restore_mtus(root_ssh, original)
 
 
 async def assert_jmb_08_mtu_1500(root_ssh, gui_page, bsu_ip, device_creds):
@@ -775,9 +715,8 @@ async def assert_jmb_08_mtu_1500(root_ssh, gui_page, bsu_ip, device_creds):
         elif remote_ssh is not None:
             _log_case("JMB_08", "CPE SSH ok but no ethernet MTU keys — continuing BTS-only.")
         _log_case("JMB_08", "Setting all LAN MTU to 1500.")
-        await _set_mtu_all_lans(gui_page, "1500")
-        await _apply(gui_page, settle_seconds=6)
-        await _assert_backend_all(root_ssh, lan_total, "1500")
+        await _set_all_lans_mtu_via_ssh(root_ssh, lan_total, "1500", case_id="JMB_08")
+        await _assert_backend_all(root_ssh, "1500")
         await _pc_jumbo_check_with_capture("JMB_08", 1500, root_ssh=root_ssh, enforce_max_frame_len=True)
     finally:
         _log_case("JMB_08", "Restoring original MTU values.")
@@ -794,28 +733,23 @@ async def assert_jmb_09_boundary_values(root_ssh, gui_page, bsu_ip, device_creds
     try:
         for mtu in valid_values:
             _log_case("JMB_09", f"Valid boundary test: applying MTU={mtu}.")
-            await _set_mtu_all_lans(gui_page, mtu)
-            await _apply(gui_page, settle_seconds=6)
-            await _assert_backend_all(root_ssh, lan_total, mtu)
+            await _set_all_lans_mtu_via_ssh(root_ssh, lan_total, mtu, case_id="JMB_09")
+            await _assert_backend_all(root_ssh, mtu)
 
         # Wire proof once at the top boundary (9000); per-value captures would be too slow.
         await _pc_jumbo_check_with_capture("JMB_09", 9000, root_ssh=root_ssh)
 
-        # GUI session can go stale during the long capture window; re-login before
-        # the invalid-boundary phase (page may be parked on the apply URL).
-        await login_if_needed(gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.MEDIUM_WAIT_MS)
-
         for invalid in invalid_values:
-            _log_case("JMB_09", f"Invalid boundary test: attempting MTU={invalid}.")
-            await _ensure_ethernet_ready(gui_page)
-            await _set_mtu(gui_page, 0, invalid)
-            await _apply(gui_page, settle_seconds=4)
+            _log_case("JMB_09", f"Invalid boundary test: attempting MTU={invalid} via SSH.")
+            await root_ssh.send_command(f"ucidyn set ethernet.eth0.mtu {shlex.quote(invalid)}")
+            await root_ssh.send_command("ucidyn apply")
+            await asyncio.sleep(1)
             current = ssh_scalar((await root_ssh.send_command("uci get ethernet.eth0.mtu")).result)
             _log_case("JMB_09", f"Post-invalid attempt backend eth0 mtu={current}")
             assert current != invalid, f"Invalid MTU should be rejected, but backend accepted {invalid}"
     finally:
         _log_case("JMB_09", "Restoring original MTU values.")
-        await _restore_mtus(root_ssh, gui_page, bsu_ip, device_creds, original)
+        await _restore_mtus(root_ssh, original)
 
 
 async def assert_jmb_10_factory_reset_default(root_ssh, gui_page, bsu_ip, device_creds, allow_destructive: bool):
@@ -824,9 +758,8 @@ async def assert_jmb_10_factory_reset_default(root_ssh, gui_page, bsu_ip, device
     _log_case("JMB_10", "Starting test flow.")
     lan_total, _original = await _backup_and_enter_ethernet(root_ssh, gui_page, bsu_ip, device_creds)
     _log_case("JMB_10", "Setting all LAN MTU to 9000 before factory reset.")
-    await _set_mtu_all_lans(gui_page, "9000")
-    await _apply(gui_page, settle_seconds=8)
-    await _assert_backend_all(root_ssh, lan_total, "9000")
+    await _set_all_lans_mtu_via_ssh(root_ssh, lan_total, "9000", case_id="JMB_10")
+    await _assert_backend_all(root_ssh, "9000")
 
     _log_case("JMB_10", "Running factory reset via current UI session.")
     await _factory_reset_via_current_ui_session(gui_page, wait_seconds=180)
