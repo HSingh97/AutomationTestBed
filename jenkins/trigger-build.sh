@@ -219,10 +219,12 @@ PARAMS=(
   "TARGET_STAND=${TARGET_STAND}"
 )
 
-QUERY="$(IFS='&'; echo "${PARAMS[*]}")"
-TRIGGER_URL="${BASE_URL}/${JOB_PATH}/buildWithParameters?${QUERY}"
-
-CURL_ARGS=(-sS -u "${AUTH}" -X POST -D /tmp/jenkins-trigger.headers -o /tmp/jenkins-trigger.out -w '%{http_code}' "${TRIGGER_URL}")
+# Form-encoded POST with per-param urlencoding (filters may contain spaces/commas).
+CURL_ARGS=(-sS -u "${AUTH}" -X POST -D /tmp/jenkins-trigger.headers -o /tmp/jenkins-trigger.out -w '%{http_code}')
+for param in "${PARAMS[@]}"; do
+  CURL_ARGS+=(--data-urlencode "${param}")
+done
+CURL_ARGS+=("${BASE_URL}/${JOB_PATH}/buildWithParameters")
 if [[ -n "${CRUMB_FIELD}" && -n "${CRUMB_VALUE}" ]]; then
   CURL_ARGS+=(-H "${CRUMB_FIELD}: ${CRUMB_VALUE}")
 fi
