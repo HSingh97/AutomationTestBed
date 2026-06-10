@@ -308,8 +308,10 @@ async def _read_backend_mtu_map(root_ssh) -> dict[str, str]:
     for i in range(4):
         key = _eth_key(i)
         mtu = ssh_scalar((await root_ssh.send_command(f"uci get ethernet.{key}.mtu")).result)
-        if mtu:
-            mtus[key] = mtu
+        # Devices expose a varying port count; skip "uci: Entry not found" and stop at the first gap.
+        if not mtu or not mtu.isdigit():
+            break
+        mtus[key] = mtu
     return mtus
 
 
