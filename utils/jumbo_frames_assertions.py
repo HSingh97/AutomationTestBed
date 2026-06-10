@@ -307,11 +307,14 @@ async def _read_backend_mtu_map(root_ssh) -> dict[str, str]:
     mtus: dict[str, str] = {}
     for i in range(4):
         key = _eth_key(i)
-        mtu = ssh_scalar((await root_ssh.send_command(f"uci get ethernet.{key}.mtu")).result)
-        # Devices expose a varying port count; skip "uci: Entry not found" and stop at the first gap.
-        if not mtu or not mtu.isdigit():
+        raw = str((await root_ssh.send_command(f"uci get ethernet.{key}.mtu")).result or "")
+        # Devices expose a varying port count; stop at the first missing port.
+        if "not found" in raw.lower():
             break
-        mtus[key] = mtu
+        # Pull the numeric token; fresh SSH sessions can prepend banner/echo noise.
+        match = re.search(r"^\s*(\d{3,5})\s*$", raw, flags=re.MULTILINE)
+        if match:
+            mtus[key] = match.group(1)
     return mtus
 
 
@@ -419,7 +422,10 @@ async def _assert_backend_all(root_ssh, lan_total: int, expected_mtu: str):
     print("[JUMBO][br-lan] raw output start")
     print(br_raw.rstrip())
     print("[JUMBO][br-lan] raw output end")
-    if not br_mtu:
+    if br_mtu != expected_mtu:
+        # A previously pinned bridge MTU (explicit ip link set) stops auto-tracking port MTUs,
+        # so the GUI apply updates eth ports but leaves br-lan stale. Sync it over SSH.
+        print(f"[JUMBO][CHECK] br-lan at {br_mtu or 'unknown'}; syncing to {expected_mtu} via SSH")
         await root_ssh.send_command(
             f"ip link set dev br-lan mtu {shlex.quote(expected_mtu)} "
             f"|| ifconfig br-lan mtu {shlex.quote(expected_mtu)} || true"
