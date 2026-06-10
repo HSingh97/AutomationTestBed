@@ -802,107 +802,94 @@ async def run_pc_jumbo_capture_check(
     ping_source = "pc"
     ping_ok = False
     pc_ping_exc: AssertionError | None = None
-    # Lab PC jumbo ping always fragments when host MTU < DUT MTU — skip the doomed
-    # PC ping + second capture window and use one device-originated capture instead.
-    device_ping_only = configured_mtu > 1500 and device_ping is not None
 
     try:
         mtu_states = await prepare_backend_interface_mtu(configured_mtu, best_effort=True)
         print(f"[JUMBO][{case_id}][CAPTURE] waiting for lab PC MTU (poll ≤{MTU_APPLY_SETTLE_MAX_SECONDS}s)")
         await _wait_lab_pc_capture_ready(configured_mtu)
 
-        if device_ping_only:
-            print(f"[JUMBO][{case_id}][CAPTURE] device-originated ICMP only (MTU>{1500})")
-            bundle = await start_jumbo_icmp_capture(case_id, str(configured_mtu), payload_size, capture_target)
-            assert bundle is not None, f"{case_id}: failed to start lab PC capture sessions."
+        bundle_pc = await start_jumbo_icmp_capture(case_id, str(configured_mtu), payload_size, capture_target)
+        assert bundle_pc is not None, f"{case_id}: failed to start lab PC capture sessions."
+        ping = await run_backend_pc_ping(
+            configured_mtu=configured_mtu,
+            count=count,
+            target=ping_target or capture_target,
+        )
+        ping_output = str(ping.get("output") or "")
+        print(f"[JUMBO][{case_id}][PC-PING] cmd={ping['command']}")
+        print("[JUMBO][PC-PING] raw output start")
+        print(ping_output.rstrip())
+        print("[JUMBO][PC-PING] raw output end")
+        try:
+            _assert_ping_success(ping, configured_mtu=configured_mtu)
+            ping_ok = True
+        except AssertionError as exc:
+            pc_ping_exc = exc
+            print(
+                f"[JUMBO][{case_id}][CAPTURE] lab PC ping not fully successful ({exc}); "
+                "finalizing PC capture before device ping."
+            )
+
+        metadata_pc = await finalize_jumbo_icmp_capture(bundle_pc, ping_output=ping_output)
+        metadata_pc["ping_source"] = "pc"
+        pc_bts_packets, pc_bts_max = _bts_capture_stats(metadata_pc)
+        if pc_bts_max and pc_bts_max < min_frame_len:
+            print(
+                f"[JUMBO][{case_id}][CAPTURE] PC-phase max frame.len {pc_bts_max} < expected {min_frame_len} "
+                "(lab PC likely still at 1500 MTU or path fragments)."
+            )
+
+        if ping_ok:
+            metadata = metadata_pc
+            ping_source = "pc"
+        elif device_ping:
+            print(f"[JUMBO][{case_id}][CAPTURE] starting fresh capture for device-originated jumbo ICMP.")
+            bundle_dev = await start_jumbo_icmp_capture(
+                case_id,
+                str(configured_mtu),
+                payload_size,
+                capture_target,
+            )
+            assert bundle_dev is not None, f"{case_id}: failed to start device ping capture sessions."
             await asyncio.sleep(1)
             await device_ping()
             await asyncio.sleep(2)
             ping_source = "device"
-            ping_ok = False
-            metadata = await finalize_jumbo_icmp_capture(bundle, ping_output="")
-            metadata["ping_source"] = "device"
-        else:
-            bundle_pc = await start_jumbo_icmp_capture(case_id, str(configured_mtu), payload_size, capture_target)
-            assert bundle_pc is not None, f"{case_id}: failed to start lab PC capture sessions."
-            ping = await run_backend_pc_ping(
-                configured_mtu=configured_mtu,
-                count=count,
-                target=ping_target or capture_target,
+            ping_output = (
+                f"{ping_output}\n\n[device-ping after PC ping failure: {pc_ping_exc}]"
+                if pc_ping_exc
+                else ping_output
             )
-            ping_output = str(ping.get("output") or "")
-            print(f"[JUMBO][{case_id}][PC-PING] cmd={ping['command']}")
-            print("[JUMBO][PC-PING] raw output start")
-            print(ping_output.rstrip())
-            print("[JUMBO][PC-PING] raw output end")
-            try:
-                _assert_ping_success(ping, configured_mtu=configured_mtu)
-                ping_ok = True
-            except AssertionError as exc:
-                pc_ping_exc = exc
-                print(
-                    f"[JUMBO][{case_id}][CAPTURE] lab PC ping not fully successful ({exc}); "
-                    "finalizing PC capture before device ping."
-                )
-
-            metadata_pc = await finalize_jumbo_icmp_capture(bundle_pc, ping_output=ping_output)
-            metadata_pc["ping_source"] = "pc"
-            pc_bts_packets, pc_bts_max = _bts_capture_stats(metadata_pc)
-            if pc_bts_max and pc_bts_max < min_frame_len:
-                print(
-                    f"[JUMBO][{case_id}][CAPTURE] PC-phase max frame.len {pc_bts_max} < expected {min_frame_len} "
-                    "(lab PC likely still at 1500 MTU or path fragments)."
-                )
-
-            if ping_ok:
-                metadata = metadata_pc
-                ping_source = "pc"
-            elif device_ping:
-                print(f"[JUMBO][{case_id}][CAPTURE] starting fresh capture for device-originated jumbo ICMP.")
-                bundle_dev = await start_jumbo_icmp_capture(
-                    case_id,
-                    str(configured_mtu),
-                    payload_size,
-                    capture_target,
-                )
-                assert bundle_dev is not None, f"{case_id}: failed to start device ping capture sessions."
-                await device_ping()
+            metadata_dev = await finalize_jumbo_icmp_capture(bundle_dev, ping_output=ping_output)
+            metadata_dev["case_id"] = case_id
+            dev_bts_packets, dev_bts_max = _bts_capture_stats(metadata_dev)
+            if dev_bts_packets >= 1:
+                metadata = metadata_dev
+                metadata["ping_source"] = "device"
+                metadata["pc_capture_dir"] = metadata_pc.get("local_dir")
+                metadata["pc_max_frame_len"] = pc_bts_max
                 ping_source = "device"
-                ping_output = (
-                    f"{ping_output}\n\n[device-ping after PC ping failure: {pc_ping_exc}]"
-                    if pc_ping_exc
-                    else ping_output
+            elif pc_bts_packets >= 1:
+                print(
+                    f"[JUMBO][{case_id}][CAPTURE] device-phase capture empty; "
+                    f"reusing PC-phase wire proof ({pc_bts_packets} packets, max frame.len {pc_bts_max})."
                 )
-                metadata_dev = await finalize_jumbo_icmp_capture(bundle_dev, ping_output=ping_output)
-                metadata_dev["case_id"] = case_id
-                dev_bts_packets, dev_bts_max = _bts_capture_stats(metadata_dev)
-                if dev_bts_packets >= 1:
-                    metadata = metadata_dev
-                    metadata["ping_source"] = "device"
-                    metadata["pc_capture_dir"] = metadata_pc.get("local_dir")
-                    metadata["pc_max_frame_len"] = pc_bts_max
-                    ping_source = "device"
-                elif pc_bts_packets >= 1:
-                    print(
-                        f"[JUMBO][{case_id}][CAPTURE] device-phase capture empty; "
-                        f"reusing PC-phase wire proof ({pc_bts_packets} packets, max frame.len {pc_bts_max})."
-                    )
-                    metadata = dict(metadata_pc)
-                    metadata["ping_output"] = ping_output
-                    metadata["ping_source"] = "device"
-                    metadata["pc_capture_dir"] = metadata_pc.get("local_dir")
-                    metadata["device_capture_dir"] = metadata_dev.get("local_dir")
-                    metadata["pc_max_frame_len"] = pc_bts_max
-                    ping_source = "device"
-                else:
-                    metadata = metadata_dev
-                    metadata["ping_source"] = "device"
-                    metadata["pc_capture_dir"] = metadata_pc.get("local_dir")
-                    metadata["pc_max_frame_len"] = pc_bts_max
-                    ping_source = "device"
+                metadata = dict(metadata_pc)
+                metadata["ping_output"] = ping_output
+                metadata["ping_source"] = "device"
+                metadata["pc_capture_dir"] = metadata_pc.get("local_dir")
+                metadata["device_capture_dir"] = metadata_dev.get("local_dir")
+                metadata["pc_max_frame_len"] = pc_bts_max
+                ping_source = "device"
             else:
-                metadata = metadata_pc
-                ping_source = "pc"
+                metadata = metadata_dev
+                metadata["ping_source"] = "device"
+                metadata["pc_capture_dir"] = metadata_pc.get("local_dir")
+                metadata["pc_max_frame_len"] = pc_bts_max
+                ping_source = "device"
+        else:
+            metadata = metadata_pc
+            ping_source = "pc"
     finally:
         if mtu_states:
             await restore_backend_interface_mtu(mtu_states)
