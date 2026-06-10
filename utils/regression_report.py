@@ -351,8 +351,13 @@ def _iteration_matrix(record: IterationRecord) -> dict[str, bool | None]:
     }
 
 
+def _is_populated_summary_value(value: object) -> bool:
+    text = str(value or "").strip()
+    return bool(text) and text not in ("—", "-", "N/A", "n/a", "None", "unknown")
+
+
 def _render_testbed_summary_table(summary: dict[str, Any]) -> str:
-    """Fixed header: Model, FW, IP, Vlan, QOS for BTS and CPE."""
+    """Fixed header: Model, FW, IP, Vlan (+ QOS only when populated) for BTS and CPE."""
     bts = summary.get("bts", {}) if summary else {}
     cpe = summary.get("cpe", {}) if summary else {}
 
@@ -367,8 +372,9 @@ def _render_testbed_summary_table(summary: dict[str, Any]) -> str:
         ("FW Version", "fw_version"),
         ("IP", "ip"),
         ("Vlan", "vlan"),
-        ("QOS", "qos"),
     )
+    if _is_populated_summary_value(bts.get("qos")) or _is_populated_summary_value(cpe.get("qos")):
+        rows = (*rows, ("QOS", "qos"))
     body_rows = []
     for label, key in rows:
         body_rows.append(

@@ -25,6 +25,18 @@ SENAO_LOGO_URL = (
 ARTIFACTS_DIR = Path("reports/artifacts")
 
 
+def _humanize_module_name(nodeid: str, test_id: str) -> str:
+    """Human-readable module name without repeating the Module ID prefix (e.g. JMB_01)."""
+    fn = nodeid.split("::")[-1]
+    raw = re.sub(r"^test_", "", fn, flags=re.I)
+
+    if re.match(r"JMB_\d+", test_id, re.I):
+        raw = re.sub(r"^jmb_\d+_?", "", raw, flags=re.I)
+        return raw.replace("_", " ").strip().title()
+
+    return raw.replace("_", " ").strip().title()
+
+
 def get_group_marker(keywords):
     """
     Extracts the logical group name from pytest markers.
@@ -201,7 +213,7 @@ def generate():
             jmb_id = parse_jmb_case_id(nodeid)
             if jmb_id:
                 test_id = jmb_id
-                test_name = nodeid.split("::")[-1].replace("test_", "").replace("_", " ").title()
+                test_name = _humanize_module_name(nodeid, test_id)
             else:
                 match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
                 if match:
