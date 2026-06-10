@@ -781,7 +781,7 @@ async def assert_jmb_10_factory_reset_default(root_ssh, gui_page, bsu_ip, device
     await _login_with_retries(gui_page, default_ip, device_creds, attempts=4)
     temp_ssh = await _open_temp_root_ssh(default_ip, device_creds["pass"])
     try:
-        await _assert_backend_all(temp_ssh, lan_total, "1500")
+        await _assert_backend_all(temp_ssh, "1500")
     finally:
         await temp_ssh.close()
 
