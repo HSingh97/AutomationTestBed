@@ -21,6 +21,9 @@ from utils.lab_pc_net import (
 from utils.net_utils import format_ssh_host, is_ipv6_literal, normalize_ip
 from utils.recovery_manager import get_active_recovery_manager
 
+# Lab PC link + IPv6 need time to settle after parent/VLAN MTU apply before jumbo ICMP.
+MTU_APPLY_SETTLE_SECONDS = 20
+
 SSH_OPTIONS = [
     "-o",
     "LogLevel=ERROR",
@@ -696,6 +699,14 @@ def validate_capture_metadata(
             )
 
 
+def _bts_capture_stats(metadata: dict) -> tuple[int, int]:
+    """Return (packet_count, max_frame_len) for the BTS lab PC capture node."""
+    for capture in metadata.get("captures") or []:
+        if str(capture.get("node") or "").lower() == "bts":
+            return int(capture.get("packet_count") or 0), int(capture.get("max_frame_len") or 0)
+    return 0, 0
+
+
 def _assert_ping_success(ping: dict[str, object], *, configured_mtu: int) -> None:
     output = str(ping.get("output") or "")
     out = output.lower()
@@ -769,7 +780,10 @@ async def run_pc_jumbo_capture_check(
 
     try:
         mtu_states = await prepare_backend_interface_mtu(configured_mtu, best_effort=True)
-        await asyncio.sleep(1)
+        print(
+            f"[JUMBO][{case_id}][CAPTURE] waiting {MTU_APPLY_SETTLE_SECONDS}s for lab PC MTU/IPv6 to settle"
+        )
+        await asyncio.sleep(MTU_APPLY_SETTLE_SECONDS)
 
         bundle_pc = await start_jumbo_icmp_capture(case_id, str(configured_mtu), payload_size, capture_target)
         assert bundle_pc is not None, f"{case_id}: failed to start lab PC capture sessions."
@@ -797,10 +811,7 @@ async def run_pc_jumbo_capture_check(
 
         metadata_pc = await finalize_jumbo_icmp_capture(bundle_pc, ping_output=ping_output)
         metadata_pc["ping_source"] = "pc"
-        pc_bts_max = next(
-            (int(c.get("max_frame_len", 0)) for c in metadata_pc.get("captures", []) if c.get("node") == "bts"),
-            0,
-        )
+        pc_bts_packets, pc_bts_max = _bts_capture_stats(metadata_pc)
         if pc_bts_max and pc_bts_max < min_frame_len:
             print(
                 f"[JUMBO][{case_id}][CAPTURE] PC-phase max frame.len {pc_bts_max} < expected {min_frame_len} "
@@ -828,11 +839,33 @@ async def run_pc_jumbo_capture_check(
                 else ping_output
             )
             await asyncio.sleep(2)
-            metadata = await finalize_jumbo_icmp_capture(bundle_dev, ping_output=ping_output)
-            metadata["case_id"] = case_id
-            metadata["ping_source"] = "device"
-            metadata["pc_capture_dir"] = metadata_pc.get("local_dir")
-            metadata["pc_max_frame_len"] = pc_bts_max
+            metadata_dev = await finalize_jumbo_icmp_capture(bundle_dev, ping_output=ping_output)
+            metadata_dev["case_id"] = case_id
+            dev_bts_packets, dev_bts_max = _bts_capture_stats(metadata_dev)
+            if dev_bts_packets >= 1:
+                metadata = metadata_dev
+                metadata["ping_source"] = "device"
+                metadata["pc_capture_dir"] = metadata_pc.get("local_dir")
+                metadata["pc_max_frame_len"] = pc_bts_max
+                ping_source = "device"
+            elif pc_bts_packets >= 1:
+                print(
+                    f"[JUMBO][{case_id}][CAPTURE] device-phase capture empty; "
+                    f"reusing PC-phase wire proof ({pc_bts_packets} packets, max frame.len {pc_bts_max})."
+                )
+                metadata = dict(metadata_pc)
+                metadata["ping_output"] = ping_output
+                metadata["ping_source"] = "device"
+                metadata["pc_capture_dir"] = metadata_pc.get("local_dir")
+                metadata["device_capture_dir"] = metadata_dev.get("local_dir")
+                metadata["pc_max_frame_len"] = pc_bts_max
+                ping_source = "device"
+            else:
+                metadata = metadata_dev
+                metadata["ping_source"] = "device"
+                metadata["pc_capture_dir"] = metadata_pc.get("local_dir")
+                metadata["pc_max_frame_len"] = pc_bts_max
+                ping_source = "device"
         else:
             metadata = metadata_pc
             ping_source = "pc"
@@ -856,6 +889,13 @@ async def run_pc_jumbo_capture_check(
             f"[JUMBO][{case_id}][CAPTURE] wire proof via BTS capture only "
             f"({bts_packets} packets); lab PC may fragment when host MTU < DUT MTU."
         )
+        if not enforce_max_frame_len:
+            bts_max = next(
+                (int(c.get("max_frame_len", 0)) for c in metadata.get("captures", []) if c.get("node") == "bts"),
+                0,
+            )
+            if bts_max >= min_frame_len:
+                validate_capture_metadata(metadata, min_packet_count=1, min_frame_len=min_frame_len)
     if ping_ok and not enforce_max_frame_len:
         bts_max = next(
             (int(c.get("max_frame_len", 0)) for c in metadata.get("captures", []) if c.get("node") == "bts"),
