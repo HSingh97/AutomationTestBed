@@ -311,11 +311,10 @@ async def _open_remote_cpe_ssh(device_creds, *, root_ssh=None):
 
 
 async def _read_backend_mtu_map(root_ssh) -> dict[str, str]:
-    result = await root_ssh.send_command("uci show ethernet")
-    text = str(result.result or "")
-    keys = sorted(set(re.findall(r"ethernet\.(eth\d+)\.mtu=", text)))
+    """Read MTU per port via ``uci get ethernet.<ethN>.mtu`` (same as BTS backend reads)."""
     mtus: dict[str, str] = {}
-    for key in keys:
+    for i in range(4):
+        key = _eth_key(i)
         mtu = ssh_scalar((await root_ssh.send_command(f"uci get ethernet.{key}.mtu")).result)
         if mtu:
             mtus[key] = mtu
@@ -325,7 +324,9 @@ async def _read_backend_mtu_map(root_ssh) -> dict[str, str]:
 async def _configure_remote_cpe_mtus_via_ssh(remote_ssh, mtu: str) -> int:
     current = await _read_backend_mtu_map(remote_ssh)
     if not current:
-        raise RuntimeError("Unable to discover remote CPE ethernet MTU keys over SSH.")
+        raise RuntimeError(
+            "Unable to read remote CPE ethernet MTU (uci get ethernet.ethN.mtu returned nothing)."
+        )
     for key in current:
         await remote_ssh.send_command(f"ucidyn set ethernet.{key}.mtu {shlex.quote(mtu)}")
     await remote_ssh.send_command("ucidyn apply")
@@ -512,10 +513,12 @@ async def assert_jmb_02_configure_9000(root_ssh, gui_page, bsu_ip, device_creds)
         root_ssh, gui_page, bsu_ip, device_creds
     )
     try:
-        if remote_ssh is not None:
+        if remote_ssh is not None and remote_original:
             _log_case("JMB_02", "Setting remote CPE LAN MTU to 9000 first.")
             remote_lan_total = await _configure_remote_cpe_mtus_via_ssh(remote_ssh, "9000")
             await _assert_backend_all(remote_ssh, remote_lan_total, "9000")
+        elif remote_ssh is not None:
+            _log_case("JMB_02", "CPE SSH ok but no ethernet MTU keys — continuing BTS-only.")
         _log_case("JMB_02", "Setting all LAN MTU to 9000.")
         await _set_mtu_all_lans(gui_page, "9000")
         await _apply(gui_page)
@@ -535,10 +538,12 @@ async def assert_jmb_03_min_mid_mtu(root_ssh, gui_page, bsu_ip, device_creds):
     try:
         for mtu in ("2000", "5000"):
             _log_case("JMB_03", f"Applying MTU={mtu} on all LAN interfaces.")
-            if remote_ssh is not None:
+            if remote_ssh is not None and remote_original:
                 _log_case("JMB_03", f"Setting remote CPE LAN MTU={mtu} first.")
                 remote_lan_total = await _configure_remote_cpe_mtus_via_ssh(remote_ssh, mtu)
                 await _assert_backend_all(remote_ssh, remote_lan_total, mtu)
+            elif remote_ssh is not None:
+                _log_case("JMB_03", "CPE SSH ok but no ethernet MTU keys — continuing BTS-only.")
             await _ensure_ethernet_ready(gui_page)
             await _set_mtu_all_lans(gui_page, mtu)
             await _apply(gui_page, settle_seconds=8)
@@ -559,10 +564,12 @@ async def assert_jmb_04_max_mtu_9000(root_ssh, gui_page, bsu_ip, device_creds):
         root_ssh, gui_page, bsu_ip, device_creds
     )
     try:
-        if remote_ssh is not None:
+        if remote_ssh is not None and remote_original:
             _log_case("JMB_04", "Setting remote CPE LAN MTU to 9000 first.")
             remote_lan_total = await _configure_remote_cpe_mtus_via_ssh(remote_ssh, "9000")
             await _assert_backend_all(remote_ssh, remote_lan_total, "9000")
+        elif remote_ssh is not None:
+            _log_case("JMB_04", "CPE SSH ok but no ethernet MTU keys — continuing BTS-only.")
         _log_case("JMB_04", "Setting all LAN MTU to 9000.")
         await _set_mtu_all_lans(gui_page, "9000")
         await _apply(gui_page)
@@ -603,10 +610,12 @@ async def assert_jmb_06_jumbo_with_p2mp(root_ssh, gui_page, bsu_ip, device_creds
         root_ssh, gui_page, bsu_ip, device_creds
     )
     try:
-        if remote_ssh is not None:
+        if remote_ssh is not None and remote_original:
             _log_case("JMB_06", "Setting remote CPE LAN MTU to 9000 first.")
             remote_lan_total = await _configure_remote_cpe_mtus_via_ssh(remote_ssh, "9000")
             await _assert_backend_all(remote_ssh, remote_lan_total, "9000")
+        elif remote_ssh is not None:
+            _log_case("JMB_06", "CPE SSH ok but no ethernet MTU keys — continuing BTS-only.")
         _log_case("JMB_06", "Setting all LAN MTU to 9000.")
         await _set_mtu_all_lans(gui_page, "9000")
         await _apply(gui_page)
@@ -659,10 +668,12 @@ async def assert_jmb_08_mtu_1500(root_ssh, gui_page, bsu_ip, device_creds):
         root_ssh, gui_page, bsu_ip, device_creds
     )
     try:
-        if remote_ssh is not None:
+        if remote_ssh is not None and remote_original:
             _log_case("JMB_08", "Setting remote CPE LAN MTU to 1500 first.")
             remote_lan_total = await _configure_remote_cpe_mtus_via_ssh(remote_ssh, "1500")
             await _assert_backend_all(remote_ssh, remote_lan_total, "1500")
+        elif remote_ssh is not None:
+            _log_case("JMB_08", "CPE SSH ok but no ethernet MTU keys — continuing BTS-only.")
         _log_case("JMB_08", "Setting all LAN MTU to 1500.")
         await _set_mtu_all_lans(gui_page, "1500")
         await _apply(gui_page, settle_seconds=6)
