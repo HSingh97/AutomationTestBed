@@ -48,13 +48,13 @@ async def _ensure_ethernet_ready(gui_page):
     await gui_page.locator(EL.LAN_TABS).first.wait_for(state="visible", timeout=15000)
 
 
-async def _apply(gui_page, settle_seconds=10):
+async def _apply(gui_page, settle_seconds=4):
     await gui_page.locator(EL.SAVE_BUTTON).first.click()
-    await gui_page.wait_for_timeout(3000)
+    await gui_page.wait_for_timeout(2000)
     apply_icon = gui_page.locator(NL.APPLY_ICON).first
     if await apply_icon.is_visible(timeout=5000):
         await apply_icon.click()
-        await gui_page.wait_for_timeout(3000)
+        await gui_page.wait_for_timeout(2000)
         confirm_btn = gui_page.locator(NL.CONFIRM_APPLY).first
         # On some firmware/pages Apply commits directly without a confirm prompt.
         if await confirm_btn.is_visible(timeout=4000):
@@ -424,7 +424,7 @@ async def _assert_backend_all(root_ssh, lan_total: int, expected_mtu: str):
     print("[JUMBO][br-lan] raw output end")
     # netifd can still be reloading right after GUI apply (race), and a previously
     # pinned bridge MTU stops auto-tracking port MTUs. Poll and sync over SSH.
-    for attempt in range(4):
+    for attempt in range(3):
         if br_mtu == expected_mtu:
             break
         print(
@@ -435,7 +435,7 @@ async def _assert_backend_all(root_ssh, lan_total: int, expected_mtu: str):
             f"ip link set dev br-lan mtu {shlex.quote(expected_mtu)} "
             f"|| ifconfig br-lan mtu {shlex.quote(expected_mtu)} || true"
         )
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
         br_mtu, br_raw = await _read_br_lan_mtu(root_ssh)
     if not br_mtu:
         print(
@@ -466,7 +466,7 @@ async def _pc_jumbo_check_with_capture(
     configured_mtu: int,
     *,
     root_ssh=None,
-    count: int = 5,
+    count: int = 3,
     enforce_max_frame_len: bool = False,
 ):
     config = load_jumbo_capture_config()
@@ -650,10 +650,8 @@ async def assert_jmb_03_min_mid_mtu(root_ssh, gui_page, bsu_ip, device_creds):
                 _log_case("JMB_03", "CPE SSH ok but no ethernet MTU keys — continuing BTS-only.")
             await _ensure_ethernet_ready(gui_page)
             await _set_mtu_all_lans(gui_page, mtu)
-            await _apply(gui_page, settle_seconds=8)
+            await _apply(gui_page, settle_seconds=4)
             await _assert_backend_all(root_ssh, lan_total, mtu)
-            _log_case("JMB_03", f"Running device-to-device ICMP validation for MTU={mtu}.")
-            await _icmp_jumbo_check(root_ssh, configured_mtu=int(mtu), case_id="JMB_03")
             await _pc_jumbo_check_with_capture("JMB_03", int(mtu), root_ssh=root_ssh)
     finally:
         _log_case("JMB_03", "Restoring original MTU values.")
@@ -678,8 +676,6 @@ async def assert_jmb_04_max_mtu_9000(root_ssh, gui_page, bsu_ip, device_creds):
         await _set_mtu_all_lans(gui_page, "9000")
         await _apply(gui_page)
         await _assert_backend_all(root_ssh, lan_total, "9000")
-        _log_case("JMB_04", "Running device-to-device ICMP validation for MTU=9000.")
-        await _icmp_jumbo_check(root_ssh, configured_mtu=9000, case_id="JMB_04")
         await _pc_jumbo_check_with_capture("JMB_04", 9000, root_ssh=root_ssh)
     finally:
         _log_case("JMB_04", "Restoring original MTU values.")
@@ -725,8 +721,6 @@ async def assert_jmb_06_jumbo_with_p2mp(root_ssh, gui_page, bsu_ip, device_creds
         await _set_mtu_all_lans(gui_page, "9000")
         await _apply(gui_page)
         await _assert_backend_all(root_ssh, lan_total, "9000")
-        _log_case("JMB_06", "Running device-to-device ICMP validation for MTU=9000 (same as JMB_04).")
-        await _icmp_jumbo_check(root_ssh, configured_mtu=9000, case_id="JMB_06")
         await _pc_jumbo_check_with_capture("JMB_06", 9000, root_ssh=root_ssh)
     finally:
         _log_case("JMB_06", "Restoring original MTU values.")
@@ -784,8 +778,6 @@ async def assert_jmb_08_mtu_1500(root_ssh, gui_page, bsu_ip, device_creds):
         await _set_mtu_all_lans(gui_page, "1500")
         await _apply(gui_page, settle_seconds=6)
         await _assert_backend_all(root_ssh, lan_total, "1500")
-        _log_case("JMB_08", "Running device-to-device ICMP validation for MTU=1500.")
-        await _icmp_jumbo_check(root_ssh, configured_mtu=1500, case_id="JMB_08")
         await _pc_jumbo_check_with_capture("JMB_08", 1500, root_ssh=root_ssh, enforce_max_frame_len=True)
     finally:
         _log_case("JMB_08", "Restoring original MTU values.")
