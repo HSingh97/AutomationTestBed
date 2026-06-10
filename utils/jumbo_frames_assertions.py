@@ -331,13 +331,23 @@ async def _restore_remote_cpe_mtus_via_ssh(remote_ssh, original: dict[str, str])
     await remote_ssh.send_command("ucidyn apply")
 
 
-async def _assert_remote_cpe_mtus(remote_ssh, expected_mtu: str) -> None:
-    """Verify CPE MTU via ``uci get`` only (nested SSH often drops ``ifconfig`` output)."""
-    current = await _read_backend_mtu_map(remote_ssh)
+async def _assert_remote_cpe_mtus(
+    remote_ssh, expected_mtu: str, *, attempts: int = 4, interval_s: float = 5.0
+) -> None:
+    """Verify CPE MTU via ``uci get`` with retries (ucidyn apply reloads network over RF)."""
+    current: dict[str, str] = {}
+    for attempt in range(1, attempts + 1):
+        current = await _read_backend_mtu_map(remote_ssh)
+        if current and all(val == expected_mtu for val in current.values()):
+            print(f"[JUMBO][REMOTE][CHECK] expected_mtu={expected_mtu} ok on attempt {attempt}")
+            for key, val in current.items():
+                print(f"[JUMBO][REMOTE][UCI] {key} mtu={val}")
+            return
+        if attempt < attempts:
+            await asyncio.sleep(interval_s)
     if not current:
         _log_case("REMOTE", "CPE MTU verify skipped: uci get ethernet.ethN.mtu returned nothing")
         return
-    print(f"[JUMBO][REMOTE][CHECK] expected_mtu={expected_mtu}")
     for key, val in current.items():
         print(f"[JUMBO][REMOTE][UCI] {key} mtu={val}")
         assert val == expected_mtu, (
