@@ -252,6 +252,18 @@ async def testbed_ready(request, profile_bundle, device_creds):
         gui_page=None,
         cli_fallback_ip=cli_fb,
     )
+    # Cache the testbed summary now, while BTS/CPE are known reachable; destructive
+    # cases (reboot/factory reset) can leave them down by session end.
+    try:
+        from utils.regression_device_info import collect_testbed_summary
+
+        bsu_host, cpe_hosts, password = _resolve_testbed_hosts(request.config)
+        summary = await collect_testbed_summary(bsu_host, cpe_hosts, password)
+        with _artifact_path("testbed_summary.json").open("w", encoding="utf-8") as handle:
+            json.dump(summary, handle, indent=2)
+        print(f"[report] Testbed summary cached (BTS={bsu_host}, CPE={cpe_hosts[:1] or ['—']})")
+    except Exception as exc:
+        print(f"[report] Early testbed summary skipped: {exc}")
     return profile_bundle
 
 
@@ -530,7 +542,9 @@ def pytest_sessionfinish(session, exitstatus):
     if session.config.getoption("json_report_file", default=""):
         from utils.json_report_checkpoint import flush_json_report, recover_report_json
 
-        if not flush_json_report(session.config, partial=exitstatus != 0, exitcode=exitstatus):
+        # Partial only when the run was interrupted/crashed (2/3) — plain test
+        # failures (exit 1) are still a complete run.
+        if not flush_json_report(session.config, partial=exitstatus in (2, 3), exitcode=exitstatus):
             recover_report_json()
     _write_testbed_summary(session.config)
     reports_dir = str(ARTIFACTS_DIR)
