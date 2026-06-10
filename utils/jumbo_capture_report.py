@@ -152,22 +152,48 @@ def _render_inline_svg(svg_rel: str) -> str:
     return f"<div class='capture-svg-wrap'>{svg_text}</div>"
 
 
+def _latest_run_entries(entries: list[dict]) -> list[dict]:
+    """
+    Tail of the history covering the most recent test run: walk backwards
+    collecting entries until a configured MTU repeats (multi-MTU cases such as
+    JMB_01/JMB_03 log one capture per MTU within a single run).
+    """
+    seen: set[str] = set()
+    latest: list[dict] = []
+    for entry in reversed(entries):
+        mtu = str(entry.get("configured_mtu") or "")
+        if mtu in seen:
+            break
+        seen.add(mtu)
+        latest.append(entry)
+    return list(reversed(latest))
+
+
 def render_jumbo_capture_evidence_html(case_id: str, index: dict | None = None) -> tuple[str, str]:
     """
     Return (html_fragment, csv_plain_text) for one JMB case.
     Paths in links are relative to reports/artifacts/ (same folder as the Senao HTML report).
+    The block renders collapsed by default; readers expand it on demand.
     """
     data = index if index is not None else load_jumbo_capture_index()
     entries = list((data.get("cases") or {}).get(case_id.upper()) or [])
     if not entries:
         return "", ""
 
-    # Show only the latest capture run in the customer report (index keeps history).
-    entries = [entries[-1]]
+    entries = _latest_run_entries(entries)
 
+    gist = " · ".join(
+        f"MTU {escape(str(e.get('configured_mtu') or '?'))}: "
+        f"{int(e.get('bts_packet_count') or 0)} pkts, max {int(e.get('bts_max_frame_len') or 0)}"
+        for e in entries
+    )
     html_parts = [
-        "<div class='jumbo-capture-block'>",
-        "<div class='reason-title'>Wire Capture Evidence (tcpdump / tshark)</div>",
+        "<details class='jumbo-capture-block'>",
+        "<summary class='capture-summary'>"
+        "<span class='capture-summary-title'>Wire Capture Evidence (tcpdump / tshark)</span>"
+        f"<span class='capture-summary-gist'>{gist}</span>"
+        "<span class='capture-summary-hint'>click to expand</span>"
+        "</summary>",
     ]
     csv_lines = ["Wire capture evidence:"]
 
@@ -228,12 +254,23 @@ def render_jumbo_capture_evidence_html(case_id: str, index: dict | None = None) 
             f"- MTU {mtu}: {pkt} BTS packets, max frame.len {max_len}, pcap={pcap_rel or 'n/a'}"
         )
 
-    html_parts.append("</div>")
+    html_parts.append("</details>")
     return "".join(html_parts), "\n".join(csv_lines)
 
 
 JUMBO_CAPTURE_REPORT_CSS = """
-            .jumbo-capture-block { margin-top: 14px; padding: 14px 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }
+            .jumbo-capture-block { margin-top: 14px; padding: 0; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
+            .capture-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 11px 16px; cursor: pointer; user-select: none; list-style: none; background: #f1f5f9; }
+            .capture-summary::-webkit-details-marker { display: none; }
+            .capture-summary::before { content: '\\25B8'; color: #2563eb; font-size: 12px; transition: transform 0.15s ease; }
+            details[open] > .capture-summary::before { transform: rotate(90deg); }
+            details[open] > .capture-summary { border-bottom: 1px solid #e2e8f0; }
+            .capture-summary:hover { background: #e2e8f0; }
+            .capture-summary-title { font-weight: 700; font-size: 12px; color: #1e3a8a; }
+            .capture-summary-gist { font-size: 11px; color: #475569; }
+            .capture-summary-hint { margin-left: auto; font-size: 10px; color: #94a3b8; font-style: italic; }
+            details[open] > .capture-summary .capture-summary-hint { display: none; }
+            .jumbo-capture-block .capture-run { padding: 12px 16px; }
             .capture-run + .capture-run { margin-top: 16px; padding-top: 14px; border-top: 1px dashed #cbd5e1; }
             .capture-meta { margin: 0 0 8px; font-size: 12px; color: #475569; }
             .capture-links { margin: 0 0 10px; font-size: 12px; }

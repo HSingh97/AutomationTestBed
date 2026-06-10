@@ -540,12 +540,14 @@ async def assert_jmb_01_configure_and_disable(root_ssh, gui_page, bsu_ip, device
         await _set_mtu_all_lans(gui_page, "9000")
         await _apply(gui_page)
         await _assert_backend_all(root_ssh, lan_total, "9000")
+        await _pc_jumbo_check_with_capture("JMB_01", 9000, root_ssh=root_ssh)
 
         await _ensure_ethernet_ready(gui_page)
         _log_case("JMB_01", "Setting all LAN MTU to 1500.")
         await _set_mtu_all_lans(gui_page, "1500")
         await _apply(gui_page)
         await _assert_backend_all(root_ssh, lan_total, "1500")
+        await _pc_jumbo_check_with_capture("JMB_01", 1500, root_ssh=root_ssh, enforce_max_frame_len=True)
     finally:
         _log_case("JMB_01", "Restoring original MTU values.")
         await _restore_mtus(root_ssh, gui_page, bsu_ip, device_creds, original)
@@ -567,6 +569,7 @@ async def assert_jmb_02_configure_9000(root_ssh, gui_page, bsu_ip, device_creds)
         await _set_mtu_all_lans(gui_page, "9000")
         await _apply(gui_page)
         await _assert_backend_all(root_ssh, lan_total, "9000")
+        await _pc_jumbo_check_with_capture("JMB_02", 9000, root_ssh=root_ssh)
     finally:
         _log_case("JMB_02", "Restoring original MTU values.")
         await _restore_local_and_remote_mtus(
@@ -643,6 +646,7 @@ async def assert_jmb_05_mgmt_vlan_mtu(root_ssh, gui_page, bsu_ip, device_creds):
             mtu_line = await root_ssh.send_command(f"ip link show {if_name} | head -n 1")
             _log_case("JMB_05", f"Management-like interface check: {if_name} -> {ssh_scalar(mtu_line.result)}")
             assert "mtu" in mtu_line.result.lower(), f"Unable to read MTU for management-like interface {if_name}"
+        await _pc_jumbo_check_with_capture("JMB_05", 9000, root_ssh=root_ssh)
     finally:
         _log_case("JMB_05", "Restoring original MTU values.")
         await _restore_mtus(root_ssh, gui_page, bsu_ip, device_creds, original)
@@ -701,6 +705,7 @@ async def assert_jmb_07_reboot_persistence(root_ssh, gui_page, bsu_ip, device_cr
             await asyncio.sleep(2)
             await root_ssh.open()
             await _assert_backend_all(root_ssh, lan_total, "9000")
+        await _pc_jumbo_check_with_capture("JMB_07", 9000, root_ssh=root_ssh)
     finally:
         _log_case("JMB_07", "Restoring original MTU values.")
         await _restore_mtus(root_ssh, gui_page, bsu_ip, device_creds, original)
@@ -743,6 +748,9 @@ async def assert_jmb_09_boundary_values(root_ssh, gui_page, bsu_ip, device_creds
             await _set_mtu_all_lans(gui_page, mtu)
             await _apply(gui_page, settle_seconds=6)
             await _assert_backend_all(root_ssh, lan_total, mtu)
+
+        # Wire proof once at the top boundary (9000); per-value captures would be too slow.
+        await _pc_jumbo_check_with_capture("JMB_09", 9000, root_ssh=root_ssh)
 
         for invalid in invalid_values:
             _log_case("JMB_09", f"Invalid boundary test: attempting MTU={invalid}.")
