@@ -251,8 +251,9 @@ async def _open_remote_cpe_ssh(device_creds, *, root_ssh=None):
     """
     Open CPE root SSH for remote LAN MTU changes (best-effort).
 
-    Prefer secondary CPE lab PC → factory IPv4 when the hop is ready.
-    Falls back to direct mgmt reachability only when secondary is not configured.
+    Topology: PC(local) — BTS —(RF)— CPE — PC(remote).
+    CPE mgmt IPv6 is reachable from the local PC through the BTS RF path, so SSH
+    directly from the local PC. The secondary-PC hop is only a last-resort fallback.
     Returns None when CPE CLI is unavailable so BTS-only jumbo flows can continue.
     """
     manager = get_active_recovery_manager()
@@ -268,6 +269,17 @@ async def _open_remote_cpe_ssh(device_creds, *, root_ssh=None):
     if root_ssh is not None and cpe_mgmt:
         await _cpe_link_up_via_bts(root_ssh, cpe_mgmt)
 
+    # Direct SSH from local PC over the BTS RF path — no remote PC hop needed.
+    direct_host = cpe_mgmt or _remote_dut_host_from_profile() or ""
+    if direct_host:
+        try:
+            conn = await _open_temp_root_ssh(direct_host, password, timeout_socket=20)
+            _log_case("REMOTE", f"CPE SSH direct from local PC to {direct_host}")
+            return conn
+        except Exception as exc:
+            _log_case("REMOTE", f"direct CPE SSH to {direct_host} failed: {exc}")
+
+    # Last resort: hop through the secondary CPE-side lab PC to CPE factory IPv4.
     if sec.get("enabled", True) and str(sec.get("ssh", "")).strip():
         from utils.ip_test_flows import open_cpe_ssh_via_secondary_pc
         from utils.lab_pc_net import ensure_secondary_pc_cpe_hop_ready
@@ -275,39 +287,19 @@ async def _open_remote_cpe_ssh(device_creds, *, root_ssh=None):
 
         access = cpe_ssh_access(profile)
         cpe_factory = access["host"]
-        cpe_lan = cpe_mgmt or cpe_factory
-        last_exc: Exception | None = None
-        for attempt in range(1, 4):
-            try:
-                await ensure_secondary_pc_cpe_hop_ready(profile, password)
-                driver, _, label = await open_cpe_ssh_via_secondary_pc(
-                    profile,
-                    password,
-                    cpe_lan=cpe_lan,
-                    cpe_factory=cpe_factory,
-                )
-                _log_case("REMOTE", f"CPE SSH via {label} (attempt {attempt})")
-                return driver
-            except Exception as exc:
-                last_exc = exc
-                _log_case("REMOTE", f"secondary CPE SSH attempt {attempt} failed: {exc}")
-                if attempt < 3:
-                    await asyncio.sleep(4)
-        _log_case(
-            "REMOTE",
-            f"CPE secondary SSH unavailable after retries: {last_exc}; continuing BTS-only MTU flow.",
-        )
-        return None
-
-    remote_host = _remote_dut_host_from_profile()
-    if not remote_host:
-        return None
-    try:
-        _log_case("REMOTE", f"CPE SSH direct to {remote_host}")
-        return await _open_temp_root_ssh(remote_host, password)
-    except Exception as exc:
-        _log_case("REMOTE", f"direct CPE SSH failed: {exc}; continuing BTS-only MTU flow.")
-        return None
+        try:
+            await ensure_secondary_pc_cpe_hop_ready(profile, password)
+            driver, _, label = await open_cpe_ssh_via_secondary_pc(
+                profile,
+                password,
+                cpe_lan=cpe_mgmt or cpe_factory,
+                cpe_factory=cpe_factory,
+            )
+            _log_case("REMOTE", f"CPE SSH via {label}")
+            return driver
+        except Exception as exc:
+            _log_case("REMOTE", f"secondary CPE SSH failed: {exc}; continuing BTS-only MTU flow.")
+    return None
 
 
 async def _read_backend_mtu_map(root_ssh) -> dict[str, str]:

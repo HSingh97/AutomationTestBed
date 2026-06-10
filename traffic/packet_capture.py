@@ -676,6 +676,12 @@ def _summarize_capture_file(local_summary: Path, *, local_pcap: Path | None = No
     return {"packet_count": packet_count, "max_frame_len": max_frame_len}
 
 
+def _metadata_for_capture_node(metadata: dict, node: str) -> dict:
+    """Subset metadata to one lab PC tap (CPE side is often empty on mgmt VLAN captures)."""
+    captures = [c for c in metadata.get("captures", []) if str(c.get("node") or "").lower() == node]
+    return {**metadata, "captures": captures}
+
+
 def validate_capture_metadata(
     metadata: dict,
     *,
@@ -895,14 +901,22 @@ async def run_pc_jumbo_capture_check(
                 0,
             )
             if bts_max >= min_frame_len:
-                validate_capture_metadata(metadata, min_packet_count=1, min_frame_len=min_frame_len)
+                validate_capture_metadata(
+                    _metadata_for_capture_node(metadata, "bts"),
+                    min_packet_count=1,
+                    min_frame_len=min_frame_len,
+                )
     if ping_ok and not enforce_max_frame_len:
         bts_max = next(
             (int(c.get("max_frame_len", 0)) for c in metadata.get("captures", []) if c.get("node") == "bts"),
             0,
         )
         if bts_max >= min_frame_len:
-            validate_capture_metadata(metadata, min_packet_count=1, min_frame_len=min_frame_len)
+            validate_capture_metadata(
+                _metadata_for_capture_node(metadata, "bts"),
+                min_packet_count=1,
+                min_frame_len=min_frame_len,
+            )
     elif enforce_max_frame_len:
         bts_max = next(
             (int(c.get("max_frame_len", 0)) for c in metadata.get("captures", []) if c.get("node") == "bts"),
