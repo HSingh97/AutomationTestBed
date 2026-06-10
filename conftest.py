@@ -464,7 +464,11 @@ def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
     progress = getattr(item.config, "_ip_suite_progress", None)
-    if progress is not None and report.when == "call" and item.get_closest_marker("IP"):
+    record_progress = report.when == "call" or (
+        # Skips/errors during setup never reach the call phase.
+        report.when == "setup" and report.outcome != "passed"
+    )
+    if progress is not None and record_progress:
         from utils.ip_suite_progress import outcome_from_report
 
         duration = getattr(call, "duration", 0.0) or 0.0
@@ -762,14 +766,12 @@ _quiet_ssh_library_logs()
 def pytest_collection_finish(session):
     count = len(session.items)
     print(f"\n[pytest] Collected {count} test(s). Starting session setup (not stuck)...\n")
-    if session.config.getoption("--allow-ip-suite"):
-        ip_items = [i for i in session.items if i.get_closest_marker("IP")]
-        if ip_items:
-            from utils.ip_suite_progress import IpSuiteProgress
+    if session.items:
+        from utils.ip_suite_progress import IpSuiteProgress
 
-            session.config._ip_suite_progress = IpSuiteProgress(
-                [item.nodeid for item in ip_items]
-            )
+        session.config._ip_suite_progress = IpSuiteProgress(
+            [item.nodeid for item in session.items]
+        )
 
 
 def pytest_sessionstart(session):

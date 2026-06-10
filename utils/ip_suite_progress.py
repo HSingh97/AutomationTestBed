@@ -1,4 +1,4 @@
-"""Console progress summary for the IP pytest suite (Jenkins-friendly)."""
+"""Console progress summary for pytest suites (Jenkins-friendly)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ from prettytable import PrettyTable
 
 IP_SUITE_PROGRESS_PATH = Path("reports/artifacts/ip_suite_progress.json")
 
-_CASE_ID_RE = re.compile(r"(IP_\d+)", re.I)
+# Any suite case id: IP_01, JMB_04, REG_12, ...
+_CASE_ID_RE = re.compile(r"([A-Z]{2,}_\d+)", re.I)
 _TARGET_RE = re.compile(r"_(bts|cpe)(?:\[|$)", re.I)
 
 
@@ -41,7 +42,7 @@ class IpSuiteProgress:
             )
         self.total = len(self._rows)
         if self.total:
-            print(f"\n[IP suite] {self.total} test(s) queued — progress table after each case\n")
+            print(f"\n[suite] {self.total} test(s) queued — progress table after each case\n")
             self._persist()
 
     def record(self, nodeid: str, *, outcome: str, duration_s: float) -> None:
@@ -113,7 +114,7 @@ class IpSuiteProgress:
             )
 
         print(
-            f"\n[IP suite] Progress {done}/{total} ({pct}%) | "
+            f"\n[suite] Progress {done}/{total} ({pct}%) | "
             f"PASS {passed} FAIL {failed} SKIP {skipped} ERR {errors} | "
             f"elapsed {_format_duration(int(elapsed))} | ETA ~{eta_txt}\n"
         )
@@ -124,7 +125,7 @@ class IpSuiteProgress:
 def _parse_nodeid(nodeid: str) -> tuple[str, str, str]:
     base = nodeid.split("::")[-1]
     case_m = _CASE_ID_RE.search(base)
-    case_id = case_m.group(1).upper() if case_m else base[:24]
+    case_id = case_m.group(1).upper() if case_m else base.removeprefix("test_")[:24]
     target_m = _TARGET_RE.search(base)
     target = (target_m.group(1) if target_m else "bts").lower()
     if "extended" in base and "[" in nodeid:
