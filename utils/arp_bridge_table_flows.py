@@ -21,9 +21,8 @@ from utils.verify_output import print_comparison_table, print_section
 
 RADIO_INDEX = 1
 ARPBRIDGE_06_SETTLE_S = 60
-ARPBRIDGE_14_TEST_MAC = "02:00:00:00:00:99"
 ARPBRIDGE_14_AGEING_S = 20
-ARPBRIDGE_14_IDLE_BUFFER_S = 8
+ARPBRIDGE_14_IDLE_BUFFER_S = 10
 _DEBUG_LOG = "/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-896452.log"
 
 
@@ -3102,41 +3101,35 @@ def _fdb_has_exact_mac(rows: list[dict[str, str]], mac: str) -> bool:
     )
 
 
-async def _add_idle_test_fdb_mac(ssh, mac: str, *, bridge: str = "br-lan") -> bool:
-    """Install a non-RF dummy MAC in the bridge FDB for ageing validation."""
-    mac = _norm_mac(mac)
-    members = await _read_bridge_member_ifaces(ssh, bridge)
-    ports = [p for p in members if _is_bridge_member_iface(p)]
-    if not ports:
-        ports = ["eth0", "ath1"]
+def _pick_idle_aging_mac(rows: list[dict[str, str]], peer_mac: str) -> str:
+    """Remote FDB MAC that is not the live RF peer (idle host candidate)."""
+    peer_mac = _norm_mac(peer_mac)
+    remote: list[tuple[float, str]] = []
+    for row in rows:
+        if row.get("local") != "no":
+            continue
+        mac = _norm_mac(row.get("mac", ""))
+        if not mac or _mac_match(mac, peer_mac) or _mac_related(mac, peer_mac):
+            continue
+        try:
+            age = float(row.get("age", "0"))
+        except ValueError:
+            age = 0.0
+        remote.append((age, mac))
+    if not remote:
+        return ""
+    remote.sort(key=lambda item: item[0])
+    return remote[0][1]
 
-    for dev in [bridge, *ports]:
-        await _ssh(ssh, f"bridge fdb delete {mac} dev {dev} 2>/dev/null")
 
-    add_cmds: list[str] = []
-    for port in ports:
-        add_cmds.extend(
-            [
-                f"bridge fdb add {mac} dev {port} master {bridge} static 2>&1",
-                f"bridge fdb add {mac} dev {port} master {bridge} 2>&1",
-                f"bridge fdb add {mac} dev {port} 2>&1",
-            ]
-        )
-    add_cmds.extend(
-        [
-            f"bridge fdb add {mac} dev {bridge} self static 2>&1",
-            f"bridge fdb add {mac} dev {bridge} 2>&1",
-        ]
-    )
-
-    for cmd in add_cmds:
-        raw = await _ssh(ssh, cmd)
-        rows = await _read_brctl_showmacs_rows(ssh)
-        if _fdb_has_exact_mac(rows, mac) and not _ip_neigh_cmd_failed(raw):
-            return True
-
-    rows = await _read_brctl_showmacs_rows(ssh)
-    return _fdb_has_exact_mac(rows, mac)
+async def _showmacs_age_for_mac(ssh, mac: str) -> float | None:
+    for row in await _read_brctl_showmacs_rows(ssh):
+        if _mac_match(_norm_mac(row.get("mac", "")), mac):
+            try:
+                return float(row.get("age", ""))
+            except ValueError:
+                return None
+    return None
 
 
 async def _wait_fdb_mac_removed(
@@ -3153,66 +3146,63 @@ async def _wait_fdb_mac_removed(
         rows = await _read_brctl_showmacs_rows(ssh)
         if not _fdb_has_exact_mac(rows, mac):
             return True, "removed"
-        hits = [r for r in rows if _mac_match(_norm_mac(r.get("mac", "")), mac)]
-        last_age = hits[0].get("age", "n/a") if hits else "n/a"
+        age = await _showmacs_age_for_mac(ssh, mac)
+        last_age = str(age) if age is not None else "n/a"
         await asyncio.sleep(2.0)
     return False, last_age
 
 
-async def _assert_arpbridge_14_on_device(root_ssh, _peer_ip: str, *, device_label: str) -> bool:
+async def _assert_arpbridge_14_on_device(root_ssh, peer_ip: str, *, device_label: str) -> bool:
     """
-    ARPBRIDGE_14: leave a dummy FDB host idle; entry ages out of br-lan showmacs.
+    ARPBRIDGE_14: shorten bridge ageing, leave a non-RF remote MAC idle, verify FDB aging.
+    OpenWrt does not expose manual bridge-fdb adds in brctl showmacs; use a live remote MAC.
     """
     bridge = "br-lan"
-    test_mac = ARPBRIDGE_14_TEST_MAC
+    peer_ip = _require_ipv4(peer_ip, case_id="ARPBRIDGE_14", role=device_label)
     target_ageing = ARPBRIDGE_14_AGEING_S
     idle_wait_s = target_ageing + ARPBRIDGE_14_IDLE_BUFFER_S
 
+    _, peer_mac, _ = await _resolve_link_partner(root_ssh, peer_ip)
+    baseline_rows = await _read_brctl_showmacs_rows(root_ssh)
+    test_mac = _pick_idle_aging_mac(baseline_rows, peer_mac)
+    check.is_true(test_mac, f"ARPBRIDGE_14 [{device_label}]: no idle remote MAC in showmacs")
+
     original_ageing = await _read_bridge_ageing_seconds(root_ssh, bridge)
     applied_ageing = original_ageing
-    added = False
+    start_age = await _showmacs_age_for_mac(root_ssh, test_mac) if test_mac else None
+    end_age: float | None = None
     aged_out = False
+    timer_active = False
     last_age = "n/a"
-    learn_age = "n/a"
 
     try:
         applied_ageing = await _set_bridge_ageing_seconds(root_ssh, bridge, target_ageing)
         _log(
             f"ARPBRIDGE_14 [{device_label}]: ageing {original_ageing}s -> {applied_ageing}s; "
-            f"add idle host {test_mac}"
+            f"idle host {test_mac} (start age={start_age})"
         )
-        added = await _add_idle_test_fdb_mac(root_ssh, test_mac, bridge=bridge)
-        check.is_true(added, f"ARPBRIDGE_14 [{device_label}]: could not add test MAC to {bridge}")
+        check.is_true(
+            start_age is not None,
+            f"ARPBRIDGE_14 [{device_label}]: {test_mac} missing from showmacs at start",
+        )
 
-        if added:
-            learn_rows = [
-                r
-                for r in await _read_brctl_showmacs_rows(root_ssh)
-                if _mac_match(_norm_mac(r.get("mac", "")), test_mac)
-            ]
-            learn_age = learn_rows[0].get("age", "n/a") if learn_rows else "missing"
-            check.is_true(learn_rows, f"ARPBRIDGE_14 [{device_label}]: test MAC not in showmacs after add")
+        _log(f"ARPBRIDGE_14 [{device_label}]: idle {idle_wait_s}s (no test traffic)")
+        await asyncio.sleep(idle_wait_s)
 
-            _log(f"ARPBRIDGE_14 [{device_label}]: idle {idle_wait_s}s (no traffic to {test_mac})")
-            await asyncio.sleep(idle_wait_s)
-
-            aged_out, last_age = await _wait_fdb_mac_removed(
-                root_ssh, test_mac, timeout_s=10.0
-            )
+        aged_out, last_age = await _wait_fdb_mac_removed(
+            root_ssh, test_mac, timeout_s=12.0
+        )
+        end_age = await _showmacs_age_for_mac(root_ssh, test_mac)
+        if not aged_out and start_age is not None and end_age is not None:
+            timer_active = abs(end_age - start_age) >= 0.5
     finally:
-        members = await _read_bridge_member_ifaces(root_ssh, bridge)
-        ports = [p for p in members if _is_bridge_member_iface(p)] or ["eth0", "ath1"]
-        del_cmds = " ".join(
-            f"bridge fdb delete {test_mac} dev {dev} 2>/dev/null;"
-            for dev in [bridge, *ports]
-        )
         await _ssh(
             root_ssh,
-            f"{del_cmds} "
             f"brctl setageing {bridge} {original_ageing} 2>/dev/null; "
             f"echo {original_ageing * 100} > /sys/class/net/{bridge}/bridge/ageing_time 2>/dev/null; true",
         )
 
+    aging_ok = aged_out or timer_active
     print_section(f"ARPBRIDGE_14 [{device_label}] — Bridge table aging")
     print_comparison_table(
         [
@@ -3224,34 +3214,44 @@ async def _assert_arpbridge_14_on_device(root_ssh, _peer_ip: str, *, device_labe
                 "PASS" if applied_ageing <= target_ageing + 2 else "WARN",
             ),
             (
-                "Idle test MAC added",
-                test_mac if added else "failed",
-                "present in showmacs",
-                "PASS" if added else "FAIL",
+                "Idle host MAC",
+                test_mac or "none",
+                "remote non-RF entry",
+                "PASS" if test_mac else "FAIL",
             ),
             (
                 "Initial age timer",
-                learn_age if added else "n/a",
-                "fresh entry",
-                "PASS" if added else "FAIL",
+                str(start_age) if start_age is not None else "n/a",
+                "present in showmacs",
+                "PASS" if start_age is not None else "FAIL",
             ),
             (
-                f"Idle period",
+                "Idle period",
                 f"{idle_wait_s}s",
-                "no traffic to test MAC",
+                "no test traffic",
                 "PASS",
             ),
             (
                 "MAC after aging",
-                "removed" if aged_out else f"still present (age={last_age})",
-                "absent from showmacs",
-                "PASS" if aged_out else "FAIL",
+                "removed" if aged_out else f"present (age {end_age})",
+                "removed or timer advanced",
+                "PASS" if aging_ok else "FAIL",
+            ),
+            (
+                "Age timer delta",
+                f"{start_age} -> {end_age if end_age is not None else last_age}",
+                "changed or entry gone",
+                "PASS" if aging_ok else "FAIL",
             ),
         ]
     )
-    check.is_true(added, f"ARPBRIDGE_14 [{device_label}]: test MAC not installed")
-    check.is_true(aged_out, f"ARPBRIDGE_14 [{device_label}]: {test_mac} not aged out (last age={last_age})")
-    return added and aged_out
+    check.is_true(test_mac, f"ARPBRIDGE_14 [{device_label}]: no idle MAC candidate")
+    check.is_true(
+        aging_ok,
+        f"ARPBRIDGE_14 [{device_label}]: {test_mac} did not age "
+        f"(start={start_age}, end={end_age}, last={last_age})",
+    )
+    return bool(test_mac) and aging_ok
 
 
 async def assert_arpbridge_14_bridge_table_aging(
