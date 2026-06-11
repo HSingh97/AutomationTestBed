@@ -34,11 +34,57 @@ from traffic.operating_rate_table import operating_rate_mbps
 from traffic.operating_rate_table import lookup_spec
 from traffic.phy_rate_targets import compute_traffic_targets
 from traffic.trex_runner import run_trex_stats_check
+from utils.bench_config import profile_for_stand, recovery_profile_for_stand
 from utils.net_utils import normalize_ip
 from utils.performance_report import write_html_report, write_summary_csv
 from utils.profile_manager import load_profile_bundle
 from utils.recovery_manager import RecoveryManager
 from utils.regression_device_info import collect_testbed_summary
+
+
+def _apply_profile_run_defaults(args, profile_bundle) -> None:
+    """Apply profile performance/traffic.trex defaults when CLI left values at factory defaults."""
+    active = profile_bundle.active
+    perf_section = dict(active.get("performance") or {})
+    traffic_trex = dict((active.get("traffic") or {}).get("trex") or {})
+    trex_defaults = TRAFFIC_DEFAULTS["trex"]
+
+    if args.su_count == PERFORMANCE_DEFAULTS["su_count"] and perf_section.get("su_count"):
+        args.su_count = int(perf_section["su_count"])
+    if args.trex_ports == trex_defaults["ports"] and traffic_trex.get("ports"):
+        args.trex_ports = str(traffic_trex["ports"])
+    if traffic_trex.get("host"):
+        if args.profile != PERFORMANCE_DEFAULTS["profile"] or getattr(args, "stand", ""):
+            args.trex_server = str(traffic_trex["host"])
+        elif args.trex_server == trex_defaults["host"]:
+            args.trex_server = str(traffic_trex["host"])
+    if traffic_trex.get("user") and not os.getenv("TREX_USER"):
+        args.trex_user = str(traffic_trex["user"])
+    if traffic_trex.get("password") and args.trex_password == os.getenv("TREX_PASSWORD", trex_defaults["password"]):
+        if args.profile != PERFORMANCE_DEFAULTS["profile"] or getattr(args, "stand", ""):
+            args.trex_password = str(traffic_trex["password"])
+    su_servers = traffic_trex.get("su_servers") or []
+    if isinstance(su_servers, str):
+        su_servers = [su_servers]
+    for idx, attr in enumerate(
+        ("trex_server_su", "trex_server_su2", "trex_server_su3", "trex_server_su4")
+    ):
+        if idx < len(su_servers) and su_servers[idx] and not getattr(args, attr, ""):
+            setattr(args, attr, str(su_servers[idx]))
+    if args.time == PERFORMANCE_DEFAULTS["duration_s"] and perf_section.get("duration_s"):
+        args.time = int(perf_section["duration_s"])
+    if args.packet_size == PERFORMANCE_DEFAULTS["packet_size"] and perf_section.get("packet_size"):
+        args.packet_size = int(perf_section["packet_size"])
+
+
+def _resolve_stand_profile_args(args) -> None:
+    stand = str(getattr(args, "stand", "") or "").strip()
+    if not stand:
+        return
+    if args.profile == PERFORMANCE_DEFAULTS["profile"]:
+        args.profile = profile_for_stand(stand)
+    if args.recovery_profile == PERFORMANCE_DEFAULTS["recovery_profile"]:
+        args.recovery_profile = recovery_profile_for_stand(stand)
 
 
 def _parse_csv_list(raw: str) -> list[str]:
@@ -210,6 +256,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         username=args.dut_user,
         password=args.dut_password,
     )
+    _apply_profile_run_defaults(args, profile_bundle)
     recovery_manager = RecoveryManager(profile_bundle)
     dut = profile_bundle.active["dut"]
     dut_ip = _resolve_dut_ip(profile_bundle)
@@ -225,7 +272,12 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     print("UBR PERFORMANCE MATRIX")
     print("=" * 72)
     print(f"DUT IP:           {dut_ip}")
-    print(f"TRex server:      {args.trex_server}")
+    print(f"TRex BSU server:  {args.trex_server}")
+    su_hosts = [h for h in (args.trex_server_su, args.trex_server_su2, args.trex_server_su3, args.trex_server_su4) if h]
+    if su_hosts:
+        print(f"TRex SU servers:  {', '.join(su_hosts)}")
+    print(f"TRex SU count:    {args.su_count}")
+    print(f"TRex BSU ports:   {args.trex_ports}")
     print(f"Bandwidths:       {', '.join(bandwidths)}")
     print(f"MCS rates:        {', '.join(mcs_rates)}")
     print(f"Traffic profiles: {len(traffic_profiles)} per MCS/BW ({total_iterations} total runs)")
@@ -394,6 +446,10 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                 try:
                     trex_result = run_trex_stats_check(
                         trex_server=args.trex_server,
+                        trex_server_su=args.trex_server_su or None,
+                        trex_server_su2=args.trex_server_su2 or None,
+                        trex_server_su3=args.trex_server_su3 or None,
+                        trex_server_su4=args.trex_server_su4 or None,
                         trex_user=args.trex_user,
                         trex_password=args.trex_password,
                         trex_dir=args.trex_dir,
@@ -597,6 +653,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--profile", default=perf["profile"])
     parser.add_argument("--recovery-profile", default=perf["recovery_profile"])
+    parser.add_argument(
+        "--stand",
+        default="",
+        help="Lab bench id from config/benches.yaml (sets --profile when left at default)",
+    )
     parser.add_argument("--local-ip", default="", help="Override BTS (local DUT) IP from profile")
     parser.add_argument(
         "--cpe-ip",
@@ -697,6 +758,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Deploy bundled TRex client script before the first iteration",
     )
     parser.add_argument("--trex-server", default=trex["host"])
+    parser.add_argument("--trex-server-su", default="", help="Remote TRex SU server 1 (4-7 SUs)")
+    parser.add_argument("--trex-server-su2", default="", help="Remote TRex SU server 2 (8-11 SUs)")
+    parser.add_argument("--trex-server-su3", default="", help="Remote TRex SU server 3 (12-15 SUs)")
+    parser.add_argument("--trex-server-su4", default="", help="Remote TRex SU server 4 (16+ SUs)")
     parser.add_argument("--trex-user", default=trex["user"])
     parser.add_argument("--trex-password", default=os.getenv("TREX_PASSWORD", trex["password"]))
     parser.add_argument("--trex-dir", default=trex["directory"])
@@ -712,6 +777,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    _resolve_stand_profile_args(args)
     summary = run_performance_matrix(args)
     if summary.get("dry_run"):
         return 0
