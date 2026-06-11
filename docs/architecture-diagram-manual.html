@@ -703,9 +703,121 @@
             text-align: center;
             font-size: 13px;
             color: var(--text-muted);
-            margin-top: 10px;
+            margin-top: 14px;
             font-weight: 500;
+            line-height: 1.5;
         }
+
+        .suites-header {
+            text-align: center;
+            margin: 8px 0 18px;
+        }
+        .product-pair {
+            display: flex;
+            justify-content: center;
+            gap: 14px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+        .product-badge {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: white;
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            padding: 12px 20px;
+            min-width: 160px;
+            box-shadow: var(--shadow-sm);
+        }
+        .product-badge i {
+            font-size: 28px;
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .product-badge.a60 { border-color: #93c5fd; }
+        .product-badge.a60 i { background: #eff6ff; color: #1d4ed8; }
+        .product-badge.a61 { border-color: #86efac; }
+        .product-badge.a61 i { background: #f0fdf4; color: #15803d; }
+        .product-badge strong {
+            display: block;
+            font-size: 18px;
+            font-weight: 800;
+            color: var(--brand-dark-blue);
+            line-height: 1.1;
+        }
+        .product-badge span {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .suites-tagline {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .suites-grid-enhanced {
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+        }
+        .suite-card.suite-baseline { border-color: #3b82f6; border-top: 4px solid #3b82f6; }
+        .suite-card.suite-performance { border-color: #16a34a; border-top: 4px solid #16a34a; }
+        .suite-card.suite-network { border-color: #7c3aed; border-top: 4px solid #7c3aed; }
+        .suite-card.suite-wireless { border-color: #ea580c; border-top: 4px solid #ea580c; }
+        .suite-card .suite-count-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 36px;
+            height: 36px;
+            padding: 0 10px;
+            border-radius: 18px;
+            font-size: 14px;
+            font-weight: 800;
+            margin-bottom: 8px;
+        }
+        .suite-baseline .suite-count-badge { background: #dbeafe; color: #1d4ed8; }
+        .suite-performance .suite-count-badge { background: #dcfce7; color: #15803d; }
+        .suite-network .suite-count-badge { background: #ede9fe; color: #6d28d9; }
+        .suite-wireless .suite-count-badge { background: #ffedd5; color: #c2410c; }
+        .suite-card .suite-tools {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px dashed var(--border-color);
+        }
+        .suite-card .suite-tools i { margin-right: 4px; color: var(--brand-blue); }
+        .suite-sheet-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            justify-content: center;
+            margin-top: 12px;
+            max-height: 120px;
+            overflow-y: auto;
+            padding: 2px;
+        }
+        .suite-sheet-tags span {
+            font-size: 9px;
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: 4px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            color: var(--text-main);
+            line-height: 1.2;
+        }
+        .suite-baseline .suite-sheet-tags span { background: #eff6ff; border-color: #bfdbfe; }
+        .suite-performance .suite-sheet-tags span { background: #f0fdf4; border-color: #bbf7d0; }
+        .suite-network .suite-sheet-tags span { background: #f5f3ff; border-color: #ddd6fe; }
+        .suite-wireless .suite-sheet-tags span { background: #fff7ed; border-color: #fed7aa; }
 
         /* --- TRAFFIC --- */
         .traffic-grid {
@@ -1234,7 +1346,7 @@
             .workflow-row { flex-wrap: wrap; }
             .workflow-row .arrow-flex { display: none; }
             .modules-grid { grid-template-columns: repeat(2, 1fr); }
-            .suites-grid { grid-template-columns: repeat(2, 1fr); }
+            .suites-grid, .suites-grid-enhanced { grid-template-columns: 1fr; }
             .traffic-grid { grid-template-columns: repeat(2, 1fr); }
             .phy-body { grid-template-columns: 1fr; }
             .phy-dut-band { flex-wrap: wrap; gap: 10px; padding: 12px; }
@@ -1253,11 +1365,7 @@
         <h1>UBR Manual Testbed</h1>
         <p class="subtitle">Senao UBR P2MP Manual Validation — how we test, track &amp; sign off every firmware release</p>
         <div class="header-stats">
-            <span class="stat-chip"><i class="fas fa-clipboard-list"></i> Manual Test Cases</span>
             <span class="stat-chip"><i class="fas fa-microchip"></i> A60 · A61</span>
-            <span class="stat-chip"><i class="fab fa-jenkins"></i> Jenkins FW</span>
-            <span class="stat-chip"><i class="fab fa-gitlab"></i> Atlantis GitLab</span>
-            <span class="stat-chip"><i class="fas fa-leaf"></i> Kiwi TCMS</span>
         </div>
     </div>
 
@@ -1266,9 +1374,9 @@
         <div class="legend-item"><span class="legend-dot planned"></span> On roadmap</div>
     </div>
 
-    <!-- LAYER 1: Manual Test Workflow -->
+    <!-- Release Process -->
     <div class="layer layer-people">
-        <span class="layer-label">Layer 1 — Release Process (Who · What · When)</span>
+        <span class="layer-label">Release Process (Who · What · When)</span>
         <div class="workflow-rows">
 
             <div>
@@ -1278,7 +1386,7 @@
                         <span class="step-num">1</span>
                         <div class="wf-header">
                             <i class="fab fa-jenkins" style="color:#d33833;"></i>
-                            Jenkins — FW Build
+                            HQ Jenkins — FW Build
                             <span class="badge live">Live</span>
                         </div>
                         <ul class="wf-list">
@@ -1348,12 +1456,12 @@
                     </div>
                     <div class="arrow-flex"><i class="fas fa-arrow-right"></i></div>
 
-                    <div class="workflow-box live" style="border-color:var(--brand-green);">
+                    <div class="workflow-box box-planned">
                         <span class="step-num">6</span>
                         <div class="wf-header">
                             <i class="fas fa-leaf" style="color:#65a30d;"></i>
                             Kiwi TCMS
-                            <span class="badge live">Live</span>
+                            <span class="badge planned">On roadmap</span>
                         </div>
                         <ul class="wf-list">
                             <li>Update test case management</li>
@@ -1394,279 +1502,113 @@
         </div>
     </div>
 
-    <!-- LAYER 2: Manual Test Process -->
-    <div class="layer layer-core">
-        <span class="layer-label">Layer 2 — Execution Hub (Tools · Test Plan · Deliverables)</span>
-        <div class="mid-section">
-            <div class="side-col">
-                <div class="side-box green unified-side">
-                    <h3 style="color:var(--brand-green);">
-                        <i class="fas fa-plug"></i> Systems &amp; Platforms
-                        <span class="badge live">Live</span>
-                    </h3>
-
-                    <div class="artifact-section-label" style="color:#7e22ce;">Core platforms</div>
-                    <div class="artifact-grid">
-                        <div class="artifact-tile">
-                            <i class="fab fa-jenkins"></i>
-                            <div><strong>Jenkins</strong><span>FW build delivery</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fab fa-gitlab"></i>
-                            <div><strong>Atlantis</strong><span>Issue tracking · GitLab</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fas fa-leaf"></i>
-                            <div><strong>Kiwi TCMS</strong><span>Test case management</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fas fa-globe"></i>
-                            <div><strong>Device GUI</strong><span>BTS &amp; CPE access</span></div>
-                        </div>
-                    </div>
-
-                    <div class="artifact-section-label">Traffic &amp; performance</div>
-                    <div class="artifact-grid">
-                        <div class="artifact-tile">
-                            <i class="fas fa-chart-line" style="color:#166534;"></i>
-                            <div><strong>TRex</strong><span>Throughput matrix</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fas fa-signal"></i>
-                            <div><strong>Ixia</strong><span>Benchmark · RFC</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fas fa-tachometer-alt" style="color:#b91c1c;"></i>
-                            <div><strong>iPerf3</strong><span>BW · IPv4/IPv6</span></div>
-                        </div>
-                        <div class="artifact-tile planned">
-                            <i class="fas fa-water"></i>
-                            <div><strong>Ostinato</strong><span>Custom streams</span></div>
-                        </div>
-                    </div>
-
-                    <div class="artifact-section-label">Lab &amp; access tools</div>
-                    <div class="artifact-grid">
-                        <div class="artifact-tile">
-                            <i class="fas fa-terminal"></i>
-                            <div><strong>SSH / CLI</strong><span>Device commands</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fas fa-network-wired" style="color:#2563eb;"></i>
-                            <div><strong>SNMP</strong><span>Link stats</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fas fa-magnifying-glass-chart"></i>
-                            <div><strong>Wireshark</strong><span>PCAP analysis</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fas fa-sliders-h" style="color:#991b1b;"></i>
-                            <div><strong>Vaunix LDA</strong><span>RF attenuator</span></div>
-                        </div>
-                    </div>
-
-                    <div class="artifact-store" style="margin-top:auto;">
-                        <strong><i class="fas fa-users"></i> Manual Testers</strong>
-                        Execute · record · raise issues · sign-off release
-                    </div>
-                </div>
-            </div>
-
-            <div class="framework-box">
-                <div class="fw-title">UBR P2MP Manual Test Cases</div>
-                <div class="fw-subtitle">Senao A60-A61 · executed manually per test-plan sheets · tracked in Kiwi TCMS</div>
-
-                <div class="modules-grid">
-                    <div class="module-card">
-                        <h4>Pre-Test</h4>
-                        <span class="sub">Test Setup</span>
-                        <i class="fas fa-cloud-arrow-up icon" style="color:#f97316;"></i>
-                        <p>Lab &amp; device prep<br>FW upgrade CPE &amp; BTS</p>
-                    </div>
-                    <div class="module-card">
-                        <h4>Execute Plan</h4>
-                        <span class="sub">All Sheets</span>
-                        <i class="fas fa-clipboard-list icon" style="color:#16a34a;"></i>
-                        <p>Every test-plan sheet<br>Pass / fail recorded</p>
-                    </div>
-                    <div class="module-card">
-                        <h4>Defect Loop</h4>
-                        <span class="sub">Atlantis · Kiwi</span>
-                        <i class="fab fa-gitlab icon" style="color:#fc6d26;"></i>
-                        <p>Raise GitLab issues<br>Sync Kiwi TCMS</p>
-                    </div>
-                    <div class="module-card">
-                        <h4>Close Out</h4>
-                        <span class="sub">Sign-off</span>
-                        <i class="fas fa-file-export icon" style="color:#7c3aed;"></i>
-                        <p>Patch verify loop<br>SOP · MOT · reports</p>
-                    </div>
-                </div>
-
-                <div class="bootstrap-row">
-                    <div class="bootstrap-card">
-                        <h4><i class="fas fa-code-branch"></i> Issue Patch Cycle</h4>
-                        <p>Patch delivered → resolved: close issue in Atlantis · not resolved: comment, recheck, re-test affected cases in Kiwi TCMS</p>
-                    </div>
-                    <div class="bootstrap-card">
-                        <h4><i class="fas fa-stamp"></i> Build Tested &amp; Forward</h4>
-                        <p>Final review · issue monitoring until all closed · build all tested · forward SOP, MOT &amp; full test reports</p>
-                    </div>
-                </div>
-
-                <div class="fw-session">
-                    <h4>Manual Test Sheets</h4>
-                    <div class="coverage-cats">
-                        <div class="cat-chip"><span class="lbl">Test Setup</span></div>
-                        <div class="cat-chip"><span class="lbl">Sanity</span></div>
-                        <div class="cat-chip"><span class="lbl">GUI</span></div>
-                        <div class="cat-chip"><span class="lbl">Functional</span></div>
-                        <div class="cat-chip"><span class="lbl">RFC Results</span></div>
-                        <div class="cat-chip"><span class="lbl">Throughput per MCS</span></div>
-                        <div class="cat-chip"><span class="lbl">Tx Power Measurement</span></div>
-                        <div class="cat-chip"><span class="lbl">Speed_Test_Tool</span></div>
-                        <div class="cat-chip"><span class="lbl">Co-Channel Adjacent-Channel</span></div>
-                        <div class="cat-chip"><span class="lbl">VLAN</span></div>
-                        <div class="cat-chip"><span class="lbl">IPv4 &amp; IPv6</span></div>
-                        <div class="cat-chip"><span class="lbl">DHCPv4 &amp; DHCPv6</span></div>
-                        <div class="cat-chip"><span class="lbl">Jumbo Frames</span></div>
-                        <div class="cat-chip"><span class="lbl">Ethernet Test</span></div>
-                        <div class="cat-chip"><span class="lbl">Arp &amp; Bridge Table</span></div>
-                        <div class="cat-chip"><span class="lbl">Cable Length</span></div>
-                        <div class="cat-chip"><span class="lbl">QoS</span></div>
-                        <div class="cat-chip"><span class="lbl">PPPoE</span></div>
-                        <div class="cat-chip"><span class="lbl">Firewall</span></div>
-                        <div class="cat-chip"><span class="lbl">Logs</span></div>
-                        <div class="cat-chip"><span class="lbl">ATPC</span></div>
-                        <div class="cat-chip"><span class="lbl">DCS</span></div>
-                        <div class="cat-chip"><span class="lbl">DDRS</span></div>
-                        <div class="cat-chip"><span class="lbl">OFDMA</span></div>
-                        <div class="cat-chip"><span class="lbl">MU-MIMO</span></div>
-                        <div class="cat-chip"><span class="lbl">Spectrum Analyser &amp; Site Survey</span></div>
-                        <div class="cat-chip"><span class="lbl">2.4 GHz Radio</span></div>
-                        <div class="cat-chip"><span class="lbl">Wireless Security WPA2-WPA3</span></div>
-                        <div class="cat-chip"><span class="lbl">Wireless_Link_from_NMS</span></div>
-                        <div class="cat-chip"><span class="lbl">Device Management</span></div>
-                        <div class="cat-chip"><span class="lbl">User Management</span></div>
-                        <div class="cat-chip"><span class="lbl">SECURE-DUAL-BOOT</span></div>
-                        <div class="cat-chip"><span class="lbl">Process Monitoring</span></div>
-                        <div class="cat-chip"><span class="lbl">GPS</span></div>
-                        <div class="cat-chip"><span class="lbl">API</span></div>
-                        <div class="cat-chip"><span class="lbl">NMS-Client Communication</span></div>
-                        <div class="cat-chip"><span class="lbl">Cascaded BTS Deployment</span></div>
-                        <div class="cat-chip"><span class="lbl">Device_NMS_Interoperability</span></div>
-                        <div class="cat-chip"><span class="lbl">CPE-Power-On-PoE-Mechanism</span></div>
-                        <div class="cat-chip"><span class="lbl">CPE and IDU DHCP Authentication</span></div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="side-col">
-                <div class="side-box dark" style="display:flex; flex-direction:column;">
-                    <h3 style="color:var(--brand-dark-blue);">
-                        <i class="fas fa-box-archive"></i> Outputs &amp; Deliverables
-                        <span class="badge live">Live</span>
-                    </h3>
-
-                    <div class="artifact-section-label">During testing</div>
-                    <div class="artifact-grid">
-                        <div class="artifact-tile">
-                            <i class="fas fa-leaf"></i>
-                            <div><strong>Kiwi TCMS</strong><span>Case results updated</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fab fa-gitlab"></i>
-                            <div><strong>Atlantis Issues</strong><span>Raised on GitLab</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fas fa-camera"></i>
-                            <div><strong>Screenshots</strong><span>Test evidence</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fas fa-server"></i>
-                            <div><strong>Device Logs</strong><span>SSH / logread</span></div>
-                        </div>
-                    </div>
-
-                    <div class="artifact-section-label">Issue resolution</div>
-                    <div class="artifact-grid">
-                        <div class="artifact-tile">
-                            <i class="fas fa-code-branch"></i>
-                            <div><strong>Issue Patch</strong><span>Dev fix delivered</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fas fa-check-circle"></i>
-                            <div><strong>Issue Close</strong><span>Resolved &amp; verified</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fas fa-comment"></i>
-                            <div><strong>Recheck Loop</strong><span>Comment if not fixed</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fas fa-eye"></i>
-                            <div><strong>Issue Monitoring</strong><span>Track until closed</span></div>
-                        </div>
-                    </div>
-
-                    <div class="artifact-section-label">Release forward</div>
-                    <div class="artifact-grid">
-                        <div class="artifact-tile">
-                            <i class="fas fa-book"></i>
-                            <div><strong>SOP</strong><span>Standard operating procedure</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fas fa-clipboard-check"></i>
-                            <div><strong>MOT</strong><span>Method of test</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fas fa-file-alt"></i>
-                            <div><strong>Test Reports</strong><span>Full manual results</span></div>
-                        </div>
-                        <div class="artifact-tile">
-                            <i class="fas fa-stamp"></i>
-                            <div><strong>Build Tested</strong><span>Final sign-off</span></div>
-                        </div>
-                    </div>
-
-                    <div class="artifact-store">
-                        <strong><i class="fas fa-folder-open"></i> release-package/</strong>
-                        Kiwi exports · GitLab issues · SOP · MOT · test reports
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- LAYER 3: Test Plan Domains -->
+    <!-- Manual Test Case Suites -->
     <div class="layer layer-suites">
-        <span class="layer-label">Layer 3 — Manual Test Case Suites (A60-A61)</span>
-        <div class="suites-grid">
-            <div class="suite-card">
+        <span class="layer-label">Manual Test Case Suites — A60 · A61</span>
+
+        <div class="suites-header">
+            <div class="product-pair">
+                <div class="product-badge a60">
+                    <i class="fas fa-broadcast-tower"></i>
+                    <div>
+                        <strong>A60</strong>
+                        <span>BTS</span>
+                    </div>
+                </div>
+                <div class="product-badge a61">
+                    <i class="fas fa-satellite-dish"></i>
+                    <div>
+                        <strong>A61</strong>
+                        <span>CPE</span>
+                    </div>
+                </div>
+            </div>
+            <p class="suites-tagline">Executed manually every release · tracked in Kiwi TCMS</p>
+        </div>
+
+        <div class="suites-grid suites-grid-enhanced">
+            <div class="suite-card suite-baseline">
                 <div class="suite-icon"><i class="fas fa-check-double"></i></div>
                 <div class="suite-label">Baseline</div>
                 <h4>Sanity · GUI · Functional</h4>
-                <p>Test Setup · Sanity · GUI · Functional · Tx Power Measurement — device access, web UI &amp; baseline checks</p>
+                <p>Device access, web UI &amp; baseline validation before deeper testing</p>
+                <div class="suite-sheet-tags">
+                    <span>Test Setup</span>
+                    <span>Sanity</span>
+                    <span>GUI</span>
+                    <span>Functional</span>
+                    <span>Tx Power Measurement</span>
+                </div>
+                <div class="suite-tools"><i class="fas fa-globe"></i> Web GUI · SSH / CLI</div>
             </div>
-            <div class="suite-card">
+
+            <div class="suite-card suite-performance">
                 <div class="suite-icon"><i class="fas fa-tachometer-alt"></i></div>
                 <div class="suite-label">Performance</div>
                 <h4>Throughput · RFC · Speed</h4>
-                <p>Throughput per MCS · RFC Results · Speed_Test_Tool · Co-Channel Adjacent-Channel — TRex · Ixia · iPerf3</p>
+                <p>Traffic generation, benchmark runs &amp; MCS throughput matrix</p>
+                <div class="suite-sheet-tags">
+                    <span>Throughput per MCS</span>
+                    <span>RFC Results</span>
+                    <span>Speed_Test_Tool</span>
+                    <span>Co-Channel Adjacent-Channel</span>
+                </div>
+                <div class="suite-tools"><i class="fas fa-chart-line"></i> TRex · Ixia · iPerf3</div>
             </div>
-            <div class="suite-card">
+
+            <div class="suite-card suite-network">
                 <div class="suite-icon"><i class="fas fa-network-wired"></i></div>
                 <div class="suite-label">Network</div>
                 <h4>L2 · Protocol · Ethernet</h4>
-                <p>VLAN · IPv4 &amp; IPv6 · DHCPv4 &amp; DHCPv6 · Jumbo Frames · Ethernet Test · QoS · PPPoE · Firewall · Arp &amp; Bridge · Cable Length · Logs</p>
+                <p>Layer-2 switching, IP stacks, DHCP, QoS &amp; edge protocols</p>
+                <div class="suite-sheet-tags">
+                    <span>VLAN</span>
+                    <span>IPv4 &amp; IPv6</span>
+                    <span>DHCPv4 &amp; DHCPv6</span>
+                    <span>Jumbo Frames</span>
+                    <span>Ethernet Test</span>
+                    <span>Arp &amp; Bridge Table</span>
+                    <span>Cable Length</span>
+                    <span>QoS</span>
+                    <span>PPPoE</span>
+                    <span>Firewall</span>
+                    <span>Logs</span>
+                </div>
+                <div class="suite-tools"><i class="fas fa-magnifying-glass-chart"></i> Wireshark</div>
             </div>
-            <div class="suite-card">
+
+            <div class="suite-card suite-wireless">
                 <div class="suite-icon"><i class="fas fa-broadcast-tower"></i></div>
                 <div class="suite-label">Wireless &amp; NMS</div>
                 <h4>RF · Device · Management</h4>
-                <p>ATPC · DCS · DDRS · OFDMA · MU-MIMO · Spectrum Analyser · 2.4 GHz Radio · WPA2-WPA3 · Device_NMS_Interoperability · Cascaded BTS · API · GPS · PoE · DHCP Auth · NMS-Client · more</p>
+                <p>Radio features, security, NMS integration &amp; device management</p>
+                <div class="suite-sheet-tags">
+                    <span>ATPC</span>
+                    <span>DCS</span>
+                    <span>DDRS</span>
+                    <span>OFDMA</span>
+                    <span>MU-MIMO</span>
+                    <span>Spectrum Analyser &amp; Site Survey</span>
+                    <span>2.4 GHz Radio</span>
+                    <span>Wireless Security WPA2-WPA3</span>
+                    <span>Wireless_Link_from_NMS</span>
+                    <span>Device Management</span>
+                    <span>User Management</span>
+                    <span>SECURE-DUAL-BOOT</span>
+                    <span>Process Monitoring</span>
+                    <span>GPS</span>
+                    <span>API</span>
+                    <span>NMS-Client Communication</span>
+                    <span>Cascaded BTS Deployment</span>
+                    <span>Device_NMS_Interoperability</span>
+                    <span>CPE-Power-On-PoE-Mechanism</span>
+                    <span>CPE and IDU DHCP Authentication</span>
+                </div>
+                <div class="suite-tools"><i class="fas fa-sliders-h"></i> Vaunix LDA · Device GUI</div>
             </div>
         </div>
-        <p class="coverage-subtitle">These are the manual test areas we execute on every release — results logged in Kiwi TCMS · defects in Atlantis GitLab · sign-off with SOP, MOT &amp; test reports</p>
+
+        <p class="coverage-subtitle">Every sheet executed on both A60 and A61 each release — pass/fail logged in Kiwi TCMS · defects raised in Atlantis GitLab · final sign-off with SOP, MOT &amp; test reports</p>
     </div>
 
     <!-- Tools & stack — single line -->
@@ -1682,8 +1624,6 @@
         <span class="tech-sep">·</span>
         <span class="tech-item"><i class="fas fa-terminal" style="color:#334155;"></i> SSH / CLI</span>
         <span class="tech-sep">·</span>
-        <span class="tech-item"><i class="fas fa-network-wired" style="color:#2563eb;"></i> SNMP</span>
-        <span class="tech-sep">·</span>
         <span class="tech-item" style="color:#166534;">TRex</span>
         <span class="tech-sep">·</span>
         <span class="tech-item">Ixia</span>
@@ -1691,8 +1631,6 @@
         <span class="tech-item" style="color:#b91c1c;">iPerf3</span>
         <span class="tech-sep">·</span>
         <span class="tech-item">Ostinato</span>
-        <span class="tech-sep">·</span>
-        <span class="tech-item"><i class="fas fa-magnifying-glass-chart" style="color:#64748b;"></i> Wireshark</span>
         <span class="tech-sep">·</span>
         <span class="tech-item"><i class="fas fa-sliders-h" style="color:#991b1b;"></i> Vaunix LDA</span>
     </div>

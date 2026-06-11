@@ -14,7 +14,7 @@ from openpyxl.utils import get_column_letter
 
 ROOT = Path(__file__).resolve().parents[1]
 PLAN_PATH = ROOT / "Senao UBR P2MP Test Result_May18.xlsx"
-OUTPUT_PATH = ROOT / "reports" / "artifacts" / "Automation_Coverage_May18.xlsx"
+OUTPUT_PATH = ROOT / "reports" / "Automation_Coverage_May18.xlsx"
 
 TC_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*_\d+$")
 CASE_ID_RE = re.compile(r"^[A-Z][A-Z0-9_]*_\d+$")
@@ -22,13 +22,8 @@ CASE_ID_RE = re.compile(r"^[A-Z][A-Z0-9_]*_\d+$")
 JENKINS_JOBS = {
     "gui": {
         "pipeline_file": "jenkins/jenkins-AutomationFramework",
-        "job_name": "jenkins-AutomationFramework (TEST_MARKERS=GUI)",
+        "job_name": "jenkins-AutomationFramework (UBR GUI Test Cases)",
         "default_pytest_path": "tests/GUI/",
-    },
-    "ip": {
-        "pipeline_file": "jenkins/jenkins-AutomationFramework",
-        "job_name": "jenkins-AutomationFramework (TEST_MARKERS=IP)",
-        "default_pytest_path": "tests/IP/",
     },
     "jumbo": {
         "pipeline_file": "jenkins/jenkins-AutomationFramework",
@@ -88,24 +83,15 @@ def _jenkins_info(case_id: str, rel_test_file: str) -> dict[str, str]:
         job = JENKINS_JOBS["regression"]
     elif case_id.startswith("JMB_"):
         job = JENKINS_JOBS["jumbo"]
-    elif case_id.startswith("IP_"):
-        job = JENKINS_JOBS["ip"]
     else:
         job = JENKINS_JOBS["gui"]
     pytest_path = job["default_pytest_path"]
     if case_id.startswith("GUI_") and not case_id.startswith("REG_"):
         pytest_path = f"tests/GUI/  # file: {rel_test_file}"
-    elif case_id.startswith("IP_"):
-        pytest_path = f"tests/IP/  # file: {rel_test_file}"
     cmd = (
         f"PYTHONPATH=. pytest {job['default_pytest_path']} -v -k \"{case_id}\" "
         f"--profile default"
     )
-    if case_id.startswith("IP_"):
-        cmd = (
-            f"PYTHONPATH=. pytest tests/IP/ -m IP -v -k \"{case_id}\" "
-            f"--allow-ip-suite --profile ipv6_quickrun"
-        )
     if case_id.startswith("JMB_") and case_id in ("JMB_07", "JMB_10"):
         cmd += " --allow-destructive-jumbo"
     if case_id.startswith("REG_"):
@@ -295,9 +281,13 @@ def classify_case(case: dict, automated_ids: set[str]) -> tuple[str, str, str]:
         return "Not automated", "Medium (feature module)", "1–3 days"
 
     if cid.startswith("ARPBRIDGE"):
-        if cid.endswith("_01") or cid.endswith("_02"):
-            return "Partial coverage", "Partial (GUI_105–108 tables)", "0.5 day"
-        return "Not automated", "Manual / no GUI", "N/A"
+        if cid in automated_ids:
+            return "Automated", "tests/ArpBridgeTable/", "done"
+        if cid in ("ARPBRIDGE_01", "ARPBRIDGE_06", "ARPBRIDGE_08", "ARPBRIDGE_09", "ARPBRIDGE_10", "ARPBRIDGE_13", "ARPBRIDGE_14"):
+            return "Automated", "tests/ArpBridgeTable/Arp&BridgeTable.py", "done"
+        if cid in ("ARPBRIDGE_02", "ARPBRIDGE_07"):
+            return "Partial coverage", "Partial (GUI_107 ARP table)", "0.5 day"
+        return "Not automated", "Manual / lab injection", "1–2 days"
 
     if sheet in ("Sanity", "Ethernet_Test", "Speed Test"):
         return "Not automated", "Medium (mixed sanity)", "1–2 days"
