@@ -707,10 +707,16 @@ async def assert_gui_107_arp_table(
         await cpe_page.close()
 
 
-async def _assert_gui_108_on_device(gui_page, root_ssh, *, device_label: str = "BTS"):
-    """GUI_108: ARP Clear reduces entries; Refresh restores active neighbors."""
-    check.is_true(root_ssh is not None, f"GUI_108 [{device_label}]: SSH required")
-    _log(f"GUI_108 [{device_label}]: ARP Refresh and Clear")
+async def _assert_gui_108_on_device(
+    gui_page,
+    root_ssh,
+    *,
+    device_label: str = "BTS",
+    case_label: str = "GUI_108",
+):
+    """ARP Clear reduces entries; Refresh restores active neighbors."""
+    check.is_true(root_ssh is not None, f"{case_label} [{device_label}]: SSH required")
+    _log(f"{case_label} [{device_label}]: ARP Refresh and Clear")
     await open_learn_table_arp(gui_page)
 
     await gui_page.locator(LearnTableLocators.REFRESH_BUTTON).click()
@@ -748,10 +754,10 @@ async def _assert_gui_108_on_device(gui_page, root_ssh, *, device_label: str = "
             "PASS" if after_refresh else "FAIL",
         ),
     ]
-    print_section(f"GUI_108 [{device_label}] — ARP Refresh / Clear")
+    print_section(f"{case_label} [{device_label}] — ARP Refresh / Clear")
     print_comparison_table(rows)
     for _, _, _, status in rows:
-        check.equal(status, "PASS", "GUI_108 table contains a failed row")
+        check.equal(status, "PASS", f"{case_label} table contains a failed row")
 
     neigh_raw = await _send_ssh(root_ssh, RootCommands.GET_ARP_TABLE)
     backend = _parse_ip_neigh(neigh_raw)
@@ -761,7 +767,7 @@ async def _assert_gui_108_on_device(gui_page, root_ssh, *, device_label: str = "
         after_refresh or backend,
         f"ARP not restored after Refresh (gui={len(after_refresh)}, backend={len(backend)})",
     )
-    _log(f"GUI_108 [{device_label}] completed")
+    _log(f"{case_label} [{device_label}] completed")
     return {
         "rows_before": len(before),
         "rows_after_refresh": len(after_refresh),
@@ -775,17 +781,20 @@ async def assert_gui_108_arp_refresh_clear(
     *,
     bsu_ip: str | None = None,
     device_creds: dict | None = None,
+    case_label: str = "GUI_108",
 ):
-    bts_result = await _assert_gui_108_on_device(gui_page, root_ssh, device_label="BTS")
+    bts_result = await _assert_gui_108_on_device(
+        gui_page, root_ssh, device_label="BTS", case_label=case_label
+    )
 
     cpe_ip = cpe_ips[0] if cpe_ips else ""
     if not cpe_ip:
         return
 
-    check.is_true(bool(bsu_ip), "GUI_108: BTS IP is required for CPE-side validation")
-    check.is_true(bool(device_creds), "GUI_108: device credentials are required for CPE validation")
+    check.is_true(bool(bsu_ip), f"{case_label}: BTS IP is required for CPE-side validation")
+    check.is_true(bool(device_creds), f"{case_label}: device credentials are required for CPE validation")
     _log(
-        f"GUI_108: saved BTS ARP clear snapshot "
+        f"{case_label}: saved BTS ARP clear snapshot "
         f"(rows {bts_result['rows_before']} -> {bts_result['rows_after_refresh']}); "
         f"logging into CPE {cpe_ip} for the same validation"
     )
@@ -793,7 +802,9 @@ async def assert_gui_108_arp_refresh_clear(
     cpe_page = await open_cpe_gui_session(gui_page.context, cpe_ip, device_creds)
     cpe_root_ssh = await _open_root_ssh_for_host(cpe_ip, device_creds)
     try:
-        await _assert_gui_108_on_device(cpe_page, cpe_root_ssh, device_label="CPE")
+        await _assert_gui_108_on_device(
+            cpe_page, cpe_root_ssh, device_label="CPE", case_label=case_label
+        )
     finally:
         await cpe_root_ssh.close()
         await cpe_page.close()

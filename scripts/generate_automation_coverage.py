@@ -283,7 +283,7 @@ def classify_case(case: dict, automated_ids: set[str]) -> tuple[str, str, str]:
     if cid.startswith("ARPBRIDGE"):
         if cid in automated_ids:
             return "Automated", "tests/ArpBridgeTable/", "done"
-        if cid in ("ARPBRIDGE_01", "ARPBRIDGE_06", "ARPBRIDGE_08", "ARPBRIDGE_09", "ARPBRIDGE_10", "ARPBRIDGE_13"):
+        if cid in ("ARPBRIDGE_01", "ARPBRIDGE_06", "ARPBRIDGE_08", "ARPBRIDGE_09", "ARPBRIDGE_10", "ARPBRIDGE_13", "ARPBRIDGE_14"):
             return "Automated", "tests/ArpBridgeTable/Arp&BridgeTable.py", "done"
         if cid in ("ARPBRIDGE_02", "ARPBRIDGE_07"):
             return "Partial coverage", "Partial (GUI_107 ARP table)", "0.5 day"

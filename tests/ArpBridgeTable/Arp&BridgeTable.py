@@ -8,6 +8,8 @@ from utils.arp_bridge_table_flows import (
     assert_arpbridge_09_bridge_traffic,
     assert_arpbridge_10_mac_learning,
     assert_arpbridge_11_correct_port_forwarding,
+    assert_arpbridge_13_refresh_clear,
+    assert_arpbridge_14_bridge_table_aging,
 )
 
 pytestmark = [pytest.mark.sanity, pytest.mark.ArpBridgeTable]
@@ -100,12 +102,37 @@ async def test_arpbridge_10_mac_learning_ipv4(root_ssh, cpe_ips, bsu_ip, device_
 @pytest.mark.ARPBRIDGE_11
 @pytest.mark.ArpBridgeTable
 async def test_arpbridge_11_correct_port_forwarding_ipv4(root_ssh, cpe_ips, bsu_ip, device_creds):
-    """
-    ARPBRIDGE_11 — Packet Forwarding to Correct Port (Functional, BTS & CPE).
 
-    BTS must stay at --local-ip (.10); CPE at --remote-ip (.11). CPE pass is read-only.
-    """
     await assert_arpbridge_11_correct_port_forwarding(
+        root_ssh,
+        cpe_ips,
+        bsu_ip=bsu_ip,
+        device_creds=device_creds,
+    )
+
+
+@pytest.mark.order(13)
+@pytest.mark.asyncio(scope="session")
+@pytest.mark.ARPBRIDGE_13
+@pytest.mark.ArpBridgeTable
+async def test_arpbridge_13_refresh_clear_ipv4(gui_page, root_ssh, cpe_ips, bsu_ip, device_creds):
+
+    await assert_arpbridge_13_refresh_clear(
+        gui_page,
+        root_ssh,
+        cpe_ips,
+        bsu_ip=bsu_ip,
+        device_creds=device_creds,
+    )
+
+
+@pytest.mark.order(14)
+@pytest.mark.asyncio(scope="session")
+@pytest.mark.ARPBRIDGE_14
+@pytest.mark.ArpBridgeTable
+async def test_arpbridge_14_bridge_table_aging_ipv4(root_ssh, cpe_ips, bsu_ip, device_creds):
+
+    await assert_arpbridge_14_bridge_table_aging(
         root_ssh,
         cpe_ips,
         bsu_ip=bsu_ip,
