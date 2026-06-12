@@ -109,7 +109,16 @@ def _render_result_row(record: dict[str, Any]) -> str:
         row_class = "rate-mismatch" if row_class else "run-error"
 
     modulation = spec.get("modulation") or "—"
-    data_rate_cell = f"{expected_rate:.0f}" if expected_rate > 0 else "—"
+    if expected_rate > 0:
+        if link.get("operating_rate_mismatch"):
+            data_rate_cell = (
+                f"<span class='mark fail'>{expected_rate:.0f}</span>"
+                f"<br/><span class='muted'>data rate mismatch</span>"
+            )
+        else:
+            data_rate_cell = f"{expected_rate:.0f}"
+    else:
+        data_rate_cell = "—"
 
     return f"""
         <tr class="{row_class}">
@@ -384,8 +393,9 @@ def write_html_report(
         <span class="tput-warn">orange 50–70%</span>,
         <span class="tput-bad">red &lt;50%</span>,
         <span class="tput-zero">zero = no traffic</span>.
-        <strong>Data rate</strong> is from the spec sheet; <strong>Tx/Rx</strong> are SNMP operating rates (green = match).
-        Pink rows: operating-rate mismatch or run error (no TRex result).
+        <strong>Data rate</strong> is from the spec sheet; <strong>Tx/Rx</strong> are SNMP operating rates (green = match, red = mismatch).
+        Pink rows highlight data rate mismatch; throughput pass/fail is based on TRex unless
+        <code>--fail-on-rate-mismatch</code> is enabled. Run errors (e.g. TRex ports down) also use pink rows.
       </p>
     </section>
   </div>

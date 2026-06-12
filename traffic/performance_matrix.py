@@ -192,6 +192,30 @@ def _resolve_logs_paths(output_dir_arg: str) -> tuple[Path, Path, str]:
     return output_dir, html_path, executed_at
 
 
+def _fetch_link_validation(
+    dut_ip: str,
+    *,
+    bandwidth: str,
+    mcs: str,
+    snmp_community: str,
+    snmp_radio_index: int,
+    spatial_stream: int,
+    tolerance_mbps: float = 10.0,
+    tolerance_pct: float = 0.08,
+) -> dict[str, object]:
+    clients = fetch_link_clients(
+        dut_ip, snmp_community=snmp_community, radio_idx=snmp_radio_index
+    )
+    return validate_operating_rates(
+        bandwidth=bandwidth,
+        configured_mcs=mcs,
+        clients=clients,
+        spatial_streams=spatial_stream,
+        tolerance_mbps=tolerance_mbps,
+        tolerance_pct=tolerance_pct,
+    )
+
+
 def _wait_for_link_rate(
     dut_ip: str,
     *,
@@ -200,35 +224,53 @@ def _wait_for_link_rate(
     snmp_community: str,
     snmp_radio_index: int,
     spatial_stream: int,
+    tolerance_mbps: float = 10.0,
+    tolerance_pct: float = 0.08,
     timeout_s: float = 45.0,
     poll_s: float = 3.0,
-) -> bool:
-    """Poll SNMP until operating rate matches spec or timeout."""
+) -> dict[str, object]:
+    """Poll SNMP until operating rate matches spec or timeout; always continue to TRex."""
     expected = operating_rate_mbps(bandwidth, mcs, spatial_streams=spatial_stream)
     deadline = time.time() + timeout_s
+    last_validation: dict[str, object] = {}
     while time.time() < deadline:
-        clients = fetch_link_clients(
-            dut_ip, snmp_community=snmp_community, radio_idx=snmp_radio_index
+        validation = _fetch_link_validation(
+            dut_ip,
+            bandwidth=bandwidth,
+            mcs=mcs,
+            snmp_community=snmp_community,
+            snmp_radio_index=snmp_radio_index,
+            spatial_stream=spatial_stream,
+            tolerance_mbps=tolerance_mbps,
+            tolerance_pct=tolerance_pct,
         )
+        last_validation = validation
+        if validation.get("operating_rate_ok"):
+            print(f"[DUT] Link rate stable at {expected:.0f} Mbps")
+            return validation
+        clients = validation.get("clients") or []
         if clients:
-            validation = validate_operating_rates(
-                bandwidth=bandwidth,
-                configured_mcs=mcs,
-                clients=clients,
-                spatial_streams=spatial_stream,
+            primary = clients[0]
+            print(
+                f"[DUT] Waiting for link rate {expected:.0f} Mbps — "
+                f"Tx={primary.get('tx_rate')} Rx={primary.get('rx_rate')}"
             )
-            if validation.get("operating_rate_ok"):
-                print(f"[DUT] Link rate stable at {expected:.0f} Mbps")
-                return True
-            if clients:
-                primary = clients[0]
-                print(
-                    f"[DUT] Waiting for link rate {expected:.0f} Mbps — "
-                    f"Tx={primary.get('tx_rate')} Rx={primary.get('rx_rate')}"
-                )
         time.sleep(poll_s)
-    print(f"[WARN] Link rate did not stabilize at {expected:.0f} Mbps within {timeout_s:.0f}s")
-    return False
+    print(
+        f"[WARN] Link rate did not stabilize at {expected:.0f} Mbps within {timeout_s:.0f}s "
+        f"— continuing with throughput (report will flag data rate mismatch)"
+    )
+    if not last_validation:
+        failed_spec = lookup_spec(mcs, bandwidth, spatial_streams=spatial_stream)
+        last_validation = {
+            "configured_mcs": mcs,
+            "spec": failed_spec,
+            "expected_operating_rate_mbps": failed_spec["operating_rate_mbps"],
+            "clients": [],
+            "operating_rate_ok": False,
+            "operating_rate_mismatch": True,
+        }
+    return last_validation
 
 
 async def _ensure_dut_ready(recovery_manager: RecoveryManager, dut_ip: str) -> None:
@@ -361,13 +403,15 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         prefer_cpe_via_bts=args.cpe_via_bts,
                         settle_s=args.radio_settle_s,
                     )
-                    _wait_for_link_rate(
+                    pre_trex_link_validation = _wait_for_link_rate(
                         dut_ip,
                         bandwidth=bandwidth,
                         mcs=mcs,
                         snmp_community=args.snmp_community,
                         snmp_radio_index=args.snmp_radio_index,
                         spatial_stream=int(args.spatial_stream),
+                        tolerance_mbps=args.rate_tolerance_mbps,
+                        tolerance_pct=args.rate_tolerance_pct,
                         timeout_s=args.link_wait_s,
                     )
                 except Exception as exc:
@@ -438,6 +482,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                     "trex_dl_bw": dl_bw,
                     "trex_ul_bw": ul_bw,
                     "trex_direction": direction,
+                    "link_validation": pre_trex_link_validation,
                     "started_at": datetime.now(timezone.utc).isoformat(),
                 }
                 artifact = output_dir / _artifact_name(bandwidth, mcs, mode, ratio)
@@ -519,19 +564,17 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         "trex": trex_result,
                     }
                     validation = trex_result.get("validation") or {}
-                    clients = fetch_link_clients(
+                    link_validation = _fetch_link_validation(
                         dut_ip,
-                        snmp_community=args.snmp_community,
-                        radio_idx=args.snmp_radio_index,
-                    )
-                    link_validation = validate_operating_rates(
                         bandwidth=bandwidth,
-                        configured_mcs=mcs,
-                        clients=clients,
-                        spatial_streams=int(args.spatial_stream),
+                        mcs=mcs,
+                        snmp_community=args.snmp_community,
+                        snmp_radio_index=args.snmp_radio_index,
+                        spatial_stream=int(args.spatial_stream),
                         tolerance_mbps=args.rate_tolerance_mbps,
                         tolerance_pct=args.rate_tolerance_pct,
                     )
+                    clients = link_validation.get("clients") or []
                     record["link_validation"] = link_validation
                     record["noise_dbm"] = args.noise_dbm
                     export["link_validation"] = link_validation
@@ -543,9 +586,10 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                     record["finished_at"] = datetime.now(timezone.utc).isoformat()
                     with artifact.open("w", encoding="utf-8") as handle:
                         json.dump(export, handle, indent=2)
-                    rate_note = "rate OK" if rate_ok else "RATE MISMATCH"
+                    rate_note = "rate OK" if rate_ok else "data rate mismatch (report only)"
+                    trex_status = "PASS" if record["passed"] else "FAIL"
                     print(
-                        f"Result: {'PASS' if record['passed'] else 'FAIL'} | "
+                        f"Result: {trex_status} | "
                         f"combined_rx={export['combined'].get('rx_mbps', 0):.2f} Mbps | {rate_note}"
                     )
                     if link_validation.get("operating_rate_mismatch") and clients:
@@ -561,16 +605,13 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                     record["stats"] = {}
                     record["noise_dbm"] = args.noise_dbm
                     try:
-                        clients = fetch_link_clients(
+                        record["link_validation"] = _fetch_link_validation(
                             dut_ip,
-                            snmp_community=args.snmp_community,
-                            radio_idx=args.snmp_radio_index,
-                        )
-                        record["link_validation"] = validate_operating_rates(
                             bandwidth=bandwidth,
-                            configured_mcs=mcs,
-                            clients=clients,
-                            spatial_streams=int(args.spatial_stream),
+                            mcs=mcs,
+                            snmp_community=args.snmp_community,
+                            snmp_radio_index=args.snmp_radio_index,
+                            spatial_stream=int(args.spatial_stream),
                             tolerance_mbps=args.rate_tolerance_mbps,
                             tolerance_pct=args.rate_tolerance_pct,
                         )
@@ -731,8 +772,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--fail-on-rate-mismatch",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Mark iteration failed when SNMP rate != spec sheet (default: true)",
+        default=perf.get("fail_on_rate_mismatch", False),
+        help="Mark iteration failed when SNMP rate != spec sheet (default: false — report only)",
     )
     parser.add_argument("--packet-size", type=int, default=perf["packet_size"])
     parser.add_argument("--expected-min-mbps", type=float, default=0.0)

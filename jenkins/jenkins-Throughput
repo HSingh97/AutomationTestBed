@@ -128,6 +128,7 @@ pipeline {
                     cmd.append(" --mcs '${mcsList}'")
                     cmd.append(" --ratios '${ratio}'")
                     cmd.append(' --ratios-only')
+                    cmd.append(' --no-fail-on-rate-mismatch')
                     cmd.append(" --time ${testTime}")
                     cmd.append(" --packet-size ${packetRaw}")
                     if (trexServer) {

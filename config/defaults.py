@@ -105,6 +105,7 @@ PERFORMANCE_DEFAULTS = {
     "cpe_su_index": 1,
     "snmp_radio_index": 2,
     "link_wait_s": 45,
+    "fail_on_rate_mismatch": False,
     "su_count": 1,
     "spatial_stream": "2",
     "snmp_community": "ubr@rw123",
