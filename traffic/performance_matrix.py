@@ -671,15 +671,9 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     csv_path = output_dir / "performance_matrix_summary.csv"
     run_meta = {
         "executed_at": executed_at,
-        "DUT IP": dut_ip,
-        "TRex Server": args.trex_server,
-        "Profile": args.profile,
         "Bandwidths": ", ".join(bandwidths),
         "MCS Rates": ", ".join(mcs_rates),
         "Ratios": ", ".join(bidir_ratios),
-        "Target Mode": "dynamic" if args.use_dynamic_target else "static",
-        "Efficiency Factor": str(args.efficiency),
-        "Target Ceiling Mbps": str(args.target),
         "Duration (s)": str(args.time),
     }
     write_summary_csv(records, csv_path)

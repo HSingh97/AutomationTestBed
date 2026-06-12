@@ -292,13 +292,9 @@ def write_html_report(
 
     meta_lines = []
     for key in (
-        "TRex Server",
-        "Profile",
         "Bandwidths",
         "MCS Rates",
         "Ratios",
-        "Target Mode",
-        "Efficiency Factor",
         "Duration (s)",
     ):
         if key in run_meta:
