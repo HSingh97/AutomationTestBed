@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import os
 import re
@@ -41,6 +42,7 @@ SUMMARY_ROW_RE = re.compile(
 )
 CONSOLIDATED_ROW_RE = re.compile(r"^\|\s*(?P<pkt_size>\d+)\s*\|\s*(?P<bidi_mbps>[\d,.]+)\s*\|$")
 TREX_PORT_LINK_RE = re.compile(r"\(link\s+(UP|DOWN)\)\s*(\d+)", re.IGNORECASE)
+TREX_PORT_HEADER_RE = re.compile(r"^\s*port\s*:\s*(\d+)\s*$", re.IGNORECASE)
 
 
 class _OutputCollector:
@@ -165,7 +167,7 @@ def _start_trex_server(
         text=True,
         bufsize=1,
     )
-    collector = _OutputCollector(process, echo=True, prefix="[TRex server] ")
+    collector = _OutputCollector(process, echo=False, prefix="[TRex server] ")
     collector.start()
     return process, collector
 
@@ -226,6 +228,23 @@ def parse_trex_server_port_states(server_output: str) -> dict[int, str]:
                 port = int(cell)
                 if port not in states:
                     states[port] = "UP"
+
+    # Startup banner: "port : 0" followed by "link : Link Up ..."
+    current_port: int | None = None
+    for line in clean.splitlines():
+        port_match = TREX_PORT_HEADER_RE.match(line.strip())
+        if port_match:
+            current_port = int(port_match.group(1))
+            continue
+        if current_port is None:
+            continue
+        lower = line.lower()
+        if "link up" in lower:
+            states[current_port] = "UP"
+            current_port = None
+        elif "link down" in lower:
+            states[current_port] = "DOWN"
+            current_port = None
     return states
 
 
@@ -236,6 +255,7 @@ def _check_trex_ports_via_api(
     trex_password: str,
     trex_pythonpath: str,
     trex_ports: str,
+    suppress_warnings: bool = False,
 ) -> tuple[dict[int, str], str]:
     ports = [int(item.strip()) for item in trex_ports.split(",") if item.strip()]
     port_literal = ", ".join(str(port) for port in ports)
@@ -247,14 +267,21 @@ def _check_trex_ports_via_api(
             "import sys",
             "from trex.stl.api import STLClient",
             f"ports = [{port_literal}]",
+            "def _link_state(info):",
+            "    if isinstance(info, list):",
+            "        info = info[0] if info else {}",
+            "    if isinstance(info, dict):",
+            "        text = str(info.get('link', info.get('status', 'down'))).upper()",
+            "    else:",
+            "        text = str(info).upper()",
+            "    return 'UP' if 'UP' in text else 'DOWN'",
             "states = {}",
             "client = STLClient(server='127.0.0.1')",
             "try:",
             "    client.connect()",
             "    for port in ports:",
             "        info = client.get_port_info(port)",
-            "        link = str(info.get('link', 'down')).upper()",
-            "        states[port] = 'UP' if 'UP' in link else 'DOWN'",
+            "        states[port] = _link_state(info)",
             "finally:",
             "    try:",
             "        client.disconnect()",
@@ -279,12 +306,12 @@ def _check_trex_ports_via_api(
         parts = line.strip().split()
         if len(parts) >= 3 and parts[0] == "TREX_PORT_STATUS":
             states[int(parts[1])] = parts[2].upper()
-    if not states and output.strip():
+    if not states and output.strip() and not suppress_warnings:
         print(
             f"[TRex][WARN] Port API probe returned no TREX_PORT_STATUS lines "
             f"(exit {result.returncode}):\n{output.strip()}"
         )
-    elif not states:
+    elif not states and not suppress_warnings:
         print(
             f"[TRex][WARN] Port API probe returned no data (exit {result.returncode}). "
             "Is the TRex server RPC listening on 127.0.0.1?"
@@ -300,6 +327,7 @@ def wait_for_trex_ports_link_up(
     trex_pythonpath: str,
     trex_ports: str,
     server_output: str = "",
+    server_output_getter: Callable[[], str] | None = None,
     timeout_s: float = 90.0,
     poll_s: float = 3.0,
 ) -> None:
@@ -308,11 +336,12 @@ def wait_for_trex_ports_link_up(
     deadline = time.time() + timeout_s
     attempt = 0
     last_api_debug = ""
-    parsed_server_output = server_output
+    api_warned = False
 
     while time.time() < deadline:
         attempt += 1
-        states = parse_trex_server_port_states(parsed_server_output)
+        current_output = server_output_getter() if server_output_getter else server_output
+        states = parse_trex_server_port_states(current_output)
         if not all(port in states for port in required):
             api_states, last_api_debug = _check_trex_ports_via_api(
                 trex_server=trex_server,
@@ -320,7 +349,10 @@ def wait_for_trex_ports_link_up(
                 trex_password=trex_password,
                 trex_pythonpath=trex_pythonpath,
                 trex_ports=trex_ports,
+                suppress_warnings=api_warned,
             )
+            if not api_states and last_api_debug.strip():
+                api_warned = True
             states.update(api_states)
 
         readable = ", ".join(f"{port}={states.get(port, 'UNKNOWN')}" for port in required)
@@ -329,8 +361,8 @@ def wait_for_trex_ports_link_up(
             print(f"[TRex] Port link check passed: {readable}")
             return
 
-        print(f"[TRex] Waiting for port link UP (attempt {attempt}): {readable}")
-        parsed_server_output = ""
+        if attempt == 1 or attempt % 5 == 0:
+            print(f"[TRex] Waiting for port link UP (attempt {attempt}): {readable}")
         time.sleep(poll_s)
 
     detail = ""
@@ -809,6 +841,7 @@ def run_trex_stats_check(
                 trex_pythonpath=trex_pythonpath,
                 trex_ports=trex_ports,
                 server_output=server_collector.text(),
+                server_output_getter=server_collector.text,
                 timeout_s=max(90.0, float(trex_server_startup_s) + 60.0),
             )
 
@@ -830,7 +863,7 @@ def run_trex_stats_check(
             text=True,
             bufsize=1,
         )
-        client_collector = _OutputCollector(client_process, echo=True, prefix="[TRex client] ")
+        client_collector = _OutputCollector(client_process, echo=False, prefix="[TRex client] ")
         client_collector.start()
 
         deadline = time.time() + max(duration_s + 120, 180)
