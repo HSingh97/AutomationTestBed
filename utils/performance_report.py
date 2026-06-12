@@ -105,10 +105,16 @@ def _render_result_row(record: dict[str, Any]) -> str:
     row_class = ""
     if link.get("operating_rate_mismatch"):
         row_class = "rate-mismatch"
-    if record.get("error"):
+    error_text = str(record.get("error") or "")
+    if error_text:
         row_class = "rate-mismatch" if row_class else "run-error"
 
+    configured_mcs = str(record.get("mcs") or spec.get("mcs") or "—")
     modulation = spec.get("modulation") or "—"
+    if configured_mcs != "—" and modulation != "—":
+        modulation_cell = f"{escape(configured_mcs)}<br/><span class='muted'>{escape(modulation)}</span>"
+    else:
+        modulation_cell = escape(modulation if modulation != "—" else configured_mcs)
     if expected_rate > 0:
         if link.get("operating_rate_mismatch"):
             data_rate_cell = (
@@ -120,16 +126,21 @@ def _render_result_row(record: dict[str, Any]) -> str:
     else:
         data_rate_cell = "—"
 
+    error_note = ""
+    if error_text:
+        short = escape(error_text if len(error_text) <= 120 else error_text[:117] + "…")
+        error_note = f"<br/><span class='muted'>{short}</span>"
+
     return f"""
         <tr class="{row_class}">
           <td>{escape(str(record.get('bandwidth', '—')))}</td>
           <td>{escape(str(record.get('mcs', '—')))}</td>
           <td>{escape(str(record.get('ratio', '—')))}</td>
-          <td>{escape(str(modulation))}</td>
+          <td>{modulation_cell}</td>
           <td>{data_rate_cell}</td>
           <td>{_rate_actual_cell(primary.get('tx_rate_mbps'), primary.get('tx_rate_ok'))}</td>
           <td>{_rate_actual_cell(primary.get('rx_rate_mbps'), primary.get('rx_rate_ok'))}</td>
-          <td>{_throughput_cell(dl_mbps, dl_target)}</td>
+          <td>{_throughput_cell(dl_mbps, dl_target)}{error_note}</td>
           <td>{_throughput_cell(ul_mbps, ul_target)}</td>
           <td>{_throughput_cell(bidi_mbps, bidi_target)}</td>
           <td>{escape(str(primary.get('l_snr1', '—')))}</td>
@@ -233,6 +244,39 @@ def write_summary_csv(records: list[dict[str, Any]], path: Path) -> None:
             )
 
 
+def _render_run_outcome_banner(records: list[dict[str, Any]]) -> str:
+    total = len(records)
+    if total == 0:
+        return (
+            '<div class="run-outcome warn">'
+            "<strong>No iterations recorded.</strong> Check Jenkins console for early failures."
+            "</div>"
+        )
+    passed = sum(1 for row in records if row.get("passed"))
+    failed = total - passed
+    trex_errors = [
+        str(row.get("error") or "")
+        for row in records
+        if row.get("error") and "TRex" in str(row.get("error"))
+    ]
+    if passed == total:
+        css = "pass"
+        headline = f"<strong>{passed}/{total} passed</strong> — all throughput iterations completed."
+    elif passed == 0:
+        css = "fail"
+        headline = f"<strong>0/{total} passed</strong> — no throughput data captured."
+    else:
+        css = "warn"
+        headline = f"<strong>{passed}/{total} passed</strong>, {failed} failed or skipped."
+    detail = ""
+    if trex_errors:
+        sample = escape(trex_errors[0][:220])
+        if len(trex_errors[0]) > 220:
+            sample += "…"
+        detail = f"<br/><span class='muted'>TRex: {sample}</span>"
+    return f'<div class="run-outcome {css}">{headline}{detail}</div>'
+
+
 def write_html_report(
     *,
     records: list[dict[str, Any]],
@@ -243,6 +287,7 @@ def write_html_report(
     path.parent.mkdir(parents=True, exist_ok=True)
     executed_at = escape(str(run_meta.get("executed_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     testbed_table = _render_testbed_summary_table(testbed_summary or {})
+    outcome_banner = _render_run_outcome_banner(records)
     results_table = _render_results_table(records)
 
     meta_lines = []
@@ -295,16 +340,47 @@ def write_html_report(
       padding: 20px 22px; margin-bottom: 16px;
     }}
     .panel-top h2 {{ margin: 0 0 14px; font-size: 17px; color: var(--title); }}
-    .run-meta {{
-      display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px;
-      font-size: 13px; color: #475569;
+    table.data-table {{
+      width: 100%; border-collapse: collapse; background: #fff;
+      border: 2px solid var(--border); border-radius: 8px; overflow: hidden;
+      box-shadow: 0 1px 3px rgba(15,23,42,0.06); table-layout: fixed;
     }}
+    table.data-table th, table.data-table td {{
+      border: 1px solid var(--border); padding: 12px 16px; text-align: center;
+      vertical-align: middle; word-break: break-word;
+    }}
+    table.data-table thead th {{
+      background: #f8fafc; color: var(--head); font-size: 14px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.5px;
+    }}
+    table.data-table th.corner {{ background: #f1f5f9; width: 14%; }}
+    table.data-table th.row-label {{
+      text-align: left; background: #f8fafc; color: var(--title);
+      font-size: 14px; font-weight: 600; padding-left: 16px; width: 14%;
+    }}
+    table.data-table td {{ background: #fff; }}
+    table.summary-top {{ margin-bottom: 0; }}
+    .run-meta {{
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px 14px; margin-top: 14px; font-size: 13px; color: #475569;
+    }}
+    .run-meta span {{
+      padding: 10px 14px; background: #f8fafc; border-radius: 8px;
+      border: 1px solid var(--border);
+    }}
+    .run-meta strong {{ color: var(--title); }}
+    .run-outcome {{
+      margin-top: 14px; padding: 12px 16px; border-radius: 8px; font-size: 14px;
+      border: 1px solid var(--border); background: #f8fafc;
+    }}
+    .run-outcome.fail {{ background: #fff5f5; border-color: #fecaca; color: #991b1b; }}
+    .run-outcome.pass {{ background: #f0fdf4; border-color: #bbf7d0; color: #166534; }}
+    .run-outcome.warn {{ background: #fffbeb; border-color: #fde68a; color: #92400e; }}
     .panel {{
       background: var(--card); border: 1px solid var(--border); border-radius: 14px;
       padding: 20px 22px;
     }}
     .panel > h2 {{ margin: 0 0 16px; font-size: 17px; color: var(--title); }}
-    table.summary-top {{ max-width: 100%; margin-bottom: 0; }}
     .ip-cell {{ white-space: nowrap; font-family: Consolas, Monaco, monospace; font-size: 12px; }}
     table.matrix {{
       width: 100%; max-width: 100%; border-collapse: collapse; background: #fff;
@@ -385,6 +461,7 @@ def write_html_report(
 
     <section class="panel">
       <h2>Performance Results</h2>
+      {outcome_banner}
       {results_table}
       <p class="footnote">
         <strong>Throughput</strong> % uses each direction&apos;s share of spec data rate

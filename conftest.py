@@ -1,4 +1,3 @@
-import builtins
 import logging
 import re
 import pytest
@@ -10,28 +9,9 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 
+from utils.console_output import enable_live_console_output
 
-def _enable_live_console_output() -> None:
-    """Line-buffer stdout/stderr and default flush=True on print (Jenkins is not a TTY)."""
-    if getattr(builtins, "_ubr_flush_print_installed", False):
-        return
-    _orig_print = builtins.print
-
-    def print(*args, **kwargs):  # noqa: A001
-        kwargs.setdefault("flush", True)
-        return _orig_print(*args, **kwargs)
-
-    builtins.print = print
-    builtins._ubr_flush_print_installed = True
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            try:
-                stream.reconfigure(line_buffering=True)
-            except Exception:
-                pass
-
-
-_enable_live_console_output()
+enable_live_console_output()
 import httpx
 from playwright.async_api import async_playwright
 from pages.locators import LoginPageLocators

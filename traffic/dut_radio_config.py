@@ -6,7 +6,7 @@ import subprocess
 import time
 
 from pages.commands import RootCommands
-from traffic.operating_rate_table import mcs_number, normalize_bandwidth
+from traffic.operating_rate_table import lookup_spec, mcs_number, normalize_bandwidth
 from utils.net_utils import format_ssh_host, is_ipv6_literal, normalize_ip
 
 
@@ -435,12 +435,19 @@ def configure_radio_profile(
     Apply radio profile across the link (order matters):
       1. CPE(s): MCS only
       2. BTS: bandwidth + DL/UL ratio + MCS
+      3. CPE(s): re-apply MCS after BTS change (link retrain can reset SU modulation)
     """
     effective_settle = _settle_seconds(bandwidth, settle_s)
     cpe_radio = cpe_radio_idx if cpe_radio_idx is not None else radio_idx
     cpe_list = [host.strip() for host in (cpe_hosts or []) if host.strip()]
+    spec = lookup_spec(mcs_rate, bandwidth, spatial_streams=int(spatial_stream))
+    print(
+        f"[CONFIG] Target {spec['mcs']}: {spec['modulation']}, "
+        f"sheet row {spec['mcs_pair']}, "
+        f"expected link rate {spec['operating_rate_mbps']:.0f} Mbps ({bandwidth}, spatial={spatial_stream})"
+    )
 
-    print(f"[CONFIG] Step 1/2: CPE MCS={mcs_rate}")
+    print(f"[CONFIG] Step 1/3: CPE MCS={mcs_rate}")
     if not cpe_list:
         print("[WARN] No CPE hosts in profile — using BTS remote_exec only for CPE MCS")
         configure_cpe_mcs_via_bts_remote_exec(
@@ -470,7 +477,7 @@ def configure_radio_profile(
                 prefer_bts_relay=prefer_cpe_via_bts,
             )
 
-    print(f"[CONFIG] Step 2/2: BTS bw={bandwidth}, ratio={ratio}, MCS={mcs_rate}")
+    print(f"[CONFIG] Step 2/3: BTS bw={bandwidth}, ratio={ratio}, MCS={mcs_rate}")
     configure_bts_radio(
         bts_ip,
         user,
@@ -484,6 +491,35 @@ def configure_radio_profile(
         verify=verify,
     )
     _push_cpe_link_apply(bts_ip, user, password, ssh_timeout_s=ssh_timeout_s)
+
+    print(f"[CONFIG] Step 3/3: Re-apply CPE MCS={mcs_rate} after BTS radio change")
+    if not cpe_list:
+        configure_cpe_mcs_via_bts_remote_exec(
+            bts_ip,
+            user,
+            password,
+            cpe_radio,
+            mcs_rate,
+            spatial_stream,
+            su_index=cpe_su_index,
+            ssh_timeout_s=ssh_timeout_s,
+            verify=verify,
+        )
+    else:
+        for cpe_ip in cpe_list:
+            _apply_cpe_mcs(
+                bts_ip,
+                cpe_ip,
+                user,
+                password,
+                cpe_radio,
+                mcs_rate,
+                spatial_stream,
+                su_index=cpe_su_index,
+                ssh_timeout_s=ssh_timeout_s,
+                verify=verify,
+                prefer_bts_relay=prefer_cpe_via_bts,
+            )
 
     time.sleep(effective_settle)
 

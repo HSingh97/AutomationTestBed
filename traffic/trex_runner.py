@@ -5,6 +5,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -43,9 +44,17 @@ TREX_PORT_LINK_RE = re.compile(r"\(link\s+(UP|DOWN)\)\s*(\d+)", re.IGNORECASE)
 
 
 class _OutputCollector:
-    def __init__(self, process: subprocess.Popen[str]):
+    def __init__(
+        self,
+        process: subprocess.Popen[str],
+        *,
+        echo: bool = False,
+        prefix: str = "",
+    ):
         self._process = process
         self._lines: list[str] = []
+        self._echo = echo
+        self._prefix = prefix
         self._thread = threading.Thread(target=self._consume, daemon=True)
 
     def start(self) -> None:
@@ -65,6 +74,9 @@ class _OutputCollector:
             return
         for line in self._process.stdout:
             self._lines.append(line)
+            if self._echo:
+                sys.stdout.write(f"{self._prefix}{line}")
+                sys.stdout.flush()
 
 
 def _utc_now() -> str:
@@ -153,7 +165,7 @@ def _start_trex_server(
         text=True,
         bufsize=1,
     )
-    collector = _OutputCollector(process)
+    collector = _OutputCollector(process, echo=True, prefix="[TRex server] ")
     collector.start()
     return process, collector
 
@@ -224,7 +236,7 @@ def _check_trex_ports_via_api(
     trex_password: str,
     trex_pythonpath: str,
     trex_ports: str,
-) -> dict[int, str]:
+) -> tuple[dict[int, str], str]:
     ports = [int(item.strip()) for item in trex_ports.split(",") if item.strip()]
     port_literal = ", ".join(str(port) for port in ports)
     remote_script = "\n".join(
@@ -232,18 +244,22 @@ def _check_trex_ports_via_api(
             "set -euo pipefail",
             f"export PYTHONPATH={shlex.quote(trex_pythonpath)}",
             "python3 - <<'PY'",
+            "import sys",
             "from trex.stl.api import STLClient",
             f"ports = [{port_literal}]",
             "states = {}",
             "client = STLClient(server='127.0.0.1')",
-            "client.connect()",
             "try:",
+            "    client.connect()",
             "    for port in ports:",
             "        info = client.get_port_info(port)",
             "        link = str(info.get('link', 'down')).upper()",
             "        states[port] = 'UP' if 'UP' in link else 'DOWN'",
             "finally:",
-            "    client.disconnect()",
+            "    try:",
+            "        client.disconnect()",
+            "    except Exception:",
+            "        pass",
             "for port, state in sorted(states.items()):",
             "    print(f'TREX_PORT_STATUS {port} {state}')",
             "PY",
@@ -263,7 +279,69 @@ def _check_trex_ports_via_api(
         parts = line.strip().split()
         if len(parts) >= 3 and parts[0] == "TREX_PORT_STATUS":
             states[int(parts[1])] = parts[2].upper()
-    return states
+    if not states and output.strip():
+        print(
+            f"[TRex][WARN] Port API probe returned no TREX_PORT_STATUS lines "
+            f"(exit {result.returncode}):\n{output.strip()}"
+        )
+    elif not states:
+        print(
+            f"[TRex][WARN] Port API probe returned no data (exit {result.returncode}). "
+            "Is the TRex server RPC listening on 127.0.0.1?"
+        )
+    return states, output
+
+
+def wait_for_trex_ports_link_up(
+    *,
+    trex_server: str,
+    trex_user: str,
+    trex_password: str,
+    trex_pythonpath: str,
+    trex_ports: str,
+    server_output: str = "",
+    timeout_s: float = 90.0,
+    poll_s: float = 3.0,
+) -> None:
+    """Poll until requested TRex NIC ports report link UP (server RPC may need time after start)."""
+    required = [int(item.strip()) for item in trex_ports.split(",") if item.strip()]
+    deadline = time.time() + timeout_s
+    attempt = 0
+    last_api_debug = ""
+    parsed_server_output = server_output
+
+    while time.time() < deadline:
+        attempt += 1
+        states = parse_trex_server_port_states(parsed_server_output)
+        if not all(port in states for port in required):
+            api_states, last_api_debug = _check_trex_ports_via_api(
+                trex_server=trex_server,
+                trex_user=trex_user,
+                trex_password=trex_password,
+                trex_pythonpath=trex_pythonpath,
+                trex_ports=trex_ports,
+            )
+            states.update(api_states)
+
+        readable = ", ".join(f"{port}={states.get(port, 'UNKNOWN')}" for port in required)
+        down_ports = [port for port in required if states.get(port) != "UP"]
+        if not down_ports:
+            print(f"[TRex] Port link check passed: {readable}")
+            return
+
+        print(f"[TRex] Waiting for port link UP (attempt {attempt}): {readable}")
+        parsed_server_output = ""
+        time.sleep(poll_s)
+
+    detail = ""
+    if last_api_debug.strip():
+        tail = "\n".join(last_api_debug.strip().splitlines()[-12:])
+        detail = f" Last API probe:\n{tail}"
+    raise RuntimeError(
+        f"TRex port(s) {required} are not link UP ({readable}). "
+        f"Timed out after {timeout_s:.0f}s.{detail} "
+        "Aborting test — fix NIC cabling/link or TRex server startup before re-running."
+    )
 
 
 def assert_trex_ports_link_up(
@@ -276,28 +354,35 @@ def assert_trex_ports_link_up(
     server_output: str = "",
 ) -> None:
     """Raise if any requested TRex port is not link UP (do not start traffic)."""
-    required = [int(item.strip()) for item in trex_ports.split(",") if item.strip()]
-    states = parse_trex_server_port_states(server_output)
-    if not all(port in states for port in required):
-        api_states = _check_trex_ports_via_api(
-            trex_server=trex_server,
-            trex_user=trex_user,
-            trex_password=trex_password,
-            trex_pythonpath=trex_pythonpath,
-            trex_ports=trex_ports,
-        )
-        states.update(api_states)
+    wait_for_trex_ports_link_up(
+        trex_server=trex_server,
+        trex_user=trex_user,
+        trex_password=trex_password,
+        trex_pythonpath=trex_pythonpath,
+        trex_ports=trex_ports,
+        server_output=server_output,
+        timeout_s=90.0,
+        poll_s=3.0,
+    )
 
-    down_ports = [port for port in required if states.get(port) != "UP"]
-    if down_ports:
-        readable = ", ".join(
-            f"{port}={states.get(port, 'UNKNOWN')}" for port in required
-        )
-        raise RuntimeError(
-            f"TRex port(s) {down_ports} are not link UP ({readable}). "
-            "Aborting test — fix NIC cabling/link before re-running."
-        )
-    print(f"[TRex] Port link check passed: {', '.join(f'{p}=UP' for p in required)}")
+
+def stop_remote_trex_server(
+    *,
+    trex_server: str,
+    trex_user: str,
+    trex_password: str,
+) -> None:
+    """Stop any TRex server process on the remote host (idempotent)."""
+    print("[TRex] Stopping remote TRex server (if running)...")
+    _run_remote_command(
+        trex_server,
+        trex_user,
+        trex_password,
+        "pkill -f 't-rex-64 -i --no-scapy-server' || pkill -f 't-rex-64' || true",
+        timeout_s=15,
+        check=False,
+    )
+    time.sleep(2)
 
 
 def _has_running_trex_server(
@@ -616,6 +701,7 @@ def run_trex_stats_check(
     dut_radio_idx: int = 1,
     dut_sample_interval_s: int = 5,
     reuse_existing_server: bool = False,
+    keep_server_running: bool = False,
     deploy_client_script: bool = False,
 ) -> dict[str, object]:
     server_process = None
@@ -690,15 +776,22 @@ def run_trex_stats_check(
             trex_password=trex_password,
         ):
             server_reused = True
-            assert_trex_ports_link_up(
+            print("[TRex] Reusing existing remote TRex server")
+            wait_for_trex_ports_link_up(
                 trex_server=trex_server,
                 trex_user=trex_user,
                 trex_password=trex_password,
                 trex_pythonpath=trex_pythonpath,
                 trex_ports=trex_ports,
                 server_output="",
+                timeout_s=60.0,
             )
         else:
+            stop_remote_trex_server(
+                trex_server=trex_server,
+                trex_user=trex_user,
+                trex_password=trex_password,
+            )
             server_process, server_collector = _start_trex_server(
                 trex_server=trex_server,
                 trex_user=trex_user,
@@ -709,13 +802,14 @@ def run_trex_stats_check(
             time.sleep(max(1, trex_server_startup_s))
             if server_process.poll() is not None:
                 raise RuntimeError(f"TRex server exited early: {server_collector.tail()}")
-            assert_trex_ports_link_up(
+            wait_for_trex_ports_link_up(
                 trex_server=trex_server,
                 trex_user=trex_user,
                 trex_password=trex_password,
                 trex_pythonpath=trex_pythonpath,
                 trex_ports=trex_ports,
                 server_output=server_collector.text(),
+                timeout_s=max(90.0, float(trex_server_startup_s) + 60.0),
             )
 
         dut_counters["pre"] = _sample_dut_counters(
@@ -725,6 +819,10 @@ def run_trex_stats_check(
             dut_radio_idx=dut_radio_idx,
         )
 
+        print(
+            f"[TRex] Starting throughput client: DL={trex_dl_bw} UL={trex_ul_bw} "
+            f"duration={duration_s}s direction={trex_direction} proto={trex_protocol}"
+        )
         client_process = subprocess.Popen(
             _build_ssh_command(trex_server, trex_user, trex_password, client_script),
             stdout=subprocess.PIPE,
@@ -732,10 +830,12 @@ def run_trex_stats_check(
             text=True,
             bufsize=1,
         )
-        client_collector = _OutputCollector(client_process)
+        client_collector = _OutputCollector(client_process, echo=True, prefix="[TRex client] ")
         client_collector.start()
 
         deadline = time.time() + max(duration_s + 120, 180)
+        trex_started = time.time()
+        last_progress_log = trex_started
         while client_process.poll() is None and time.time() < deadline:
             if dut_host:
                 snapshot = _sample_dut_counters(
@@ -746,6 +846,11 @@ def run_trex_stats_check(
                 )
                 if snapshot:
                     dut_counters["samples"].append(snapshot)
+            now = time.time()
+            if now - last_progress_log >= 10:
+                elapsed = int(now - trex_started)
+                print(f"[TRex] Throughput running... {elapsed}s elapsed (client still active)")
+                last_progress_log = now
             time.sleep(max(1, dut_sample_interval_s))
 
         if client_process.poll() is None:
@@ -869,7 +974,15 @@ def run_trex_stats_check(
             "server_output_tail": server_output,
         }
     finally:
-        if server_process is not None and not server_reused:
+        trex_completed_ok = bool(
+            result is not None and (result.get("validation") or {}).get("passed")
+        )
+        if (
+            server_process is not None
+            and not server_reused
+            and not (keep_server_running and trex_completed_ok)
+        ):
+            print("[TRex] Stopping TRex server started for this run")
             server_output = _stop_trex_server(
                 server_process,
                 server_collector,

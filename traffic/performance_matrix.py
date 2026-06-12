@@ -33,8 +33,9 @@ from traffic.link_stats import fetch_link_clients, validate_operating_rates
 from traffic.operating_rate_table import operating_rate_mbps
 from traffic.operating_rate_table import lookup_spec
 from traffic.phy_rate_targets import compute_traffic_targets
-from traffic.trex_runner import run_trex_stats_check
+from traffic.trex_runner import run_trex_stats_check, stop_remote_trex_server
 from utils.bench_config import profile_for_stand, recovery_profile_for_stand
+from utils.console_output import enable_live_console_output
 from utils.net_utils import normalize_ip
 from utils.performance_report import write_html_report, write_summary_csv
 from utils.profile_manager import load_profile_bundle
@@ -377,235 +378,200 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     iteration = 0
     started_at = datetime.now(timezone.utc).isoformat()
 
-    for bandwidth in bandwidths:
-        for mcs in mcs_rates:
-            for profile in traffic_profiles:
-                iteration += 1
-                ratio = profile["ratio"]
-                mode = profile["name"]
-                print(
-                    f"\n>>> Configuring: BTS bw/ratio/mcs + CPE mcs | "
-                    f"bw={bandwidth}, mcs={mcs}, ratio={ratio}, cpe={cpe_hosts or 'none'}"
-                )
-                try:
-                    configure_radio_profile(
-                        dut_ip,
-                        dut_user,
-                        dut_password,
-                        args.radio_index,
-                        bandwidth,
-                        mcs,
-                        ratio,
-                        args.spatial_stream,
-                        cpe_hosts=cpe_hosts,
-                        cpe_radio_idx=args.cpe_radio_index,
-                        cpe_su_index=args.cpe_su_index,
-                        prefer_cpe_via_bts=args.cpe_via_bts,
-                        settle_s=args.radio_settle_s,
-                    )
-                    pre_trex_link_validation = _wait_for_link_rate(
-                        dut_ip,
-                        bandwidth=bandwidth,
-                        mcs=mcs,
-                        snmp_community=args.snmp_community,
-                        snmp_radio_index=args.snmp_radio_index,
-                        spatial_stream=int(args.spatial_stream),
-                        tolerance_mbps=args.rate_tolerance_mbps,
-                        tolerance_pct=args.rate_tolerance_pct,
-                        timeout_s=args.link_wait_s,
-                    )
-                except Exception as exc:
-                    print(f"[ERROR] Failed to configure DUT for {bandwidth}/{mcs}/{ratio}: {exc}")
-                    try:
-                        failed_spec = lookup_spec(
-                            mcs, bandwidth, spatial_streams=int(args.spatial_stream)
-                        )
-                        link_validation = {
-                            "configured_mcs": mcs,
-                            "spec": failed_spec,
-                            "expected_operating_rate_mbps": failed_spec["operating_rate_mbps"],
-                            "clients": [],
-                            "operating_rate_ok": False,
-                            "operating_rate_mismatch": True,
-                        }
-                    except Exception:
-                        link_validation = {}
-                    records.append(
-                        {
-                            "bandwidth": bandwidth,
-                            "mcs": mcs,
-                            "mode": mode,
-                            "ratio": ratio,
-                            "requested_target_mbps": args.target,
-                            "passed": False,
-                            "error": f"DUT config failed: {exc}",
-                            "stats": {},
-                            "link_validation": link_validation,
-                            "noise_dbm": args.noise_dbm,
-                        }
-                    )
-                    continue
-                targets = _resolve_traffic_targets(
-                    bandwidth=bandwidth,
-                    mcs=mcs,
-                    ratio=ratio,
-                    args=args,
-                    phy_overrides=phy_overrides,
-                    legacy_mcs_caps=mcs_caps,
-                )
-                print(
-                    f"\n--- [{iteration}/{total_iterations}] "
-                    f"BW={bandwidth} MCS={mcs} Mode={mode} Ratio={ratio} ---"
-                )
-                spec = lookup_spec(mcs, bandwidth, spatial_streams=int(args.spatial_stream))
-                print(
-                    f"Targets: sheet_operating_rate={spec['operating_rate_mbps']} Mbps, "
-                    f"effective={targets['effective_target_mbps']} Mbps "
-                    f"(efficiency={targets['efficiency_factor']:.0%}), "
-                    f"TRex DL={targets['trex_dl_bw']} UL={targets['trex_ul_bw']}"
-                )
-                dl_bw = targets["trex_dl_bw"]
-                ul_bw = targets["trex_ul_bw"]
-                direction = targets["trex_direction"]
-                effective_target = targets["effective_target_mbps"]
-                record: dict[str, object] = {
-                    "bandwidth": bandwidth,
-                    "mcs": mcs,
-                    "mode": mode,
-                    "ratio": ratio,
-                    "requested_target_mbps": args.target,
-                    "phy_max_mbps": targets.get("phy_max_mbps"),
-                    "efficiency_factor": targets.get("efficiency_factor"),
-                    "effective_target_mbps": effective_target,
-                    "downlink_target_mbps": targets.get("downlink_mbps"),
-                    "uplink_target_mbps": targets.get("uplink_mbps"),
-                    "trex_dl_bw": dl_bw,
-                    "trex_ul_bw": ul_bw,
-                    "trex_direction": direction,
-                    "link_validation": pre_trex_link_validation,
-                    "started_at": datetime.now(timezone.utc).isoformat(),
-                }
-                artifact = output_dir / _artifact_name(bandwidth, mcs, mode, ratio)
-                record["artifact"] = str(artifact)
-
-                try:
-                    trex_result = run_trex_stats_check(
-                        trex_server=args.trex_server,
-                        trex_server_su=args.trex_server_su or None,
-                        trex_server_su2=args.trex_server_su2 or None,
-                        trex_server_su3=args.trex_server_su3 or None,
-                        trex_server_su4=args.trex_server_su4 or None,
-                        trex_user=args.trex_user,
-                        trex_password=args.trex_password,
-                        trex_dir=args.trex_dir,
-                        trex_pythonpath=args.trex_pythonpath,
-                        trex_client_script=args.trex_client_script,
-                        trex_ports=args.trex_ports,
-                        trex_server_cores=args.trex_server_cores,
-                        trex_server_startup_s=args.trex_server_startup_s,
-                        duration_s=args.time,
-                        expected_min_mbps=args.expected_min_mbps,
-                        trex_su_count=args.su_count,
-                        trex_dl_bw=dl_bw,
-                        trex_ul_bw=ul_bw,
-                        trex_packet_size=args.packet_size,
-                        trex_direction=direction,
-                        trex_protocol=args.trex_proto,
-                        dut_host=dut_ip,
-                        dut_user=dut_user,
-                        dut_password=dut_password,
-                        dut_radio_idx=args.radio_index,
-                        deploy_client_script=args.deploy_client_script and iteration == 1,
-                        reuse_existing_server=False,
-                    )
-                    export = {
-                        "mode": "performance_matrix",
-                        "profile": {
-                            "active": args.profile,
-                            "recovery": args.recovery_profile,
-                        },
-                        "matrix": {
-                            "bandwidth": bandwidth,
-                            "mcs": mcs,
-                            "mode": mode,
-                            "ratio": ratio,
-                            "requested_target_mbps": args.target,
-                            "phy_max_mbps": targets.get("phy_max_mbps"),
-                            "efficiency_factor": targets.get("efficiency_factor"),
-                            "effective_target_mbps": effective_target,
-                            "downlink_target_mbps": targets.get("downlink_mbps"),
-                            "uplink_target_mbps": targets.get("uplink_mbps"),
-                            "trex_dl_bw": dl_bw,
-                            "trex_ul_bw": ul_bw,
-                        },
-                        "config": {
-                            "target_mbps": effective_target,
-                            "phy_max_mbps": targets.get("phy_max_mbps"),
-                            "efficiency_factor": targets.get("efficiency_factor"),
-                            "ratio": ratio,
-                            "traffic_backend": "trex",
-                            "duration_s": args.time,
-                            "su_count": args.su_count,
-                            "packet_size": args.packet_size,
-                            "spatial_stream": args.spatial_stream,
-                            "bandwidth": bandwidth,
-                            "mcs_rate": mcs,
-                        },
-                        "recovery": {
-                            "attempts": recovery_manager.metrics.attempts,
-                            "successes": recovery_manager.metrics.successes,
-                            "failures": recovery_manager.metrics.failures,
-                            "factory_resets": recovery_manager.metrics.factory_resets,
-                            "last_error": recovery_manager.metrics.last_error,
-                        },
-                        "combined": trex_result.get("combined", {}),
-                        "downlink": trex_result.get("downlink", {}),
-                        "uplink": trex_result.get("uplink", {}),
-                        "trex": trex_result,
-                    }
-                    validation = trex_result.get("validation") or {}
-                    link_validation = _fetch_link_validation(
-                        dut_ip,
-                        bandwidth=bandwidth,
-                        mcs=mcs,
-                        snmp_community=args.snmp_community,
-                        snmp_radio_index=args.snmp_radio_index,
-                        spatial_stream=int(args.spatial_stream),
-                        tolerance_mbps=args.rate_tolerance_mbps,
-                        tolerance_pct=args.rate_tolerance_pct,
-                    )
-                    clients = link_validation.get("clients") or []
-                    record["link_validation"] = link_validation
-                    record["noise_dbm"] = args.noise_dbm
-                    export["link_validation"] = link_validation
-                    trex_passed = bool(validation.get("passed"))
-                    rate_ok = bool(link_validation.get("operating_rate_ok"))
-                    record["operating_rate_ok"] = rate_ok
-                    record["passed"] = trex_passed and (rate_ok or not args.fail_on_rate_mismatch)
-                    record["stats"] = export
-                    record["finished_at"] = datetime.now(timezone.utc).isoformat()
-                    with artifact.open("w", encoding="utf-8") as handle:
-                        json.dump(export, handle, indent=2)
-                    rate_note = "rate OK" if rate_ok else "data rate mismatch (report only)"
-                    trex_status = "PASS" if record["passed"] else "FAIL"
+    try:
+        for bandwidth in bandwidths:
+            for mcs in mcs_rates:
+                for profile in traffic_profiles:
+                    iteration += 1
+                    ratio = profile["ratio"]
+                    mode = profile["name"]
                     print(
-                        f"Result: {trex_status} | "
-                        f"combined_rx={export['combined'].get('rx_mbps', 0):.2f} Mbps | {rate_note}"
+                        f"\n>>> Configuring: BTS bw/ratio/mcs + CPE mcs | "
+                        f"bw={bandwidth}, mcs={mcs}, ratio={ratio}, cpe={cpe_hosts or 'none'}"
                     )
-                    if link_validation.get("operating_rate_mismatch") and clients:
-                        primary = clients[0]
-                        print(
-                            f"  Link rates: Tx={primary.get('tx_rate')} Rx={primary.get('rx_rate')} "
-                            f"(expected {link_validation['expected_operating_rate_mbps']} Mbps)"
-                        )
-                except Exception as exc:
-                    record["passed"] = False
-                    err_text = str(exc)
-                    record["error"] = err_text
-                    record["stats"] = {}
-                    record["noise_dbm"] = args.noise_dbm
                     try:
-                        record["link_validation"] = _fetch_link_validation(
+                        configure_radio_profile(
+                            dut_ip,
+                            dut_user,
+                            dut_password,
+                            args.radio_index,
+                            bandwidth,
+                            mcs,
+                            ratio,
+                            args.spatial_stream,
+                            cpe_hosts=cpe_hosts,
+                            cpe_radio_idx=args.cpe_radio_index,
+                            cpe_su_index=args.cpe_su_index,
+                            prefer_cpe_via_bts=args.cpe_via_bts,
+                            settle_s=args.radio_settle_s,
+                        )
+                        pre_trex_link_validation = _wait_for_link_rate(
+                            dut_ip,
+                            bandwidth=bandwidth,
+                            mcs=mcs,
+                            snmp_community=args.snmp_community,
+                            snmp_radio_index=args.snmp_radio_index,
+                            spatial_stream=int(args.spatial_stream),
+                            tolerance_mbps=args.rate_tolerance_mbps,
+                            tolerance_pct=args.rate_tolerance_pct,
+                            timeout_s=args.link_wait_s,
+                        )
+                    except Exception as exc:
+                        print(f"[ERROR] Failed to configure DUT for {bandwidth}/{mcs}/{ratio}: {exc}")
+                        try:
+                            failed_spec = lookup_spec(
+                                mcs, bandwidth, spatial_streams=int(args.spatial_stream)
+                            )
+                            link_validation = {
+                                "configured_mcs": mcs,
+                                "spec": failed_spec,
+                                "expected_operating_rate_mbps": failed_spec["operating_rate_mbps"],
+                                "clients": [],
+                                "operating_rate_ok": False,
+                                "operating_rate_mismatch": True,
+                            }
+                        except Exception:
+                            link_validation = {}
+                        records.append(
+                            {
+                                "bandwidth": bandwidth,
+                                "mcs": mcs,
+                                "mode": mode,
+                                "ratio": ratio,
+                                "requested_target_mbps": args.target,
+                                "passed": False,
+                                "error": f"DUT config failed: {exc}",
+                                "stats": {},
+                                "link_validation": link_validation,
+                                "noise_dbm": args.noise_dbm,
+                            }
+                        )
+                        continue
+                    targets = _resolve_traffic_targets(
+                        bandwidth=bandwidth,
+                        mcs=mcs,
+                        ratio=ratio,
+                        args=args,
+                        phy_overrides=phy_overrides,
+                        legacy_mcs_caps=mcs_caps,
+                    )
+                    print(
+                        f"\n--- [{iteration}/{total_iterations}] "
+                        f"BW={bandwidth} MCS={mcs} Mode={mode} Ratio={ratio} ---"
+                    )
+                    spec = lookup_spec(mcs, bandwidth, spatial_streams=int(args.spatial_stream))
+                    print(
+                        f"Targets: sheet_operating_rate={spec['operating_rate_mbps']} Mbps, "
+                        f"effective={targets['effective_target_mbps']} Mbps "
+                        f"(efficiency={targets['efficiency_factor']:.0%}), "
+                        f"TRex DL={targets['trex_dl_bw']} UL={targets['trex_ul_bw']}"
+                    )
+                    dl_bw = targets["trex_dl_bw"]
+                    ul_bw = targets["trex_ul_bw"]
+                    direction = targets["trex_direction"]
+                    effective_target = targets["effective_target_mbps"]
+                    record: dict[str, object] = {
+                        "bandwidth": bandwidth,
+                        "mcs": mcs,
+                        "mode": mode,
+                        "ratio": ratio,
+                        "requested_target_mbps": args.target,
+                        "phy_max_mbps": targets.get("phy_max_mbps"),
+                        "efficiency_factor": targets.get("efficiency_factor"),
+                        "effective_target_mbps": effective_target,
+                        "downlink_target_mbps": targets.get("downlink_mbps"),
+                        "uplink_target_mbps": targets.get("uplink_mbps"),
+                        "trex_dl_bw": dl_bw,
+                        "trex_ul_bw": ul_bw,
+                        "trex_direction": direction,
+                        "link_validation": pre_trex_link_validation,
+                        "started_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    artifact = output_dir / _artifact_name(bandwidth, mcs, mode, ratio)
+                    record["artifact"] = str(artifact)
+    
+                    try:
+                        print(
+                            f"[TRex] Launching throughput for {bandwidth}/{mcs} "
+                            f"({mode}, {ratio}) — {args.time}s"
+                        )
+                        trex_result = run_trex_stats_check(
+                            trex_server=args.trex_server,
+                            trex_server_su=args.trex_server_su or None,
+                            trex_server_su2=args.trex_server_su2 or None,
+                            trex_server_su3=args.trex_server_su3 or None,
+                            trex_server_su4=args.trex_server_su4 or None,
+                            trex_user=args.trex_user,
+                            trex_password=args.trex_password,
+                            trex_dir=args.trex_dir,
+                            trex_pythonpath=args.trex_pythonpath,
+                            trex_client_script=args.trex_client_script,
+                            trex_ports=args.trex_ports,
+                            trex_server_cores=args.trex_server_cores,
+                            trex_server_startup_s=args.trex_server_startup_s,
+                            duration_s=args.time,
+                            expected_min_mbps=args.expected_min_mbps,
+                            trex_su_count=args.su_count,
+                            trex_dl_bw=dl_bw,
+                            trex_ul_bw=ul_bw,
+                            trex_packet_size=args.packet_size,
+                            trex_direction=direction,
+                            trex_protocol=args.trex_proto,
+                            dut_host=dut_ip,
+                            dut_user=dut_user,
+                            dut_password=dut_password,
+                            dut_radio_idx=args.radio_index,
+                            deploy_client_script=args.deploy_client_script and iteration == 1,
+                            reuse_existing_server=iteration > 1,
+                            keep_server_running=iteration < total_iterations,
+                        )
+                        export = {
+                            "mode": "performance_matrix",
+                            "profile": {
+                                "active": args.profile,
+                                "recovery": args.recovery_profile,
+                            },
+                            "matrix": {
+                                "bandwidth": bandwidth,
+                                "mcs": mcs,
+                                "mode": mode,
+                                "ratio": ratio,
+                                "requested_target_mbps": args.target,
+                                "phy_max_mbps": targets.get("phy_max_mbps"),
+                                "efficiency_factor": targets.get("efficiency_factor"),
+                                "effective_target_mbps": effective_target,
+                                "downlink_target_mbps": targets.get("downlink_mbps"),
+                                "uplink_target_mbps": targets.get("uplink_mbps"),
+                                "trex_dl_bw": dl_bw,
+                                "trex_ul_bw": ul_bw,
+                            },
+                            "config": {
+                                "target_mbps": effective_target,
+                                "phy_max_mbps": targets.get("phy_max_mbps"),
+                                "efficiency_factor": targets.get("efficiency_factor"),
+                                "ratio": ratio,
+                                "traffic_backend": "trex",
+                                "duration_s": args.time,
+                                "su_count": args.su_count,
+                                "packet_size": args.packet_size,
+                                "spatial_stream": args.spatial_stream,
+                                "bandwidth": bandwidth,
+                                "mcs_rate": mcs,
+                            },
+                            "recovery": {
+                                "attempts": recovery_manager.metrics.attempts,
+                                "successes": recovery_manager.metrics.successes,
+                                "failures": recovery_manager.metrics.failures,
+                                "factory_resets": recovery_manager.metrics.factory_resets,
+                                "last_error": recovery_manager.metrics.last_error,
+                            },
+                            "combined": trex_result.get("combined", {}),
+                            "downlink": trex_result.get("downlink", {}),
+                            "uplink": trex_result.get("uplink", {}),
+                            "trex": trex_result,
+                        }
+                        validation = trex_result.get("validation") or {}
+                        link_validation = _fetch_link_validation(
                             dut_ip,
                             bandwidth=bandwidth,
                             mcs=mcs,
@@ -615,29 +581,76 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             tolerance_mbps=args.rate_tolerance_mbps,
                             tolerance_pct=args.rate_tolerance_pct,
                         )
-                    except Exception:
-                        failed_spec = lookup_spec(
-                            mcs, bandwidth, spatial_streams=int(args.spatial_stream)
+                        clients = link_validation.get("clients") or []
+                        record["link_validation"] = link_validation
+                        record["noise_dbm"] = args.noise_dbm
+                        export["link_validation"] = link_validation
+                        trex_passed = bool(validation.get("passed"))
+                        rate_ok = bool(link_validation.get("operating_rate_ok"))
+                        record["operating_rate_ok"] = rate_ok
+                        record["passed"] = trex_passed and (rate_ok or not args.fail_on_rate_mismatch)
+                        record["stats"] = export
+                        record["finished_at"] = datetime.now(timezone.utc).isoformat()
+                        with artifact.open("w", encoding="utf-8") as handle:
+                            json.dump(export, handle, indent=2)
+                        rate_note = "rate OK" if rate_ok else "data rate mismatch (report only)"
+                        trex_status = "PASS" if record["passed"] else "FAIL"
+                        print(
+                            f"Result: {trex_status} | "
+                            f"combined_rx={export['combined'].get('rx_mbps', 0):.2f} Mbps | {rate_note}"
                         )
-                        record["link_validation"] = {
-                            "configured_mcs": mcs,
-                            "spec": failed_spec,
-                            "expected_operating_rate_mbps": failed_spec["operating_rate_mbps"],
-                            "clients": [],
-                            "operating_rate_ok": False,
-                            "operating_rate_mismatch": True,
-                        }
-                    record["finished_at"] = datetime.now(timezone.utc).isoformat()
-                    with artifact.open("w", encoding="utf-8") as handle:
-                        json.dump(record, handle, indent=2)
-                    if "TRex port" in err_text and "not link UP" in err_text:
-                        print(f"Result: SKIP (TRex ports down) | {err_text}")
-                    else:
-                        print(f"Result: FAIL | {exc}")
-
-                records.append(record)
-                if args.pause_s > 0:
-                    time.sleep(args.pause_s)
+                        if link_validation.get("operating_rate_mismatch") and clients:
+                            primary = clients[0]
+                            print(
+                                f"  Link rates: Tx={primary.get('tx_rate')} Rx={primary.get('rx_rate')} "
+                                f"(expected {link_validation['expected_operating_rate_mbps']} Mbps)"
+                            )
+                    except Exception as exc:
+                        record["passed"] = False
+                        err_text = str(exc)
+                        record["error"] = err_text
+                        record["stats"] = {}
+                        record["noise_dbm"] = args.noise_dbm
+                        try:
+                            record["link_validation"] = _fetch_link_validation(
+                                dut_ip,
+                                bandwidth=bandwidth,
+                                mcs=mcs,
+                                snmp_community=args.snmp_community,
+                                snmp_radio_index=args.snmp_radio_index,
+                                spatial_stream=int(args.spatial_stream),
+                                tolerance_mbps=args.rate_tolerance_mbps,
+                                tolerance_pct=args.rate_tolerance_pct,
+                            )
+                        except Exception:
+                            failed_spec = lookup_spec(
+                                mcs, bandwidth, spatial_streams=int(args.spatial_stream)
+                            )
+                            record["link_validation"] = {
+                                "configured_mcs": mcs,
+                                "spec": failed_spec,
+                                "expected_operating_rate_mbps": failed_spec["operating_rate_mbps"],
+                                "clients": [],
+                                "operating_rate_ok": False,
+                                "operating_rate_mismatch": True,
+                            }
+                        record["finished_at"] = datetime.now(timezone.utc).isoformat()
+                        with artifact.open("w", encoding="utf-8") as handle:
+                            json.dump(record, handle, indent=2)
+                        if "TRex port" in err_text and "not link UP" in err_text:
+                            print(f"Result: SKIP (TRex ports down) | {err_text}")
+                        else:
+                            print(f"Result: FAIL | {exc}")
+    
+                    records.append(record)
+                    if args.pause_s > 0:
+                        time.sleep(args.pause_s)
+    finally:
+        stop_remote_trex_server(
+            trex_server=args.trex_server,
+            trex_user=args.trex_user,
+            trex_password=args.trex_password,
+        )
 
     finished_at = datetime.now(timezone.utc).isoformat()
     passed_count = sum(1 for row in records if row.get("passed"))
@@ -816,6 +829,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    enable_live_console_output()
     parser = build_parser()
     args = parser.parse_args(argv)
     _resolve_stand_profile_args(args)
