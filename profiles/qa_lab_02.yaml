@@ -168,7 +168,7 @@ performance:
   # For throughput, DUT-side radio/MCS apply may be environment-dependent.
   # Keep it skipped so we can still run TRex and collect SSH-based link stats (CPE count + rates).
   skip_dut_config: true
-  link_stats_source: ssh
+  link_stats_source: auto
   trex_dl_bw: "100M"
   trex_ul_bw: "100M"
 
