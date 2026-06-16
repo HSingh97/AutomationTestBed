@@ -152,6 +152,8 @@ traffic:
       - "192.168.1.2"
     # BSU-server port allowlist: 0=BTS, 1-3=CPE (4th CPE from su_servers[0])
     ports: "0,1,2,3"
+    server_cores: 1
+    server_startup_s: 15
 
 performance:
   su_count: 4
@@ -159,7 +161,9 @@ performance:
   snmp_radio_index: 2
   duration_s: 30
   packet_size: 1500
-  # BTS port 0 is 100M; CPE ports are 1G — 100M DL on BTS, 100M UL split on CPE
+  # BTS port 0 is 100M; cap TRex load to match lab NICs (not PHY sheet rates).
+  use_dynamic_target: false
+  target_mbps: 100
   trex_dl_bw: "100M"
   trex_ul_bw: "100M"
 

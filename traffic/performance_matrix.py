@@ -33,7 +33,7 @@ from traffic.link_stats import fetch_link_clients, validate_operating_rates
 from traffic.operating_rate_table import operating_rate_mbps
 from traffic.operating_rate_table import lookup_spec
 from traffic.phy_rate_targets import compute_traffic_targets
-from traffic.trex_runner import run_trex_stats_check, stop_remote_trex_server
+from traffic.trex_runner import run_trex_stats_check, stop_remote_trex_servers
 from utils.bench_config import profile_for_stand, recovery_profile_for_stand
 from utils.console_output import enable_live_console_output
 from utils.net_utils import normalize_ip
@@ -76,6 +76,16 @@ def _apply_profile_run_defaults(args, profile_bundle) -> None:
         args.time = int(perf_section["duration_s"])
     if args.packet_size == PERFORMANCE_DEFAULTS["packet_size"] and perf_section.get("packet_size"):
         args.packet_size = int(perf_section["packet_size"])
+    profile_selected = bool(getattr(args, "stand", "")) or args.profile != PERFORMANCE_DEFAULTS["profile"]
+    if profile_selected:
+        if "use_dynamic_target" in perf_section:
+            args.use_dynamic_target = bool(perf_section["use_dynamic_target"])
+        if perf_section.get("target_mbps") is not None:
+            args.target = float(perf_section["target_mbps"])
+    if traffic_trex.get("server_startup_s"):
+        args.trex_server_startup_s = int(traffic_trex["server_startup_s"])
+    if traffic_trex.get("server_cores"):
+        args.trex_server_cores = int(traffic_trex["server_cores"])
 
 
 def _resolve_stand_profile_args(args) -> None:
@@ -646,8 +656,19 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                     if args.pause_s > 0:
                         time.sleep(args.pause_s)
     finally:
-        stop_remote_trex_server(
-            trex_server=args.trex_server,
+        trex_hosts = [args.trex_server]
+        trex_hosts.extend(
+            host
+            for host in (
+                args.trex_server_su,
+                args.trex_server_su2,
+                args.trex_server_su3,
+                args.trex_server_su4,
+            )
+            if host
+        )
+        stop_remote_trex_servers(
+            trex_hosts,
             trex_user=args.trex_user,
             trex_password=args.trex_password,
         )

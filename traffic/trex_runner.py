@@ -144,6 +144,19 @@ def _run_remote_command(
     return result
 
 
+def _unique_trex_hosts(*hosts: str | None) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for host in hosts:
+        if not host:
+            continue
+        clean = str(host).strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            ordered.append(clean)
+    return ordered
+
+
 def _start_trex_server(
     *,
     trex_server: str,
@@ -405,7 +418,7 @@ def stop_remote_trex_server(
     trex_password: str,
 ) -> None:
     """Stop any TRex server process on the remote host (idempotent)."""
-    print("[TRex] Stopping remote TRex server (if running)...")
+    print(f"[TRex] Stopping remote TRex server on {trex_server} (if running)...")
     _run_remote_command(
         trex_server,
         trex_user,
@@ -415,6 +428,20 @@ def stop_remote_trex_server(
         check=False,
     )
     time.sleep(2)
+
+
+def stop_remote_trex_servers(
+    hosts: list[str],
+    *,
+    trex_user: str,
+    trex_password: str,
+) -> None:
+    for host in _unique_trex_hosts(*hosts):
+        stop_remote_trex_server(
+            trex_server=host,
+            trex_user=trex_user,
+            trex_password=trex_password,
+        )
 
 
 def _has_running_trex_server(
@@ -433,6 +460,25 @@ def _has_running_trex_server(
     )
     output = "\n".join(part for part in [result.stdout, result.stderr] if part).strip()
     return "t-rex-64" in output or "_t-rex-64" in output
+
+
+def _all_trex_servers_running(
+    hosts: list[str],
+    *,
+    trex_user: str,
+    trex_password: str,
+) -> bool:
+    unique = _unique_trex_hosts(*hosts)
+    if not unique:
+        return False
+    return all(
+        _has_running_trex_server(
+            trex_server=host,
+            trex_user=trex_user,
+            trex_password=trex_password,
+        )
+        for host in unique
+    )
 
 
 BUNDLED_CLIENT_SCRIPT = (
@@ -737,9 +783,18 @@ def run_trex_stats_check(
     deploy_client_script: bool = False,
 ) -> dict[str, object]:
     server_process = None
+    server_collector: _OutputCollector | None = None
+    extra_server_handles: list[tuple[str, subprocess.Popen[str], _OutputCollector]] = []
     server_output = ""
     client_output = ""
     server_reused = False
+    su_hosts = _unique_trex_hosts(
+        trex_server_su,
+        trex_server_su2,
+        trex_server_su3,
+        trex_server_su4,
+    )
+    all_server_hosts = _unique_trex_hosts(trex_server, *su_hosts)
 
     if deploy_client_script:
         deployed_path = deploy_trex_client_script(
@@ -802,13 +857,13 @@ def run_trex_stats_check(
     result: dict[str, object] | None = None
 
     try:
-        if reuse_existing_server and _has_running_trex_server(
-            trex_server=trex_server,
+        if reuse_existing_server and _all_trex_servers_running(
+            all_server_hosts,
             trex_user=trex_user,
             trex_password=trex_password,
         ):
             server_reused = True
-            print("[TRex] Reusing existing remote TRex server")
+            print(f"[TRex] Reusing existing remote TRex server(s): {', '.join(all_server_hosts)}")
             wait_for_trex_ports_link_up(
                 trex_server=trex_server,
                 trex_user=trex_user,
@@ -818,9 +873,19 @@ def run_trex_stats_check(
                 server_output="",
                 timeout_s=60.0,
             )
+            for su_host in su_hosts:
+                wait_for_trex_ports_link_up(
+                    trex_server=su_host,
+                    trex_user=trex_user,
+                    trex_password=trex_password,
+                    trex_pythonpath=trex_pythonpath,
+                    trex_ports="0",
+                    server_output="",
+                    timeout_s=60.0,
+                )
         else:
-            stop_remote_trex_server(
-                trex_server=trex_server,
+            stop_remote_trex_servers(
+                all_server_hosts,
                 trex_user=trex_user,
                 trex_password=trex_password,
             )
@@ -831,9 +896,30 @@ def run_trex_stats_check(
                 trex_dir=trex_dir,
                 server_cores=trex_server_cores,
             )
+            for su_host in su_hosts:
+                su_process, su_collector = _start_trex_server(
+                    trex_server=su_host,
+                    trex_user=trex_user,
+                    trex_password=trex_password,
+                    trex_dir=trex_dir,
+                    server_cores=trex_server_cores,
+                )
+                extra_server_handles.append((su_host, su_process, su_collector))
             time.sleep(max(1, trex_server_startup_s))
             if server_process.poll() is not None:
-                raise RuntimeError(f"TRex server exited early: {server_collector.tail()}")
+                raise RuntimeError(
+                    f"TRex server exited early on {trex_server}: {server_collector.tail()}"
+                )
+            for su_host, su_process, su_collector in extra_server_handles:
+                if su_process.poll() is not None:
+                    raise RuntimeError(
+                        f"TRex server exited early on {su_host}: {su_collector.tail()}"
+                    )
+            if su_hosts:
+                print(
+                    f"[TRex] Started TRex on BSU {trex_server} + SU host(s): "
+                    f"{', '.join(su_hosts)}"
+                )
             wait_for_trex_ports_link_up(
                 trex_server=trex_server,
                 trex_user=trex_user,
@@ -844,6 +930,16 @@ def run_trex_stats_check(
                 server_output_getter=server_collector.text,
                 timeout_s=max(90.0, float(trex_server_startup_s) + 60.0),
             )
+            for su_host in su_hosts:
+                wait_for_trex_ports_link_up(
+                    trex_server=su_host,
+                    trex_user=trex_user,
+                    trex_password=trex_password,
+                    trex_pythonpath=trex_pythonpath,
+                    trex_ports="0",
+                    server_output="",
+                    timeout_s=max(60.0, float(trex_server_startup_s) + 30.0),
+                )
 
         dut_counters["pre"] = _sample_dut_counters(
             dut_host=dut_host,
@@ -1010,21 +1106,28 @@ def run_trex_stats_check(
         trex_completed_ok = bool(
             result is not None and (result.get("validation") or {}).get("passed")
         )
-        if (
-            server_process is not None
-            and not server_reused
-            and not (keep_server_running and trex_completed_ok)
-        ):
-            print("[TRex] Stopping TRex server started for this run")
-            server_output = _stop_trex_server(
-                server_process,
-                server_collector,
-                trex_server=trex_server,
-                trex_user=trex_user,
-                trex_password=trex_password,
-            )
-            if result is not None:
-                result["server_output_tail"] = server_output
+        should_stop = not server_reused and not (keep_server_running and trex_completed_ok)
+        if should_stop:
+            if server_process is not None and server_collector is not None:
+                print(f"[TRex] Stopping TRex server on {trex_server}")
+                server_output = _stop_trex_server(
+                    server_process,
+                    server_collector,
+                    trex_server=trex_server,
+                    trex_user=trex_user,
+                    trex_password=trex_password,
+                )
+                if result is not None:
+                    result["server_output_tail"] = server_output
+            for su_host, su_process, su_collector in extra_server_handles:
+                print(f"[TRex] Stopping TRex server on {su_host}")
+                _stop_trex_server(
+                    su_process,
+                    su_collector,
+                    trex_server=su_host,
+                    trex_user=trex_user,
+                    trex_password=trex_password,
+                )
 
     if result is None:
         raise RuntimeError("TRex stats check failed before a result payload was produced.")

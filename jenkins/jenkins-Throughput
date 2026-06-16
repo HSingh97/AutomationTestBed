@@ -15,6 +15,11 @@ pipeline {
     agent { node { label "${TARGET_STAND}" } }
 
     parameters {
+        choice(
+            name: 'TARGET_STAND',
+            choices: ['test-harman2', 'test-qa-lab-02', 'test-puneet'],
+            description: 'Jenkins agent label / bench (maps to config/benches.yaml → profile)'
+        )
         string(
             name: 'BTS IP',
             defaultValue: '',
