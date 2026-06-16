@@ -173,6 +173,11 @@ def _fetch_link_clients_via_ssh(
             key, val = line.split("=", 1)
             parsed[key.strip().upper()] = val.strip()
 
+        if "LINKS" not in parsed and output.strip():
+            # SSH-only mode: make SSH failures visible in Jenkins console.
+            print(f"[link_stats][ssh] wifi{ridx} probe output (no LINKS=...): {output.strip()[:200]}")
+            continue
+
         links_raw = str(parsed.get("LINKS", "0") or "0")
         # links may be numeric or contain extra tokens (e.g. lists). Extract first number.
         m = re.search(r"(\d+)", links_raw)
