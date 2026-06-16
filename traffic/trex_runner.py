@@ -168,9 +168,6 @@ def _start_trex_server(
     remote_script = "\n".join(
         [
             "set -euo pipefail",
-            "pkill -f '_t-rex-64' || true",
-            "pkill -f 't-rex-64' || true",
-            "sleep 2",
             "echo 1024 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages",
             f"cd {shlex.quote(trex_dir)}",
             f"./t-rex-64 -i --no-scapy-server -c {int(server_cores)} --no-ofed-check",
@@ -928,12 +925,16 @@ def run_trex_stats_check(
             time.sleep(max(1, trex_server_startup_s))
             if server_process.poll() is not None:
                 raise RuntimeError(
-                    f"TRex server exited early on {trex_server}: {server_collector.tail()}"
+                    f"TRex server exited early on {trex_server} "
+                    f"(rc={server_process.returncode}): "
+                    f"{server_collector.tail() or server_collector.text()[:800]}"
                 )
             for su_host, su_process, su_collector in extra_server_handles:
                 if su_process.poll() is not None:
                     raise RuntimeError(
-                        f"TRex server exited early on {su_host}: {su_collector.tail()}"
+                        f"TRex server exited early on {su_host} "
+                        f"(rc={su_process.returncode}): "
+                        f"{su_collector.tail() or su_collector.text()[:800]}"
                     )
             if su_hosts:
                 print(
