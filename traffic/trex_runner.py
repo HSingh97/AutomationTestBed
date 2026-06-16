@@ -168,6 +168,9 @@ def _start_trex_server(
     remote_script = "\n".join(
         [
             "set -euo pipefail",
+            "pkill -f '_t-rex-64' || true",
+            "pkill -f 't-rex-64' || true",
+            "sleep 2",
             "echo 1024 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages",
             f"cd {shlex.quote(trex_dir)}",
             f"./t-rex-64 -i --no-scapy-server -c {int(server_cores)} --no-ofed-check",
@@ -423,11 +426,28 @@ def stop_remote_trex_server(
         trex_server,
         trex_user,
         trex_password,
-        "pkill -f 't-rex-64 -i --no-scapy-server' || pkill -f 't-rex-64' || true",
+        "pkill -f '_t-rex-64' || true; pkill -f 't-rex-64' || true; sleep 1",
         timeout_s=15,
         check=False,
     )
-    time.sleep(2)
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        if not _has_running_trex_server(
+            trex_server=trex_server,
+            trex_user=trex_user,
+            trex_password=trex_password,
+        ):
+            return
+        _run_remote_command(
+            trex_server,
+            trex_user,
+            trex_password,
+            "pkill -9 -f '_t-rex-64' || true; pkill -9 -f 't-rex-64' || true",
+            timeout_s=15,
+            check=False,
+        )
+        time.sleep(1)
+    print(f"[TRex] WARN: TRex process may still be running on {trex_server}")
 
 
 def stop_remote_trex_servers(
