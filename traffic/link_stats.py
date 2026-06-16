@@ -131,56 +131,75 @@ def _fetch_link_clients_via_ssh(
     if not ssh_password:
         return []
     host = dut_ip.strip()
-    base = f"/sys/class/kwn/wifi{int(radio_idx)}/statistics"
-    remote_script = (
-        f"links=$(cat {base}/links 2>/dev/null || echo 0); "
-        f"tx=$(cat {base}/tx_tput 2>/dev/null || echo ''); "
-        f"rx=$(cat {base}/rx_tput 2>/dev/null || echo ''); "
-        f"rtx=$(cat {base}/avg_rtx 2>/dev/null || echo ''); "
-        "printf 'LINKS=%s\nTX=%s\nRX=%s\nRTX=%s\n' \"$links\" \"$tx\" \"$rx\" \"$rtx\""
-    )
     pw = shlex.quote(ssh_password)
     ssh_host = shlex.quote(host)
     ssh_user_q = shlex.quote(ssh_user)
-    cmd = (
-        f"sshpass -p {pw} ssh -o LogLevel=ERROR -o StrictHostKeyChecking=no "
-        f"-o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 {ssh_user_q}@{ssh_host} "
-        f"\"{remote_script}\""
-    )
-    output = _run_shell(cmd)
-    if not output:
-        return []
-    parsed: dict[str, str] = {}
-    for line in output.splitlines():
-        if "=" not in line:
-            continue
-        key, val = line.split("=", 1)
-        parsed[key.strip().upper()] = val.strip()
-    try:
-        link_count = int(float(parsed.get("LINKS", "0") or "0"))
-    except ValueError:
-        link_count = 0
-    tx_rate = _parse_rate_mbps(parsed.get("TX", ""))
-    rx_rate = _parse_rate_mbps(parsed.get("RX", ""))
-    avg_rtx = _parse_rate_mbps(parsed.get("RTX", ""))
-    clients: list[dict[str, Any]] = []
-    for idx in range(1, max(0, link_count) + 1):
-        clients.append(
-            {
-                "ip": f"SU{idx}",
-                "l_snr1": "-",
-                "l_snr2": "-",
-                "r_snr1": "-",
-                "r_snr2": "-",
-                "tx_rate": parsed.get("TX", "-"),
-                "rx_rate": parsed.get("RX", "-"),
-                "tx_rate_mbps": tx_rate,
-                "rx_rate_mbps": rx_rate,
-                "avg_rtx_pct": avg_rtx,
-                "source": "ssh",
-            }
+
+    # Many benches use radio_idx=1 for config + sysfs stats, while SNMP uses
+    # snmp_radio_index (often 2). Try both so SSH-only mode keeps working.
+    candidate_indices = []
+    for idx in (1, int(radio_idx)):
+        if idx not in candidate_indices:
+            candidate_indices.append(idx)
+
+    for ridx in candidate_indices:
+        base = f"/sys/class/kwn/wifi{ridx}/statistics"
+        remote_script = (
+            f"links=$(cat {base}/links 2>/dev/null || echo 0); "
+            f"tx=$(cat {base}/tx_tput 2>/dev/null || echo ''); "
+            f"rx=$(cat {base}/rx_tput 2>/dev/null || echo ''); "
+            f"rtx=$(cat {base}/avg_rtx 2>/dev/null || echo ''); "
+            "printf 'LINKS=%s\nTX=%s\nRX=%s\nRTX=%s\n' \"$links\" \"$tx\" \"$rx\" \"$rtx\""
         )
-    return clients
+
+        cmd = (
+            f"sshpass -p {pw} ssh -o LogLevel=ERROR -o StrictHostKeyChecking=no "
+            f"-o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 {ssh_user_q}@{ssh_host} "
+            f"\"{remote_script}\""
+        )
+        output = _run_shell(cmd)
+        if not output:
+            continue
+
+        parsed: dict[str, str] = {}
+        for line in output.splitlines():
+            if "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            parsed[key.strip().upper()] = val.strip()
+
+        links_raw = str(parsed.get("LINKS", "0") or "0")
+        # links may be numeric or contain extra tokens (e.g. lists). Extract first number.
+        m = re.search(r"(\d+)", links_raw)
+        link_count = int(m.group(1)) if m else 0
+
+        tx_rate = _parse_rate_mbps(parsed.get("TX", ""))
+        rx_rate = _parse_rate_mbps(parsed.get("RX", ""))
+        avg_rtx = _parse_rate_mbps(parsed.get("RTX", ""))
+
+        if link_count <= 0:
+            continue
+
+        clients: list[dict[str, Any]] = []
+        for idx in range(1, link_count + 1):
+            clients.append(
+                {
+                    "ip": f"SU{idx}",
+                    "l_snr1": "-",
+                    "l_snr2": "-",
+                    "r_snr1": "-",
+                    "r_snr2": "-",
+                    "tx_rate": parsed.get("TX", "-"),
+                    "rx_rate": parsed.get("RX", "-"),
+                    "tx_rate_mbps": tx_rate,
+                    "rx_rate_mbps": rx_rate,
+                    "avg_rtx_pct": avg_rtx,
+                    "source": "ssh",
+                }
+            )
+        return clients
+
+    return []
 
 
 def validate_operating_rates(
