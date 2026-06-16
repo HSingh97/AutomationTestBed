@@ -86,6 +86,8 @@ def _apply_profile_run_defaults(args, profile_bundle) -> None:
         args.trex_server_startup_s = int(traffic_trex["server_startup_s"])
     if traffic_trex.get("server_cores"):
         args.trex_server_cores = int(traffic_trex["server_cores"])
+    if perf_section.get("skip_dut_config"):
+        args.skip_dut_config = True
 
 
 def _resolve_stand_profile_args(args) -> None:
@@ -375,14 +377,17 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         }
 
     cpe_hosts = [str(ip) for ip in (dut.get("remote_ipv6s") or dut.get("remote_ips") or [])]
-    try:
-        testbed_summary = asyncio.run(
-            collect_testbed_summary(dut_ip, cpe_hosts, dut_password)
-        )
-    except Exception as exc:
-        print(f"[WARN] Testbed summary collection failed: {exc}")
+    if not args.skip_dut_config:
+        try:
+            testbed_summary = asyncio.run(
+                collect_testbed_summary(dut_ip, cpe_hosts, dut_password)
+            )
+        except Exception as exc:
+            print(f"[WARN] Testbed summary collection failed: {exc}")
 
-    asyncio.run(_ensure_dut_ready(recovery_manager, dut_ip))
+        asyncio.run(_ensure_dut_ready(recovery_manager, dut_ip))
+    else:
+        print("[CONFIG] Skipping DUT recovery/radio config (--skip-dut-config); TRex traffic only")
 
     records: list[dict[str, object]] = []
     iteration = 0
@@ -399,64 +404,68 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         f"\n>>> Configuring: BTS bw/ratio/mcs + CPE mcs | "
                         f"bw={bandwidth}, mcs={mcs}, ratio={ratio}, cpe={cpe_hosts or 'none'}"
                     )
-                    try:
-                        configure_radio_profile(
-                            dut_ip,
-                            dut_user,
-                            dut_password,
-                            args.radio_index,
-                            bandwidth,
-                            mcs,
-                            ratio,
-                            args.spatial_stream,
-                            cpe_hosts=cpe_hosts,
-                            cpe_radio_idx=args.cpe_radio_index,
-                            cpe_su_index=args.cpe_su_index,
-                            prefer_cpe_via_bts=args.cpe_via_bts,
-                            settle_s=args.radio_settle_s,
-                        )
-                        pre_trex_link_validation = _wait_for_link_rate(
-                            dut_ip,
-                            bandwidth=bandwidth,
-                            mcs=mcs,
-                            snmp_community=args.snmp_community,
-                            snmp_radio_index=args.snmp_radio_index,
-                            spatial_stream=int(args.spatial_stream),
-                            tolerance_mbps=args.rate_tolerance_mbps,
-                            tolerance_pct=args.rate_tolerance_pct,
-                            timeout_s=args.link_wait_s,
-                        )
-                    except Exception as exc:
-                        print(f"[ERROR] Failed to configure DUT for {bandwidth}/{mcs}/{ratio}: {exc}")
+                    pre_trex_link_validation: dict[str, object] = {}
+                    if args.skip_dut_config:
+                        print("[CONFIG] Skipping DUT radio apply (--skip-dut-config)")
+                    else:
                         try:
-                            failed_spec = lookup_spec(
-                                mcs, bandwidth, spatial_streams=int(args.spatial_stream)
+                            configure_radio_profile(
+                                dut_ip,
+                                dut_user,
+                                dut_password,
+                                args.radio_index,
+                                bandwidth,
+                                mcs,
+                                ratio,
+                                args.spatial_stream,
+                                cpe_hosts=cpe_hosts,
+                                cpe_radio_idx=args.cpe_radio_index,
+                                cpe_su_index=args.cpe_su_index,
+                                prefer_cpe_via_bts=args.cpe_via_bts,
+                                settle_s=args.radio_settle_s,
                             )
-                            link_validation = {
-                                "configured_mcs": mcs,
-                                "spec": failed_spec,
-                                "expected_operating_rate_mbps": failed_spec["operating_rate_mbps"],
-                                "clients": [],
-                                "operating_rate_ok": False,
-                                "operating_rate_mismatch": True,
-                            }
-                        except Exception:
-                            link_validation = {}
-                        records.append(
-                            {
-                                "bandwidth": bandwidth,
-                                "mcs": mcs,
-                                "mode": mode,
-                                "ratio": ratio,
-                                "requested_target_mbps": args.target,
-                                "passed": False,
-                                "error": f"DUT config failed: {exc}",
-                                "stats": {},
-                                "link_validation": link_validation,
-                                "noise_dbm": args.noise_dbm,
-                            }
-                        )
-                        continue
+                            pre_trex_link_validation = _wait_for_link_rate(
+                                dut_ip,
+                                bandwidth=bandwidth,
+                                mcs=mcs,
+                                snmp_community=args.snmp_community,
+                                snmp_radio_index=args.snmp_radio_index,
+                                spatial_stream=int(args.spatial_stream),
+                                tolerance_mbps=args.rate_tolerance_mbps,
+                                tolerance_pct=args.rate_tolerance_pct,
+                                timeout_s=args.link_wait_s,
+                            )
+                        except Exception as exc:
+                            print(f"[ERROR] Failed to configure DUT for {bandwidth}/{mcs}/{ratio}: {exc}")
+                            try:
+                                failed_spec = lookup_spec(
+                                    mcs, bandwidth, spatial_streams=int(args.spatial_stream)
+                                )
+                                link_validation = {
+                                    "configured_mcs": mcs,
+                                    "spec": failed_spec,
+                                    "expected_operating_rate_mbps": failed_spec["operating_rate_mbps"],
+                                    "clients": [],
+                                    "operating_rate_ok": False,
+                                    "operating_rate_mismatch": True,
+                                }
+                            except Exception:
+                                link_validation = {}
+                            records.append(
+                                {
+                                    "bandwidth": bandwidth,
+                                    "mcs": mcs,
+                                    "mode": mode,
+                                    "ratio": ratio,
+                                    "requested_target_mbps": args.target,
+                                    "passed": False,
+                                    "error": f"DUT config failed: {exc}",
+                                    "stats": {},
+                                    "link_validation": link_validation,
+                                    "noise_dbm": args.noise_dbm,
+                                }
+                            )
+                            continue
                     targets = _resolve_traffic_targets(
                         bandwidth=bandwidth,
                         mcs=mcs,
@@ -814,6 +823,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         default=perf["artifact_dir"],
         help="Base directory under reports/artifacts/ for per-run artifacts",
+    )
+    parser.add_argument(
+        "--skip-dut-config",
+        action="store_true",
+        help="Skip DUT recovery and radio MCS/bw apply; run TRex traffic only (lab pre-configured)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print matrix plan without running traffic")
     parser.add_argument(

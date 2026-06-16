@@ -164,6 +164,8 @@ performance:
   # BTS port 0 is 100M; cap TRex load to match lab NICs (not PHY sheet rates).
   use_dynamic_target: false
   target_mbps: 100
+  # qa-lab PC reaches TRex (192.168.1.x) but DUT mgmt IPv6 may be on another VLAN.
+  skip_dut_config: true
   trex_dl_bw: "100M"
   trex_ul_bw: "100M"
 
