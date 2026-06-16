@@ -26,8 +26,10 @@ OID_RX_RATE_BASE = ".1.3.6.1.4.1.52619.1.3.3.1.9"
 def _run_shell(cmd: str) -> str:
     try:
         return subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, text=True).strip()
-    except Exception:
-        return ""
+    except Exception as exc:
+        # Preserve SSH/auth/permission failures to help SSH-only debugging.
+        output = getattr(exc, "output", None) or ""
+        return str(output).strip()
 
 
 def _parse_snmp_value(output: str) -> str:
@@ -149,7 +151,10 @@ def _fetch_link_clients_via_ssh(
             f"tx=$(cat {base}/tx_tput 2>/dev/null || echo ''); "
             f"rx=$(cat {base}/rx_tput 2>/dev/null || echo ''); "
             f"rtx=$(cat {base}/avg_rtx 2>/dev/null || echo ''); "
-            "printf 'LINKS=%s\nTX=%s\nRX=%s\nRTX=%s\n' \"$links\" \"$tx\" \"$rx\" \"$rtx\""
+            "echo LINKS=$links; "
+            "echo TX=$tx; "
+            "echo RX=$rx; "
+            "echo RTX=$rtx"
         )
 
         cmd = (
