@@ -137,11 +137,11 @@ def _fetch_link_clients_via_ssh(
     ssh_host = shlex.quote(host)
     ssh_user_q = shlex.quote(ssh_user)
 
-    # Many benches use radio_idx=1 for config + sysfs stats, while SNMP uses
-    # snmp_radio_index (often 2). Try both so SSH-only mode keeps working.
+    # Sysfs wifi interface index can vary by bench (and sometimes differs from
+    # snmp_radio_index). Try a small range so SSH-only mode keeps working.
     candidate_indices = []
-    for idx in (1, int(radio_idx)):
-        if idx not in candidate_indices:
+    for idx in (0, 1, 2, 3, int(radio_idx), 4):
+        if idx >= 0 and idx not in candidate_indices:
             candidate_indices.append(idx)
 
     for ridx in candidate_indices:
