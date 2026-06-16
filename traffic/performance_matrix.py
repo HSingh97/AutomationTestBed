@@ -88,6 +88,8 @@ def _apply_profile_run_defaults(args, profile_bundle) -> None:
         args.trex_server_cores = int(traffic_trex["server_cores"])
     if perf_section.get("skip_dut_config"):
         args.skip_dut_config = True
+    if perf_section.get("link_stats_source"):
+        args.link_stats_source = str(perf_section["link_stats_source"]).strip()
 
 
 def _resolve_stand_profile_args(args) -> None:
