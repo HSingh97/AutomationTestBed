@@ -474,12 +474,12 @@ def _has_running_trex_server(
         trex_server,
         trex_user,
         trex_password,
-        "pgrep -af 't-rex-64' || pgrep -af '_t-rex-64' || true",
+        "ps -eo pid=,args= | grep -E '[/_]t-rex-64 -i' | grep -v grep || true",
         timeout_s=15,
         check=False,
     )
     output = "\n".join(part for part in [result.stdout, result.stderr] if part).strip()
-    return "t-rex-64" in output or "_t-rex-64" in output
+    return bool(output)
 
 
 def _all_trex_servers_running(
