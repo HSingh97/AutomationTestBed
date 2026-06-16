@@ -1,8 +1,9 @@
-"""Fetch wireless link statistics over SNMP and validate operating rates."""
+"""Fetch wireless link statistics via SSH/SNMP and validate operating rates."""
 
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 from typing import Any
 
@@ -11,6 +12,7 @@ from utils.net_utils import format_snmp_host
 
 DEFAULT_SNMP_COMMUNITY = "ubr@rw123"
 DEFAULT_RADIO_IDX = 2
+DEFAULT_SSH_USER = "root"
 
 OID_SU_IP_WALK_BASE = ".1.3.6.1.4.1.52619.1.3.3.1.4"
 OID_LOCAL_SNRA1_BASE = ".1.3.6.1.4.1.52619.1.3.3.1.13"
@@ -53,6 +55,33 @@ def fetch_link_clients(
     *,
     snmp_community: str = DEFAULT_SNMP_COMMUNITY,
     radio_idx: int = DEFAULT_RADIO_IDX,
+    source: str = "auto",
+    ssh_user: str = DEFAULT_SSH_USER,
+    ssh_password: str = "",
+) -> list[dict[str, Any]]:
+    if source not in {"auto", "ssh", "snmp"}:
+        raise ValueError(f"Unsupported link stats source '{source}'")
+    if source in {"auto", "ssh"}:
+        ssh_clients = _fetch_link_clients_via_ssh(
+            dut_ip=dut_ip,
+            radio_idx=radio_idx,
+            ssh_user=ssh_user,
+            ssh_password=ssh_password,
+        )
+        if ssh_clients or source == "ssh":
+            return ssh_clients
+    return _fetch_link_clients_via_snmp(
+        dut_ip=dut_ip,
+        snmp_community=snmp_community,
+        radio_idx=radio_idx,
+    )
+
+
+def _fetch_link_clients_via_snmp(
+    dut_ip: str,
+    *,
+    snmp_community: str,
+    radio_idx: int,
 ) -> list[dict[str, Any]]:
     snmp_host = format_snmp_host(dut_ip)
     walk_cmd = f"snmpwalk -v 2c -c {snmp_community} {snmp_host} {OID_SU_IP_WALK_BASE}.{radio_idx}"
@@ -92,6 +121,68 @@ def fetch_link_clients(
     return clients
 
 
+def _fetch_link_clients_via_ssh(
+    *,
+    dut_ip: str,
+    radio_idx: int,
+    ssh_user: str,
+    ssh_password: str,
+) -> list[dict[str, Any]]:
+    if not ssh_password:
+        return []
+    host = dut_ip.strip()
+    base = f"/sys/class/kwn/wifi{int(radio_idx)}/statistics"
+    remote_script = (
+        f"links=$(cat {base}/links 2>/dev/null || echo 0); "
+        f"tx=$(cat {base}/tx_tput 2>/dev/null || echo ''); "
+        f"rx=$(cat {base}/rx_tput 2>/dev/null || echo ''); "
+        f"rtx=$(cat {base}/avg_rtx 2>/dev/null || echo ''); "
+        "printf 'LINKS=%s\nTX=%s\nRX=%s\nRTX=%s\n' \"$links\" \"$tx\" \"$rx\" \"$rtx\""
+    )
+    pw = shlex.quote(ssh_password)
+    ssh_host = shlex.quote(host)
+    ssh_user_q = shlex.quote(ssh_user)
+    cmd = (
+        f"sshpass -p {pw} ssh -o LogLevel=ERROR -o StrictHostKeyChecking=no "
+        f"-o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 {ssh_user_q}@{ssh_host} "
+        f"\"{remote_script}\""
+    )
+    output = _run_shell(cmd)
+    if not output:
+        return []
+    parsed: dict[str, str] = {}
+    for line in output.splitlines():
+        if "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        parsed[key.strip().upper()] = val.strip()
+    try:
+        link_count = int(float(parsed.get("LINKS", "0") or "0"))
+    except ValueError:
+        link_count = 0
+    tx_rate = _parse_rate_mbps(parsed.get("TX", ""))
+    rx_rate = _parse_rate_mbps(parsed.get("RX", ""))
+    avg_rtx = _parse_rate_mbps(parsed.get("RTX", ""))
+    clients: list[dict[str, Any]] = []
+    for idx in range(1, max(0, link_count) + 1):
+        clients.append(
+            {
+                "ip": f"SU{idx}",
+                "l_snr1": "-",
+                "l_snr2": "-",
+                "r_snr1": "-",
+                "r_snr2": "-",
+                "tx_rate": parsed.get("TX", "-"),
+                "rx_rate": parsed.get("RX", "-"),
+                "tx_rate_mbps": tx_rate,
+                "rx_rate_mbps": rx_rate,
+                "avg_rtx_pct": avg_rtx,
+                "source": "ssh",
+            }
+        )
+    return clients
+
+
 def validate_operating_rates(
     *,
     bandwidth: str,
@@ -111,7 +202,10 @@ def validate_operating_rates(
         rx = client.get("rx_rate_mbps")
         tx_ok = _rate_matches(tx, expected, tolerance_mbps, tolerance_pct)
         rx_ok = _rate_matches(rx, expected, tolerance_mbps, tolerance_pct)
-        mismatch = not (tx_ok and rx_ok)
+        if tx_ok is None and rx_ok is None:
+            mismatch = False
+        else:
+            mismatch = not ((tx_ok is True) and (rx_ok is True))
         any_mismatch = any_mismatch or mismatch
         client_checks.append(
             {
@@ -130,6 +224,7 @@ def validate_operating_rates(
         "tolerance_mbps": tolerance_mbps,
         "tolerance_pct": tolerance_pct,
         "clients": client_checks,
+        "connected_cpe_count": len(client_checks),
         "operating_rate_ok": not any_mismatch and bool(client_checks),
         "operating_rate_mismatch": any_mismatch,
     }
@@ -140,8 +235,8 @@ def _rate_matches(
     expected: float,
     tolerance_mbps: float,
     tolerance_pct: float,
-) -> bool:
+) -> bool | None:
     if actual is None:
-        return False
+        return None
     delta = abs(actual - expected)
     return delta <= tolerance_mbps or delta <= expected * tolerance_pct

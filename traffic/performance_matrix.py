@@ -215,9 +215,17 @@ def _fetch_link_validation(
     spatial_stream: int,
     tolerance_mbps: float = 10.0,
     tolerance_pct: float = 0.08,
+    source: str = "auto",
+    ssh_user: str = "root",
+    ssh_password: str = "",
 ) -> dict[str, object]:
     clients = fetch_link_clients(
-        dut_ip, snmp_community=snmp_community, radio_idx=snmp_radio_index
+        dut_ip,
+        snmp_community=snmp_community,
+        radio_idx=snmp_radio_index,
+        source=source,
+        ssh_user=ssh_user,
+        ssh_password=ssh_password,
     )
     return validate_operating_rates(
         bandwidth=bandwidth,
@@ -241,6 +249,9 @@ def _wait_for_link_rate(
     tolerance_pct: float = 0.08,
     timeout_s: float = 45.0,
     poll_s: float = 3.0,
+    source: str = "auto",
+    ssh_user: str = "root",
+    ssh_password: str = "",
 ) -> dict[str, object]:
     """Poll SNMP until operating rate matches spec or timeout; always continue to TRex."""
     expected = operating_rate_mbps(bandwidth, mcs, spatial_streams=spatial_stream)
@@ -256,6 +267,9 @@ def _wait_for_link_rate(
             spatial_stream=spatial_stream,
             tolerance_mbps=tolerance_mbps,
             tolerance_pct=tolerance_pct,
+            source=source,
+            ssh_user=ssh_user,
+            ssh_password=ssh_password,
         )
         last_validation = validation
         if validation.get("operating_rate_ok"):
@@ -315,6 +329,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     recovery_manager = RecoveryManager(profile_bundle)
     dut = profile_bundle.active["dut"]
     dut_ip = _resolve_dut_ip(profile_bundle)
+    dut_link_ip = str(dut.get("ssh_host") or dut_ip)
     dut_user = args.dut_user or dut["username"]
     dut_password = args.dut_password or dut["password"]
 
@@ -327,6 +342,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     print("UBR PERFORMANCE MATRIX")
     print("=" * 72)
     print(f"DUT IP:           {dut_ip}")
+    print(f"DUT link stats:   {args.link_stats_source} via {dut_link_ip}")
     print(f"TRex BSU server:  {args.trex_server}")
     su_hosts = [h for h in (args.trex_server_su, args.trex_server_su2, args.trex_server_su3, args.trex_server_su4) if h]
     if su_hosts:
@@ -377,6 +393,23 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         }
 
     cpe_hosts = [str(ip) for ip in (dut.get("remote_ipv6s") or dut.get("remote_ips") or [])]
+    detected_clients = fetch_link_clients(
+        dut_link_ip,
+        snmp_community=args.snmp_community,
+        radio_idx=args.snmp_radio_index,
+        source=args.link_stats_source,
+        ssh_user=dut_user,
+        ssh_password=dut_password,
+    )
+    detected_count = len(detected_clients)
+    if detected_count > 0:
+        if args.su_count != detected_count:
+            print(f"[DUT] Connected CPE detected: {detected_count} (override su_count={args.su_count} -> {detected_count})")
+            args.su_count = detected_count
+        else:
+            print(f"[DUT] Connected CPE detected: {detected_count}")
+    else:
+        print(f"[WARN] Could not detect connected CPE count via {args.link_stats_source}; using su_count={args.su_count}")
     if not args.skip_dut_config:
         try:
             testbed_summary = asyncio.run(
@@ -425,7 +458,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 settle_s=args.radio_settle_s,
                             )
                             pre_trex_link_validation = _wait_for_link_rate(
-                                dut_ip,
+                                dut_link_ip,
                                 bandwidth=bandwidth,
                                 mcs=mcs,
                                 snmp_community=args.snmp_community,
@@ -434,6 +467,9 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 tolerance_mbps=args.rate_tolerance_mbps,
                                 tolerance_pct=args.rate_tolerance_pct,
                                 timeout_s=args.link_wait_s,
+                            source=args.link_stats_source,
+                            ssh_user=dut_user,
+                            ssh_password=dut_password,
                             )
                         except Exception as exc:
                             print(f"[ERROR] Failed to configure DUT for {bandwidth}/{mcs}/{ratio}: {exc}")
@@ -591,7 +627,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         }
                         validation = trex_result.get("validation") or {}
                         link_validation = _fetch_link_validation(
-                            dut_ip,
+                            dut_link_ip,
                             bandwidth=bandwidth,
                             mcs=mcs,
                             snmp_community=args.snmp_community,
@@ -599,6 +635,9 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             spatial_stream=int(args.spatial_stream),
                             tolerance_mbps=args.rate_tolerance_mbps,
                             tolerance_pct=args.rate_tolerance_pct,
+                            source=args.link_stats_source,
+                            ssh_user=dut_user,
+                            ssh_password=dut_password,
                         )
                         clients = link_validation.get("clients") or []
                         record["link_validation"] = link_validation
@@ -632,7 +671,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         record["noise_dbm"] = args.noise_dbm
                         try:
                             record["link_validation"] = _fetch_link_validation(
-                                dut_ip,
+                                dut_link_ip,
                                 bandwidth=bandwidth,
                                 mcs=mcs,
                                 snmp_community=args.snmp_community,
@@ -640,6 +679,9 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 spatial_stream=int(args.spatial_stream),
                                 tolerance_mbps=args.rate_tolerance_mbps,
                                 tolerance_pct=args.rate_tolerance_pct,
+                                source=args.link_stats_source,
+                                ssh_user=dut_user,
+                                ssh_password=dut_password,
                             )
                         except Exception:
                             failed_spec = lookup_spec(
@@ -800,6 +842,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--spatial-stream", default=perf["spatial_stream"],
                         help="Spatial streams (2 = use Dual column from spec sheet)")
     parser.add_argument("--snmp-community", default=perf.get("snmp_community", "ubr@rw123"))
+    parser.add_argument(
+        "--link-stats-source",
+        choices=["auto", "ssh", "snmp"],
+        default="auto",
+        help="Link stats source for CPE count and rate validation (default: auto=SSH then SNMP)",
+    )
     parser.add_argument("--noise-dbm", default=perf.get("noise_dbm", "-93"),
                         help="Noise floor shown in report when not polled")
     parser.add_argument("--rate-tolerance-mbps", type=float, default=10.0,

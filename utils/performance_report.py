@@ -136,6 +136,7 @@ def _render_result_row(record: dict[str, Any]) -> str:
           <td>{escape(str(record.get('bandwidth', '—')))}</td>
           <td>{escape(str(record.get('mcs', '—')))}</td>
           <td>{escape(str(record.get('ratio', '—')))}</td>
+          <td>{escape(str(link.get('connected_cpe_count', '—')))}</td>
           <td>{modulation_cell}</td>
           <td>{data_rate_cell}</td>
           <td>{_rate_actual_cell(primary.get('tx_rate_mbps'), primary.get('tx_rate_ok'))}</td>
@@ -156,7 +157,7 @@ def _render_results_table(records: list[dict[str, Any]]) -> str:
     rows = [_render_result_row(record) for record in records]
     if not rows:
         rows = [
-            "<tr><td colspan='14'>No performance iterations recorded.</td></tr>",
+            "<tr><td colspan='15'>No performance iterations recorded.</td></tr>",
         ]
     return f"""
     <div class="sheet-scroll">
@@ -166,6 +167,7 @@ def _render_results_table(records: list[dict[str, Any]]) -> str:
           <th rowspan="2">Bandwidth</th>
           <th rowspan="2">MCS</th>
           <th rowspan="2">DL:UL</th>
+          <th rowspan="2">Connected CPE</th>
           <th rowspan="2">Modulation</th>
           <th rowspan="2">Data Rate<br/><span class="muted">(Mbps)</span></th>
           <th colspan="2">Rate (Mbps)</th>
@@ -195,6 +197,7 @@ def write_summary_csv(records: list[dict[str, Any]], path: Path) -> None:
         "mcs",
         "mode",
         "ratio",
+        "connected_cpe_count",
         "expected_operating_rate_mbps",
         "actual_tx_rate_mbps",
         "actual_rx_rate_mbps",
@@ -226,6 +229,7 @@ def write_summary_csv(records: list[dict[str, Any]], path: Path) -> None:
                     "mcs": record.get("mcs"),
                     "mode": record.get("mode"),
                     "ratio": record.get("ratio"),
+                    "connected_cpe_count": link.get("connected_cpe_count"),
                     "expected_operating_rate_mbps": expected,
                     "actual_tx_rate_mbps": primary.get("tx_rate_mbps"),
                     "actual_rx_rate_mbps": primary.get("rx_rate_mbps"),
@@ -466,7 +470,7 @@ def write_html_report(
         <span class="tput-warn">orange 50–70%</span>,
         <span class="tput-bad">red &lt;50%</span>,
         <span class="tput-zero">zero = no traffic</span>.
-        <strong>Data rate</strong> is from the spec sheet; <strong>Tx/Rx</strong> are SNMP operating rates (green = match, red = mismatch).
+        <strong>Data rate</strong> is from the spec sheet; <strong>Tx/Rx</strong> are DUT link operating rates from SSH/SNMP (green = match, red = mismatch).
         Pink rows highlight data rate mismatch; throughput pass/fail is based on TRex unless
         <code>--fail-on-rate-mismatch</code> is enabled. Run errors (e.g. TRex ports down) also use pink rows.
       </p>
