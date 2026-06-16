@@ -183,6 +183,11 @@ def _fetch_link_clients_via_ssh(
         m = re.search(r"(\d+)", links_raw)
         link_count = int(m.group(1)) if m else 0
 
+        if link_count <= 0:
+            print(
+                f"[link_stats][ssh] wifi{ridx} LINKS raw={links_raw!r} TX={parsed.get('TX','')} RX={parsed.get('RX','')}"
+            )
+
         tx_rate = _parse_rate_mbps(parsed.get("TX", ""))
         rx_rate = _parse_rate_mbps(parsed.get("RX", ""))
         avg_rtx = _parse_rate_mbps(parsed.get("RTX", ""))
