@@ -102,8 +102,9 @@ pipeline {
         stage('Install Dependencies') {
             steps {
                 sh '''
-                    python3 -m pip install --upgrade pip
-                    python3 -m pip install -r requirements.txt
+                    python3 -m venv venv
+                    venv/bin/pip install --upgrade pip
+                    venv/bin/pip install -r requirements.txt
                 '''
             }
         }
@@ -128,7 +129,7 @@ pipeline {
 
                     sh 'rm -rf reports/artifacts/performance_* reports/artifacts/Performance_Report_*.html Senao_Performance_*.html || true'
 
-                    def cmd = new StringBuilder('PYTHONPATH=. python3 traffic/performance_matrix.py')
+                    def cmd = new StringBuilder('PYTHONPATH=. venv/bin/python traffic/performance_matrix.py')
                     cmd.append(" --bandwidths '${bandwidths}'")
                     cmd.append(" --mcs '${mcsList}'")
                     cmd.append(" --ratios '${ratio}'")
