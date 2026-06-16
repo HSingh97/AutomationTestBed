@@ -184,6 +184,13 @@ def _resolve_dut_ip(profile_bundle) -> str:
     return normalize_ip(str(dut.get("local_ip") or dut.get("local_ipv6") or ""))
 
 
+def _resolve_dut_ssh_ip(profile_bundle, dut_ip: str) -> str:
+    """SSH/mgmt reachability host — profile ssh_host overrides mgmt IPv6 when set."""
+    dut = profile_bundle.active["dut"]
+    ssh_host = str(dut.get("ssh_host") or "").strip()
+    return normalize_ip(ssh_host) if ssh_host else dut_ip
+
+
 def _artifact_name(bandwidth: str, mcs: str, mode: str, ratio: str) -> str:
     safe_ratio = ratio.replace(":", "_")
     return f"Throughput_{bandwidth}_{mcs}_{mode}_{safe_ratio}.json"
@@ -329,7 +336,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     recovery_manager = RecoveryManager(profile_bundle)
     dut = profile_bundle.active["dut"]
     dut_ip = _resolve_dut_ip(profile_bundle)
-    dut_link_ip = str(dut.get("ssh_host") or dut_ip)
+    dut_ssh_ip = _resolve_dut_ssh_ip(profile_bundle, dut_ip)
     dut_user = args.dut_user or dut["username"]
     dut_password = args.dut_password or dut["password"]
 
@@ -342,7 +349,9 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     print("UBR PERFORMANCE MATRIX")
     print("=" * 72)
     print(f"DUT IP:           {dut_ip}")
-    print(f"DUT link stats:   {args.link_stats_source} via {dut_link_ip}")
+    if dut_ssh_ip != dut_ip:
+        print(f"DUT SSH:          {dut_ssh_ip}")
+    print(f"DUT link stats:   {args.link_stats_source} via {dut_ssh_ip}")
     print(f"TRex BSU server:  {args.trex_server}")
     su_hosts = [h for h in (args.trex_server_su, args.trex_server_su2, args.trex_server_su3, args.trex_server_su4) if h]
     if su_hosts:
@@ -394,7 +403,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
 
     cpe_hosts = [str(ip) for ip in (dut.get("remote_ipv6s") or dut.get("remote_ips") or [])]
     detected_clients = fetch_link_clients(
-        dut_link_ip,
+        dut_ssh_ip,
         snmp_community=args.snmp_community,
         radio_idx=args.snmp_radio_index,
         source=args.link_stats_source,
@@ -418,7 +427,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         except Exception as exc:
             print(f"[WARN] Testbed summary collection failed: {exc}")
 
-        asyncio.run(_ensure_dut_ready(recovery_manager, dut_ip))
+        asyncio.run(_ensure_dut_ready(recovery_manager, dut_ssh_ip))
     else:
         print("[CONFIG] Skipping DUT recovery/radio config (--skip-dut-config); TRex traffic only")
 
@@ -443,7 +452,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                     else:
                         try:
                             configure_radio_profile(
-                                dut_ip,
+                                dut_ssh_ip,
                                 dut_user,
                                 dut_password,
                                 args.radio_index,
@@ -458,7 +467,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 settle_s=args.radio_settle_s,
                             )
                             pre_trex_link_validation = _wait_for_link_rate(
-                                dut_link_ip,
+                                dut_ssh_ip,
                                 bandwidth=bandwidth,
                                 mcs=mcs,
                                 snmp_community=args.snmp_community,
@@ -572,7 +581,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             trex_packet_size=args.packet_size,
                             trex_direction=direction,
                             trex_protocol=args.trex_proto,
-                            dut_host=dut_ip,
+                            dut_host=dut_ssh_ip,
                             dut_user=dut_user,
                             dut_password=dut_password,
                             dut_radio_idx=args.radio_index,
@@ -627,7 +636,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         }
                         validation = trex_result.get("validation") or {}
                         link_validation = _fetch_link_validation(
-                            dut_link_ip,
+                            dut_ssh_ip,
                             bandwidth=bandwidth,
                             mcs=mcs,
                             snmp_community=args.snmp_community,
@@ -671,7 +680,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         record["noise_dbm"] = args.noise_dbm
                         try:
                             record["link_validation"] = _fetch_link_validation(
-                                dut_link_ip,
+                                dut_ssh_ip,
                                 bandwidth=bandwidth,
                                 mcs=mcs,
                                 snmp_community=args.snmp_community,
