@@ -9,7 +9,7 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from traffic.operating_rate_table import lookup_spec, modulation_scheme
+from traffic.operating_rate_table import lookup_spec, modulation_scheme, operating_rate_mbps
 from utils.regression_report import _render_testbed_summary_table
 
 SENAO_LOGO_URL = (
@@ -110,9 +110,60 @@ def _rate_matches_expected(
     return delta <= tolerance_mbps or delta <= expected_mbps * tolerance_pct
 
 
+def _configured_mcs_number(record: dict[str, Any]) -> int | None:
+    mcs = str(record.get("mcs") or "").strip().upper()
+    if not mcs.startswith("MCS"):
+        return None
+    try:
+        return int(mcs.replace("MCS", ""))
+    except ValueError:
+        return None
+
+
+def _parse_display_mcs(raw: str | None) -> int | None:
+    match = re.search(r"\((\d+)\)", str(raw or ""))
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _operating_rate_matches_config(
+    raw: str | None,
+    record: dict[str, Any],
+    *,
+    tolerance_mbps: float = 10.0,
+    tolerance_pct: float = 0.08,
+) -> bool:
+    """True when on-air MCS and Mbps match the configured MCS (single or dual stream)."""
+    actual = _parse_rate_mbps_from_display(raw)
+    if actual is None:
+        return True
+    configured = _configured_mcs_number(record)
+    displayed = _parse_display_mcs(raw)
+    if configured is not None and displayed is not None and displayed != configured:
+        return False
+    bandwidth = str(record.get("bandwidth") or "")
+    mcs = str(record.get("mcs") or "")
+    if not bandwidth or not mcs:
+        return True
+    try:
+        dual = operating_rate_mbps(bandwidth, mcs, spatial_streams=2)
+        single = operating_rate_mbps(bandwidth, mcs, spatial_streams=1)
+    except (TypeError, ValueError):
+        return True
+    return _rate_matches_expected(
+        actual, dual, tolerance_mbps=tolerance_mbps, tolerance_pct=tolerance_pct
+    ) or _rate_matches_expected(
+        actual, single, tolerance_mbps=tolerance_mbps, tolerance_pct=tolerance_pct
+    )
+
+
 def _operating_rate_cell(
     raw: str | None,
-    expected_mbps: float,
+    record: dict[str, Any],
     *,
     tolerance_mbps: float = 10.0,
     tolerance_pct: float = 0.08,
@@ -120,16 +171,14 @@ def _operating_rate_cell(
     text = str(raw or "").strip()
     if not text or text == "-":
         return "—"
-    actual = _parse_rate_mbps_from_display(text)
     inner = escape(text)
-    if actual is not None and expected_mbps > 0:
-        if not _rate_matches_expected(
-            actual,
-            expected_mbps,
-            tolerance_mbps=tolerance_mbps,
-            tolerance_pct=tolerance_pct,
-        ):
-            return f'<span class="rate-mismatch">{inner}</span>'
+    if not _operating_rate_matches_config(
+        text,
+        record,
+        tolerance_mbps=tolerance_mbps,
+        tolerance_pct=tolerance_pct,
+    ):
+        return f'<span class="rate-mismatch">{inner}</span>'
     return inner
 
 
@@ -283,7 +332,6 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
     """One row per connected CPE (sheet-style grouping)."""
     rows: list[dict[str, Any]] = []
     stats = record.get("stats") or {}
-    _, expected_operating_rate = _resolve_row_spec(record)
     clients = _link_clients_for_record(record)
     for index, client in enumerate(clients, start=1):
         name = str(client.get("system_name") or client.get("name") or f"cpe{index}").strip()
@@ -312,8 +360,8 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
                 "snr_remote": _chain_pair(client.get("r_snr1"), client.get("r_snr2")),
                 "rssi_local": _chain_pair(client.get("l_rssi1"), client.get("l_rssi2")),
                 "rssi_remote": _chain_pair(client.get("r_rssi1"), client.get("r_rssi2")),
-                "tx_rate": _operating_rate_cell(tx_raw, expected_operating_rate),
-                "rx_rate": _operating_rate_cell(rx_raw, expected_operating_rate),
+                "tx_rate": _operating_rate_cell(tx_raw, record),
+                "rx_rate": _operating_rate_cell(rx_raw, record),
                 "tx_traffic": f"{float(trex_dl):.1f}" if trex_dl is not None else "—",
                 "rx_traffic": f"{float(trex_ul):.1f}" if trex_ul is not None else "—",
             }
