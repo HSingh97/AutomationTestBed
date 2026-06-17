@@ -93,6 +93,8 @@ def _apply_profile_run_defaults(args, profile_bundle) -> None:
         args.trex_server_cores = int(traffic_trex["server_cores"])
     if perf_section.get("skip_dut_config"):
         args.skip_dut_config = True
+    if perf_section.get("skip_config_if_unchanged") is not None:
+        args.skip_config_if_unchanged = bool(perf_section["skip_config_if_unchanged"])
     if perf_section.get("cpe_via_bts"):
         args.cpe_via_bts = True
     if perf_section.get("link_wait_s") is not None:
@@ -550,6 +552,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 settle_s=args.radio_settle_s,
                                 snmp_community=args.snmp_community,
                                 snmp_radio_idx=args.snmp_radio_index,
+                                skip_if_unchanged=args.skip_config_if_unchanged,
                             )
                             if not mcs_config.get("mcs_config_ok", True):
                                 err = str(
@@ -1032,6 +1035,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         default=perf["artifact_dir"],
         help="Base directory under reports/artifacts/ for per-run artifacts",
+    )
+    parser.add_argument(
+        "--skip-config-if-unchanged",
+        action=argparse.BooleanOptionalAction,
+        default=perf.get("skip_config_if_unchanged", True),
+        help="Skip MCS/bw/ratio apply when BTS + all CPEs already match target (default: on)",
     )
     parser.add_argument(
         "--skip-dut-config",

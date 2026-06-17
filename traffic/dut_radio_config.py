@@ -1222,6 +1222,56 @@ def _reapply_mcs_all_devices(
     )
 
 
+def radio_profile_already_matches(
+    bts_ip: str,
+    user: str,
+    password: str,
+    radio_idx: int,
+    bandwidth: str,
+    mcs_rate: str,
+    ratio: str,
+    spatial_stream: str = "2",
+    *,
+    cpe_radio_idx: int | None = None,
+    su_count: int = 1,
+    cpe_hosts: list[str] | None = None,
+    prefer_cpe_via_bts: bool = False,
+    ssh_timeout_s: int = 60,
+    snmp_community: str | None = None,
+    snmp_radio_idx: int = 2,
+) -> tuple[bool, dict[str, object]]:
+    """Return True when BTS bw/ratio and MCS on all devices already match the target."""
+    cpe_radio = cpe_radio_idx if cpe_radio_idx is not None else radio_idx
+    expected_bw = normalize_bandwidth(bandwidth)
+    dl_ul_percent = ratio_to_uci_dl_percent(ratio)
+    mcs_report = verify_mcs_all_devices(
+        bts_ip,
+        user,
+        password,
+        radio_idx,
+        cpe_radio,
+        mcs_rate,
+        spatial_stream,
+        su_count=su_count,
+        cpe_hosts=cpe_hosts,
+        prefer_cpe_via_bts=prefer_cpe_via_bts,
+        ssh_timeout_s=ssh_timeout_s,
+        snmp_community=snmp_community,
+        snmp_radio_idx=snmp_radio_idx,
+        bandwidth=expected_bw,
+    )
+    if not mcs_report.get("mcs_config_ok"):
+        return False, mcs_report
+
+    actual_bw = _read_uci(bts_ip, user, password, f"uci get wireless.wifi{radio_idx}.htmode")
+    actual_ratio = _read_uci(
+        bts_ip, user, password, f"uci get ath{radio_idx}qos.qoscfg.dlulratio"
+    )
+    bw_ok = actual_bw.strip().upper() == expected_bw
+    ratio_ok = actual_ratio.strip() == dl_ul_percent
+    return bw_ok and ratio_ok, mcs_report
+
+
 def configure_radio_profile(
     bts_ip: str,
     user: str,
@@ -1242,6 +1292,7 @@ def configure_radio_profile(
     verify: bool = True,
     snmp_community: str | None = None,
     snmp_radio_idx: int = 2,
+    skip_if_unchanged: bool = True,
 ) -> dict[str, object]:
     """
     Apply radio profile with MCS consistency as the primary gate.
@@ -1257,6 +1308,31 @@ def configure_radio_profile(
     cpe_radio = cpe_radio_idx if cpe_radio_idx is not None else radio_idx
     spec = lookup_spec(mcs_rate, bandwidth, spatial_streams=int(spatial_stream))
     effective_su_count = max(su_count, len([h for h in (cpe_hosts or []) if h.strip()]), 1)
+    if skip_if_unchanged:
+        matches, mcs_report = radio_profile_already_matches(
+            bts_ip,
+            user,
+            password,
+            radio_idx,
+            bandwidth,
+            mcs_rate,
+            ratio,
+            spatial_stream,
+            cpe_radio_idx=cpe_radio,
+            su_count=effective_su_count,
+            cpe_hosts=cpe_hosts,
+            prefer_cpe_via_bts=prefer_cpe_via_bts,
+            ssh_timeout_s=ssh_timeout_s,
+            snmp_community=snmp_community,
+            snmp_radio_idx=snmp_radio_idx,
+        )
+        if matches:
+            print(
+                f"[CONFIG] Already configured: {mcs_rate}, {bandwidth}, ratio={ratio} "
+                f"on BTS + {effective_su_count} CPE(s) — skipping apply"
+            )
+            return mcs_report
+
     print(
         f"[CONFIG] Target MCS {spec['mcs']} ({spec['modulation']}); "
         f"operating rate ~{spec['operating_rate_mbps']:.0f} Mbps checked after config"

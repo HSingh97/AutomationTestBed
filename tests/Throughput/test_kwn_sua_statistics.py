@@ -1,4 +1,5 @@
 from traffic.kwn_sua_statistics import (
+    _parse_bulk_kwn_output,
     fetch_kwn_sua_statistics,
     is_sua_associated,
     normalize_kwn_sua_client,
@@ -58,6 +59,39 @@ def test_format_rssi_dbm_keeps_negative_values():
 
     assert format_rssi_dbm("-52") == "-52"
     assert format_rssi_dbm("62") == "-62"
+
+
+def test_normalize_ignores_l_power_for_rssi_chain():
+    raw = {
+        "sua_index": 1,
+        "comb_rssi": "62",
+        "r_comb_rssi": "63",
+        "l_power": "1",
+        "r_power": "1",
+        "rx_rate": "1201",
+    }
+    client = normalize_kwn_sua_client(raw, display_index=1)
+    assert client["l_rssi1"] == "-62"
+    assert client["l_rssi2"] == "—"
+    assert client["r_rssi1"] == "-63"
+    assert client["r_rssi2"] == "—"
+
+
+def test_parse_bulk_kwn_output():
+    raw = (
+        "SUA_INDEX=1\n"
+        "ipv6=2001::1\n"
+        "tx_rate=1201\n"
+        "---\n"
+        "SUA_INDEX=3\n"
+        "ipv6=2001::3\n"
+        "rx_rate=1080\n"
+        "---\n"
+    )
+    slots = _parse_bulk_kwn_output(raw)
+    assert slots[1]["ipv6"] == "2001::1"
+    assert slots[1]["tx_rate"] == "1201"
+    assert slots[3]["rx_rate"] == "1080"
 
 
 def test_fetch_kwn_sua_statistics_uses_injected_reader():

@@ -169,9 +169,10 @@ performance:
   target_mbps: 800
   efficiency_factor: 0.70
   skip_dut_config: false
+  skip_config_if_unchanged: true
   cpe_via_bts: true
   # cpe_via_bts: skip direct lab-PC→CPE SSH; use BTS→CPE relay then remote_exec
-  link_wait_s: 90
+  link_wait_s: 10
   radio_settle_s: 10
   link_stats_source: ssh
 

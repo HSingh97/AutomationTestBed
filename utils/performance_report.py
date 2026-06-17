@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -127,6 +128,24 @@ def _ratio_sheet_label(ratio: str) -> str:
     return str(ratio).replace(":", "-")
 
 
+def _parse_tput_mbps(value: Any) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text in {"-", "—"}:
+        return None
+    try:
+        return float(text.replace(",", ""))
+    except ValueError:
+        match = re.search(r"([\d.]+)", text)
+        if not match:
+            return None
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return None
+
+
 def _trex_device_stats(stats: dict[str, Any], su_index: int) -> dict[str, Any]:
     trex = stats.get("trex") or {}
     by_device = trex.get("summary_by_device") or {}
@@ -147,7 +166,10 @@ def _unit_ip_cell(unit: str, ip: str) -> str:
     addr = escape(str(ip))
     if not addr or addr in {"—", "-"}:
         return f'<span class="unit-line">{name}</span>'
-    return f'<span class="unit-line">{name} <span class="unit-sep">·</span> <span class="unit-ip">{addr}</span></span>'
+    return (
+        f'<span class="unit-line">{name}</span>'
+        f'<span class="unit-ip">{addr}</span>'
+    )
 
 
 def _mcs_for_unit(record: dict[str, Any], *, su_index: int | None = None, label: str = "") -> str:
@@ -187,6 +209,10 @@ def _chain_pair(first: Any, second: Any) -> str:
         return "—"
     left = a1 if a1 and a1 != "-" else "—"
     right = a2 if a2 and a2 != "-" else "—"
+    if right in {"—", "-"}:
+        return left
+    if left in {"—", "-"}:
+        return right
     return f"{left}/{right}"
 
 
@@ -207,11 +233,15 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
         name = str(client.get("system_name") or client.get("name") or f"cpe{index}").strip()
         if name.upper().startswith("UBR630") or "BTS" in name.upper():
             continue
-        trex_su = index
+        trex_su = int(client.get("su_index") or client.get("sua_index") or index)
         su_label = f"SU{trex_su}"
         trex_dev = _trex_device_stats(stats, trex_su)
         trex_dl = trex_dev.get("avg_rx_mbps")
         trex_ul = trex_dev.get("avg_tx_mbps")
+        if trex_ul is None:
+            trex_ul = _parse_tput_mbps(
+                client.get("throughput_in_mbps") or client.get("rx_tput")
+            )
         mcs_raw = (
             str(client.get("operating_mcs") or client.get("rx_rate_mcs") or client.get("tx_rate_mcs") or "")
             or _mcs_for_unit(record, su_index=int(client.get("su_index") or trex_su), label=su_label)
@@ -564,7 +594,7 @@ def write_html_report(
     table.throughput-sheet col.col-ratio {{ width: 5%; }}
     table.throughput-sheet col.col-noise {{ width: 5%; }}
     table.throughput-sheet col.col-dur {{ width: 4%; }}
-    table.throughput-sheet col.col-unit {{ width: 12%; }}
+    table.throughput-sheet col.col-unit {{ width: 18%; }}
     table.throughput-sheet col.col-mcs {{ width: 8%; }}
     table.throughput-sheet col.col-snr {{ width: 5%; }}
     table.throughput-sheet col.col-rssi {{ width: 5%; }}
@@ -586,19 +616,22 @@ def write_html_report(
     table.throughput-sheet td[rowspan] {{ background: #fffbeb; font-weight: 600; vertical-align: middle; }}
     table.throughput-sheet .unit-line {{
       display: block;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
       font-weight: 600;
       text-align: left;
       font-size: 10px;
+      line-height: 1.25;
     }}
     table.throughput-sheet .unit-ip {{
+      display: block;
       font-family: Consolas, Monaco, monospace;
       font-weight: 400;
       font-size: 9px;
+      line-height: 1.35;
+      word-break: break-all;
+      white-space: normal;
+      color: #334155;
+      margin-top: 2px;
     }}
-    table.throughput-sheet .unit-sep {{ color: #94a3b8; padding: 0 2px; }}
     table.throughput-sheet .mcs-cell {{ line-height: 1.2; }}
     table.throughput-sheet .mcs-label {{ font-weight: 700; }}
     table.throughput-sheet .modulation {{ color: #64748b; font-size: 10px; }}

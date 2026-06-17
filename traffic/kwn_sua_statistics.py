@@ -184,16 +184,11 @@ def format_rssi_dbm(value: str | None) -> str:
 
 
 def _rssi_chain_values(raw: dict[str, Any]) -> tuple[str, str, str, str]:
-    """Local/remote RSSI A1/A2 from comb_rssi and optional per-chain power."""
+    """Local/remote RSSI from comb_rssi sysfs fields (not l_power/r_power)."""
     l_a1 = format_rssi_dbm(str(raw.get("comb_rssi") or ""))
-    l_a2 = format_rssi_dbm(str(raw.get("l_power") or ""))
     r_a1 = format_rssi_dbm(str(raw.get("r_comb_rssi") or ""))
-    r_a2 = format_rssi_dbm(str(raw.get("r_power") or ""))
-    if l_a2 == "—":
-        l_a2 = "—"
-    if r_a2 == "—":
-        r_a2 = "—"
-    return l_a1, l_a2, r_a1, r_a2
+    # Second-chain RSSI sysfs is not exposed; avoid l_power/r_power (tx power, not dBm RSSI).
+    return l_a1, "—", r_a1, "—"
 
 
 def normalize_kwn_sua_client(
@@ -263,6 +258,71 @@ def normalize_kwn_sua_client(
     }
 
 
+def _parse_bulk_kwn_output(raw: str) -> dict[int, dict[str, str]]:
+    """Parse one-SSH bulk dump of ``/sys/class/kwn/sua{N}/statistics`` fields."""
+    slots: dict[int, dict[str, str]] = {}
+    current_idx: int | None = None
+    current: dict[str, str] = {}
+    for line in raw.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        if text == "---":
+            if current_idx is not None:
+                slots[current_idx] = current
+            current_idx = None
+            current = {}
+            continue
+        if text.startswith("SUA_INDEX="):
+            if current_idx is not None:
+                slots[current_idx] = current
+            try:
+                current_idx = int(text.split("=", 1)[1])
+            except ValueError:
+                current_idx = None
+            current = {}
+            continue
+        if "=" in text and current_idx is not None:
+            key, value = text.split("=", 1)
+            if value != "-":
+                current[key] = value
+    if current_idx is not None:
+        slots[current_idx] = current
+    return slots
+
+
+def ssh_read_kwn_sysfs_bulk(
+    *,
+    host: str,
+    ssh_user: str = DEFAULT_SSH_USER,
+    ssh_password: str = "",
+    max_sua: int = 16,
+    fields: tuple[str, ...] = KWN_SUA_STAT_FIELDS,
+) -> dict[int, dict[str, str]]:
+    """Read all SUA statistics in a single SSH session."""
+    if not ssh_password:
+        return {}
+    field_list = " ".join(fields)
+    inner = (
+        f"for idx in $(seq 1 {max_sua}); do "
+        f'base="/sys/class/kwn/sua${{idx}}/statistics"; '
+        f'[ -d "$base" ] || continue; '
+        f'echo "SUA_INDEX=$idx"; '
+        f"for f in {field_list}; do "
+        f'printf "%s=" "$f"; cat "$base/$f" 2>/dev/null || echo -; echo; '
+        f"done; echo ---; done"
+    )
+    pw = shlex.quote(ssh_password)
+    ssh_host = shlex.quote(host)
+    ssh_user_q = shlex.quote(ssh_user)
+    cmd = (
+        f"sshpass -p {pw} ssh -o LogLevel=ERROR -o StrictHostKeyChecking=no "
+        f"-o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 {ssh_user_q}@{ssh_host} "
+        f"{shlex.quote(inner)}"
+    )
+    return _parse_bulk_kwn_output(_run_shell(cmd))
+
+
 def fetch_kwn_sua_statistics(
     dut_ip: str,
     *,
@@ -276,9 +336,23 @@ def fetch_kwn_sua_statistics(
     if not ssh_password and read_field is None:
         return []
 
+    bulk: dict[int, dict[str, str]] = {}
+    if read_field is None and ssh_password:
+        bulk = ssh_read_kwn_sysfs_bulk(
+            host=dut_ip,
+            ssh_user=ssh_user,
+            ssh_password=ssh_password,
+            max_sua=max_sua,
+        )
+
     def _read(path: str) -> str:
         if read_field is not None:
             return read_field(path)
+        match = re.search(r"/sua(\d+)/statistics/([^/]+)$", path)
+        if match and bulk:
+            sua_idx = int(match.group(1))
+            field = match.group(2)
+            return bulk.get(sua_idx, {}).get(field, "-")
         return ssh_read_sysfs_field(
             host=dut_ip,
             path=path,
@@ -290,10 +364,13 @@ def fetch_kwn_sua_statistics(
     for sua_idx in range(1, max_sua + 1):
         base = f"/sys/class/kwn/sua{sua_idx}/statistics"
         raw: dict[str, Any] = {"sua_index": sua_idx}
-        for field in KWN_SUA_STAT_FIELDS:
-            value = _read(f"{base}/{field}")
-            if value != "-":
-                raw[field] = value
+        if bulk and sua_idx in bulk:
+            raw.update(bulk[sua_idx])
+        else:
+            for field in KWN_SUA_STAT_FIELDS:
+                value = _read(f"{base}/{field}")
+                if value != "-":
+                    raw[field] = value
         if not is_sua_associated(raw):
             continue
         clients.append(
