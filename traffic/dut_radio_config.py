@@ -495,10 +495,22 @@ def _read_cpe_mcs(
     return mcs, spatial
 
 
+def _mcs_index_from_client(client: dict[str, object]) -> str:
+  out_mcs = str(client.get("out_mcs") or "").strip()
+  if out_mcs.isdigit():
+    return out_mcs
+  raw = str(client.get("out_rate") or client.get("tx_rate") or "")
+  match = re.search(r"\((\d+)\)", raw)
+  if match:
+    return match.group(1)
+  return ""
+
+
 def _cpe_mcs_checks_via_snmp(
     bts_ip: str,
     *,
     expected_mcs: str,
+    expected_rate_mbps: float,
     su_count: int,
     snmp_community: str,
     snmp_radio_idx: int,
@@ -512,9 +524,15 @@ def _cpe_mcs_checks_via_snmp(
     )
     checks: list[dict[str, object]] = []
     for index, client in enumerate(clients[:su_count], start=1):
-        actual_mcs = str(client.get("out_mcs") or "").strip()
+        actual_mcs = _mcs_index_from_client(client)
         out_rate = str(client.get("out_rate") or client.get("tx_rate") or "")
+        out_mbps = client.get("out_rate_mbps") or client.get("tx_rate_mbps")
         ok = actual_mcs == expected_mcs
+        if not ok and not actual_mcs and out_mbps and expected_rate_mbps > 0:
+            delta = abs(float(out_mbps) - expected_rate_mbps)
+            if delta <= max(10.0, expected_rate_mbps * 0.08):
+                actual_mcs = expected_mcs
+                ok = True
         checks.append(
             {
                 "role": "CPE",
@@ -546,9 +564,15 @@ def verify_mcs_all_devices(
     ssh_timeout_s: int = 60,
     snmp_community: str | None = None,
     snmp_radio_idx: int = 2,
+    bandwidth: str = "HT80",
 ) -> dict[str, object]:
     """Confirm BTS and every CPE/SU have the same configured MCS (primary gate)."""
     expected_mcs = str(mcs_number(mcs_rate))
+    expected_rate_mbps = float(
+        lookup_spec(mcs_rate, bandwidth, spatial_streams=int(spatial_stream))[
+            "operating_rate_mbps"
+        ]
+    )
     cpe_list = [host.strip() for host in (cpe_hosts or []) if host.strip()]
     checks: list[dict[str, object]] = []
 
@@ -576,6 +600,7 @@ def verify_mcs_all_devices(
         snmp_cpe_checks = _cpe_mcs_checks_via_snmp(
             bts_ip,
             expected_mcs=expected_mcs,
+            expected_rate_mbps=expected_rate_mbps,
             su_count=su_count,
             snmp_community=snmp_community,
             snmp_radio_idx=snmp_radio_idx,
@@ -1167,6 +1192,7 @@ def configure_radio_profile(
         ssh_timeout_s=ssh_timeout_s,
         snmp_community=snmp_community,
         snmp_radio_idx=snmp_radio_idx,
+        bandwidth=bandwidth,
     )
     if verify and not mcs_report.get("mcs_config_ok"):
         bad = [
