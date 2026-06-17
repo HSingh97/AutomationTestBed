@@ -34,6 +34,7 @@ def compute_traffic_targets(
     phy_overrides: dict[str, dict[str, float]] | None = None,
     legacy_mcs_caps: dict[str, float] | None = None,
     spatial_streams: int = 2,
+    su_count: int | None = None,
 ) -> dict[str, Any]:
     dl_ratio, ul_ratio = [float(part) for part in ratio.split(":")]
     total_ratio = dl_ratio + ul_ratio
@@ -63,7 +64,7 @@ def compute_traffic_targets(
     else:
         direction = "uplink"
 
-    return {
+    result: dict[str, Any] = {
         "bandwidth": normalize_bandwidth(bandwidth),
         "mcs": normalize_mcs(mcs),
         "ratio": ratio,
@@ -77,3 +78,8 @@ def compute_traffic_targets(
         "trex_ul_bw": f"{max(1, int(round(uplink_mbps)))}M",
         "trex_direction": direction,
     }
+    if su_count and su_count > 0:
+        result["su_count"] = su_count
+        result["downlink_per_cpe_mbps"] = round(downlink_mbps / su_count, 2)
+        result["uplink_per_cpe_mbps"] = round(uplink_mbps / su_count, 2)
+    return result

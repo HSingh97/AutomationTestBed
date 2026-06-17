@@ -86,6 +86,76 @@ def _throughput_cell(measured: float, target_mbps: float) -> str:
     return f"<span class='{css}'>{measured:.1f}</span><span class='muted'> ({pct:.0f}%)</span>"
 
 
+def _cpe_label(client: dict[str, Any], index: int) -> str:
+    ip = str(client.get("ip") or "").strip()
+    if ip and ip != "0.0.0.0":
+        return ip
+    return f"SU{index}"
+
+
+def _trex_device_stats(stats: dict[str, Any], su_index: int) -> dict[str, Any]:
+    trex = stats.get("trex") or {}
+    by_device = trex.get("summary_by_device") or {}
+    return by_device.get(f"SU{su_index}") or {}
+
+
+def _render_cpe_details_row(record: dict[str, Any], *, colspan: int = 15) -> str:
+    link = record.get("link_validation") or {}
+    clients = link.get("clients") or []
+    if not clients:
+        return ""
+
+    stats = record.get("stats") or {}
+    cpe_rows: list[str] = []
+    for index, client in enumerate(clients, start=1):
+        trex_dev = _trex_device_stats(stats, index)
+        trex_rx = trex_dev.get("avg_rx_mbps")
+        trex_rx_cell = f"{float(trex_rx):.1f}" if trex_rx is not None else "—"
+        cpe_rows.append(
+            f"""
+          <tr>
+            <td>{escape(_cpe_label(client, index))}</td>
+            <td>{_rate_actual_cell(client.get('tx_rate_mbps'), client.get('tx_rate_ok'))}</td>
+            <td>{_rate_actual_cell(client.get('rx_rate_mbps'), client.get('rx_rate_ok'))}</td>
+            <td>{escape(str(client.get('l_snr1', '—')))}</td>
+            <td>{escape(str(client.get('l_snr2', '—')))}</td>
+            <td>{escape(str(client.get('r_snr1', '—')))}</td>
+            <td>{escape(str(client.get('r_snr2', '—')))}</td>
+            <td>{trex_rx_cell}</td>
+          </tr>
+            """
+        )
+
+    return f"""
+        <tr class="cpe-detail-row">
+          <td colspan="{colspan}">
+            <div class="cpe-detail-wrap">
+              <div class="cpe-detail-title">Per-SU link &amp; TRex throughput</div>
+              <table class="cpe-sheet">
+                <thead>
+                  <tr>
+                    <th>CPE / SU</th>
+                    <th>Tx Rate<br/><span class="muted">(Mbps)</span></th>
+                    <th>Rx Rate<br/><span class="muted">(Mbps)</span></th>
+                    <th colspan="2">Local SNR (dB)</th>
+                    <th colspan="2">Remote SNR (dB)</th>
+                    <th>TRex Avg RX<br/><span class="muted">(Mbps)</span></th>
+                  </tr>
+                  <tr>
+                    <th></th><th></th><th></th>
+                    <th>A1</th><th>A2</th><th>A1</th><th>A2</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {''.join(cpe_rows)}
+                </tbody>
+              </table>
+            </div>
+          </td>
+        </tr>
+        """
+
+
 def _render_result_row(record: dict[str, Any]) -> str:
     stats = record.get("stats") or {}
     link = record.get("link_validation") or {}
@@ -131,7 +201,27 @@ def _render_result_row(record: dict[str, Any]) -> str:
         short = escape(error_text if len(error_text) <= 120 else error_text[:117] + "…")
         error_note = f"<br/><span class='muted'>{short}</span>"
 
-    return f"""
+    if len(clients) > 1:
+        link_metric_cell = "<span class='muted'>per SU ↓</span>"
+    else:
+        link_metric_cell = _rate_actual_cell(primary.get("tx_rate_mbps"), primary.get("tx_rate_ok"))
+
+    if len(clients) > 1:
+        rx_metric_cell = "<span class='muted'>per SU ↓</span>"
+    else:
+        rx_metric_cell = _rate_actual_cell(primary.get("rx_rate_mbps"), primary.get("rx_rate_ok"))
+
+    if len(clients) > 1:
+        snr_cells = ("<span class='muted'>per SU ↓</span>",) * 4
+    else:
+        snr_cells = (
+            escape(str(primary.get("l_snr1", "—"))),
+            escape(str(primary.get("l_snr2", "—"))),
+            escape(str(primary.get("r_snr1", "—"))),
+            escape(str(primary.get("r_snr2", "—"))),
+        )
+
+    summary_row = f"""
         <tr class="{row_class}">
           <td>{escape(str(record.get('bandwidth', '—')))}</td>
           <td>{escape(str(record.get('mcs', '—')))}</td>
@@ -139,18 +229,19 @@ def _render_result_row(record: dict[str, Any]) -> str:
           <td>{escape(str(link.get('connected_cpe_count', '—')))}</td>
           <td>{modulation_cell}</td>
           <td>{data_rate_cell}</td>
-          <td>{_rate_actual_cell(primary.get('tx_rate_mbps'), primary.get('tx_rate_ok'))}</td>
-          <td>{_rate_actual_cell(primary.get('rx_rate_mbps'), primary.get('rx_rate_ok'))}</td>
+          <td>{link_metric_cell}</td>
+          <td>{rx_metric_cell}</td>
           <td>{_throughput_cell(dl_mbps, dl_target)}{error_note}</td>
           <td>{_throughput_cell(ul_mbps, ul_target)}</td>
           <td>{_throughput_cell(bidi_mbps, bidi_target)}</td>
-          <td>{escape(str(primary.get('l_snr1', '—')))}</td>
-          <td>{escape(str(primary.get('l_snr2', '—')))}</td>
-          <td>{escape(str(primary.get('r_snr1', '—')))}</td>
-          <td>{escape(str(primary.get('r_snr2', '—')))}</td>
+          <td>{snr_cells[0]}</td>
+          <td>{snr_cells[1]}</td>
+          <td>{snr_cells[2]}</td>
+          <td>{snr_cells[3]}</td>
           <td>{escape(str(record.get('noise_dbm', '—')))}</td>
         </tr>
         """
+    return summary_row + _render_cpe_details_row(record)
 
 
 def _render_results_table(records: list[dict[str, Any]]) -> str:
@@ -300,9 +391,17 @@ def write_html_report(
         "MCS Rates",
         "Ratios",
         "Duration (s)",
+        "TRex client command",
     ):
         if key in run_meta:
-            meta_lines.append(f"<span><strong>{escape(key)}:</strong> {escape(run_meta[key])}</span>")
+            value = run_meta[key]
+            if key == "TRex client command":
+                meta_lines.append(
+                    f"<span class='trex-cmd'><strong>{escape(key)}:</strong> "
+                    f"<code>{escape(str(value))}</code></span>"
+                )
+            else:
+                meta_lines.append(f"<span><strong>{escape(key)}:</strong> {escape(value)}</span>")
 
     html_doc = f"""<!DOCTYPE html>
 <html lang="en">
@@ -414,6 +513,23 @@ def write_html_report(
     table.sheet tbody tr:nth-child(even) td {{ background: #fafcff; }}
     table.sheet tbody tr.rate-mismatch td {{ background: #fff8f8; }}
     table.sheet tbody tr.run-error td {{ background: #fff5f5; }}
+    table.sheet tbody tr.cpe-detail-row td {{
+      background: #f8fafc; padding: 10px 14px 14px; text-align: left;
+    }}
+    .cpe-detail-wrap {{ width: 100%; }}
+    .cpe-detail-title {{
+      font-size: 12px; font-weight: 600; color: var(--head); margin: 0 0 8px;
+    }}
+    table.cpe-sheet {{
+      width: 100%; border-collapse: collapse; font-size: 12px;
+      border: 1px solid var(--border); background: #fff;
+    }}
+    table.cpe-sheet th, table.cpe-sheet td {{
+      border: 1px solid var(--border); padding: 8px 10px; text-align: center;
+    }}
+    table.cpe-sheet thead th {{
+      background: #eef2ff; color: var(--head); font-weight: 600; font-size: 11px;
+    }}
     .muted {{ color: #64748b; font-size: 11px; }}
     .tput-good {{
       color: #166534; font-weight: 700; background: #dcfce7;
@@ -437,6 +553,14 @@ def write_html_report(
       padding: 2px 6px; border-radius: 4px;
     }}
     .footnote {{ margin-top: 14px; font-size: 12px; color: #64748b; line-height: 1.6; }}
+    .trex-cmd {{
+      display: block; margin-top: 8px; font-size: 12px; line-height: 1.5;
+    }}
+    .trex-cmd code {{
+      display: block; margin-top: 4px; padding: 8px 10px; background: #f1f5f9;
+      border-radius: 6px; font-family: Consolas, Monaco, monospace; font-size: 11px;
+      white-space: pre-wrap; word-break: break-all;
+    }}
   </style>
 </head>
 <body>

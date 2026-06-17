@@ -33,7 +33,7 @@ from traffic.link_stats import fetch_link_clients, validate_operating_rates
 from traffic.operating_rate_table import operating_rate_mbps
 from traffic.operating_rate_table import lookup_spec
 from traffic.phy_rate_targets import compute_traffic_targets
-from traffic.trex_runner import run_trex_stats_check, stop_remote_trex_servers
+from traffic.trex_runner import build_trex_client_command, run_trex_stats_check, stop_remote_trex_servers
 from utils.bench_config import profile_for_stand, recovery_profile_for_stand
 from utils.console_output import enable_live_console_output
 from utils.net_utils import normalize_ip
@@ -82,6 +82,8 @@ def _apply_profile_run_defaults(args, profile_bundle) -> None:
             args.use_dynamic_target = bool(perf_section["use_dynamic_target"])
         if perf_section.get("target_mbps") is not None:
             args.target = float(perf_section["target_mbps"])
+        if perf_section.get("efficiency_factor") is not None:
+            args.efficiency = float(perf_section["efficiency_factor"])
     if traffic_trex.get("server_startup_s"):
         args.trex_server_startup_s = int(traffic_trex["server_startup_s"])
     if traffic_trex.get("server_cores"):
@@ -133,6 +135,18 @@ def _traffic_profiles(ratios: list[str], *, include_directional: bool = True) ->
     return profiles
 
 
+def _format_traffic_target_log(targets: dict[str, object]) -> str:
+    dl = targets.get("trex_dl_bw")
+    ul = targets.get("trex_ul_bw")
+    line = f"TRex total DL={dl} UL={ul}"
+    su_count = targets.get("su_count")
+    dl_per = targets.get("downlink_per_cpe_mbps")
+    ul_per = targets.get("uplink_per_cpe_mbps")
+    if su_count and dl_per is not None and ul_per is not None:
+        line += f" | per CPE ({su_count}): DL={dl_per} UL={ul_per} Mbps"
+    return line
+
+
 def _resolve_traffic_targets(
     *,
     bandwidth: str,
@@ -141,6 +155,7 @@ def _resolve_traffic_targets(
     args: argparse.Namespace,
     phy_overrides: dict[str, dict[str, float]],
     legacy_mcs_caps: dict[str, float],
+    su_count: int | None = None,
 ) -> dict[str, object]:
     if args.use_dynamic_target:
         return compute_traffic_targets(
@@ -152,6 +167,7 @@ def _resolve_traffic_targets(
             phy_overrides=phy_overrides,
             legacy_mcs_caps=legacy_mcs_caps if not args.ignore_legacy_caps else None,
             spatial_streams=int(args.spatial_stream),
+            su_count=su_count,
         )
 
     dl_ratio, ul_ratio = _parse_ratio(ratio)
@@ -166,7 +182,7 @@ def _resolve_traffic_targets(
         direction = "downlink"
     else:
         direction = "uplink"
-    return {
+    result: dict[str, object] = {
         "phy_max_mbps": None,
         "efficiency_factor": args.efficiency,
         "effective_target_mbps": round(effective, 2),
@@ -177,6 +193,11 @@ def _resolve_traffic_targets(
         "trex_ul_bw": f"{max(1, int(round(uplink_total)))}M",
         "trex_direction": direction,
     }
+    if su_count and su_count > 0:
+        result["su_count"] = su_count
+        result["downlink_per_cpe_mbps"] = round(downlink_total / su_count, 2)
+        result["uplink_per_cpe_mbps"] = round(uplink_total / su_count, 2)
+    return result
 
 
 def _resolve_dut_ip(profile_bundle) -> str:
@@ -387,6 +408,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         args=args,
                         phy_overrides=phy_overrides,
                         legacy_mcs_caps=mcs_caps,
+                        su_count=args.su_count,
                     )
                     spec = lookup_spec(mcs, bandwidth, spatial_streams=int(args.spatial_stream))
                     print(
@@ -394,7 +416,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         f"BW={bandwidth} MCS={mcs} Mode={profile['name']} Ratio={profile['ratio']} | "
                         f"sheet_rate={spec['operating_rate_mbps']} Mbps, "
                         f"effective={targets['effective_target_mbps']} Mbps, "
-                        f"TRex DL={targets['trex_dl_bw']} UL={targets['trex_ul_bw']}"
+                        f"{_format_traffic_target_log(targets)}"
                     )
         return {
             "dry_run": True,
@@ -520,6 +542,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         args=args,
                         phy_overrides=phy_overrides,
                         legacy_mcs_caps=mcs_caps,
+                        su_count=args.su_count,
                     )
                     print(
                         f"\n--- [{iteration}/{total_iterations}] "
@@ -530,7 +553,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         f"Targets: sheet_operating_rate={spec['operating_rate_mbps']} Mbps, "
                         f"effective={targets['effective_target_mbps']} Mbps "
                         f"(efficiency={targets['efficiency_factor']:.0%}), "
-                        f"TRex DL={targets['trex_dl_bw']} UL={targets['trex_ul_bw']}"
+                        f"{_format_traffic_target_log(targets)}"
                     )
                     dl_bw = targets["trex_dl_bw"]
                     ul_bw = targets["trex_ul_bw"]
@@ -550,6 +573,8 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         "trex_dl_bw": dl_bw,
                         "trex_ul_bw": ul_bw,
                         "trex_direction": direction,
+                        "downlink_per_cpe_mbps": targets.get("downlink_per_cpe_mbps"),
+                        "uplink_per_cpe_mbps": targets.get("uplink_per_cpe_mbps"),
                         "link_validation": pre_trex_link_validation,
                         "started_at": datetime.now(timezone.utc).isoformat(),
                     }
@@ -610,6 +635,8 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 "uplink_target_mbps": targets.get("uplink_mbps"),
                                 "trex_dl_bw": dl_bw,
                                 "trex_ul_bw": ul_bw,
+                                "downlink_per_cpe_mbps": targets.get("downlink_per_cpe_mbps"),
+                                "uplink_per_cpe_mbps": targets.get("uplink_per_cpe_mbps"),
                             },
                             "config": {
                                 "target_mbps": effective_target,
@@ -752,6 +779,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         json.dump(summary, handle, indent=2)
 
     csv_path = output_dir / "performance_matrix_summary.csv"
+    trex_cmd_record = next((row for row in records if row.get("trex_dl_bw")), None)
     run_meta = {
         "executed_at": executed_at,
         "Bandwidths": ", ".join(bandwidths),
@@ -759,6 +787,23 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         "Ratios": ", ".join(bidir_ratios),
         "Duration (s)": str(args.time),
     }
+    if trex_cmd_record:
+        run_meta["TRex client command"] = build_trex_client_command(
+            trex_client_script=args.trex_client_script,
+            trex_pythonpath=args.trex_pythonpath,
+            trex_ports=args.trex_ports,
+            trex_server_su=args.trex_server_su or None,
+            trex_server_su2=args.trex_server_su2 or None,
+            trex_server_su3=args.trex_server_su3 or None,
+            trex_server_su4=args.trex_server_su4 or None,
+            trex_su_count=args.su_count,
+            trex_dl_bw=str(trex_cmd_record.get("trex_dl_bw")),
+            trex_ul_bw=str(trex_cmd_record.get("trex_ul_bw")),
+            trex_packet_size=args.packet_size,
+            duration_s=args.time,
+            trex_direction=str(trex_cmd_record.get("trex_direction") or "bidi"),
+            trex_protocol=args.trex_proto,
+        )
     write_summary_csv(records, csv_path)
     write_html_report(
         records=records,

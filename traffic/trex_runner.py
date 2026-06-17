@@ -762,6 +762,74 @@ def parse_trex_client_output(raw_output: str) -> dict[str, object]:
     }
 
 
+def build_trex_client_command(
+    *,
+    trex_client_script: str = "master_script_extended_16SU.py",
+    trex_pythonpath: str = "/opt/v3.06/automation/trex_control_plane/interactive/",
+    trex_ports: str = "0,1",
+    trex_server_su: str | None = None,
+    trex_server_su2: str | None = None,
+    trex_server_su3: str | None = None,
+    trex_server_su4: str | None = None,
+    trex_su_count: int = 1,
+    trex_dl_bw: str = "400M",
+    trex_ul_bw: str = "400M",
+    trex_subw: str | None = None,
+    trex_packet_size: int = 1500,
+    duration_s: int = 30,
+    trex_direction: str = "bidi",
+    trex_protocol: str = "udp",
+    trex_vlan: int | None = None,
+    trex_enable_graph: bool = False,
+) -> str:
+    """Return the shell snippet run on the BSU TRex host to launch the client."""
+    client_dir, client_name = _normalize_client_script(trex_client_script)
+    client_cd = "cd ~" if client_dir == "~" else f"cd {shlex.quote(client_dir)}"
+    client_args = [
+        "python3",
+        shlex.quote(client_name),
+        "--debug",
+        "--server-bsu",
+        "127.0.0.1",
+        "--su",
+        str(trex_su_count),
+        "--dl-bw",
+        trex_dl_bw,
+        "--ul-bw",
+        trex_ul_bw,
+        "--size",
+        str(trex_packet_size),
+        "--duration",
+        str(duration_s),
+        "--dir",
+        trex_direction,
+        "--proto",
+        trex_protocol,
+    ]
+    if trex_server_su:
+        client_args.extend(["--server-su", trex_server_su])
+    if trex_server_su2:
+        client_args.extend(["--server-su2", trex_server_su2])
+    if trex_server_su3:
+        client_args.extend(["--server-su3", trex_server_su3])
+    if trex_server_su4:
+        client_args.extend(["--server-su4", trex_server_su4])
+    if trex_subw:
+        client_args.extend(["--subw", trex_subw])
+    if trex_vlan is not None:
+        client_args.extend(["--vlan", str(trex_vlan)])
+    if trex_enable_graph:
+        client_args.append("--graph")
+    return "\n".join(
+        [
+            f"export PYTHONPATH={shlex.quote(trex_pythonpath)}",
+            f"export TREX_PORTS={shlex.quote(trex_ports)}",
+            client_cd,
+            " ".join(client_args),
+        ]
+    )
+
+
 def run_trex_stats_check(
     *,
     trex_server: str,
@@ -822,52 +890,26 @@ def run_trex_stats_check(
         )
         trex_client_script = deployed_path
 
-    client_dir, client_name = _normalize_client_script(trex_client_script)
-    client_cd = "cd ~" if client_dir == "~" else f"cd {shlex.quote(client_dir)}"
-    client_args = [
-        "python3",
-        shlex.quote(client_name),
-        "--debug",
-        "--server-bsu",
-        "127.0.0.1",
-        "--su",
-        str(trex_su_count),
-        "--dl-bw",
-        trex_dl_bw,
-        "--ul-bw",
-        trex_ul_bw,
-        "--size",
-        str(trex_packet_size),
-        "--duration",
-        str(duration_s),
-        "--dir",
-        trex_direction,
-        "--proto",
-        trex_protocol,
-    ]
-    if trex_server_su:
-        client_args.extend(["--server-su", trex_server_su])
-    if trex_server_su2:
-        client_args.extend(["--server-su2", trex_server_su2])
-    if trex_server_su3:
-        client_args.extend(["--server-su3", trex_server_su3])
-    if trex_server_su4:
-        client_args.extend(["--server-su4", trex_server_su4])
-    if trex_subw:
-        client_args.extend(["--subw", trex_subw])
-    if trex_vlan is not None:
-        client_args.extend(["--vlan", str(trex_vlan)])
-    if trex_enable_graph:
-        client_args.append("--graph")
-    client_script = "\n".join(
-        [
-            "set -euo pipefail",
-            f"export PYTHONPATH={shlex.quote(trex_pythonpath)}",
-            f"export TREX_PORTS={shlex.quote(trex_ports)}",
-            client_cd,
-            " ".join(client_args),
-        ]
+    client_script = build_trex_client_command(
+        trex_client_script=trex_client_script,
+        trex_pythonpath=trex_pythonpath,
+        trex_ports=trex_ports,
+        trex_server_su=trex_server_su,
+        trex_server_su2=trex_server_su2,
+        trex_server_su3=trex_server_su3,
+        trex_server_su4=trex_server_su4,
+        trex_su_count=trex_su_count,
+        trex_dl_bw=trex_dl_bw,
+        trex_ul_bw=trex_ul_bw,
+        trex_subw=trex_subw,
+        trex_packet_size=trex_packet_size,
+        duration_s=duration_s,
+        trex_direction=trex_direction,
+        trex_protocol=trex_protocol,
+        trex_vlan=trex_vlan,
+        trex_enable_graph=trex_enable_graph,
     )
+    client_script = "\n".join(["set -euo pipefail", client_script])
 
     dut_counters: dict[str, object] = {"pre": None, "samples": [], "post": None}
     started_at = _utc_now()
