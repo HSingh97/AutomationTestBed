@@ -7,7 +7,6 @@ import time
 import re
 
 from pages.commands import RootCommands
-from traffic.link_stats import fetch_link_clients
 from traffic.operating_rate_table import lookup_spec, mcs_number, normalize_bandwidth
 from utils.net_utils import format_ssh_host, is_ipv6_literal, normalize_ip
 
@@ -495,60 +494,6 @@ def _read_cpe_mcs(
     return mcs, spatial
 
 
-def _mcs_index_from_client(client: dict[str, object]) -> str:
-  out_mcs = str(client.get("out_mcs") or "").strip()
-  if out_mcs.isdigit():
-    return out_mcs
-  raw = str(client.get("out_rate") or client.get("tx_rate") or "")
-  match = re.search(r"\((\d+)\)", raw)
-  if match:
-    return match.group(1)
-  return ""
-
-
-def _cpe_mcs_checks_via_snmp(
-    bts_ip: str,
-    *,
-    expected_mcs: str,
-    expected_rate_mbps: float,
-    su_count: int,
-    snmp_community: str,
-    snmp_radio_idx: int,
-) -> list[dict[str, object]]:
-    """Read per-SU downlink MCS index from BTS link SNMP (matches device GUI)."""
-    clients = fetch_link_clients(
-        bts_ip,
-        snmp_community=snmp_community,
-        radio_idx=snmp_radio_idx,
-        source="snmp",
-    )
-    checks: list[dict[str, object]] = []
-    for index, client in enumerate(clients[:su_count], start=1):
-        actual_mcs = _mcs_index_from_client(client)
-        out_rate = str(client.get("out_rate") or client.get("tx_rate") or "")
-        out_mbps = client.get("out_rate_mbps") or client.get("tx_rate_mbps")
-        ok = actual_mcs == expected_mcs
-        if not ok and not actual_mcs and out_mbps and expected_rate_mbps > 0:
-            delta = abs(float(out_mbps) - expected_rate_mbps)
-            if delta <= max(10.0, expected_rate_mbps * 0.08):
-                actual_mcs = expected_mcs
-                ok = True
-        checks.append(
-            {
-                "role": "CPE",
-                "label": f"SU{index}",
-                "su_index": index,
-                "ip": client.get("ip") or "",
-                "expected_mcs": expected_mcs,
-                "actual_mcs": actual_mcs or out_rate,
-                "out_rate": out_rate,
-                "source": "snmp",
-                "ok": ok,
-            }
-        )
-    return checks
-
-
 def verify_mcs_all_devices(
     bts_ip: str,
     user: str,
@@ -566,13 +511,8 @@ def verify_mcs_all_devices(
     snmp_radio_idx: int = 2,
     bandwidth: str = "HT80",
 ) -> dict[str, object]:
-    """Confirm BTS and every CPE/SU have the same configured MCS (primary gate)."""
+    """Confirm BTS and every CPE/SU have the same configured MCS (UCI ddrsrate)."""
     expected_mcs = str(mcs_number(mcs_rate))
-    expected_rate_mbps = float(
-        lookup_spec(mcs_rate, bandwidth, spatial_streams=int(spatial_stream))[
-            "operating_rate_mbps"
-        ]
-    )
     cpe_list = [host.strip() for host in (cpe_hosts or []) if host.strip()]
     checks: list[dict[str, object]] = []
 
@@ -588,6 +528,7 @@ def verify_mcs_all_devices(
             "expected_mcs": expected_mcs,
             "actual_mcs": bts_mcs,
             "spatial_stream": bts_spatial,
+            "source": "uci",
             "ok": bts_mcs == expected_mcs and bts_spatial == spatial_stream,
         }
     )
@@ -595,50 +536,47 @@ def verify_mcs_all_devices(
     cpe_remote_indices = _discover_cpe_remote_exec_indices(
         bts_ip, user, password, su_count=su_count, ssh_timeout_s=ssh_timeout_s
     )
-    snmp_cpe_checks: list[dict[str, object]] = []
-    if snmp_community:
-        snmp_cpe_checks = _cpe_mcs_checks_via_snmp(
-            bts_ip,
-            expected_mcs=expected_mcs,
-            expected_rate_mbps=expected_rate_mbps,
-            su_count=su_count,
-            snmp_community=snmp_community,
-            snmp_radio_idx=snmp_radio_idx,
+    if len(cpe_remote_indices) < su_count:
+        print(
+            f"[WARN] Found {len(cpe_remote_indices)} CPE remote_exec index(es) "
+            f"for su_count={su_count}; will use BTS→CPE SSH where addresses are known"
         )
 
-    if snmp_cpe_checks and len(snmp_cpe_checks) >= su_count:
-        print(f"[MCS] CPE verify via SNMP link table ({len(snmp_cpe_checks)} SU(s))")
-        checks.extend(snmp_cpe_checks)
-    else:
-        if len(cpe_remote_indices) < su_count:
-            print(
-                f"[WARN] Found {len(cpe_remote_indices)} CPE remote_exec index(es) "
-                f"for su_count={su_count}"
-            )
-        for su_index in range(1, su_count + 1):
-            cpe_ip = cpe_list[su_index - 1] if su_index <= len(cpe_list) else None
-            remote_idx = (
-                cpe_remote_indices[su_index - 1]
-                if su_index - 1 < len(cpe_remote_indices)
-                else su_index
-            )
-            if not _remote_exec_is_cpe_target(
-                bts_ip, user, password, remote_idx, ssh_timeout_s=ssh_timeout_s
-            ):
-                checks.append(
-                    {
-                        "role": "CPE",
-                        "label": f"SU{su_index}",
-                        "su_index": su_index,
-                        "ip": cpe_ip or "",
-                        "expected_mcs": expected_mcs,
-                        "actual_mcs": "?",
-                        "spatial_stream": "",
-                        "ok": False,
-                        "error": f"remote_exec SU{remote_idx} does not reach CPE",
-                    }
+    for su_index in range(1, su_count + 1):
+        cpe_ip = cpe_list[su_index - 1] if su_index <= len(cpe_list) else None
+        remote_idx = (
+            cpe_remote_indices[su_index - 1]
+            if su_index - 1 < len(cpe_remote_indices)
+            else su_index
+        )
+        actual_mcs = ""
+        actual_spatial = ""
+        source = ""
+        error = ""
+
+        if cpe_ip and prefer_cpe_via_bts:
+            try:
+                actual_mcs = _read_cpe_uci_via_bts(
+                    bts_ip,
+                    cpe_ip,
+                    password,
+                    f"uci get txparam.ath{cpe_radio_idx}.ddrsrate",
+                    ssh_timeout_s=ssh_timeout_s,
                 )
-                continue
+                actual_spatial = _read_cpe_uci_via_bts(
+                    bts_ip,
+                    cpe_ip,
+                    password,
+                    f"uci get txparam.ath{cpe_radio_idx}.spatialstream",
+                    ssh_timeout_s=ssh_timeout_s,
+                )
+                source = "bts_ssh"
+            except RuntimeError as exc:
+                error = str(exc)
+
+        if not actual_mcs and _remote_exec_is_cpe_target(
+            bts_ip, user, password, remote_idx, ssh_timeout_s=ssh_timeout_s
+        ):
             actual_mcs, actual_spatial = _read_cpe_mcs(
                 bts_ip,
                 user,
@@ -649,6 +587,31 @@ def verify_mcs_all_devices(
                 prefer_bts_relay=False,
                 ssh_timeout_s=ssh_timeout_s,
             )
+            source = "remote_exec"
+            error = ""
+
+        if not actual_mcs and cpe_ip and not prefer_cpe_via_bts:
+            try:
+                actual_mcs = _read_cpe_uci_via_bts(
+                    bts_ip,
+                    cpe_ip,
+                    password,
+                    f"uci get txparam.ath{cpe_radio_idx}.ddrsrate",
+                    ssh_timeout_s=ssh_timeout_s,
+                )
+                actual_spatial = _read_cpe_uci_via_bts(
+                    bts_ip,
+                    cpe_ip,
+                    password,
+                    f"uci get txparam.ath{cpe_radio_idx}.spatialstream",
+                    ssh_timeout_s=ssh_timeout_s,
+                )
+                source = "bts_ssh"
+                error = ""
+            except RuntimeError as exc:
+                error = str(exc)
+
+        if not actual_mcs:
             checks.append(
                 {
                     "role": "CPE",
@@ -656,13 +619,28 @@ def verify_mcs_all_devices(
                     "su_index": su_index,
                     "ip": cpe_ip or "",
                     "expected_mcs": expected_mcs,
-                    "actual_mcs": actual_mcs,
-                    "spatial_stream": actual_spatial,
-                    "source": "remote_exec",
-                    "ok": actual_mcs == expected_mcs
-                    and (not actual_spatial or actual_spatial == spatial_stream),
+                    "actual_mcs": "?",
+                    "spatial_stream": "",
+                    "ok": False,
+                    "error": error or f"could not read UCI MCS for SU{su_index}",
                 }
             )
+            continue
+
+        checks.append(
+            {
+                "role": "CPE",
+                "label": f"SU{su_index}",
+                "su_index": su_index,
+                "ip": cpe_ip or "",
+                "expected_mcs": expected_mcs,
+                "actual_mcs": actual_mcs,
+                "spatial_stream": actual_spatial,
+                "source": source,
+                "ok": actual_mcs == expected_mcs
+                and (not actual_spatial or actual_spatial == spatial_stream),
+            }
+        )
 
     all_ok = all(bool(row.get("ok")) for row in checks)
     for row in checks:
@@ -1200,9 +1178,11 @@ def configure_radio_profile(
             for row in (mcs_report.get("checks") or [])
             if not row.get("ok")
         ]
-        raise RuntimeError(
+        mcs_report["error"] = (
             f"MCS config mismatch — not all devices have {mcs_rate}: {', '.join(bad)}"
         )
+        print(f"[ERROR] {mcs_report['error']}")
+        return mcs_report
 
     time.sleep(effective_settle)
     return mcs_report

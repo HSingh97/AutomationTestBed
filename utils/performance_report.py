@@ -116,13 +116,142 @@ def _iteration_heading(record: dict[str, Any], index: int, total: int) -> str:
     )
 
 
+def _status_badge(ok: bool | None, *, pass_label: str = "OK", fail_label: str = "FAIL") -> str:
+    if ok is True:
+        return f"<span class='badge pass'>{escape(pass_label)}</span>"
+    if ok is False:
+        return f"<span class='badge fail'>{escape(fail_label)}</span>"
+    return "<span class='badge neutral'>—</span>"
+
+
+def _mcs_cell(expected: str, actual: str, ok: bool | None) -> str:
+    actual_text = escape(actual or "—")
+    if ok is True:
+        return f"<span class='mark pass'>{actual_text}</span>"
+    if ok is False:
+        return (
+            f"<span class='mark fail'>{actual_text}</span>"
+            f"<br/><span class='muted'>expected {escape(expected)}</span>"
+        )
+    return actual_text
+
+
+def _render_status_strip(record: dict[str, Any]) -> str:
+    mcs_config = record.get("mcs_config") or {}
+    link = record.get("link_validation") or {}
+    skipped = bool(record.get("skipped_trex"))
+    mcs_ok = mcs_config.get("mcs_config_ok")
+    rate_ok = link.get("operating_rate_ok")
+    tput_ok = record.get("throughput_passed")
+    if skipped:
+        overall = "skipped"
+        overall_label = "SKIPPED"
+    elif record.get("passed") is True:
+        overall = "pass"
+        overall_label = "PASS"
+    elif record.get("passed") is False:
+        overall = "fail"
+        overall_label = "FAIL"
+    else:
+        overall = "neutral"
+        overall_label = "—"
+
+    rate_label = "Advisory" if rate_ok is False else ("OK" if rate_ok is True else "—")
+    tput_label = "—" if skipped else ("PASS" if tput_ok is True else ("FAIL" if tput_ok is False else "—"))
+
+    return f"""
+    <div class="status-strip">
+      <div class="status-item">
+        <div class="status-label">1 · Configured MCS</div>
+        {_status_badge(mcs_ok, pass_label="MATCH", fail_label="MISMATCH")}
+      </div>
+      <div class="status-item secondary">
+        <div class="status-label">2 · Operating Rate</div>
+        {_status_badge(rate_ok, pass_label="OK", fail_label=rate_label)}
+      </div>
+      <div class="status-item">
+        <div class="status-label">3 · Throughput</div>
+        {_status_badge(None if skipped else tput_ok, pass_label=tput_label, fail_label=tput_label)}
+      </div>
+      <div class="status-item overall {overall}">
+        <div class="status-label">Overall</div>
+        <span class="badge {overall}">{overall_label}</span>
+      </div>
+    </div>
+    """
+
+
+def _render_mcs_config_table(record: dict[str, Any]) -> str:
+    """Configured MCS from UCI on BTS + each CPE (primary gate)."""
+    mcs_config = record.get("mcs_config") or {}
+    checks = mcs_config.get("checks") or []
+    if not checks:
+        return (
+            "<p class='muted'>No configured-MCS verification captured for this iteration.</p>"
+        )
+
+    rows: list[str] = []
+    for row in checks:
+        ok = row.get("ok")
+        row_class = "mcs-mismatch" if ok is False else ""
+        ip = str(row.get("ip") or "—")
+        source = str(row.get("source") or "—")
+        rows.append(
+            f"""
+          <tr class="{row_class}">
+            <td>{escape(str(row.get('label') or '—'))}</td>
+            <td class="ip-cell">{escape(ip)}</td>
+            <td>{escape(str(row.get('expected_mcs') or '—'))}</td>
+            <td>{_mcs_cell(str(row.get('expected_mcs') or ''), str(row.get('actual_mcs') or ''), ok if isinstance(ok, bool) else None)}</td>
+            <td>{escape(str(row.get('spatial_stream') or '—'))}</td>
+            <td>{escape(source)}</td>
+            <td>{_status_badge(ok if isinstance(ok, bool) else None, pass_label="OK", fail_label="MISMATCH")}</td>
+          </tr>
+            """
+        )
+
+    configured = escape(str(mcs_config.get("configured_mcs") or record.get("mcs") or "—"))
+    return f"""
+    <div class="table-block primary-block">
+      <div class="table-title">Configured MCS <span class="tag primary">Primary gate</span></div>
+      <p class="table-desc">UCI <code>ddrsrate</code> on BTS and every CPE must match. Throughput is skipped when any device mismatches.</p>
+      <div class="sheet-scroll">
+        <table class="matrix mcs-matrix">
+          <thead>
+            <tr>
+              <th>Device</th>
+              <th>IP Address</th>
+              <th>Expected</th>
+              <th>Configured MCS</th>
+              <th>Spatial</th>
+              <th>Source</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {''.join(rows)}
+          </tbody>
+        </table>
+      </div>
+      <p class="inline-meta">Target profile: <strong>{configured}</strong></p>
+    </div>
+    """
+
+
 def _render_link_stream_table(record: dict[str, Any]) -> str:
-    """Per-SU link table aligned with BTS Monitor → Radio Statistics → Link."""
+    """Per-SU operating link rates (secondary — informational, does not block throughput)."""
     link = record.get("link_validation") or {}
     clients = link.get("clients") or []
     if not clients:
-        return "<p class='muted'>No per-SU link statistics captured.</p>"
+        return (
+            "<div class='table-block secondary-block'>"
+            "<div class='table-title'>Operating Link Rates "
+            "<span class='tag secondary'>Secondary</span></div>"
+            "<p class='muted'>No per-SU link statistics captured.</p></div>"
+        )
 
+    expected_rate = link.get("expected_operating_rate_mbps")
+    rate_mismatch = bool(link.get("operating_rate_mismatch"))
     stats = record.get("stats") or {}
     rows: list[str] = []
     for index, client in enumerate(clients, start=1):
@@ -134,7 +263,9 @@ def _render_link_stream_table(record: dict[str, Any]) -> str:
         local_snr = client.get("combined_local_snr") or "—"
         remote_snr = client.get("combined_remote_snr") or "—"
         ip = str(client.get("ip") or "—")
-        row_class = "rate-mismatch" if client.get("rate_mismatch") else ""
+        row_class = "rate-advisory" if client.get("rate_mismatch") else ""
+        out_mcs = client.get("out_mcs")
+        in_mcs = client.get("in_mcs")
         rows.append(
             f"""
           <tr class="{row_class}">
@@ -143,16 +274,28 @@ def _render_link_stream_table(record: dict[str, Any]) -> str:
             <td class="ip-cell">{escape(ip)}</td>
             <td>{escape(str(local_snr))} / {escape(str(remote_snr))}</td>
             <td>{_rate_actual_cell(client.get('out_rate'), client.get('out_rate_ok'))}</td>
+            <td>{escape(str(out_mcs) if out_mcs not in (None, '', '-') else '—')}</td>
             <td>{_rate_actual_cell(client.get('in_rate'), None)}</td>
+            <td>{escape(str(in_mcs) if in_mcs not in (None, '', '-') else '—')}</td>
             <td>{dl_cell}</td>
             <td>{ul_cell}</td>
           </tr>
             """
         )
 
+    advisory = ""
+    if rate_mismatch and expected_rate:
+        advisory = (
+            f"<p class='advisory-note'>Operating Out rate did not fully match "
+            f"the {float(expected_rate):.0f} Mbps sheet target on all SUs. "
+            f"This is reported for visibility only — throughput is not blocked.</p>"
+        )
+
     return f"""
-    <div class="table-block">
-      <div class="table-title">Link Stream Statistics (per SU)</div>
+    <div class="table-block secondary-block">
+      <div class="table-title">Operating Link Rates <span class="tag secondary">Secondary</span></div>
+      <p class="table-desc">Live link negotiation from BTS monitor / SNMP. Out rate is compared to the MCS sheet; mismatches are advisory.</p>
+      {advisory}
       <div class="sheet-scroll">
         <table class="matrix link-stream">
           <thead>
@@ -160,11 +303,13 @@ def _render_link_stream_table(record: dict[str, Any]) -> str:
               <th>#</th>
               <th>System Name</th>
               <th>IP Address</th>
-              <th>Combined SNR (dB)<br/><span class="muted">Local / Remote</span></th>
-              <th>Rate Out (Mbps)<br/><span class="muted">BTS → CPE</span></th>
-              <th>Rate In (Mbps)<br/><span class="muted">CPE → BTS</span></th>
-              <th>TRex DL RX<br/><span class="muted">(Mbps)</span></th>
-              <th>TRex UL TX<br/><span class="muted">(Mbps)</span></th>
+              <th>SNR (dB)<br/><span class="muted">Local / Remote</span></th>
+              <th>Out Rate<br/><span class="muted">BTS → CPE</span></th>
+              <th>Out MCS</th>
+              <th>In Rate<br/><span class="muted">CPE → BTS</span></th>
+              <th>In MCS</th>
+              <th>TRex DL<br/><span class="muted">Mbps</span></th>
+              <th>TRex UL<br/><span class="muted">Mbps</span></th>
             </tr>
           </thead>
           <tbody>
@@ -177,7 +322,17 @@ def _render_link_stream_table(record: dict[str, Any]) -> str:
 
 
 def _render_throughput_summary_table(record: dict[str, Any]) -> str:
-    """Final summary: MCS, ratio, total throughput, operating rate."""
+    """TRex throughput totals vs effective target."""
+    if record.get("skipped_trex"):
+        err = escape(str(record.get("error") or "Throughput skipped"))
+        return f"""
+    <div class="table-block">
+      <div class="table-title">Throughput Summary</div>
+      <p class='skip-note'>TRex was not run because configured MCS did not match on all devices.</p>
+      <p class='error-cell'>{err}</p>
+    </div>
+        """
+
     stats = record.get("stats") or {}
     link = record.get("link_validation") or {}
     spec, expected_rate = _resolve_row_spec(record)
@@ -201,29 +356,21 @@ def _render_throughput_summary_table(record: dict[str, Any]) -> str:
     rate_mismatch = bool(link.get("operating_rate_mismatch"))
     if expected_rate > 0 and rate_mismatch:
         data_rate_cell = (
-            f"<span class='mark fail'>{expected_rate:.0f}</span>"
-            f"<br/><span class='muted'>data rate mismatch</span>"
+            f"{expected_rate:.0f} Mbps"
+            f"<br/><span class='badge warn'>advisory mismatch</span>"
         )
     elif expected_rate > 0:
-        data_rate_cell = f"{expected_rate:.0f}"
+        data_rate_cell = f"{expected_rate:.0f} Mbps"
     else:
         data_rate_cell = "—"
 
-    passed = record.get("passed")
-    mcs_config = record.get("mcs_config") or {}
-    if mcs_config.get("mcs_config_ok") is True:
-        mcs_cell = "<span class='mark pass'>All devices OK</span>"
-    elif mcs_config.get("mcs_config_ok") is False:
-        mcs_cell = "<span class='mark fail'>MCS mismatch</span>"
-    else:
-        mcs_cell = "—"
-
+    passed = record.get("throughput_passed")
     if passed is True:
-        status_cell = "<span class='mark pass'>PASS</span>"
+        status_cell = "<span class='badge pass'>PASS</span>"
     elif passed is False:
-        status_cell = "<span class='mark fail'>FAIL</span>"
+        status_cell = "<span class='badge fail'>FAIL</span>"
     else:
-        status_cell = "—"
+        status_cell = "<span class='badge neutral'>—</span>"
 
     error_text = str(record.get("error") or "")
     error_row = ""
@@ -266,12 +413,6 @@ def _render_throughput_summary_table(record: dict[str, Any]) -> str:
             <td>DL {escape(str(record.get('trex_dl_bw', '—')))} · UL {escape(str(record.get('trex_ul_bw', '—')))}</td>
           </tr>
           <tr>
-            <th class="row-label">MCS Config (all devices)</th>
-            <td>{mcs_cell}</td>
-            <th class="row-label">Configured MCS</th>
-            <td>{escape(str(mcs_config.get('configured_mcs') or record.get('mcs') or '—'))}</td>
-          </tr>
-          <tr>
             <th class="row-label">Total Downlink RX</th>
             <td>{_throughput_cell(dl_mbps, dl_target)}</td>
             <th class="row-label">Total Uplink RX</th>
@@ -280,7 +421,7 @@ def _render_throughput_summary_table(record: dict[str, Any]) -> str:
           <tr>
             <th class="row-label">Total Bi-Directional</th>
             <td>{_throughput_cell(bidi_mbps, bidi_target)}</td>
-            <th class="row-label">Result</th>
+            <th class="row-label">Throughput Result</th>
             <td>{status_cell}</td>
           </tr>
           <tr>
@@ -297,6 +438,8 @@ def _render_throughput_summary_table(record: dict[str, Any]) -> str:
 def _render_result_block(record: dict[str, Any], *, index: int, total: int) -> str:
     return (
         _iteration_heading(record, index, total)
+        + _render_status_strip(record)
+        + _render_mcs_config_table(record)
         + _render_link_stream_table(record)
         + _render_throughput_summary_table(record)
     )
@@ -383,27 +526,46 @@ def _render_run_outcome_banner(records: list[dict[str, Any]]) -> str:
             "</div>"
         )
     passed = sum(1 for row in records if row.get("passed"))
+    skipped = sum(1 for row in records if row.get("skipped_trex"))
+    mcs_failed = sum(
+        1
+        for row in records
+        if (row.get("mcs_config") or {}).get("mcs_config_ok") is False
+    )
     failed = total - passed
     trex_errors = [
         str(row.get("error") or "")
         for row in records
-        if row.get("error") and "TRex" in str(row.get("error"))
+        if row.get("error") and "TRex" in str(row.get("error")) and not row.get("skipped_trex")
     ]
     if passed == total:
         css = "pass"
-        headline = f"<strong>{passed}/{total} passed</strong> — all throughput iterations completed."
+        headline = f"<strong>{passed}/{total} passed</strong> — throughput completed."
+    elif passed == 0 and skipped == total:
+        css = "fail"
+        headline = (
+            f"<strong>0/{total} throughput runs</strong> — "
+            f"all iterations skipped ({skipped} MCS gate failure(s))."
+        )
     elif passed == 0:
         css = "fail"
-        headline = f"<strong>0/{total} passed</strong> — no throughput data captured."
+        headline = f"<strong>0/{total} passed</strong> — no successful throughput iterations."
     else:
         css = "warn"
         headline = f"<strong>{passed}/{total} passed</strong>, {failed} failed or skipped."
+    detail_parts: list[str] = []
+    if skipped:
+        detail_parts.append(f"{skipped} skipped (MCS mismatch)")
+    if mcs_failed:
+        detail_parts.append(f"{mcs_failed} MCS config mismatch")
     detail = ""
+    if detail_parts:
+        detail = f"<br/><span class='muted'>{' · '.join(detail_parts)}</span>"
     if trex_errors:
         sample = escape(trex_errors[0][:220])
         if len(trex_errors[0]) > 220:
             sample += "…"
-        detail = f"<br/><span class='muted'>TRex: {sample}</span>"
+        detail += f"<br/><span class='muted'>TRex: {sample}</span>"
     return f'<div class="run-outcome {css}">{headline}{detail}</div>'
 
 
@@ -522,7 +684,49 @@ def write_html_report(
     .iteration-title {{
       margin: 0 0 14px; font-size: 15px; color: var(--head); font-weight: 600;
     }}
+    .status-strip {{
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px;
+      margin-bottom: 18px;
+    }}
+    .status-item {{
+      background: #f8fafc; border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px 14px; text-align: center;
+    }}
+    .status-item.secondary {{ background: #fffbeb; border-color: #fde68a; }}
+    .status-item.overall.pass {{ background: #f0fdf4; border-color: #bbf7d0; }}
+    .status-item.overall.fail {{ background: #fff5f5; border-color: #fecaca; }}
+    .status-item.overall.skipped {{ background: #f8fafc; border-color: #cbd5e1; }}
+    .status-label {{ font-size: 11px; color: #64748b; margin-bottom: 6px; font-weight: 600; }}
+    .badge {{
+      display: inline-block; padding: 4px 10px; border-radius: 999px;
+      font-size: 12px; font-weight: 700; letter-spacing: 0.3px;
+    }}
+    .badge.pass {{ background: #dcfce7; color: #166534; }}
+    .badge.fail {{ background: #fee2e2; color: #991b1b; }}
+    .badge.warn {{ background: #ffedd5; color: #9a3412; }}
+    .badge.neutral {{ background: #e2e8f0; color: #475569; }}
+    .badge.skipped {{ background: #e2e8f0; color: #475569; }}
     .table-block {{ margin-bottom: 18px; }}
+    .table-block.primary-block {{
+      border: 1px solid #bfdbfe; border-radius: 12px; padding: 14px 16px; background: #f8fbff;
+    }}
+    .table-block.secondary-block {{
+      border: 1px solid #fde68a; border-radius: 12px; padding: 14px 16px; background: #fffdf5;
+    }}
+    .table-desc {{ margin: 0 0 10px; font-size: 12px; color: #64748b; line-height: 1.5; }}
+    .table-desc code {{ font-size: 11px; }}
+    .inline-meta {{ margin: 10px 0 0; font-size: 12px; color: #475569; }}
+    .tag {{
+      display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 999px;
+      font-size: 10px; font-weight: 700; vertical-align: middle;
+    }}
+    .tag.primary {{ background: #dbeafe; color: #1d4ed8; }}
+    .tag.secondary {{ background: #fef3c7; color: #b45309; }}
+    .advisory-note, .skip-note {{
+      margin: 0 0 10px; padding: 10px 12px; border-radius: 8px; font-size: 12px; line-height: 1.5;
+    }}
+    .advisory-note {{ background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }}
+    .skip-note {{ background: #fff5f5; border: 1px solid #fecaca; color: #991b1b; }}
     .table-title {{
       font-size: 13px; font-weight: 700; color: var(--head); margin: 0 0 8px;
       text-transform: uppercase; letter-spacing: 0.4px;
@@ -545,7 +749,8 @@ def write_html_report(
       text-align: left; background: #f8fafc; color: var(--title);
       font-size: 13px; font-weight: 600; padding-left: 14px; width: 18%;
     }}
-    table.matrix tbody tr.rate-mismatch td {{ background: #fff8f8; }}
+    table.matrix tbody tr.rate-advisory td {{ background: #fffdf5; }}
+    table.matrix tbody tr.mcs-mismatch td {{ background: #fff5f5; }}
     table.summary-matrix td {{ text-align: left; }}
     .sheet-scroll {{ width: 100%; overflow-x: auto; }}
     .muted {{ color: #64748b; font-size: 11px; }}
@@ -607,13 +812,12 @@ def write_html_report(
       {outcome_banner}
       {results_table}
       <p class="footnote">
-        <strong>Link table</strong> mirrors BTS Monitor → Link: Out/In rates include MCS index when available.
-        Out rate (BTS→CPE) is validated against the configured MCS; In rate (uplink) is informational.
-        <strong>Throughput summary</strong> uses TRex totals vs effective target split by DL:UL ratio
+        <strong>1 · Configured MCS</strong> reads UCI on BTS and each CPE — must match before TRex runs.
+        <strong>2 · Operating rate</strong> is live link negotiation (SNMP/monitor); mismatches are advisory only.
+        <strong>3 · Throughput</strong> uses TRex totals vs effective target split by DL:UL ratio
         (<span class="tput-good">green ≥70%</span>,
         <span class="tput-warn">orange 50–70%</span>,
         <span class="tput-bad">red &lt;50%</span>).
-        Pink per-SU rows highlight Out-rate mismatch with the MCS sheet.
       </p>
     </section>
   </div>

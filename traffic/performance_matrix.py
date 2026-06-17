@@ -542,7 +542,33 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 snmp_community=args.snmp_community,
                                 snmp_radio_idx=args.snmp_radio_index,
                             )
-                            print("[DUT] MCS configured on all devices — polling operating rate (secondary)")
+                            if not mcs_config.get("mcs_config_ok", True):
+                                err = str(
+                                    mcs_config.get("error")
+                                    or "MCS config mismatch — throughput skipped"
+                                )
+                                print(f"[ERROR] {err}")
+                                records.append(
+                                    {
+                                        "bandwidth": bandwidth,
+                                        "mcs": mcs,
+                                        "mode": mode,
+                                        "ratio": ratio,
+                                        "requested_target_mbps": args.target,
+                                        "passed": False,
+                                        "skipped_trex": True,
+                                        "error": err,
+                                        "stats": {},
+                                        "mcs_config": mcs_config,
+                                        "link_validation": {},
+                                        "noise_dbm": args.noise_dbm,
+                                    }
+                                )
+                                continue
+                            print(
+                                "[DUT] MCS configured on all devices — "
+                                "polling operating rate (secondary, does not block TRex)"
+                            )
                             pre_trex_link_validation = _wait_for_link_rate(
                                 dut_ssh_ip,
                                 bandwidth=bandwidth,
@@ -553,9 +579,9 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 tolerance_mbps=args.rate_tolerance_mbps,
                                 tolerance_pct=args.rate_tolerance_pct,
                                 timeout_s=args.link_wait_s,
-                            source=args.link_stats_source,
-                            ssh_user=dut_user,
-                            ssh_password=dut_password,
+                                source=args.link_stats_source,
+                                ssh_user=dut_user,
+                                ssh_password=dut_password,
                             )
                         except Exception as exc:
                             print(f"[ERROR] Failed to configure DUT for {bandwidth}/{mcs}/{ratio}: {exc}")
@@ -744,7 +770,8 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         trex_passed = bool(validation.get("passed"))
                         rate_ok = bool(link_validation.get("operating_rate_ok"))
                         record["operating_rate_ok"] = rate_ok
-                        record["passed"] = trex_passed and (rate_ok or not args.fail_on_rate_mismatch)
+                        record["throughput_passed"] = trex_passed
+                        record["passed"] = trex_passed
                         record["stats"] = export
                         record["finished_at"] = datetime.now(timezone.utc).isoformat()
                         with artifact.open("w", encoding="utf-8") as handle:
