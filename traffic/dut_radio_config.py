@@ -409,6 +409,24 @@ def _apply_cpe_mcs(
     errors: list[str] = []
     verify_strict = not prefer_bts_relay
 
+    if prefer_bts_relay and cpe_ip:
+        try:
+            configure_cpe_mcs_via_bts_ssh(
+                bts_ip,
+                cpe_ip,
+                password,
+                radio_idx,
+                mcs_rate,
+                spatial_stream,
+                ssh_timeout_s=ssh_timeout_s,
+                verify=verify,
+            )
+            _push_cpe_link_apply(bts_ip, user, password, ssh_timeout_s=ssh_timeout_s)
+            return
+        except RuntimeError as exc:
+            errors.append(f"BTS→CPE SSH: {exc}")
+            print(f"[CPE] BTS→CPE SSH to {cpe_ip} failed, trying remote_exec SU{su_index}...")
+
     if prefer_bts_relay:
         configure_cpe_mcs_via_bts_remote_exec(
             bts_ip,
