@@ -162,12 +162,15 @@ performance:
   snmp_radio_index: 2
   duration_s: 30
   packet_size: 1500
-  # HT80 MCS23 sheet rate 1201 Mbps × ~70% efficiency → ~840 Mbps, cap at 800 Mbps total.
-  # 75:25 split → 600 Mbps DL + 200 Mbps UL; master_script divides across 4 CPE (150/50 each).
+  # HT80 MCS23 operating rate 1201 Mbps × ~70% efficiency → cap at 800 Mbps total.
+  # 75:25 → 600 Mbps DL + 200 Mbps UL; master_script divides across 4 CPE (150/50 each).
   use_dynamic_target: true
   target_mbps: 800
   efficiency_factor: 0.70
-  skip_dut_config: true
+  skip_dut_config: false
+  cpe_via_bts: true
+  link_wait_s: 90
+  radio_settle_s: 10
   link_stats_source: auto
 
 capture:

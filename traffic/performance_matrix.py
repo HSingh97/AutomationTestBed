@@ -90,6 +90,12 @@ def _apply_profile_run_defaults(args, profile_bundle) -> None:
         args.trex_server_cores = int(traffic_trex["server_cores"])
     if perf_section.get("skip_dut_config"):
         args.skip_dut_config = True
+    if perf_section.get("cpe_via_bts"):
+        args.cpe_via_bts = True
+    if perf_section.get("link_wait_s") is not None:
+        args.link_wait_s = float(perf_section["link_wait_s"])
+    if perf_section.get("radio_settle_s") is not None:
+        args.radio_settle_s = float(perf_section["radio_settle_s"])
     if perf_section.get("link_stats_source"):
         args.link_stats_source = str(perf_section["link_stats_source"]).strip()
 
@@ -147,6 +153,36 @@ def _format_traffic_target_log(targets: dict[str, object]) -> str:
     return line
 
 
+def _operating_rate_for_traffic(
+    *,
+    bandwidth: str,
+    mcs: str,
+    spatial_stream: int,
+    link_validation: dict[str, object] | None = None,
+) -> float:
+    """Operating data rate (Mbps) from MCS sheet; use measured link rate when lower."""
+    sheet_rate = operating_rate_mbps(bandwidth, mcs, spatial_streams=spatial_stream)
+    if not link_validation:
+        return sheet_rate
+    clients = link_validation.get("clients") or []
+    measured: list[float] = []
+    for client in clients:
+        for key in ("tx_rate_mbps", "rx_rate_mbps"):
+            value = client.get(key)
+            if value is not None and float(value) > 0:
+                measured.append(float(value))
+    if not measured:
+        return sheet_rate
+    stable = min(measured)
+    if stable < sheet_rate * 0.9:
+        print(
+            f"[TARGET] Measured link rate {stable:.0f} Mbps < sheet {sheet_rate:.0f} Mbps "
+            f"— using measured rate for TRex load"
+        )
+        return stable
+    return sheet_rate
+
+
 def _resolve_traffic_targets(
     *,
     bandwidth: str,
@@ -156,8 +192,15 @@ def _resolve_traffic_targets(
     phy_overrides: dict[str, dict[str, float]],
     legacy_mcs_caps: dict[str, float],
     su_count: int | None = None,
+    link_validation: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if args.use_dynamic_target:
+        operating_rate = _operating_rate_for_traffic(
+            bandwidth=bandwidth,
+            mcs=mcs,
+            spatial_stream=int(args.spatial_stream),
+            link_validation=link_validation,
+        )
         return compute_traffic_targets(
             bandwidth=bandwidth,
             mcs=mcs,
@@ -168,6 +211,7 @@ def _resolve_traffic_targets(
             legacy_mcs_caps=legacy_mcs_caps if not args.ignore_legacy_caps else None,
             spatial_streams=int(args.spatial_stream),
             su_count=su_count,
+            operating_rate_mbps=operating_rate,
         )
 
     dl_ratio, ul_ratio = _parse_ratio(ratio)
@@ -487,6 +531,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 cpe_hosts=cpe_hosts,
                                 cpe_radio_idx=args.cpe_radio_index,
                                 cpe_su_index=args.cpe_su_index,
+                                su_count=args.su_count,
                                 prefer_cpe_via_bts=args.cpe_via_bts,
                                 settle_s=args.radio_settle_s,
                             )
@@ -543,6 +588,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         phy_overrides=phy_overrides,
                         legacy_mcs_caps=mcs_caps,
                         su_count=args.su_count,
+                        link_validation=pre_trex_link_validation or None,
                     )
                     print(
                         f"\n--- [{iteration}/{total_iterations}] "
@@ -550,7 +596,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                     )
                     spec = lookup_spec(mcs, bandwidth, spatial_streams=int(args.spatial_stream))
                     print(
-                        f"Targets: sheet_operating_rate={spec['operating_rate_mbps']} Mbps, "
+                        f"Targets: operating_rate={targets.get('operating_rate_mbps', spec['operating_rate_mbps'])} Mbps, "
                         f"effective={targets['effective_target_mbps']} Mbps "
                         f"(efficiency={targets['efficiency_factor']:.0%}), "
                         f"{_format_traffic_target_log(targets)}"
@@ -566,6 +612,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         "ratio": ratio,
                         "requested_target_mbps": args.target,
                         "phy_max_mbps": targets.get("phy_max_mbps"),
+                        "operating_rate_mbps": targets.get("operating_rate_mbps"),
                         "efficiency_factor": targets.get("efficiency_factor"),
                         "effective_target_mbps": effective_target,
                         "downlink_target_mbps": targets.get("downlink_mbps"),
@@ -629,6 +676,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 "ratio": ratio,
                                 "requested_target_mbps": args.target,
                                 "phy_max_mbps": targets.get("phy_max_mbps"),
+                                "operating_rate_mbps": targets.get("operating_rate_mbps"),
                                 "efficiency_factor": targets.get("efficiency_factor"),
                                 "effective_target_mbps": effective_target,
                                 "downlink_target_mbps": targets.get("downlink_mbps"),
@@ -873,7 +921,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--use-dynamic-target",
         action=argparse.BooleanOptionalAction,
         default=perf.get("use_dynamic_target", True),
-        help="Derive TRex DL/UL from PHY max(bandwidth,MCS) x efficiency (default: on)",
+        help="Derive TRex DL/UL from operating data rate(MCS,bandwidth) x efficiency (default: on)",
     )
     parser.add_argument(
         "--ignore-legacy-caps",

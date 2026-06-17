@@ -361,6 +361,21 @@ def _apply_cpe_mcs(
 ) -> None:
     errors: list[str] = []
 
+    if prefer_bts_relay:
+        configure_cpe_mcs_via_bts_remote_exec(
+            bts_ip,
+            user,
+            password,
+            radio_idx,
+            mcs_rate,
+            spatial_stream,
+            su_index=su_index,
+            ssh_timeout_s=ssh_timeout_s,
+            verify=verify,
+        )
+        _push_cpe_link_apply(bts_ip, user, password, ssh_timeout_s=ssh_timeout_s)
+        return
+
     if cpe_ip and not prefer_bts_relay:
         try:
             configure_cpe_mcs(
@@ -413,6 +428,36 @@ def _apply_cpe_mcs(
         raise RuntimeError("All CPE MCS apply paths failed: " + " | ".join(errors)) from exc
 
 
+def _reapply_cpe_mcs_all_sus(
+    bts_ip: str,
+    user: str,
+    password: str,
+    radio_idx: int,
+    mcs_rate: str,
+    spatial_stream: str,
+    *,
+    su_count: int,
+    ssh_timeout_s: int = 60,
+) -> None:
+    """Re-push MCS to every SU after BTS bandwidth/ratio change (link retrain)."""
+    for su_index in range(1, su_count + 1):
+        try:
+            configure_cpe_mcs_via_bts_remote_exec(
+                bts_ip,
+                user,
+                password,
+                radio_idx,
+                mcs_rate,
+                spatial_stream,
+                su_index=su_index,
+                ssh_timeout_s=ssh_timeout_s,
+                verify=False,
+            )
+        except RuntimeError as exc:
+            print(f"[WARN] CPE SU{su_index} MCS re-apply after BTS: {exc}")
+    _push_cpe_link_apply(bts_ip, user, password, ssh_timeout_s=ssh_timeout_s)
+
+
 def configure_radio_profile(
     bts_ip: str,
     user: str,
@@ -426,6 +471,7 @@ def configure_radio_profile(
     cpe_hosts: list[str] | None = None,
     cpe_radio_idx: int | None = None,
     cpe_su_index: int = 1,
+    su_count: int = 1,
     prefer_cpe_via_bts: bool = False,
     settle_s: float = 4.0,
     ssh_timeout_s: int = 60,
@@ -433,8 +479,9 @@ def configure_radio_profile(
 ) -> None:
     """
     Apply radio profile across the link (order matters):
-      1. CPE(s): MCS only
+      1. CPE(s): MCS only (per SU via remote_exec when cpe_via_bts)
       2. BTS: bandwidth + DL/UL ratio + MCS
+      3. CPE(s): re-apply MCS after BTS change
     """
     effective_settle = _settle_seconds(bandwidth, settle_s)
     cpe_radio = cpe_radio_idx if cpe_radio_idx is not None else radio_idx
@@ -446,22 +493,24 @@ def configure_radio_profile(
         f"expected link rate {spec['operating_rate_mbps']:.0f} Mbps ({bandwidth}, spatial={spatial_stream})"
     )
 
-    print(f"[CONFIG] Step 1/2: CPE MCS={mcs_rate}")
+    effective_su_count = max(su_count, len(cpe_list), 1)
+    print(f"[CONFIG] Step 1/3: CPE MCS={mcs_rate} ({effective_su_count} SU(s))")
     if not cpe_list:
-        print("[WARN] No CPE hosts in profile — using BTS remote_exec only for CPE MCS")
-        configure_cpe_mcs_via_bts_remote_exec(
-            bts_ip,
-            user,
-            password,
-            cpe_radio,
-            mcs_rate,
-            spatial_stream,
-            su_index=cpe_su_index,
-            ssh_timeout_s=ssh_timeout_s,
-            verify=verify,
-        )
+        print("[CONFIG] No CPE mgmt IPs in profile — applying MCS via BTS remote_exec per SU")
+        for su_index in range(1, effective_su_count + 1):
+            configure_cpe_mcs_via_bts_remote_exec(
+                bts_ip,
+                user,
+                password,
+                cpe_radio,
+                mcs_rate,
+                spatial_stream,
+                su_index=su_index,
+                ssh_timeout_s=ssh_timeout_s,
+                verify=verify,
+            )
     else:
-        for cpe_ip in cpe_list:
+        for su_index, cpe_ip in enumerate(cpe_list, start=1):
             _apply_cpe_mcs(
                 bts_ip,
                 cpe_ip,
@@ -470,13 +519,13 @@ def configure_radio_profile(
                 cpe_radio,
                 mcs_rate,
                 spatial_stream,
-                su_index=cpe_su_index,
+                su_index=su_index,
                 ssh_timeout_s=ssh_timeout_s,
                 verify=verify,
                 prefer_bts_relay=prefer_cpe_via_bts,
             )
 
-    print(f"[CONFIG] Step 2/2: BTS bw={bandwidth}, ratio={ratio}, MCS={mcs_rate}")
+    print(f"[CONFIG] Step 2/3: BTS bw={bandwidth}, ratio={ratio}, MCS={mcs_rate}")
     configure_bts_radio(
         bts_ip,
         user,
@@ -490,6 +539,18 @@ def configure_radio_profile(
         verify=verify,
     )
     _push_cpe_link_apply(bts_ip, user, password, ssh_timeout_s=ssh_timeout_s)
+
+    print(f"[CONFIG] Step 3/3: Re-apply CPE MCS on SU1–SU{effective_su_count} after BTS change")
+    _reapply_cpe_mcs_all_sus(
+        bts_ip,
+        user,
+        password,
+        cpe_radio,
+        mcs_rate,
+        spatial_stream,
+        su_count=effective_su_count,
+        ssh_timeout_s=ssh_timeout_s,
+    )
 
     time.sleep(effective_settle)
 
