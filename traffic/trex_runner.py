@@ -36,6 +36,15 @@ LIVE_ROW_RE = re.compile(
 )
 SUMMARY_ROW_RE = re.compile(
     r"^\|\s*(?P<device>[A-Za-z0-9_]+)\s*\|"
+    r"\s*(?P<avg_tx>[\d,.]+|N/A)\s*\|"
+    r"\s*(?P<min_tx>[\d,.]+|N/A)\s*\|"
+    r"\s*(?P<max_tx>[\d,.]+|N/A)\s*\|"
+    r"\s*(?P<avg_rx>[\d,.]+|N/A)\s*\|"
+    r"\s*(?P<min_rx>[\d,.]+|N/A)\s*\|"
+    r"\s*(?P<max_rx>[\d,.]+|N/A)\s*\|$"
+)
+SUMMARY_ROW_LEGACY_RE = re.compile(
+    r"^\|\s*(?P<device>[A-Za-z0-9_]+)\s*\|"
     r"\s*(?P<avg_rx>[\d,.]+|N/A)\s*\|"
     r"\s*(?P<min_rx>[\d,.]+|N/A)\s*\|"
     r"\s*(?P<max_rx>[\d,.]+|N/A)\s*\|$"
@@ -650,6 +659,37 @@ def _enrich_summary_with_live_tx(
         summary_devices[device]["avg_tx_mbps"] = avg_tx
 
 
+def _parse_summary_row(line: str) -> tuple[str, dict[str, float]] | None:
+    match = SUMMARY_ROW_RE.match(line)
+    if match:
+        device = match.group("device")
+        if device.strip("-") == "":
+            return None
+        return device, {
+            "avg_tx_mbps": _to_float(match.group("avg_tx")),
+            "min_tx_mbps": _to_float(match.group("min_tx")),
+            "max_tx_mbps": _to_float(match.group("max_tx")),
+            "avg_rx_mbps": _to_float(match.group("avg_rx")),
+            "min_rx_mbps": _to_float(match.group("min_rx")),
+            "max_rx_mbps": _to_float(match.group("max_rx")),
+        }
+    legacy = SUMMARY_ROW_LEGACY_RE.match(line)
+    if legacy:
+        device = legacy.group("device")
+        if device.strip("-") == "":
+            return None
+        return device, {
+            "avg_rx_mbps": _to_float(legacy.group("avg_rx")),
+            "min_rx_mbps": _to_float(legacy.group("min_rx")),
+            "max_rx_mbps": _to_float(legacy.group("max_rx")),
+        }
+    return None
+
+
+def _sum_device_metric(rows: list[dict[str, float]], key: str) -> float:
+    return sum(float(row.get(key) or 0.0) for row in rows)
+
+
 def parse_trex_client_output(raw_output: str) -> dict[str, object]:
     lines = [_strip_ansi(line).rstrip() for line in raw_output.splitlines()]
 
@@ -718,13 +758,10 @@ def parse_trex_client_output(raw_output: str) -> dict[str, object]:
             continue
 
         if in_summary:
-            summary_match = SUMMARY_ROW_RE.match(line)
-            if summary_match:
-                summary_devices[summary_match.group("device")] = {
-                    "avg_rx_mbps": _to_float(summary_match.group("avg_rx")),
-                    "min_rx_mbps": _to_float(summary_match.group("min_rx")),
-                    "max_rx_mbps": _to_float(summary_match.group("max_rx")),
-                }
+            parsed_row = _parse_summary_row(line)
+            if parsed_row:
+                device, metrics = parsed_row
+                summary_devices[device] = metrics
             continue
 
         if in_consolidated:
@@ -749,24 +786,28 @@ def parse_trex_client_output(raw_output: str) -> dict[str, object]:
     live_uplink_tx = [sample["uplink"]["tx_mbps"] for sample in live_samples]
 
     bsu_summary = [
-        row for name, row in summary_devices.items() if name.upper().startswith("BSU") and name.upper() != "TOTAL"
+        row
+        for name, row in summary_devices.items()
+        if name.upper().startswith("BSU") and name.upper() != "TOTAL"
     ]
     su_summary = [
-        row for name, row in summary_devices.items() if not name.upper().startswith("BSU") and name.upper() != "TOTAL"
+        row
+        for name, row in summary_devices.items()
+        if not name.upper().startswith("BSU") and name.upper() != "TOTAL"
     ]
     total_summary = summary_devices.get("TOTAL", {})
 
     downlink = {
-        "tx_mbps": sum(row["avg_rx_mbps"] for row in bsu_summary) if bsu_summary else _avg(live_downlink_tx),
-        "rx_mbps": sum(row["avg_rx_mbps"] for row in su_summary) if su_summary else _avg(live_downlink_rx),
+        "tx_mbps": _sum_device_metric(bsu_summary, "avg_tx_mbps") or _avg(live_downlink_tx),
+        "rx_mbps": _sum_device_metric(su_summary, "avg_rx_mbps") or _avg(live_downlink_rx),
         "loss_pct": 0.0,
         "latency_ms": 0.0,
         "min_rx_mbps": min(live_downlink_rx) if live_downlink_rx else 0.0,
         "max_rx_mbps": max(live_downlink_rx) if live_downlink_rx else 0.0,
     }
     uplink = {
-        "tx_mbps": sum(row["avg_rx_mbps"] for row in su_summary) if su_summary else _avg(live_uplink_tx),
-        "rx_mbps": sum(row["avg_rx_mbps"] for row in bsu_summary) if bsu_summary else _avg(live_uplink_rx),
+        "tx_mbps": _sum_device_metric(su_summary, "avg_tx_mbps") or _avg(live_uplink_tx),
+        "rx_mbps": _sum_device_metric(bsu_summary, "avg_rx_mbps") or _avg(live_uplink_rx),
         "loss_pct": 0.0,
         "latency_ms": 0.0,
         "min_rx_mbps": min(live_uplink_rx) if live_uplink_rx else 0.0,

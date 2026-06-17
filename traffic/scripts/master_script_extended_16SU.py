@@ -177,7 +177,15 @@ def print_summary_table(size, direction, proto, result, port_map):
     if not history:
         return
     table = PrettyTable()
-    table.field_names = ["Device", "Avg RX (Mbps)", "Min RX (Mbps)", "Max RX (Mbps)"]
+    table.field_names = [
+        "Device",
+        "Avg TX (Mbps)",
+        "Min TX (Mbps)",
+        "Max TX (Mbps)",
+        "Avg RX (Mbps)",
+        "Min RX (Mbps)",
+        "Max RX (Mbps)",
+    ]
     table.align = "r"
     table.align["Device"] = "l"
     df = pd.DataFrame(history)
@@ -187,22 +195,50 @@ def print_summary_table(size, direction, proto, result, port_map):
     mapping = {(p["server"], p["port_id"]): p["label"] for p in port_map}
     df["label"] = df.apply(lambda row: mapping.get((row["server"], row["port"])), axis=1)
 
-    total_avg_accumulator = 0.0
+    total_tx_accumulator = 0.0
+    total_rx_accumulator = 0.0
     for label in sorted(df["label"].unique()):
         port_df = df[df["label"] == label]
         if port_df.empty:
             continue
+        avg_tx = port_df["tx_mbps"].mean()
+        min_tx = port_df["tx_mbps"].min()
+        max_tx = port_df["tx_mbps"].max()
         avg_rx = port_df["rx_mbps"].mean()
         min_rx = port_df["rx_mbps"].min()
         max_rx = port_df["rx_mbps"].max()
-        table.add_row([label, f"{avg_rx:.2f}", f"{min_rx:.2f}", f"{max_rx:.2f}"])
+        table.add_row(
+            [
+                label,
+                f"{avg_tx:.2f}",
+                f"{min_tx:.2f}",
+                f"{max_tx:.2f}",
+                f"{avg_rx:.2f}",
+                f"{min_rx:.2f}",
+                f"{max_rx:.2f}",
+            ]
+        )
         is_bsu = label == "BSU"
         if (direction == "downlink" and not is_bsu) or (direction == "uplink" and is_bsu) or (
             direction == "bidi"
         ):
-            total_avg_accumulator += avg_rx
-    table.add_row(["-" * 8, "-" * 15, "-" * 15, "-" * 15])
-    table.add_row(["TOTAL", f"{total_avg_accumulator:.2f}", "N/A", "N/A"])
+            total_rx_accumulator += avg_rx
+        if (direction == "downlink" and is_bsu) or (direction == "uplink" and not is_bsu) or (
+            direction == "bidi"
+        ):
+            total_tx_accumulator += avg_tx
+    table.add_row(["-" * 8, "-" * 15, "-" * 15, "-" * 15, "-" * 15, "-" * 15, "-" * 15])
+    table.add_row(
+        [
+            "TOTAL",
+            f"{total_tx_accumulator:.2f}",
+            "N/A",
+            "N/A",
+            f"{total_rx_accumulator:.2f}",
+            "N/A",
+            "N/A",
+        ]
+    )
     title = f" Summary for {size} / {direction.upper()} / {proto.upper()} (from Samples) "
     print("\n\n" + title.center(80, "="))
     print(table)
