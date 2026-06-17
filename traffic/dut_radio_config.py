@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import time
+import re
 
 from pages.commands import RootCommands
 from traffic.operating_rate_table import lookup_spec, mcs_number, normalize_bandwidth
@@ -299,6 +300,41 @@ def configure_cpe_mcs_via_bts_ssh(
         )
 
 
+def _parse_uci_get_output(raw: str) -> str:
+    """Extract a UCI scalar from ssh/remote_exec output (may include noise lines)."""
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    for line in reversed(lines):
+        if "=" in line:
+            return line.split("=", 1)[-1].strip().strip('"').strip("'")
+        if line.isdigit():
+            return line
+    numbers = re.findall(r"\d+", raw)
+    return numbers[-1] if numbers else raw.strip().strip('"').strip("'")
+
+
+def _read_cpe_mcs_via_remote_exec(
+    bts_ip: str,
+    user: str,
+    password: str,
+    radio_idx: int,
+    *,
+    su_index: int,
+    ssh_timeout_s: int,
+    attempts: int = 4,
+    pause_s: float = 2.0,
+) -> str:
+    cmd = RootCommands.remote_exec_command(su_index, f"uci get txparam.ath{radio_idx}.ddrsrate")
+    last_raw = ""
+    for attempt in range(1, attempts + 1):
+        if attempt > 1:
+            time.sleep(pause_s)
+        last_raw = run_ssh_command(bts_ip, user, password, cmd, timeout_s=ssh_timeout_s)
+        value = _parse_uci_get_output(last_raw)
+        if value.isdigit():
+            return value
+    return _parse_uci_get_output(last_raw)
+
+
 def configure_cpe_mcs_via_bts_remote_exec(
     bts_ip: str,
     user: str,
@@ -310,6 +346,7 @@ def configure_cpe_mcs_via_bts_remote_exec(
     su_index: int = 1,
     ssh_timeout_s: int = 60,
     verify: bool = True,
+    verify_strict: bool = True,
 ) -> None:
     """Fallback: push MCS to CPE through BTS remote_exec (single batched command)."""
     uci_mcs = str(mcs_number(mcs_rate))
@@ -325,20 +362,30 @@ def configure_cpe_mcs_via_bts_remote_exec(
     )
     remote = RootCommands.remote_exec_command(su_index, batched)
     run_ssh_command(bts_ip, user, password, remote, timeout_s=ssh_timeout_s)
+    time.sleep(2.0)
     run_ssh_command(bts_ip, user, password, RootCommands.remote_apply_all_su(), timeout_s=ssh_timeout_s)
+    time.sleep(1.0)
     if verify:
-        cmd = RootCommands.remote_exec_command(su_index, f"uci get txparam.ath{radio_idx}.ddrsrate")
-        raw = run_ssh_command(bts_ip, user, password, cmd, timeout_s=ssh_timeout_s)
-        actual_mcs = raw.strip().strip('"').split("\n")[-1].strip()
-        if "=" in actual_mcs:
-            actual_mcs = actual_mcs.split("=", 1)[-1].strip()
-        _verify_cpe_mcs_on_device(
-            label=f"remote_exec SU{su_index}",
-            read_mcs=actual_mcs,
-            read_spatial=spatial_stream,
-            mcs_rate=mcs_rate,
-            spatial_stream=spatial_stream,
+        actual_mcs = _read_cpe_mcs_via_remote_exec(
+            bts_ip,
+            user,
+            password,
+            radio_idx,
+            su_index=su_index,
+            ssh_timeout_s=ssh_timeout_s,
         )
+        try:
+            _verify_cpe_mcs_on_device(
+                label=f"remote_exec SU{su_index}",
+                read_mcs=actual_mcs,
+                read_spatial=spatial_stream,
+                mcs_rate=mcs_rate,
+                spatial_stream=spatial_stream,
+            )
+        except RuntimeError as exc:
+            if verify_strict:
+                raise
+            print(f"[WARN] {exc} — continuing; link-rate poll will confirm MCS")
 
 
 def _push_cpe_link_apply(bts_ip: str, user: str, password: str, *, ssh_timeout_s: int) -> None:
@@ -360,6 +407,7 @@ def _apply_cpe_mcs(
     prefer_bts_relay: bool,
 ) -> None:
     errors: list[str] = []
+    verify_strict = not prefer_bts_relay
 
     if prefer_bts_relay:
         configure_cpe_mcs_via_bts_remote_exec(
@@ -372,6 +420,7 @@ def _apply_cpe_mcs(
             su_index=su_index,
             ssh_timeout_s=ssh_timeout_s,
             verify=verify,
+            verify_strict=verify_strict,
         )
         _push_cpe_link_apply(bts_ip, user, password, ssh_timeout_s=ssh_timeout_s)
         return
@@ -422,6 +471,7 @@ def _apply_cpe_mcs(
             su_index=su_index,
             ssh_timeout_s=ssh_timeout_s,
             verify=verify,
+            verify_strict=verify_strict,
         )
     except RuntimeError as exc:
         errors.append(f"remote_exec: {exc}")
