@@ -622,6 +622,34 @@ def _sample_dut_counters(
     return snapshot
 
 
+def _device_avg_from_live(
+    live_samples: list[dict[str, object]],
+    field: str,
+) -> dict[str, float]:
+    buckets: dict[str, list[float]] = {}
+    for sample in live_samples:
+        devices = sample.get("devices") or {}
+        if not isinstance(devices, dict):
+            continue
+        for device, metrics in devices.items():
+            if not isinstance(metrics, dict):
+                continue
+            value = float(metrics.get(field) or 0.0)
+            buckets.setdefault(str(device), []).append(value)
+    return {device: _avg(values) for device, values in buckets.items() if values}
+
+
+def _enrich_summary_with_live_tx(
+    summary_devices: dict[str, dict[str, float]],
+    live_samples: list[dict[str, object]],
+) -> None:
+    """Summary table only lists Avg RX; add per-device Avg TX from live samples."""
+    tx_avgs = _device_avg_from_live(live_samples, "tx_mbps")
+    for device, avg_tx in tx_avgs.items():
+        summary_devices.setdefault(device, {})
+        summary_devices[device]["avg_tx_mbps"] = avg_tx
+
+
 def parse_trex_client_output(raw_output: str) -> dict[str, object]:
     lines = [_strip_ansi(line).rstrip() for line in raw_output.splitlines()]
 
@@ -710,6 +738,8 @@ def parse_trex_client_output(raw_output: str) -> dict[str, object]:
                 )
 
     finalize_sample()
+
+    _enrich_summary_with_live_tx(summary_devices, live_samples)
 
     live_combined_rx = [sample["combined"]["rx_mbps"] for sample in live_samples]
     live_combined_tx = [sample["combined"]["tx_mbps"] for sample in live_samples]

@@ -48,5 +48,6 @@ def test_parse_trex_client_output_extracts_live_and_summary_metrics():
     assert parsed["downlink"]["rx_mbps"] == 26.42
     assert parsed["uplink"]["rx_mbps"] == 9.32
     assert parsed["summary_by_device"]["SU1"]["avg_rx_mbps"] == 26.42
+    assert parsed["summary_by_device"]["SU1"]["avg_tx_mbps"] == 401.08
     assert parsed["consolidated_summary"][0]["bidi_mbps"] == 35.73
 

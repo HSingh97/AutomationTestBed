@@ -130,7 +130,24 @@ def _ratio_sheet_label(ratio: str) -> str:
 def _trex_device_stats(stats: dict[str, Any], su_index: int) -> dict[str, Any]:
     trex = stats.get("trex") or {}
     by_device = trex.get("summary_by_device") or {}
-    return by_device.get(f"SU{su_index}") or {}
+    row = dict(by_device.get(f"SU{su_index}") or {})
+    if row.get("avg_tx_mbps") is None:
+        tx_values: list[float] = []
+        for sample in trex.get("live_samples") or []:
+            device = (sample.get("devices") or {}).get(f"SU{su_index}") or {}
+            if isinstance(device, dict) and device.get("tx_mbps") is not None:
+                tx_values.append(float(device["tx_mbps"]))
+        if tx_values:
+            row["avg_tx_mbps"] = sum(tx_values) / len(tx_values)
+    return row
+
+
+def _unit_ip_cell(unit: str, ip: str) -> str:
+    name = escape(str(unit))
+    addr = escape(str(ip))
+    if not addr or addr in {"—", "-"}:
+        return f'<span class="unit-line">{name}</span>'
+    return f'<span class="unit-line">{name} <span class="unit-sep">·</span> <span class="unit-ip">{addr}</span></span>'
 
 
 def _mcs_for_unit(record: dict[str, Any], *, su_index: int | None = None, label: str = "") -> str:
@@ -190,20 +207,24 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
         name = str(client.get("system_name") or client.get("name") or f"cpe{index}").strip()
         if name.upper().startswith("UBR630") or "BTS" in name.upper():
             continue
-        su_index = int(client.get("su_index") or index)
-        su_label = f"SU{su_index}"
-        trex_dev = _trex_device_stats(stats, su_index)
+        trex_su = index
+        su_label = f"SU{trex_su}"
+        trex_dev = _trex_device_stats(stats, trex_su)
         trex_dl = trex_dev.get("avg_rx_mbps")
         trex_ul = trex_dev.get("avg_tx_mbps")
         mcs_raw = (
             str(client.get("operating_mcs") or client.get("rx_rate_mcs") or client.get("tx_rate_mcs") or "")
-            or _mcs_for_unit(record, su_index=su_index, label=su_label)
+            or _mcs_for_unit(record, su_index=int(client.get("su_index") or trex_su), label=su_label)
         )
         display_ip = str(client.get("ip") or "—")
         rows.append(
             {
                 "unit": name if name != "-" else f"cpe{index}",
                 "ip": display_ip if display_ip not in {"", "-"} else "—",
+                "unit_ip": _unit_ip_cell(
+                    name if name != "-" else f"cpe{index}",
+                    display_ip if display_ip not in {"", "-"} else "—",
+                ),
                 "mcs": mcs_raw,
                 "snr_local": _chain_pair(client.get("l_snr1"), client.get("l_snr2")),
                 "snr_remote": _chain_pair(client.get("r_snr1"), client.get("r_snr2")),
@@ -237,6 +258,7 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
                 {
                     "unit": f"cpe{index}",
                     "ip": fallback_ip,
+                    "unit_ip": _unit_ip_cell(f"cpe{index}", fallback_ip),
                     "mcs": _mcs_for_unit(record, su_index=index, label=su_label),
                     "snr_local": "—",
                     "snr_remote": "—",
@@ -253,6 +275,7 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "unit": "—",
                 "ip": "—",
+                "unit_ip": "—",
                 "mcs": "—",
                 "snr_local": "—",
                 "snr_remote": "—",
@@ -272,7 +295,7 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
     if not records:
         return ""
 
-    col_count = 19
+    col_count = 18
     body_rows: list[str] = []
     for rec_idx, record in enumerate(records):
         units = _unit_rows_for_record(record)
@@ -313,8 +336,7 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
                 f"""
           <tr>
             {shared}
-            <td class="unit-cell">{escape(str(unit['unit']))}</td>
-            <td class="ip-cell">{escape(str(unit['ip']))}</td>
+            <td class="unit-cell">{unit['unit_ip']}</td>
             <td class="mcs-cell">{_mcs_display_cell(record, unit['mcs'])}</td>
             <td>{escape(str(unit['snr_local']))}</td>
             <td>{escape(str(unit['snr_remote']))}</td>
@@ -337,7 +359,7 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
       <table class="matrix throughput-sheet">
           <colgroup>
             <col class="col-bw"/><col class="col-mimo"/><col class="col-pkt"/><col class="col-ratio"/>
-            <col class="col-noise"/><col class="col-dur"/><col class="col-unit"/><col class="col-ip"/><col class="col-mcs"/>
+            <col class="col-noise"/><col class="col-dur"/><col class="col-unit"/><col class="col-mcs"/>
             <col class="col-snr"/><col class="col-snr"/><col class="col-rssi"/><col class="col-rssi"/>
             <col class="col-rate"/><col class="col-rate"/><col class="col-tput"/><col class="col-tput"/>
             <col class="col-total"/><col class="col-remarks"/>
@@ -350,8 +372,7 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
               <th rowspan="2">DL:UL<br/>Ratio</th>
               <th rowspan="2">Noise Floor<br/><span class="muted">dBm</span></th>
               <th rowspan="2">Duration<br/><span class="muted">s</span></th>
-              <th rowspan="2">Unit Name</th>
-              <th rowspan="2">IP Address</th>
+              <th rowspan="2">Unit / IP</th>
               <th rowspan="2">MCS</th>
               <th colspan="2">SNR</th>
               <th colspan="2">RSSI</th>
@@ -543,8 +564,7 @@ def write_html_report(
     table.throughput-sheet col.col-ratio {{ width: 5%; }}
     table.throughput-sheet col.col-noise {{ width: 5%; }}
     table.throughput-sheet col.col-dur {{ width: 4%; }}
-    table.throughput-sheet col.col-unit {{ width: 5%; }}
-    table.throughput-sheet col.col-ip {{ width: 8%; }}
+    table.throughput-sheet col.col-unit {{ width: 12%; }}
     table.throughput-sheet col.col-mcs {{ width: 8%; }}
     table.throughput-sheet col.col-snr {{ width: 5%; }}
     table.throughput-sheet col.col-rssi {{ width: 5%; }}
@@ -564,7 +584,21 @@ def write_html_report(
       background: #f4a261; color: #1a1a1a; font-size: 11px; font-weight: 700;
     }}
     table.throughput-sheet td[rowspan] {{ background: #fffbeb; font-weight: 600; vertical-align: middle; }}
-    table.throughput-sheet .unit-cell {{ font-weight: 600; text-align: left; }}
+    table.throughput-sheet .unit-line {{
+      display: block;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-weight: 600;
+      text-align: left;
+      font-size: 10px;
+    }}
+    table.throughput-sheet .unit-ip {{
+      font-family: Consolas, Monaco, monospace;
+      font-weight: 400;
+      font-size: 9px;
+    }}
+    table.throughput-sheet .unit-sep {{ color: #94a3b8; padding: 0 2px; }}
     table.throughput-sheet .mcs-cell {{ line-height: 1.2; }}
     table.throughput-sheet .mcs-label {{ font-weight: 700; }}
     table.throughput-sheet .modulation {{ color: #64748b; font-size: 10px; }}

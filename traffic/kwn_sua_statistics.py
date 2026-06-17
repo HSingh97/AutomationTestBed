@@ -169,6 +169,33 @@ def _combined_metric(values: list[str]) -> str:
     return str(max(nums))
 
 
+def format_rssi_dbm(value: str | None) -> str:
+    """Format sysfs RSSI — positive sysfs values are shown as negative dBm."""
+    text = str(value or "").strip()
+    if not text or text in {"-", "0"}:
+        return "—"
+    try:
+        number = float(text)
+    except ValueError:
+        return text if text.startswith("-") else "—"
+    if number > 0:
+        return str(int(-number))
+    return str(int(number))
+
+
+def _rssi_chain_values(raw: dict[str, Any]) -> tuple[str, str, str, str]:
+    """Local/remote RSSI A1/A2 from comb_rssi and optional per-chain power."""
+    l_a1 = format_rssi_dbm(str(raw.get("comb_rssi") or ""))
+    l_a2 = format_rssi_dbm(str(raw.get("l_power") or ""))
+    r_a1 = format_rssi_dbm(str(raw.get("r_comb_rssi") or ""))
+    r_a2 = format_rssi_dbm(str(raw.get("r_power") or ""))
+    if l_a2 == "—":
+        l_a2 = "—"
+    if r_a2 == "—":
+        r_a2 = "—"
+    return l_a1, l_a2, r_a1, r_a2
+
+
 def normalize_kwn_sua_client(
     raw: dict[str, Any],
     *,
@@ -184,13 +211,7 @@ def normalize_kwn_sua_client(
 
     l_snr1, l_snr2 = _chain_values(raw, "l_snr")
     r_snr1, r_snr2 = _chain_values(raw, "r_snr")
-
-    comb_rssi = str(raw.get("comb_rssi") or "").strip()
-    r_comb_rssi = str(raw.get("r_comb_rssi") or "").strip()
-    l_rssi1 = comb_rssi if comb_rssi not in {"", "-", "0"} else "-"
-    l_rssi2 = l_rssi1 if l_rssi1 != "-" else "-"
-    r_rssi1 = r_comb_rssi if r_comb_rssi not in {"", "-", "0"} else "-"
-    r_rssi2 = r_rssi1 if r_rssi1 != "-" else "-"
+    l_rssi1, l_rssi2, r_rssi1, r_rssi2 = _rssi_chain_values(raw)
 
     display_ip = resolve_sua_display_ip(
         ipv4=str(raw.get("ip") or ""),

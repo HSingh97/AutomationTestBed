@@ -33,8 +33,8 @@ def test_normalize_maps_snra_rates_and_mcs():
         "l_snra2": "52",
         "r_snra1": "50",
         "r_snra2": "49",
-        "comb_rssi": "-52",
-        "r_comb_rssi": "-55",
+        "comb_rssi": "62",
+        "r_comb_rssi": "63",
         "tx_rate": "1201",
         "rx_rate": "1080",
         "tx_rate_mcs": "23",
@@ -45,9 +45,19 @@ def test_normalize_maps_snra_rates_and_mcs():
     assert client["system_name"] == "cpe-lab-4"
     assert "2001:2002" in client["ip"]
     assert client["l_snr1"] == "54"
+    assert client["l_rssi1"] == "-62"
+    assert client["l_rssi2"] == "—"
+    assert client["r_rssi1"] == "-63"
     assert client["tx_rate"] == "1201 (23)"
     assert client["rx_rate"] == "1080 (22)"
     assert client["operating_mcs"] == "22"
+
+
+def test_format_rssi_dbm_keeps_negative_values():
+    from traffic.kwn_sua_statistics import format_rssi_dbm
+
+    assert format_rssi_dbm("-52") == "-52"
+    assert format_rssi_dbm("62") == "-62"
 
 
 def test_fetch_kwn_sua_statistics_uses_injected_reader():
