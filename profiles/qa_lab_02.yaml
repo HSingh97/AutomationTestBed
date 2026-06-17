@@ -160,6 +160,7 @@ performance:
   su_count: 4
   cpe_su_index: 1
   snmp_radio_index: 2
+  link_wifi_idx: 2
   duration_s: 30
   packet_size: 1500
   # HT80 MCS23 operating rate 1201 Mbps × ~70% efficiency → cap at 800 Mbps total.

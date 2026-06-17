@@ -173,12 +173,20 @@ def _chain_pair(first: Any, second: Any) -> str:
     return f"{left}/{right}"
 
 
+def _link_clients_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
+    for key in ("link_validation_post", "link_validation"):
+        clients = (record.get(key) or {}).get("clients") or []
+        if clients:
+            return list(clients)
+    return []
+
+
 def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
     """One row per connected CPE (sheet-style grouping)."""
     rows: list[dict[str, Any]] = []
-    link = record.get("link_validation") or {}
     stats = record.get("stats") or {}
-    for index, client in enumerate(link.get("clients") or [], start=1):
+    clients = _link_clients_for_record(record)
+    for index, client in enumerate(clients, start=1):
         name = str(client.get("system_name") or client.get("name") or f"cpe{index}").strip()
         if name.upper().startswith("UBR630") or "BTS" in name.upper():
             continue
@@ -200,6 +208,32 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
                 "rx_traffic": f"{float(trex_ul):.1f}" if trex_ul is not None else "—",
             }
         )
+    if not rows:
+        mcs_config = record.get("mcs_config") or {}
+        for check in mcs_config.get("checks") or []:
+            if str(check.get("role") or "").upper() != "CPE":
+                continue
+            index = int(check.get("su_index") or 0)
+            if index <= 0:
+                continue
+            su_label = str(check.get("label") or f"SU{index}")
+            trex_dev = _trex_device_stats(stats, index)
+            trex_dl = trex_dev.get("avg_rx_mbps")
+            trex_ul = trex_dev.get("avg_tx_mbps")
+            rows.append(
+                {
+                    "unit": f"cpe{index}",
+                    "mcs": _mcs_for_unit(record, su_index=index, label=su_label),
+                    "snr_local": "—",
+                    "snr_remote": "—",
+                    "rssi_local": "—",
+                    "rssi_remote": "—",
+                    "tx_rate": "—",
+                    "rx_rate": "—",
+                    "tx_traffic": f"{float(trex_dl):.1f}" if trex_dl is not None else "—",
+                    "rx_traffic": f"{float(trex_ul):.1f}" if trex_ul is not None else "—",
+                }
+            )
     if not rows:
         rows.append(
             {

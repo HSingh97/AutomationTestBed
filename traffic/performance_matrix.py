@@ -98,6 +98,12 @@ def _apply_profile_run_defaults(args, profile_bundle) -> None:
         args.radio_settle_s = float(perf_section["radio_settle_s"])
     if perf_section.get("link_stats_source"):
         args.link_stats_source = str(perf_section["link_stats_source"]).strip()
+    if perf_section.get("link_wifi_idx") is not None:
+        args.link_wifi_idx = int(perf_section["link_wifi_idx"])
+    elif perf_section.get("snmp_radio_index") is not None:
+        args.link_wifi_idx = int(perf_section["snmp_radio_index"])
+    else:
+        args.link_wifi_idx = int(args.radio_index)
 
 
 def _resolve_stand_profile_args(args) -> None:
@@ -476,7 +482,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     cpe_hosts = [str(ip) for ip in (dut.get("remote_ipv6s") or dut.get("remote_ips") or [])]
     detected_clients = fetch_link_clients(
         dut_ssh_ip,
-        radio_idx=args.radio_index,
+        radio_idx=args.link_wifi_idx,
         source=args.link_stats_source,
         ssh_user=dut_user,
         ssh_password=dut_password,
@@ -573,7 +579,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 dut_ssh_ip,
                                 bandwidth=bandwidth,
                                 mcs=mcs,
-                                link_wifi_idx=args.radio_index,
+                                link_wifi_idx=args.link_wifi_idx,
                                 spatial_stream=int(args.spatial_stream),
                                 tolerance_mbps=args.rate_tolerance_mbps,
                                 tolerance_pct=args.rate_tolerance_pct,
@@ -756,7 +762,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             dut_ssh_ip,
                             bandwidth=bandwidth,
                             mcs=mcs,
-                            link_wifi_idx=args.radio_index,
+                            link_wifi_idx=args.link_wifi_idx,
                             spatial_stream=int(args.spatial_stream),
                             tolerance_mbps=args.rate_tolerance_mbps,
                             tolerance_pct=args.rate_tolerance_pct,
@@ -765,6 +771,10 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             ssh_password=dut_password,
                             cpe_hosts=cpe_hosts,
                         )
+                        post_clients = post_link_validation.get("clients") or []
+                        pre_clients = link_validation.get("clients") or []
+                        if post_clients and not pre_clients:
+                            link_validation = post_link_validation
                         clients = link_validation.get("clients") or []
                         record["link_validation"] = link_validation
                         record["link_validation_post"] = post_link_validation
@@ -804,7 +814,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 dut_ssh_ip,
                                 bandwidth=bandwidth,
                                 mcs=mcs,
-                                link_wifi_idx=args.radio_index,
+                                link_wifi_idx=args.link_wifi_idx,
                                 spatial_stream=int(args.spatial_stream),
                                 tolerance_mbps=args.rate_tolerance_mbps,
                                 tolerance_pct=args.rate_tolerance_pct,
