@@ -84,6 +84,55 @@ def _rate_cell(raw: str | None) -> str:
     return escape(text)
 
 
+def _parse_rate_mbps_from_display(raw: str | None) -> float | None:
+    text = str(raw or "").strip()
+    if not text or text in {"-", "—"}:
+        return None
+    match = re.search(r"([\d.]+)", text.replace(",", ""))
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _rate_matches_expected(
+    actual_mbps: float | None,
+    expected_mbps: float,
+    *,
+    tolerance_mbps: float = 10.0,
+    tolerance_pct: float = 0.08,
+) -> bool:
+    if actual_mbps is None or expected_mbps <= 0:
+        return True
+    delta = abs(actual_mbps - expected_mbps)
+    return delta <= tolerance_mbps or delta <= expected_mbps * tolerance_pct
+
+
+def _operating_rate_cell(
+    raw: str | None,
+    expected_mbps: float,
+    *,
+    tolerance_mbps: float = 10.0,
+    tolerance_pct: float = 0.08,
+) -> str:
+    text = str(raw or "").strip()
+    if not text or text == "-":
+        return "—"
+    actual = _parse_rate_mbps_from_display(text)
+    inner = escape(text)
+    if actual is not None and expected_mbps > 0:
+        if not _rate_matches_expected(
+            actual,
+            expected_mbps,
+            tolerance_mbps=tolerance_mbps,
+            tolerance_pct=tolerance_pct,
+        ):
+            return f'<span class="rate-mismatch">{inner}</span>'
+    return inner
+
+
 def _result_badge(record: dict[str, Any]) -> str:
     if record.get("skipped_trex"):
         return "<span class='badge fail'>SKIP</span>"
@@ -202,6 +251,12 @@ def _mcs_display_cell(record: dict[str, Any], mcs_raw: str) -> str:
     return f"<span class='mcs-label'>{escape(mcs_label)}</span>"
 
 
+def _record_mcs_group_cell(record: dict[str, Any], row: dict[str, Any]) -> str:
+    mcs = str(record.get("mcs") or row.get("mcs") or "").strip()
+    num = mcs.replace("MCS", "").strip()
+    return _mcs_display_cell(record, num)
+
+
 def _chain_pair(first: Any, second: Any) -> str:
     a1 = str(first or "").strip()
     a2 = str(second or "").strip()
@@ -228,13 +283,13 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
     """One row per connected CPE (sheet-style grouping)."""
     rows: list[dict[str, Any]] = []
     stats = record.get("stats") or {}
+    _, expected_operating_rate = _resolve_row_spec(record)
     clients = _link_clients_for_record(record)
     for index, client in enumerate(clients, start=1):
         name = str(client.get("system_name") or client.get("name") or f"cpe{index}").strip()
         if name.upper().startswith("UBR630") or "BTS" in name.upper():
             continue
         trex_su = int(client.get("su_index") or client.get("sua_index") or index)
-        su_label = f"SU{trex_su}"
         trex_dev = _trex_device_stats(stats, trex_su)
         trex_dl = trex_dev.get("avg_rx_mbps")
         trex_ul = trex_dev.get("avg_tx_mbps")
@@ -242,10 +297,8 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
             trex_ul = _parse_tput_mbps(
                 client.get("throughput_in_mbps") or client.get("rx_tput")
             )
-        mcs_raw = (
-            str(client.get("operating_mcs") or client.get("rx_rate_mcs") or client.get("tx_rate_mcs") or "")
-            or _mcs_for_unit(record, su_index=int(client.get("su_index") or trex_su), label=su_label)
-        )
+        tx_raw = client.get("tx_rate") or client.get("out_rate")
+        rx_raw = client.get("rx_rate") or client.get("in_rate")
         display_ip = str(client.get("ip") or "—")
         rows.append(
             {
@@ -255,13 +308,12 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
                     name if name != "-" else f"cpe{index}",
                     display_ip if display_ip not in {"", "-"} else "—",
                 ),
-                "mcs": mcs_raw,
                 "snr_local": _chain_pair(client.get("l_snr1"), client.get("l_snr2")),
                 "snr_remote": _chain_pair(client.get("r_snr1"), client.get("r_snr2")),
                 "rssi_local": _chain_pair(client.get("l_rssi1"), client.get("l_rssi2")),
                 "rssi_remote": _chain_pair(client.get("r_rssi1"), client.get("r_rssi2")),
-                "tx_rate": _rate_cell(client.get("tx_rate") or client.get("out_rate")),
-                "rx_rate": _rate_cell(client.get("rx_rate") or client.get("in_rate")),
+                "tx_rate": _operating_rate_cell(tx_raw, expected_operating_rate),
+                "rx_rate": _operating_rate_cell(rx_raw, expected_operating_rate),
                 "tx_traffic": f"{float(trex_dl):.1f}" if trex_dl is not None else "—",
                 "rx_traffic": f"{float(trex_ul):.1f}" if trex_ul is not None else "—",
             }
@@ -274,7 +326,6 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
             index = int(check.get("su_index") or 0)
             if index <= 0:
                 continue
-            su_label = str(check.get("label") or f"SU{index}")
             trex_dev = _trex_device_stats(stats, index)
             trex_dl = trex_dev.get("avg_rx_mbps")
             trex_ul = trex_dev.get("avg_tx_mbps")
@@ -289,7 +340,6 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
                     "unit": f"cpe{index}",
                     "ip": fallback_ip,
                     "unit_ip": _unit_ip_cell(f"cpe{index}", fallback_ip),
-                    "mcs": _mcs_for_unit(record, su_index=index, label=su_label),
                     "snr_local": "—",
                     "snr_remote": "—",
                     "rssi_local": "—",
@@ -306,7 +356,6 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
                 "unit": "—",
                 "ip": "—",
                 "unit_ip": "—",
-                "mcs": "—",
                 "snr_local": "—",
                 "snr_remote": "—",
                 "rssi_local": "—",
@@ -334,6 +383,7 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
         bandwidth = escape(row["bandwidth"])
         mimo = "Dual" if int(record.get("spatial_stream") or 2) >= 2 else "Single"
         packet = escape(str(record.get("packet_size") or "—"))
+        mcs_group = _record_mcs_group_cell(record, row)
         ratio = escape(_ratio_sheet_label(row["ratio"]))
         duration = escape(str(record.get("duration_s") or "—"))
         noise = escape(str(record.get("noise_dbm") or "—"))
@@ -352,6 +402,7 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
             <td rowspan="{row_span}">{bandwidth}</td>
             <td rowspan="{row_span}">{escape(mimo)}</td>
             <td rowspan="{row_span}">{packet}</td>
+            <td rowspan="{row_span}" class="mcs-group-cell">{mcs_group}</td>
             <td rowspan="{row_span}">{ratio}</td>
             <td rowspan="{row_span}">{noise}</td>
             <td rowspan="{row_span}">{duration}</td>
@@ -367,7 +418,6 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
           <tr>
             {shared}
             <td class="unit-cell">{unit['unit_ip']}</td>
-            <td class="mcs-cell">{_mcs_display_cell(record, unit['mcs'])}</td>
             <td>{escape(str(unit['snr_local']))}</td>
             <td>{escape(str(unit['snr_remote']))}</td>
             <td>{escape(str(unit['rssi_local']))}</td>
@@ -388,8 +438,8 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
       <div class="table-title">Throughput Matrix</div>
       <table class="matrix throughput-sheet">
           <colgroup>
-            <col class="col-bw"/><col class="col-mimo"/><col class="col-pkt"/><col class="col-ratio"/>
-            <col class="col-noise"/><col class="col-dur"/><col class="col-unit"/><col class="col-mcs"/>
+            <col class="col-bw"/><col class="col-mimo"/><col class="col-pkt"/><col class="col-mcs-group"/>
+            <col class="col-ratio"/><col class="col-noise"/><col class="col-dur"/><col class="col-unit"/>
             <col class="col-snr"/><col class="col-snr"/><col class="col-rssi"/><col class="col-rssi"/>
             <col class="col-rate"/><col class="col-rate"/><col class="col-tput"/><col class="col-tput"/>
             <col class="col-total"/><col class="col-remarks"/>
@@ -399,11 +449,11 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
               <th rowspan="2">Bandwidth</th>
               <th rowspan="2">MIMO</th>
               <th rowspan="2">Packet<br/>Size</th>
+              <th rowspan="2">MCS</th>
               <th rowspan="2">DL:UL<br/>Ratio</th>
               <th rowspan="2">Noise Floor<br/><span class="muted">dBm</span></th>
               <th rowspan="2">Duration<br/><span class="muted">s</span></th>
               <th rowspan="2">Unit / IP</th>
-              <th rowspan="2">MCS</th>
               <th colspan="2">SNR</th>
               <th colspan="2">RSSI</th>
               <th rowspan="2">Tx Data Rate<br/><span class="muted">Mb/s</span></th>
@@ -591,11 +641,11 @@ def write_html_report(
     table.throughput-sheet col.col-bw {{ width: 6%; }}
     table.throughput-sheet col.col-mimo {{ width: 4%; }}
     table.throughput-sheet col.col-pkt {{ width: 4%; }}
+    table.throughput-sheet col.col-mcs-group {{ width: 8%; }}
     table.throughput-sheet col.col-ratio {{ width: 5%; }}
     table.throughput-sheet col.col-noise {{ width: 5%; }}
     table.throughput-sheet col.col-dur {{ width: 4%; }}
     table.throughput-sheet col.col-unit {{ width: 18%; }}
-    table.throughput-sheet col.col-mcs {{ width: 8%; }}
     table.throughput-sheet col.col-snr {{ width: 5%; }}
     table.throughput-sheet col.col-rssi {{ width: 5%; }}
     table.throughput-sheet col.col-rate {{ width: 7%; }}
@@ -632,9 +682,13 @@ def write_html_report(
       color: #334155;
       margin-top: 2px;
     }}
-    table.throughput-sheet .mcs-cell {{ line-height: 1.2; }}
+    table.throughput-sheet .mcs-group-cell {{ line-height: 1.2; vertical-align: middle; }}
     table.throughput-sheet .mcs-label {{ font-weight: 700; }}
     table.throughput-sheet .modulation {{ color: #64748b; font-size: 10px; }}
+    table.throughput-sheet .rate-mismatch {{
+      color: #991b1b; font-weight: 700; background: #fee2e2;
+      padding: 1px 5px; border-radius: 3px; display: inline-block;
+    }}
     table.throughput-sheet .total-cell {{ font-size: 11px; }}
     table.throughput-sheet .remarks-cell {{ font-size: 11px; }}
     table.throughput-sheet tr.mcs-spacer td {{
