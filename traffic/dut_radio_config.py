@@ -354,14 +354,10 @@ def configure_cpe_mcs_via_bts_remote_exec(
         f"[CPE] Applying via BTS remote_exec (SU{su_index}): "
         f"mcs={mcs_rate} (uci={uci_mcs}), spatial={spatial_stream}"
     )
-    batched = (
-        f"ucidyn set txparam.ath{radio_idx}.ddrsstatus 0 && "
-        f"ucidyn set txparam.ath{radio_idx}.spatialstream {spatial_stream} && "
-        f"ucidyn set txparam.ath{radio_idx}.ddrsrate {uci_mcs} && "
-        "ucidyn apply"
-    )
-    remote = RootCommands.remote_exec_command(su_index, batched)
-    run_ssh_command(bts_ip, user, password, remote, timeout_s=ssh_timeout_s)
+    commands = RootCommands.set_mcs_sequence_commands(radio_idx, mcs_rate, spatial_stream, uci_mcs)
+    for inner in commands:
+        remote = RootCommands.remote_exec_command(su_index, inner)
+        run_ssh_command(bts_ip, user, password, remote, timeout_s=ssh_timeout_s)
     time.sleep(2.0)
     run_ssh_command(bts_ip, user, password, RootCommands.remote_apply_all_su(), timeout_s=ssh_timeout_s)
     time.sleep(1.0)
