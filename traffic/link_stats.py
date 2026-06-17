@@ -1,4 +1,4 @@
-"""Fetch wireless link statistics via BTS SSH (sysfs link table)."""
+"""Fetch wireless link statistics via BTS SSH (KWN SUA sysfs)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import shlex
 import subprocess
 from typing import Any
 
+from traffic.kwn_sua_statistics import fetch_kwn_sua_statistics, normalize_kwn_sua_client
 from traffic.operating_rate_table import lookup_spec, operating_rate_mbps
 from utils.net_utils import is_ipv6_literal, normalize_ip
 
@@ -195,19 +196,28 @@ def fetch_link_clients(
     cpe_hosts: list[str] | None = None,
     snmp_community: str = "",
     snmp_radio_idx: int | None = None,
+    max_sua: int = 16,
 ) -> list[dict[str, Any]]:
-    """Fetch per-SU link clients from BTS SSH (sysfs). SNMP params are ignored."""
+    """Fetch per-SU link clients from BTS SSH (KWN SUA sysfs, legacy wifi path fallback)."""
     del snmp_community, snmp_radio_idx
     if source not in {"auto", "ssh"}:
         raise ValueError(f"Unsupported link stats source '{source}' (SNMP removed; use ssh)")
-    ssh_clients = _fetch_link_clients_via_ssh(
+    clients = fetch_kwn_sua_statistics(
+        dut_ip,
+        ssh_user=ssh_user,
+        ssh_password=ssh_password,
+        max_sua=max_sua,
+        cpe_hosts=cpe_hosts,
+    )
+    if clients:
+        return clients
+    return _fetch_link_clients_via_wifi_ssh(
         dut_ip=dut_ip,
         radio_idx=radio_idx,
         ssh_user=ssh_user,
         ssh_password=ssh_password,
         cpe_hosts=cpe_hosts,
     )
-    return ssh_clients
 
 
 def _ssh_read_field(
@@ -229,7 +239,7 @@ def _ssh_read_field(
     return value if value else "-"
 
 
-def _fetch_link_clients_via_ssh(
+def _fetch_link_clients_via_wifi_ssh(
     *,
     dut_ip: str,
     radio_idx: int,

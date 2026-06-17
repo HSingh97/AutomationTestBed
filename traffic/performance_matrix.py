@@ -28,6 +28,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from config.defaults import PERFORMANCE_DEFAULTS, TRAFFIC_DEFAULTS
+
+# Throughput matrix always runs bidirectional 75:25 (DL:UL).
+FIXED_DL_UL_RATIO = "75:25"
 from traffic.dut_radio_config import configure_radio_profile
 from traffic.link_stats import fetch_link_clients, validate_operating_rates
 from traffic.operating_rate_table import operating_rate_mbps
@@ -396,8 +399,8 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
 
     bandwidths = _parse_csv_list(args.bandwidths)
     mcs_rates = [mcs.upper() for mcs in _parse_csv_list(args.mcs)]
-    bidir_ratios = _parse_csv_list(args.ratios)
-    traffic_profiles = _traffic_profiles(bidir_ratios, include_directional=not args.ratios_only)
+    bidir_ratios = [FIXED_DL_UL_RATIO]
+    traffic_profiles = [{"name": "Bidirectional", "ratio": FIXED_DL_UL_RATIO}]
     mcs_caps = {key.upper(): float(value) for key, value in perf_defaults["mcs_traffic_cap_mbps"].items()}
     phy_overrides = perf_defaults.get("phy_max_rate_mbps") or {}
 
@@ -956,8 +959,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--ratios",
-        default=",".join(perf["ratios"]),
-        help="Comma-separated bidirectional DL:UL ratios; 100:0 and 0:100 are always included",
+        default=FIXED_DL_UL_RATIO,
+        help=f"Ignored — matrix always uses fixed DL:UL ratio {FIXED_DL_UL_RATIO}",
     )
     parser.add_argument(
         "--target",

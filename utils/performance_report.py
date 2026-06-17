@@ -190,14 +190,21 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
         name = str(client.get("system_name") or client.get("name") or f"cpe{index}").strip()
         if name.upper().startswith("UBR630") or "BTS" in name.upper():
             continue
-        su_label = f"SU{index}"
-        trex_dev = _trex_device_stats(stats, index)
+        su_index = int(client.get("su_index") or index)
+        su_label = f"SU{su_index}"
+        trex_dev = _trex_device_stats(stats, su_index)
         trex_dl = trex_dev.get("avg_rx_mbps")
         trex_ul = trex_dev.get("avg_tx_mbps")
+        mcs_raw = (
+            str(client.get("operating_mcs") or client.get("rx_rate_mcs") or client.get("tx_rate_mcs") or "")
+            or _mcs_for_unit(record, su_index=su_index, label=su_label)
+        )
+        display_ip = str(client.get("ip") or "—")
         rows.append(
             {
                 "unit": name if name != "-" else f"cpe{index}",
-                "mcs": _mcs_for_unit(record, su_index=index, label=su_label),
+                "ip": display_ip if display_ip not in {"", "-"} else "—",
+                "mcs": mcs_raw,
                 "snr_local": _chain_pair(client.get("l_snr1"), client.get("l_snr2")),
                 "snr_remote": _chain_pair(client.get("r_snr1"), client.get("r_snr2")),
                 "rssi_local": _chain_pair(client.get("l_rssi1"), client.get("l_rssi2")),
@@ -220,9 +227,16 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
             trex_dev = _trex_device_stats(stats, index)
             trex_dl = trex_dev.get("avg_rx_mbps")
             trex_ul = trex_dev.get("avg_tx_mbps")
+            cpe_hosts = record.get("cpe_hosts") or []
+            fallback_ip = (
+                str(cpe_hosts[index - 1])
+                if isinstance(cpe_hosts, list) and 0 < index <= len(cpe_hosts)
+                else "—"
+            )
             rows.append(
                 {
                     "unit": f"cpe{index}",
+                    "ip": fallback_ip,
                     "mcs": _mcs_for_unit(record, su_index=index, label=su_label),
                     "snr_local": "—",
                     "snr_remote": "—",
@@ -238,6 +252,7 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
         rows.append(
             {
                 "unit": "—",
+                "ip": "—",
                 "mcs": "—",
                 "snr_local": "—",
                 "snr_remote": "—",
@@ -257,7 +272,7 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
     if not records:
         return ""
 
-    col_count = 18
+    col_count = 19
     body_rows: list[str] = []
     for rec_idx, record in enumerate(records):
         units = _unit_rows_for_record(record)
@@ -299,6 +314,7 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
           <tr>
             {shared}
             <td class="unit-cell">{escape(str(unit['unit']))}</td>
+            <td class="ip-cell">{escape(str(unit['ip']))}</td>
             <td class="mcs-cell">{_mcs_display_cell(record, unit['mcs'])}</td>
             <td>{escape(str(unit['snr_local']))}</td>
             <td>{escape(str(unit['snr_remote']))}</td>
@@ -321,7 +337,7 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
       <table class="matrix throughput-sheet">
           <colgroup>
             <col class="col-bw"/><col class="col-mimo"/><col class="col-pkt"/><col class="col-ratio"/>
-            <col class="col-noise"/><col class="col-dur"/><col class="col-unit"/><col class="col-mcs"/>
+            <col class="col-noise"/><col class="col-dur"/><col class="col-unit"/><col class="col-ip"/><col class="col-mcs"/>
             <col class="col-snr"/><col class="col-snr"/><col class="col-rssi"/><col class="col-rssi"/>
             <col class="col-rate"/><col class="col-rate"/><col class="col-tput"/><col class="col-tput"/>
             <col class="col-total"/><col class="col-remarks"/>
@@ -335,6 +351,7 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
               <th rowspan="2">Noise Floor<br/><span class="muted">dBm</span></th>
               <th rowspan="2">Duration<br/><span class="muted">s</span></th>
               <th rowspan="2">Unit Name</th>
+              <th rowspan="2">IP Address</th>
               <th rowspan="2">MCS</th>
               <th colspan="2">SNR</th>
               <th colspan="2">RSSI</th>
@@ -526,8 +543,9 @@ def write_html_report(
     table.throughput-sheet col.col-ratio {{ width: 5%; }}
     table.throughput-sheet col.col-noise {{ width: 5%; }}
     table.throughput-sheet col.col-dur {{ width: 4%; }}
-    table.throughput-sheet col.col-unit {{ width: 6%; }}
-    table.throughput-sheet col.col-mcs {{ width: 9%; }}
+    table.throughput-sheet col.col-unit {{ width: 5%; }}
+    table.throughput-sheet col.col-ip {{ width: 8%; }}
+    table.throughput-sheet col.col-mcs {{ width: 8%; }}
     table.throughput-sheet col.col-snr {{ width: 5%; }}
     table.throughput-sheet col.col-rssi {{ width: 5%; }}
     table.throughput-sheet col.col-rate {{ width: 7%; }}
