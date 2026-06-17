@@ -1,4 +1,4 @@
-"""Fetch wireless link statistics via SSH/SNMP and validate operating rates."""
+"""Fetch wireless link statistics via BTS SSH (sysfs link table)."""
 
 from __future__ import annotations
 
@@ -8,34 +8,31 @@ import subprocess
 from typing import Any
 
 from traffic.operating_rate_table import lookup_spec, operating_rate_mbps
-from utils.net_utils import format_snmp_host
+from utils.net_utils import is_ipv6_literal, normalize_ip
 
-DEFAULT_SNMP_COMMUNITY = "ubr@rw123"
-DEFAULT_RADIO_IDX = 2
 DEFAULT_SSH_USER = "root"
-
-OID_SU_NAME_BASE = ".1.3.6.1.4.1.52619.1.3.3.1.3"
-OID_SU_IP_WALK_BASE = ".1.3.6.1.4.1.52619.1.3.3.1.4"
-OID_LOCAL_SNRA1_BASE = ".1.3.6.1.4.1.52619.1.3.3.1.13"
-OID_LOCAL_SNRA2_BASE = ".1.3.6.1.4.1.52619.1.3.3.1.14"
-OID_REMOTE_SNRA1_BASE = ".1.3.6.1.4.1.52619.1.3.3.1.15"
-OID_REMOTE_SNRA2_BASE = ".1.3.6.1.4.1.52619.1.3.3.1.16"
-# BTS AP view: Out (downlink to SU) / In (uplink from SU).
-OID_OUT_RATE_BASE = ".1.3.6.1.4.1.52619.1.3.3.1.10"
-OID_IN_RATE_BASE = ".1.3.6.1.4.1.52619.1.3.3.1.9"
-OID_OUT_TPUT_BASE = ".1.3.6.1.4.1.52619.1.3.3.1.11"
-OID_IN_TPUT_BASE = ".1.3.6.1.4.1.52619.1.3.3.1.12"
 
 SUA_STAT_FIELDS = (
     "name",
     "ip",
+    "ipv6",
+    "ipv6addr",
+    "mgmt_ip",
     "mac",
     "tx_rate",
     "rx_rate",
+    "tx_mcs",
+    "rx_mcs",
+    "out_mcs",
+    "in_mcs",
     "l_snr1",
     "l_snr2",
     "r_snr1",
     "r_snr2",
+    "l_rssi1",
+    "l_rssi2",
+    "r_rssi1",
+    "r_rssi2",
     "tx_tput",
     "rx_tput",
 )
@@ -105,23 +102,58 @@ def _combined_snr(values: list[str]) -> str:
     return str(max(nums))
 
 
-def _extract_ip_from_snmp_value(value_part: str) -> str:
-    ipv6_match = re.search(
-        r"(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:]{0,}",
-        value_part,
-    )
+def _extract_ip_from_text(value: str) -> str:
+    if not value or value.strip() in {"-", "0.0.0.0", "0"}:
+        return ""
+    text = value.strip()
+    if is_ipv6_literal(text):
+        return normalize_ip(text)
+    ipv6_match = re.search(r"(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:]{0,}", text)
     if ipv6_match:
-        return ipv6_match.group(0)
-    ips = re.findall(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", value_part)
-    return ips[-1] if ips else ""
+        return normalize_ip(ipv6_match.group(0))
+    ips = re.findall(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", text)
+    for candidate in reversed(ips):
+        if candidate != "0.0.0.0":
+            return candidate
+    return ""
 
 
-def _normalize_client(client: dict[str, Any]) -> dict[str, Any]:
+def _resolve_client_ip(client: dict[str, Any], cpe_hosts: list[str] | None, index: int) -> str:
+    for key in ("ip", "ipv6", "ipv6addr", "mgmt_ip"):
+        resolved = _extract_ip_from_text(str(client.get(key) or ""))
+        if resolved:
+            return resolved
+    if cpe_hosts and 0 < index <= len(cpe_hosts):
+        return normalize_ip(cpe_hosts[index - 1])
+    return ""
+
+
+def _rate_display(
+    rate_raw: str,
+    mcs_hint: str | None,
+) -> str:
+    rate_mbps, mcs_parsed = _parse_rate_and_mcs(rate_raw)
+    mcs = (mcs_hint or mcs_parsed or "").strip() or None
+    return _format_rate_with_mcs(rate_mbps, mcs, rate_raw)
+
+
+def _normalize_client(
+    client: dict[str, Any],
+    *,
+    cpe_hosts: list[str] | None = None,
+    display_index: int = 0,
+) -> dict[str, Any]:
     """Normalize BTS AP link fields to match the device monitor table."""
-    out_raw = str(client.get("out_rate") or client.get("tx_rate") or "-")
-    in_raw = str(client.get("in_rate") or client.get("rx_rate") or "-")
-    out_rate_mbps, out_mcs = _parse_rate_and_mcs(out_raw)
-    in_rate_mbps, in_mcs = _parse_rate_and_mcs(in_raw)
+    tx_raw = str(client.get("tx_rate") or client.get("out_rate") or "-")
+    rx_raw = str(client.get("rx_rate") or client.get("in_rate") or "-")
+    tx_mcs_hint = str(client.get("tx_mcs") or client.get("out_mcs") or "").strip() or None
+    rx_mcs_hint = str(client.get("rx_mcs") or client.get("in_mcs") or "").strip() or None
+    out_rate_mbps, out_mcs = _parse_rate_and_mcs(tx_raw)
+    in_rate_mbps, in_mcs = _parse_rate_and_mcs(rx_raw)
+    if out_mcs is None and tx_mcs_hint and tx_mcs_hint.isdigit():
+        out_mcs = tx_mcs_hint
+    if in_mcs is None and rx_mcs_hint and rx_mcs_hint.isdigit():
+        in_mcs = rx_mcs_hint
     if out_rate_mbps is None:
         out_rate_mbps = client.get("out_rate_mbps") or client.get("tx_rate_mbps")
     if in_rate_mbps is None:
@@ -129,19 +161,20 @@ def _normalize_client(client: dict[str, Any]) -> dict[str, Any]:
 
     local_snr = _combined_snr([str(client.get("l_snr1", "-")), str(client.get("l_snr2", "-"))])
     remote_snr = _combined_snr([str(client.get("r_snr1", "-")), str(client.get("r_snr2", "-"))])
+    resolved_ip = _resolve_client_ip(client, cpe_hosts, display_index)
 
     normalized = {
         **client,
         "system_name": client.get("system_name") or client.get("name") or "-",
-        "ip": client.get("ip") or "-",
-        "out_rate": _format_rate_with_mcs(out_rate_mbps, out_mcs, out_raw),
-        "in_rate": _format_rate_with_mcs(in_rate_mbps, in_mcs, in_raw),
+        "ip": resolved_ip or "-",
+        "tx_rate": _rate_display(tx_raw, out_mcs),
+        "rx_rate": _rate_display(rx_raw, in_mcs),
+        "out_rate": _rate_display(tx_raw, out_mcs),
+        "in_rate": _rate_display(rx_raw, in_mcs),
         "out_rate_mbps": out_rate_mbps,
         "in_rate_mbps": in_rate_mbps,
         "out_mcs": out_mcs,
         "in_mcs": in_mcs,
-        "tx_rate": _format_rate_with_mcs(out_rate_mbps, out_mcs, out_raw),
-        "rx_rate": _format_rate_with_mcs(in_rate_mbps, in_mcs, in_raw),
         "tx_rate_mbps": out_rate_mbps,
         "rx_rate_mbps": in_rate_mbps,
         "combined_local_snr": local_snr,
@@ -155,85 +188,26 @@ def _normalize_client(client: dict[str, Any]) -> dict[str, Any]:
 def fetch_link_clients(
     dut_ip: str,
     *,
-    snmp_community: str = DEFAULT_SNMP_COMMUNITY,
-    radio_idx: int = DEFAULT_RADIO_IDX,
-    source: str = "auto",
+    radio_idx: int = 1,
+    source: str = "ssh",
     ssh_user: str = DEFAULT_SSH_USER,
     ssh_password: str = "",
+    cpe_hosts: list[str] | None = None,
+    snmp_community: str = "",
+    snmp_radio_idx: int | None = None,
 ) -> list[dict[str, Any]]:
-    if source not in {"auto", "ssh", "snmp"}:
-        raise ValueError(f"Unsupported link stats source '{source}'")
-    if source in {"auto", "ssh"}:
-        ssh_clients = _fetch_link_clients_via_ssh(
-            dut_ip=dut_ip,
-            radio_idx=radio_idx,
-            ssh_user=ssh_user,
-            ssh_password=ssh_password,
-        )
-        if ssh_clients or source == "ssh":
-            return [_normalize_client(client) for client in ssh_clients]
-    snmp_clients = _fetch_link_clients_via_snmp(
+    """Fetch per-SU link clients from BTS SSH (sysfs). SNMP params are ignored."""
+    del snmp_community, snmp_radio_idx
+    if source not in {"auto", "ssh"}:
+        raise ValueError(f"Unsupported link stats source '{source}' (SNMP removed; use ssh)")
+    ssh_clients = _fetch_link_clients_via_ssh(
         dut_ip=dut_ip,
-        snmp_community=snmp_community,
         radio_idx=radio_idx,
+        ssh_user=ssh_user,
+        ssh_password=ssh_password,
+        cpe_hosts=cpe_hosts,
     )
-    return [_normalize_client(client) for client in snmp_clients]
-
-
-def _snmp_get(snmp_host: str, snmp_community: str, oid: str) -> str:
-    cmd = f"snmpget -v 2c -c {snmp_community} {snmp_host} {oid}"
-    return _parse_snmp_value(_run_shell(cmd))
-
-
-def _discover_snmp_su_indices(
-    snmp_host: str,
-    snmp_community: str,
-    radio_idx: int,
-) -> list[str]:
-    indices: list[str] = []
-    for base_oid in (OID_SU_IP_WALK_BASE, OID_SU_NAME_BASE, OID_OUT_RATE_BASE):
-        walk_cmd = f"snmpwalk -v 2c -c {snmp_community} {snmp_host} {base_oid}.{radio_idx}"
-        walk_out = _run_shell(walk_cmd)
-        for line in walk_out.splitlines():
-            idx_match = re.search(rf"\.{radio_idx}\.(\d+)\s*=", line)
-            if idx_match and idx_match.group(1) not in indices:
-                indices.append(idx_match.group(1))
-    return sorted(indices, key=lambda value: int(value))
-
-
-def _fetch_link_clients_via_snmp(
-    dut_ip: str,
-    *,
-    snmp_community: str,
-    radio_idx: int,
-) -> list[dict[str, Any]]:
-    snmp_host = format_snmp_host(dut_ip)
-    su_indices = _discover_snmp_su_indices(snmp_host, snmp_community, radio_idx)
-    clients: list[dict[str, Any]] = []
-
-    for su_index in su_indices:
-
-        def get_rf(base_oid: str) -> str:
-            return _snmp_get(snmp_host, snmp_community, f"{base_oid}.{radio_idx}.{su_index}")
-
-        ip_raw = get_rf(OID_SU_IP_WALK_BASE)
-        clients.append(
-            {
-                "su_index": int(su_index),
-                "system_name": get_rf(OID_SU_NAME_BASE),
-                "ip": _extract_ip_from_snmp_value(ip_raw) or ip_raw,
-                "l_snr1": get_rf(OID_LOCAL_SNRA1_BASE),
-                "l_snr2": get_rf(OID_LOCAL_SNRA2_BASE),
-                "r_snr1": get_rf(OID_REMOTE_SNRA1_BASE),
-                "r_snr2": get_rf(OID_REMOTE_SNRA2_BASE),
-                "out_rate": get_rf(OID_OUT_RATE_BASE),
-                "in_rate": get_rf(OID_IN_RATE_BASE),
-                "tx_tput": get_rf(OID_OUT_TPUT_BASE),
-                "rx_tput": get_rf(OID_IN_TPUT_BASE),
-                "source": "snmp",
-            }
-        )
-    return clients
+    return ssh_clients
 
 
 def _ssh_read_field(
@@ -261,51 +235,66 @@ def _fetch_link_clients_via_ssh(
     radio_idx: int,
     ssh_user: str,
     ssh_password: str,
+    cpe_hosts: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     if not ssh_password:
         return []
 
-    candidate_indices = []
-    for idx in (0, 1, 2, 3, int(radio_idx), 4):
-        if idx >= 0 and idx not in candidate_indices:
-            candidate_indices.append(idx)
+    link_count_raw = _ssh_read_field(
+        ssh_password=ssh_password,
+        ssh_user=ssh_user,
+        host=dut_ip,
+        path=f"/sys/class/kwn/wifi{radio_idx}/statistics/links",
+    )
+    link_match = re.search(r"(\d+)", str(link_count_raw or "0"))
+    link_count = int(link_match.group(1)) if link_match else 0
+    if link_count <= 0:
+        return []
 
-    for wifi_idx in candidate_indices:
-        link_count_raw = _ssh_read_field(
+    clients: list[dict[str, Any]] = []
+    for sua_idx in range(1, link_count + 1):
+        assoc = _ssh_read_field(
             ssh_password=ssh_password,
             ssh_user=ssh_user,
             host=dut_ip,
-            path=f"/sys/class/kwn/wifi{wifi_idx}/statistics/links",
+            path=f"/sys/class/kwn/wifi{radio_idx}/statistics/sua{sua_idx}/assoc",
         )
-        link_match = re.search(r"(\d+)", str(link_count_raw or "0"))
-        link_count = int(link_match.group(1)) if link_match else 0
-        if link_count <= 0:
+        if str(assoc).strip() in {"", "0", "-"}:
             continue
 
-        clients: list[dict[str, Any]] = []
-        for sua_idx in range(1, link_count + 1):
-            client: dict[str, Any] = {
-                "su_index": sua_idx,
-                "source": "ssh",
-            }
-            for field in SUA_STAT_FIELDS:
-                value = _ssh_read_field(
-                    ssh_password=ssh_password,
-                    ssh_user=ssh_user,
-                    host=dut_ip,
-                    path=f"/sys/class/kwn/wifi{wifi_idx}/statistics/sua{sua_idx}/{field}",
-                )
-                if value != "-":
-                    client[field] = value
-            if client.get("name"):
-                client["system_name"] = client["name"]
-            if client.get("tx_rate") or client.get("rx_rate") or client.get("ip"):
-                clients.append(client)
+        client: dict[str, Any] = {
+            "su_index": sua_idx,
+            "source": "ssh",
+        }
+        for field in SUA_STAT_FIELDS:
+            value = _ssh_read_field(
+                ssh_password=ssh_password,
+                ssh_user=ssh_user,
+                host=dut_ip,
+                path=f"/sys/class/kwn/wifi{radio_idx}/statistics/sua{sua_idx}/{field}",
+            )
+            if value != "-":
+                client[field] = value
 
-        if clients:
-            return clients
+        ip_from_assoc = _ssh_read_field(
+            ssh_password=ssh_password,
+            ssh_user=ssh_user,
+            host=dut_ip,
+            path=(
+                f"/sys/class/kwn/wifi{radio_idx}/statistics/sua{sua_idx}/ip"
+            ),
+        )
+        if ip_from_assoc != "-":
+            client["ip"] = ip_from_assoc
 
-    return []
+        if client.get("name"):
+            client["system_name"] = client["name"]
+        if client.get("tx_rate") or client.get("rx_rate") or client.get("mac"):
+            clients.append(
+                _normalize_client(client, cpe_hosts=cpe_hosts, display_index=len(clients) + 1)
+            )
+
+    return clients
 
 
 def validate_operating_rates(
@@ -323,8 +312,11 @@ def validate_operating_rates(
     client_checks: list[dict[str, Any]] = []
     any_mismatch = False
 
-    for client in clients:
-        normalized = _normalize_client(client)
+    for index, client in enumerate(clients, start=1):
+        if client.get("out_rate_mbps") is None and client.get("tx_rate_mbps") is None:
+            normalized = _normalize_client(client, cpe_hosts=None, display_index=index)
+        else:
+            normalized = client
         out_rate = normalized.get("out_rate_mbps") or normalized.get("tx_rate_mbps")
         out_ok = _rate_matches(out_rate, expected, tolerance_mbps, tolerance_pct)
         mismatch = out_ok is not True

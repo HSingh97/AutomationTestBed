@@ -287,22 +287,22 @@ def _fetch_link_validation(
     *,
     bandwidth: str,
     mcs: str,
-    snmp_community: str,
-    snmp_radio_index: int,
+    link_wifi_idx: int,
     spatial_stream: int,
     tolerance_mbps: float = 10.0,
     tolerance_pct: float = 0.08,
-    source: str = "auto",
+    source: str = "ssh",
     ssh_user: str = "root",
     ssh_password: str = "",
+    cpe_hosts: list[str] | None = None,
 ) -> dict[str, object]:
     clients = fetch_link_clients(
         dut_ip,
-        snmp_community=snmp_community,
-        radio_idx=snmp_radio_index,
+        radio_idx=link_wifi_idx,
         source=source,
         ssh_user=ssh_user,
         ssh_password=ssh_password,
+        cpe_hosts=cpe_hosts,
     )
     return validate_operating_rates(
         bandwidth=bandwidth,
@@ -319,16 +319,16 @@ def _wait_for_link_rate(
     *,
     bandwidth: str,
     mcs: str,
-    snmp_community: str,
-    snmp_radio_index: int,
+    link_wifi_idx: int,
     spatial_stream: int,
     tolerance_mbps: float = 10.0,
     tolerance_pct: float = 0.08,
     timeout_s: float = 45.0,
     poll_s: float = 3.0,
-    source: str = "auto",
+    source: str = "ssh",
     ssh_user: str = "root",
     ssh_password: str = "",
+    cpe_hosts: list[str] | None = None,
 ) -> dict[str, object]:
     """Poll until operating Out rate matches spec (secondary); always continue to TRex."""
     expected = operating_rate_mbps(bandwidth, mcs, spatial_streams=spatial_stream)
@@ -339,14 +339,14 @@ def _wait_for_link_rate(
             dut_ip,
             bandwidth=bandwidth,
             mcs=mcs,
-            snmp_community=snmp_community,
-            snmp_radio_index=snmp_radio_index,
+            link_wifi_idx=link_wifi_idx,
             spatial_stream=spatial_stream,
             tolerance_mbps=tolerance_mbps,
             tolerance_pct=tolerance_pct,
             source=source,
             ssh_user=ssh_user,
             ssh_password=ssh_password,
+            cpe_hosts=cpe_hosts,
         )
         last_validation = validation
         if validation.get("operating_rate_ok"):
@@ -476,11 +476,11 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     cpe_hosts = [str(ip) for ip in (dut.get("remote_ipv6s") or dut.get("remote_ips") or [])]
     detected_clients = fetch_link_clients(
         dut_ssh_ip,
-        snmp_community=args.snmp_community,
-        radio_idx=args.snmp_radio_index,
+        radio_idx=args.radio_index,
         source=args.link_stats_source,
         ssh_user=dut_user,
         ssh_password=dut_password,
+        cpe_hosts=cpe_hosts,
     )
     detected_count = len(detected_clients)
     if detected_count > 0:
@@ -573,8 +573,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 dut_ssh_ip,
                                 bandwidth=bandwidth,
                                 mcs=mcs,
-                                snmp_community=args.snmp_community,
-                                snmp_radio_index=args.snmp_radio_index,
+                                link_wifi_idx=args.radio_index,
                                 spatial_stream=int(args.spatial_stream),
                                 tolerance_mbps=args.rate_tolerance_mbps,
                                 tolerance_pct=args.rate_tolerance_pct,
@@ -582,6 +581,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 source=args.link_stats_source,
                                 ssh_user=dut_user,
                                 ssh_password=dut_password,
+                                cpe_hosts=cpe_hosts,
                             )
                         except Exception as exc:
                             print(f"[ERROR] Failed to configure DUT for {bandwidth}/{mcs}/{ratio}: {exc}")
@@ -658,6 +658,10 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         "uplink_per_cpe_mbps": targets.get("uplink_per_cpe_mbps"),
                         "link_validation": pre_trex_link_validation,
                         "mcs_config": mcs_config,
+                        "cpe_hosts": cpe_hosts,
+                        "packet_size": args.packet_size,
+                        "duration_s": args.time,
+                        "spatial_stream": int(args.spatial_stream),
                         "started_at": datetime.now(timezone.utc).isoformat(),
                     }
                     artifact = output_dir / _artifact_name(bandwidth, mcs, mode, ratio)
@@ -752,14 +756,14 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             dut_ssh_ip,
                             bandwidth=bandwidth,
                             mcs=mcs,
-                            snmp_community=args.snmp_community,
-                            snmp_radio_index=args.snmp_radio_index,
+                            link_wifi_idx=args.radio_index,
                             spatial_stream=int(args.spatial_stream),
                             tolerance_mbps=args.rate_tolerance_mbps,
                             tolerance_pct=args.rate_tolerance_pct,
                             source=args.link_stats_source,
                             ssh_user=dut_user,
                             ssh_password=dut_password,
+                            cpe_hosts=cpe_hosts,
                         )
                         clients = link_validation.get("clients") or []
                         record["link_validation"] = link_validation
@@ -800,14 +804,14 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 dut_ssh_ip,
                                 bandwidth=bandwidth,
                                 mcs=mcs,
-                                snmp_community=args.snmp_community,
-                                snmp_radio_index=args.snmp_radio_index,
+                                link_wifi_idx=args.radio_index,
                                 spatial_stream=int(args.spatial_stream),
                                 tolerance_mbps=args.rate_tolerance_mbps,
                                 tolerance_pct=args.rate_tolerance_pct,
                                 source=args.link_stats_source,
                                 ssh_user=dut_user,
                                 ssh_password=dut_password,
+                                cpe_hosts=cpe_hosts,
                             )
                         except Exception:
                             failed_spec = lookup_spec(
