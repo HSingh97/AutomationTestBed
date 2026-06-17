@@ -539,6 +539,8 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 su_count=args.su_count,
                                 prefer_cpe_via_bts=args.cpe_via_bts,
                                 settle_s=args.radio_settle_s,
+                                snmp_community=args.snmp_community,
+                                snmp_radio_idx=args.snmp_radio_index,
                             )
                             print("[DUT] MCS configured on all devices — polling operating rate (secondary)")
                             pre_trex_link_validation = _wait_for_link_rate(
