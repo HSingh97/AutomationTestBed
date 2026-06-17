@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import subprocess
 import time
 import re
@@ -66,13 +67,103 @@ def _read_uci(ip: str, user: str, password: str, cmd: str) -> str:
 
 
 def _cpe_ssh_relay_command(cpe_ip: str, password: str, inner_command: str) -> str:
-    """Run a command on CPE by hopping through the BTS (lab PC often has no route to CPE)."""
-    cpe_host = format_ssh_host(normalize_ip(cpe_ip))
+    """Run a command on CPE from the BTS shell (lab PC → BTS → CPE)."""
+    escaped = inner_command.replace("'", "'\"'\"'")
+    host = normalize_ip(cpe_ip)
+    ipv6_opt = "-6 " if is_ipv6_literal(host) else ""
     return (
-        f"sshpass -p '{password}' ssh -6 -T -o LogLevel=ERROR -o StrictHostKeyChecking=no "
-        f"-o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 "
-        f"root@{cpe_host} {inner_command!r}"
+        f"sshpass -p '{password}' ssh {ipv6_opt}-T -o LogLevel=ERROR -o StrictHostKeyChecking=no "
+        f"-o UserKnownHostsFile=/dev/null -o ConnectTimeout=20 "
+        f"root@{host} '{escaped}'"
     )
+
+
+def _remote_exec_bts_command(su_index: int, inner_command: str) -> str:
+    """remote_exec with single-quoted inner command (safe on BTS shell)."""
+    escaped = inner_command.replace("'", "'\"'\"'")
+    return f"/usr/sbin/remote_exec.sh {su_index} '{escaped}'"
+
+
+def _bts_has_sshpass(
+    bts_ip: str,
+    user: str,
+    password: str,
+    *,
+    ssh_timeout_s: int = 30,
+) -> bool:
+    try:
+        out = run_ssh_command(
+            bts_ip,
+            user,
+            password,
+            "command -v sshpass 2>/dev/null || which sshpass 2>/dev/null",
+            timeout_s=ssh_timeout_s,
+        )
+        return bool(out.strip())
+    except RuntimeError:
+        return False
+
+
+def _ip_matches(expected: str, observed: str) -> bool:
+    if not expected or not observed or observed.strip() in {"", "-"}:
+        return False
+    observed_clean = observed.strip().split()[0]
+    try:
+        left = ipaddress.ip_address(normalize_ip(expected))
+        right = ipaddress.ip_address(normalize_ip(observed_clean))
+        return left == right
+    except ValueError:
+        exp = normalize_ip(expected)
+        obs = normalize_ip(observed_clean)
+        return exp == obs or exp in obs or obs in exp
+
+
+def _bts_ssh_field(
+    bts_ip: str,
+    user: str,
+    password: str,
+    command: str,
+    *,
+    ssh_timeout_s: int = 60,
+) -> str:
+    raw = run_ssh_command(bts_ip, user, password, command, timeout_s=ssh_timeout_s)
+    return _parse_uci_get_output(raw)
+
+
+def _resolve_remote_exec_index_for_cpe(
+    bts_ip: str,
+    user: str,
+    password: str,
+    cpe_ip: str,
+    link_wifi_idx: int,
+    *,
+    ssh_timeout_s: int = 60,
+) -> int | None:
+    """Map CPE management IP to BTS link-table sua index (remote_exec SU number)."""
+    target = normalize_ip(cpe_ip)
+    fallback_idx: int | None = None
+    for assoc_idx in range(1, 33):
+        assoc = _bts_ssh_field(
+            bts_ip,
+            user,
+            password,
+            RootCommands.get_link_stat_associd(link_wifi_idx, assoc_idx),
+            ssh_timeout_s=ssh_timeout_s,
+        )
+        if assoc in {"", "0"}:
+            continue
+        ip_raw = run_ssh_command(
+            bts_ip,
+            user,
+            password,
+            RootCommands.get_link_stat_field(link_wifi_idx, assoc_idx, "ip"),
+            timeout_s=ssh_timeout_s,
+        )
+        if _ip_matches(target, ip_raw):
+            return assoc_idx
+        if fallback_idx is None:
+            fallback_idx = assoc_idx
+    return fallback_idx
 
 
 def run_ssh_via_bts(
@@ -94,12 +185,118 @@ def _read_cpe_uci_via_bts(
     password: str,
     cmd: str,
     *,
+    user: str = "root",
     ssh_timeout_s: int = 60,
 ) -> str:
-    raw = run_ssh_via_bts(bts_ip, cpe_ip, "root", password, cmd, ssh_timeout_s=ssh_timeout_s)
-    if "=" in raw:
-        raw = raw.split("=", 1)[-1].strip()
-    return raw.strip().strip('"')
+    if not _bts_has_sshpass(bts_ip, user, password, ssh_timeout_s=min(ssh_timeout_s, 30)):
+        raise RuntimeError("sshpass not available on BTS for CPE relay")
+    raw = run_ssh_via_bts(
+        bts_ip, cpe_ip, user, password, cmd, ssh_timeout_s=ssh_timeout_s
+    )
+    value = _parse_uci_get_output(raw)
+    if not value:
+        raise RuntimeError(f"empty UCI response from CPE {cpe_ip}: {raw[:160]!r}")
+    return value
+
+
+def _read_cpe_uci_via_remote_exec(
+    bts_ip: str,
+    user: str,
+    password: str,
+    radio_idx: int,
+    *,
+    su_index: int,
+    uci_key: str,
+    ssh_timeout_s: int = 60,
+) -> str:
+    cmd = _remote_exec_bts_command(su_index, f"uci get {uci_key}")
+    raw = run_ssh_command(bts_ip, user, password, cmd, timeout_s=ssh_timeout_s)
+    value = _parse_uci_get_output(raw)
+    if not value:
+        raise RuntimeError(
+            f"empty UCI via remote_exec SU{su_index} ({uci_key}): {raw[:160]!r}"
+        )
+    return value
+
+
+def _read_cpe_configured_mcs(
+    bts_ip: str,
+    user: str,
+    password: str,
+    cpe_ip: str,
+    cpe_radio_idx: int,
+    link_wifi_idx: int,
+    *,
+    su_index: int,
+    ssh_timeout_s: int = 60,
+) -> tuple[str, str, str, str]:
+    """
+    Read configured ddrsrate/spatialstream on a CPE.
+    Returns (mcs, spatial, source, error_message).
+    """
+    errors: list[str] = []
+    ddrs_key = f"txparam.ath{cpe_radio_idx}.ddrsrate"
+    spatial_key = f"txparam.ath{cpe_radio_idx}.spatialstream"
+
+    if cpe_ip:
+        try:
+            mcs = _read_cpe_uci_via_bts(
+                bts_ip,
+                cpe_ip,
+                password,
+                f"uci get {ddrs_key}",
+                ssh_timeout_s=ssh_timeout_s,
+            )
+            spatial = _read_cpe_uci_via_bts(
+                bts_ip,
+                cpe_ip,
+                password,
+                f"uci get {spatial_key}",
+                ssh_timeout_s=ssh_timeout_s,
+            )
+            if mcs.isdigit():
+                return mcs, spatial, "bts_ssh", ""
+            errors.append(f"bts_ssh: non-numeric ddrsrate {mcs!r}")
+        except RuntimeError as exc:
+            errors.append(f"bts_ssh: {exc}")
+
+    exec_idx = _resolve_remote_exec_index_for_cpe(
+        bts_ip,
+        user,
+        password,
+        cpe_ip,
+        link_wifi_idx,
+        ssh_timeout_s=ssh_timeout_s,
+    )
+    for idx in [exec_idx, su_index]:
+        if idx is None:
+            continue
+        try:
+            mcs = _read_cpe_uci_via_remote_exec(
+                bts_ip,
+                user,
+                password,
+                cpe_radio_idx,
+                su_index=idx,
+                uci_key=ddrs_key,
+                ssh_timeout_s=ssh_timeout_s,
+            )
+            spatial = _read_cpe_uci_via_remote_exec(
+                bts_ip,
+                user,
+                password,
+                cpe_radio_idx,
+                su_index=idx,
+                uci_key=spatial_key,
+                ssh_timeout_s=ssh_timeout_s,
+            )
+            if mcs.isdigit():
+                return mcs, spatial, f"remote_exec:{idx}", ""
+            errors.append(f"remote_exec SU{idx}: non-numeric ddrsrate {mcs!r}")
+        except RuntimeError as exc:
+            errors.append(f"remote_exec SU{idx}: {exc}")
+
+    return "", "", "", "; ".join(errors) or "could not read CPE UCI"
 
 
 def _verify_bts_mcs(
@@ -435,16 +632,22 @@ def _read_cpe_mcs_via_remote_exec(
     attempts: int = 4,
     pause_s: float = 2.0,
 ) -> str:
-    cmd = RootCommands.remote_exec_command(su_index, f"uci get txparam.ath{radio_idx}.ddrsrate")
-    last_raw = ""
+    last_value = ""
     for attempt in range(1, attempts + 1):
         if attempt > 1:
             time.sleep(pause_s)
-        last_raw = run_ssh_command(bts_ip, user, password, cmd, timeout_s=ssh_timeout_s)
-        value = _parse_uci_get_output(last_raw)
-        if value.isdigit():
-            return value
-    return _parse_uci_get_output(last_raw)
+        last_value = _read_cpe_uci_via_remote_exec(
+            bts_ip,
+            user,
+            password,
+            radio_idx,
+            su_index=su_index,
+            uci_key=f"txparam.ath{radio_idx}.ddrsrate",
+            ssh_timeout_s=ssh_timeout_s,
+        )
+        if last_value.isdigit():
+            return last_value
+    return last_value
 
 
 def _read_cpe_mcs(
@@ -486,11 +689,15 @@ def _read_cpe_mcs(
         su_index=su_index,
         ssh_timeout_s=ssh_timeout_s,
     )
-    spatial_cmd = RootCommands.remote_exec_command(
-        su_index, f"uci get txparam.ath{radio_idx}.spatialstream"
+    spatial = _read_cpe_uci_via_remote_exec(
+        bts_ip,
+        user,
+        password,
+        radio_idx,
+        su_index=su_index,
+        uci_key=f"txparam.ath{radio_idx}.spatialstream",
+        ssh_timeout_s=ssh_timeout_s,
     )
-    spatial_raw = run_ssh_command(bts_ip, user, password, spatial_cmd, timeout_s=ssh_timeout_s)
-    spatial = _parse_uci_get_output(spatial_raw)
     return mcs, spatial
 
 
@@ -533,83 +740,41 @@ def verify_mcs_all_devices(
         }
     )
 
-    cpe_remote_indices = _discover_cpe_remote_exec_indices(
-        bts_ip, user, password, su_count=su_count, ssh_timeout_s=ssh_timeout_s
-    )
-    if len(cpe_remote_indices) < su_count:
-        print(
-            f"[WARN] Found {len(cpe_remote_indices)} CPE remote_exec index(es) "
-            f"for su_count={su_count}; will use BTS→CPE SSH where addresses are known"
-        )
+    link_wifi_idx = bts_radio_idx
+    has_sshpass = _bts_has_sshpass(bts_ip, user, password, ssh_timeout_s=min(ssh_timeout_s, 30))
+    if has_sshpass:
+        print("[MCS] CPE verify: BTS→CPE SSH relay (sshpass on BTS)")
+    else:
+        print("[MCS] CPE verify: sshpass not on BTS — will use remote_exec by link-table index")
 
     for su_index in range(1, su_count + 1):
         cpe_ip = cpe_list[su_index - 1] if su_index <= len(cpe_list) else None
-        remote_idx = (
-            cpe_remote_indices[su_index - 1]
-            if su_index - 1 < len(cpe_remote_indices)
-            else su_index
-        )
-        actual_mcs = ""
-        actual_spatial = ""
-        source = ""
-        error = ""
-
-        if cpe_ip and prefer_cpe_via_bts:
-            try:
-                actual_mcs = _read_cpe_uci_via_bts(
-                    bts_ip,
-                    cpe_ip,
-                    password,
-                    f"uci get txparam.ath{cpe_radio_idx}.ddrsrate",
-                    ssh_timeout_s=ssh_timeout_s,
-                )
-                actual_spatial = _read_cpe_uci_via_bts(
-                    bts_ip,
-                    cpe_ip,
-                    password,
-                    f"uci get txparam.ath{cpe_radio_idx}.spatialstream",
-                    ssh_timeout_s=ssh_timeout_s,
-                )
-                source = "bts_ssh"
-            except RuntimeError as exc:
-                error = str(exc)
-
-        if not actual_mcs and _remote_exec_is_cpe_target(
-            bts_ip, user, password, remote_idx, ssh_timeout_s=ssh_timeout_s
-        ):
-            actual_mcs, actual_spatial = _read_cpe_mcs(
-                bts_ip,
-                user,
-                password,
-                cpe_radio_idx,
-                su_index=remote_idx,
-                cpe_ip=cpe_ip,
-                prefer_bts_relay=False,
-                ssh_timeout_s=ssh_timeout_s,
+        if not cpe_ip:
+            checks.append(
+                {
+                    "role": "CPE",
+                    "label": f"SU{su_index}",
+                    "su_index": su_index,
+                    "ip": "",
+                    "expected_mcs": expected_mcs,
+                    "actual_mcs": "?",
+                    "spatial_stream": "",
+                    "ok": False,
+                    "error": "no CPE management IP in profile",
+                }
             )
-            source = "remote_exec"
-            error = ""
+            continue
 
-        if not actual_mcs and cpe_ip and not prefer_cpe_via_bts:
-            try:
-                actual_mcs = _read_cpe_uci_via_bts(
-                    bts_ip,
-                    cpe_ip,
-                    password,
-                    f"uci get txparam.ath{cpe_radio_idx}.ddrsrate",
-                    ssh_timeout_s=ssh_timeout_s,
-                )
-                actual_spatial = _read_cpe_uci_via_bts(
-                    bts_ip,
-                    cpe_ip,
-                    password,
-                    f"uci get txparam.ath{cpe_radio_idx}.spatialstream",
-                    ssh_timeout_s=ssh_timeout_s,
-                )
-                source = "bts_ssh"
-                error = ""
-            except RuntimeError as exc:
-                error = str(exc)
+        actual_mcs, actual_spatial, source, error = _read_cpe_configured_mcs(
+            bts_ip,
+            user,
+            password,
+            cpe_ip,
+            cpe_radio_idx,
+            link_wifi_idx,
+            su_index=su_index,
+            ssh_timeout_s=ssh_timeout_s,
+        )
 
         if not actual_mcs:
             checks.append(
@@ -645,9 +810,13 @@ def verify_mcs_all_devices(
     all_ok = all(bool(row.get("ok")) for row in checks)
     for row in checks:
         status = "OK" if row.get("ok") else "MISMATCH"
+        detail = f" [{row.get('source')}]" if row.get("source") else ""
+        err = row.get("error")
+        if err and not row.get("ok"):
+            detail += f" — {err}"
         print(
             f"[MCS] {row['label']}: expected={expected_mcs}, "
-            f"actual={row.get('actual_mcs')} ({status})"
+            f"actual={row.get('actual_mcs')}{detail} ({status})"
         )
     if all_ok:
         print(f"[MCS] All {len(checks)} device(s) configured with {mcs_rate} (uci={expected_mcs})")
