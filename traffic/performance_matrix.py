@@ -167,7 +167,7 @@ def _operating_rate_for_traffic(
     clients = link_validation.get("clients") or []
     measured: list[float] = []
     for client in clients:
-        for key in ("tx_rate_mbps", "rx_rate_mbps"):
+        for key in ("out_rate_mbps", "tx_rate_mbps"):
             value = client.get(key)
             if value is not None and float(value) > 0:
                 measured.append(float(value))
@@ -330,7 +330,7 @@ def _wait_for_link_rate(
     ssh_user: str = "root",
     ssh_password: str = "",
 ) -> dict[str, object]:
-    """Poll SNMP until operating rate matches spec or timeout; always continue to TRex."""
+    """Poll until operating Out rate matches spec (secondary); always continue to TRex."""
     expected = operating_rate_mbps(bandwidth, mcs, spatial_streams=spatial_stream)
     deadline = time.time() + timeout_s
     last_validation: dict[str, object] = {}
@@ -350,19 +350,20 @@ def _wait_for_link_rate(
         )
         last_validation = validation
         if validation.get("operating_rate_ok"):
-            print(f"[DUT] Link rate stable at {expected:.0f} Mbps")
+            print(f"[DUT] Operating Out rate stable at {expected:.0f} Mbps")
             return validation
         clients = validation.get("clients") or []
         if clients:
             primary = clients[0]
             print(
-                f"[DUT] Waiting for link rate {expected:.0f} Mbps — "
-                f"Tx={primary.get('tx_rate')} Rx={primary.get('rx_rate')}"
+                f"[DUT] (secondary) waiting for Out rate {expected:.0f} Mbps — "
+                f"current Out={primary.get('out_rate') or primary.get('tx_rate')} "
+                f"In={primary.get('in_rate') or primary.get('rx_rate')}"
             )
         time.sleep(poll_s)
     print(
-        f"[WARN] Link rate did not stabilize at {expected:.0f} Mbps within {timeout_s:.0f}s "
-        f"— continuing with throughput (report will flag data rate mismatch)"
+        f"[WARN] Operating Out rate did not reach {expected:.0f} Mbps within {timeout_s:.0f}s "
+        f"— continuing to throughput (MCS config is primary; report will flag rate mismatch)"
     )
     if not last_validation:
         failed_spec = lookup_spec(mcs, bandwidth, spatial_streams=spatial_stream)
@@ -514,15 +515,16 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                     ratio = profile["ratio"]
                     mode = profile["name"]
                     print(
-                        f"\n>>> Configuring: BTS bw/ratio/mcs + CPE mcs | "
+                        f"\n>>> Configuring: MCS on all devices, then BTS bw/ratio | "
                         f"bw={bandwidth}, mcs={mcs}, ratio={ratio}, cpe={cpe_hosts or 'none'}"
                     )
                     pre_trex_link_validation: dict[str, object] = {}
+                    mcs_config: dict[str, object] = {}
                     if args.skip_dut_config:
                         print("[CONFIG] Skipping DUT radio apply (--skip-dut-config)")
                     else:
                         try:
-                            configure_radio_profile(
+                            mcs_config = configure_radio_profile(
                                 dut_ssh_ip,
                                 dut_user,
                                 dut_password,
@@ -538,6 +540,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 prefer_cpe_via_bts=args.cpe_via_bts,
                                 settle_s=args.radio_settle_s,
                             )
+                            print("[DUT] MCS configured on all devices — polling operating rate (secondary)")
                             pre_trex_link_validation = _wait_for_link_rate(
                                 dut_ssh_ip,
                                 bandwidth=bandwidth,
@@ -626,6 +629,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         "downlink_per_cpe_mbps": targets.get("downlink_per_cpe_mbps"),
                         "uplink_per_cpe_mbps": targets.get("uplink_per_cpe_mbps"),
                         "link_validation": pre_trex_link_validation,
+                        "mcs_config": mcs_config,
                         "started_at": datetime.now(timezone.utc).isoformat(),
                     }
                     artifact = output_dir / _artifact_name(bandwidth, mcs, mode, ratio)
@@ -715,7 +719,8 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             "trex": trex_result,
                         }
                         validation = trex_result.get("validation") or {}
-                        link_validation = _fetch_link_validation(
+                        link_validation = pre_trex_link_validation or record.get("link_validation") or {}
+                        post_link_validation = _fetch_link_validation(
                             dut_ssh_ip,
                             bandwidth=bandwidth,
                             mcs=mcs,
@@ -730,8 +735,10 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         )
                         clients = link_validation.get("clients") or []
                         record["link_validation"] = link_validation
+                        record["link_validation_post"] = post_link_validation
                         record["noise_dbm"] = args.noise_dbm
                         export["link_validation"] = link_validation
+                        export["link_validation_post"] = post_link_validation
                         trex_passed = bool(validation.get("passed"))
                         rate_ok = bool(link_validation.get("operating_rate_ok"))
                         record["operating_rate_ok"] = rate_ok
@@ -749,8 +756,9 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         if link_validation.get("operating_rate_mismatch") and clients:
                             primary = clients[0]
                             print(
-                                f"  Link rates: Tx={primary.get('tx_rate')} Rx={primary.get('rx_rate')} "
-                                f"(expected {link_validation['expected_operating_rate_mbps']} Mbps)"
+                                f"  Link rates: Out={primary.get('out_rate') or primary.get('tx_rate')} "
+                                f"In={primary.get('in_rate') or primary.get('rx_rate')} "
+                                f"(expected Out {link_validation['expected_operating_rate_mbps']} Mbps)"
                             )
                     except Exception as exc:
                         record["passed"] = False

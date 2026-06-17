@@ -152,6 +152,20 @@ class RootCommands:
         return f"cat /sys/class/kwn/wifi{radio_idx}/statistics/links"
 
     @staticmethod
+    def get_link_stat_field(radio_idx, assoc_idx, field):
+        return (
+            f"cat /sys/class/kwn/wifi{radio_idx}/statistics/sua{assoc_idx}/{field} "
+            f"2>/dev/null || echo -"
+        )
+
+    @staticmethod
+    def get_link_stat_associd(radio_idx, assoc_idx):
+        return (
+            f"cat /sys/class/kwn/wifi{radio_idx}/statistics/sua{assoc_idx}/assoc "
+            f"2>/dev/null || echo 0"
+        )
+
+    @staticmethod
     def get_wifi_events_log(radio_idx: int) -> str:
         return f"cat /tmp/kwn-wifi{radio_idx}-events.log 2>/dev/null"
 
@@ -201,20 +215,26 @@ class RootCommands:
 
     # --- THROUGHPUT CONFIG COMMANDS ---
     @staticmethod
-    def set_bandwidth_commands(radio_idx, bandwidth):
-        return [
-            f"ucidyn set wireless.wifi{radio_idx}.htmode {bandwidth}",
-            "ucidyn apply",
-        ]
-
-    @staticmethod
-    def set_mcs_sequence_commands(radio_idx, mcs_rate, spatial_stream, ddrs_rate):
-        """ddrs_rate should be the numeric UCI index (e.g. 23 for MCS23)."""
+    def mcs_ucidyn_set_commands(radio_idx, mcs_rate, spatial_stream, ddrs_rate):
+        """UCI set commands only — caller applies once via remote_exec broadcast."""
         modulation_rate = ddrs_rate if ddrs_rate is not None else mcs_rate
         return [
             f"ucidyn set txparam.ath{radio_idx}.ddrsstatus 0",
             f"ucidyn set txparam.ath{radio_idx}.spatialstream {spatial_stream}",
             f"ucidyn set txparam.ath{radio_idx}.ddrsrate {modulation_rate}",
+        ]
+
+    @staticmethod
+    def set_mcs_sequence_commands(radio_idx, mcs_rate, spatial_stream, ddrs_rate):
+        """ddrs_rate should be the numeric UCI index (e.g. 23 for MCS23)."""
+        return RootCommands.mcs_ucidyn_set_commands(
+            radio_idx, mcs_rate, spatial_stream, ddrs_rate
+        ) + ["ucidyn apply"]
+
+    @staticmethod
+    def set_bandwidth_commands(radio_idx, bandwidth):
+        return [
+            f"ucidyn set wireless.wifi{radio_idx}.htmode {bandwidth}",
             "ucidyn apply",
         ]
 

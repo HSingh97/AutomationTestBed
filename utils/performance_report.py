@@ -16,16 +16,16 @@ SENAO_LOGO_URL = (
 )
 
 
-def _rate_actual_cell(actual: float | None, ok: bool | None) -> str:
-    """SNMP operating rate (Mbps) — green when matches spec data rate, red when not."""
-    if actual is None:
+def _rate_actual_cell(raw: str | None, ok: bool | None) -> str:
+    """Operating rate with MCS index — green when Out rate matches spec."""
+    if not raw or raw == "-":
         return "—"
-    text = f"{actual:.0f}"
+    text = escape(str(raw))
     if ok is True:
         return f"<span class='mark pass'>{text}</span>"
     if ok is False:
         return f"<span class='mark fail'>{text}</span>"
-    return escape(text)
+    return text
 
 
 def _parse_dl_ul_fractions(ratio: str) -> tuple[float, float]:
@@ -46,7 +46,6 @@ def _throughput_pct_of_rate(measured: float, target_mbps: float) -> float:
 
 
 def _direction_targets(data_rate_mbps: float, ratio: str) -> tuple[float, float, float]:
-    """Split spec data rate by DL:UL ratio for per-direction throughput coloring."""
     dl_frac, ul_frac = _parse_dl_ul_fractions(ratio)
     dl_target = data_rate_mbps * dl_frac
     ul_target = data_rate_mbps * ul_frac
@@ -57,7 +56,10 @@ def _resolve_row_spec(record: dict[str, Any]) -> tuple[dict[str, Any], float]:
     link = record.get("link_validation") or {}
     spec = link.get("spec") or {}
     expected = float(
-        link.get("expected_operating_rate_mbps") or spec.get("operating_rate_mbps") or 0
+        link.get("expected_operating_rate_mbps")
+        or record.get("operating_rate_mbps")
+        or spec.get("operating_rate_mbps")
+        or 0
     )
     if expected > 0 and spec:
         return spec, expected
@@ -73,7 +75,6 @@ def _resolve_row_spec(record: dict[str, Any]) -> tuple[dict[str, Any], float]:
 
 
 def _throughput_cell(measured: float, target_mbps: float) -> str:
-    """Color throughput vs direction target (DL/UL share of data rate); zero is flagged."""
     if measured <= 0:
         return "<span class='tput-zero'>0.0</span> <span class='muted'>(no traffic)</span>"
     pct = _throughput_pct_of_rate(measured, target_mbps)
@@ -87,8 +88,11 @@ def _throughput_cell(measured: float, target_mbps: float) -> str:
 
 
 def _cpe_label(client: dict[str, Any], index: int) -> str:
+    name = str(client.get("system_name") or client.get("name") or "").strip()
+    if name and name != "-":
+        return name
     ip = str(client.get("ip") or "").strip()
-    if ip and ip != "0.0.0.0":
+    if ip and ip not in {"0.0.0.0", "-"}:
         return ip
     return f"SU{index}"
 
@@ -99,186 +103,214 @@ def _trex_device_stats(stats: dict[str, Any], su_index: int) -> dict[str, Any]:
     return by_device.get(f"SU{su_index}") or {}
 
 
-def _render_cpe_details_row(record: dict[str, Any], *, colspan: int = 15) -> str:
+def _iteration_heading(record: dict[str, Any], index: int, total: int) -> str:
+    if total <= 1:
+        return ""
+    return (
+        f"<h3 class='iteration-title'>"
+        f"Iteration {index}/{total}: "
+        f"{escape(str(record.get('bandwidth', '—')))} · "
+        f"{escape(str(record.get('mcs', '—')))} · "
+        f"DL:UL {escape(str(record.get('ratio', '—')))}"
+        f"</h3>"
+    )
+
+
+def _render_link_stream_table(record: dict[str, Any]) -> str:
+    """Per-SU link table aligned with BTS Monitor → Radio Statistics → Link."""
     link = record.get("link_validation") or {}
     clients = link.get("clients") or []
     if not clients:
-        return ""
+        return "<p class='muted'>No per-SU link statistics captured.</p>"
 
     stats = record.get("stats") or {}
-    cpe_rows: list[str] = []
+    rows: list[str] = []
     for index, client in enumerate(clients, start=1):
         trex_dev = _trex_device_stats(stats, index)
-        trex_rx = trex_dev.get("avg_rx_mbps")
-        trex_rx_cell = f"{float(trex_rx):.1f}" if trex_rx is not None else "—"
-        cpe_rows.append(
+        trex_dl = trex_dev.get("avg_rx_mbps")
+        trex_ul = trex_dev.get("avg_tx_mbps")
+        dl_cell = f"{float(trex_dl):.1f}" if trex_dl is not None else "—"
+        ul_cell = f"{float(trex_ul):.1f}" if trex_ul is not None else "—"
+        local_snr = client.get("combined_local_snr") or "—"
+        remote_snr = client.get("combined_remote_snr") or "—"
+        ip = str(client.get("ip") or "—")
+        row_class = "rate-mismatch" if client.get("rate_mismatch") else ""
+        rows.append(
             f"""
-          <tr>
+          <tr class="{row_class}">
+            <td>{index}</td>
             <td>{escape(_cpe_label(client, index))}</td>
-            <td>{_rate_actual_cell(client.get('tx_rate_mbps'), client.get('tx_rate_ok'))}</td>
-            <td>{_rate_actual_cell(client.get('rx_rate_mbps'), client.get('rx_rate_ok'))}</td>
-            <td>{escape(str(client.get('l_snr1', '—')))}</td>
-            <td>{escape(str(client.get('l_snr2', '—')))}</td>
-            <td>{escape(str(client.get('r_snr1', '—')))}</td>
-            <td>{escape(str(client.get('r_snr2', '—')))}</td>
-            <td>{trex_rx_cell}</td>
+            <td class="ip-cell">{escape(ip)}</td>
+            <td>{escape(str(local_snr))} / {escape(str(remote_snr))}</td>
+            <td>{_rate_actual_cell(client.get('out_rate'), client.get('out_rate_ok'))}</td>
+            <td>{_rate_actual_cell(client.get('in_rate'), None)}</td>
+            <td>{dl_cell}</td>
+            <td>{ul_cell}</td>
           </tr>
             """
         )
 
     return f"""
-        <tr class="cpe-detail-row">
-          <td colspan="{colspan}">
-            <div class="cpe-detail-wrap">
-              <div class="cpe-detail-title">Per-SU link &amp; TRex throughput</div>
-              <table class="cpe-sheet">
-                <thead>
-                  <tr>
-                    <th>CPE / SU</th>
-                    <th>Tx Rate<br/><span class="muted">(Mbps)</span></th>
-                    <th>Rx Rate<br/><span class="muted">(Mbps)</span></th>
-                    <th colspan="2">Local SNR (dB)</th>
-                    <th colspan="2">Remote SNR (dB)</th>
-                    <th>TRex Avg RX<br/><span class="muted">(Mbps)</span></th>
-                  </tr>
-                  <tr>
-                    <th></th><th></th><th></th>
-                    <th>A1</th><th>A2</th><th>A1</th><th>A2</th><th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {''.join(cpe_rows)}
-                </tbody>
-              </table>
-            </div>
-          </td>
-        </tr>
-        """
+    <div class="table-block">
+      <div class="table-title">Link Stream Statistics (per SU)</div>
+      <div class="sheet-scroll">
+        <table class="matrix link-stream">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>System Name</th>
+              <th>IP Address</th>
+              <th>Combined SNR (dB)<br/><span class="muted">Local / Remote</span></th>
+              <th>Rate Out (Mbps)<br/><span class="muted">BTS → CPE</span></th>
+              <th>Rate In (Mbps)<br/><span class="muted">CPE → BTS</span></th>
+              <th>TRex DL RX<br/><span class="muted">(Mbps)</span></th>
+              <th>TRex UL TX<br/><span class="muted">(Mbps)</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {''.join(rows)}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    """
 
 
-def _render_result_row(record: dict[str, Any]) -> str:
+def _render_throughput_summary_table(record: dict[str, Any]) -> str:
+    """Final summary: MCS, ratio, total throughput, operating rate."""
     stats = record.get("stats") or {}
     link = record.get("link_validation") or {}
     spec, expected_rate = _resolve_row_spec(record)
-    clients = link.get("clients") or []
-    primary = clients[0] if clients else {}
     ratio = str(record.get("ratio") or "50:50")
-    dl_target, ul_target, bidi_target = _direction_targets(expected_rate, ratio)
+    dl_target, ul_target, bidi_target = _direction_targets(
+        float(record.get("effective_target_mbps") or expected_rate),
+        ratio,
+    )
 
     combined = stats.get("combined") or {}
     downlink = stats.get("downlink") or {}
     uplink = stats.get("uplink") or {}
-    ul_mbps = float(uplink.get("rx_mbps") or 0)
     dl_mbps = float(downlink.get("rx_mbps") or 0)
+    ul_mbps = float(uplink.get("rx_mbps") or 0)
     bidi_mbps = float(combined.get("rx_mbps") or 0)
-
-    row_class = ""
-    if link.get("operating_rate_mismatch"):
-        row_class = "rate-mismatch"
-    error_text = str(record.get("error") or "")
-    if error_text:
-        row_class = "rate-mismatch" if row_class else "run-error"
 
     configured_mcs = str(record.get("mcs") or spec.get("mcs") or "—")
     modulation = spec.get("modulation") or "—"
-    if configured_mcs != "—" and modulation != "—":
-        modulation_cell = f"{escape(configured_mcs)}<br/><span class='muted'>{escape(modulation)}</span>"
-    else:
-        modulation_cell = escape(modulation if modulation != "—" else configured_mcs)
-    if expected_rate > 0:
-        if link.get("operating_rate_mismatch"):
-            data_rate_cell = (
-                f"<span class='mark fail'>{expected_rate:.0f}</span>"
-                f"<br/><span class='muted'>data rate mismatch</span>"
-            )
-        else:
-            data_rate_cell = f"{expected_rate:.0f}"
+    mcs_index = spec.get("mcs_pair") or configured_mcs.replace("MCS", "")
+
+    rate_mismatch = bool(link.get("operating_rate_mismatch"))
+    if expected_rate > 0 and rate_mismatch:
+        data_rate_cell = (
+            f"<span class='mark fail'>{expected_rate:.0f}</span>"
+            f"<br/><span class='muted'>data rate mismatch</span>"
+        )
+    elif expected_rate > 0:
+        data_rate_cell = f"{expected_rate:.0f}"
     else:
         data_rate_cell = "—"
 
-    error_note = ""
+    passed = record.get("passed")
+    mcs_config = record.get("mcs_config") or {}
+    if mcs_config.get("mcs_config_ok") is True:
+        mcs_cell = "<span class='mark pass'>All devices OK</span>"
+    elif mcs_config.get("mcs_config_ok") is False:
+        mcs_cell = "<span class='mark fail'>MCS mismatch</span>"
+    else:
+        mcs_cell = "—"
+
+    if passed is True:
+        status_cell = "<span class='mark pass'>PASS</span>"
+    elif passed is False:
+        status_cell = "<span class='mark fail'>FAIL</span>"
+    else:
+        status_cell = "—"
+
+    error_text = str(record.get("error") or "")
+    error_row = ""
     if error_text:
-        short = escape(error_text if len(error_text) <= 120 else error_text[:117] + "…")
-        error_note = f"<br/><span class='muted'>{short}</span>"
-
-    if len(clients) > 1:
-        link_metric_cell = "<span class='muted'>per SU ↓</span>"
-    else:
-        link_metric_cell = _rate_actual_cell(primary.get("tx_rate_mbps"), primary.get("tx_rate_ok"))
-
-    if len(clients) > 1:
-        rx_metric_cell = "<span class='muted'>per SU ↓</span>"
-    else:
-        rx_metric_cell = _rate_actual_cell(primary.get("rx_rate_mbps"), primary.get("rx_rate_ok"))
-
-    if len(clients) > 1:
-        snr_cells = ("<span class='muted'>per SU ↓</span>",) * 4
-    else:
-        snr_cells = (
-            escape(str(primary.get("l_snr1", "—"))),
-            escape(str(primary.get("l_snr2", "—"))),
-            escape(str(primary.get("r_snr1", "—"))),
-            escape(str(primary.get("r_snr2", "—"))),
-        )
-
-    summary_row = f"""
-        <tr class="{row_class}">
-          <td>{escape(str(record.get('bandwidth', '—')))}</td>
-          <td>{escape(str(record.get('mcs', '—')))}</td>
-          <td>{escape(str(record.get('ratio', '—')))}</td>
-          <td>{escape(str(link.get('connected_cpe_count', '—')))}</td>
-          <td>{modulation_cell}</td>
-          <td>{data_rate_cell}</td>
-          <td>{link_metric_cell}</td>
-          <td>{rx_metric_cell}</td>
-          <td>{_throughput_cell(dl_mbps, dl_target)}{error_note}</td>
-          <td>{_throughput_cell(ul_mbps, ul_target)}</td>
-          <td>{_throughput_cell(bidi_mbps, bidi_target)}</td>
-          <td>{snr_cells[0]}</td>
-          <td>{snr_cells[1]}</td>
-          <td>{snr_cells[2]}</td>
-          <td>{snr_cells[3]}</td>
-          <td>{escape(str(record.get('noise_dbm', '—')))}</td>
+        short = escape(error_text if len(error_text) <= 160 else error_text[:157] + "…")
+        error_row = f"""
+        <tr>
+          <th class="row-label">Error</th>
+          <td colspan="3" class="error-cell">{short}</td>
         </tr>
         """
-    return summary_row + _render_cpe_details_row(record)
+
+    return f"""
+    <div class="table-block">
+      <div class="table-title">Throughput Summary</div>
+      <table class="matrix summary-matrix">
+        <tbody>
+          <tr>
+            <th class="row-label">Bandwidth</th>
+            <td>{escape(str(record.get('bandwidth', '—')))}</td>
+            <th class="row-label">MCS Index</th>
+            <td>{escape(str(mcs_index))} <span class="muted">({escape(configured_mcs)})</span></td>
+          </tr>
+          <tr>
+            <th class="row-label">Modulation</th>
+            <td>{escape(str(modulation))}</td>
+            <th class="row-label">DL:UL Ratio</th>
+            <td>{escape(ratio)}</td>
+          </tr>
+          <tr>
+            <th class="row-label">Operating Data Rate</th>
+            <td>{data_rate_cell}</td>
+            <th class="row-label">Connected CPE</th>
+            <td>{escape(str(link.get('connected_cpe_count', '—')))}</td>
+          </tr>
+          <tr>
+            <th class="row-label">Effective Target</th>
+            <td>{escape(str(record.get('effective_target_mbps', '—')))} Mbps</td>
+            <th class="row-label">TRex Requested</th>
+            <td>DL {escape(str(record.get('trex_dl_bw', '—')))} · UL {escape(str(record.get('trex_ul_bw', '—')))}</td>
+          </tr>
+          <tr>
+            <th class="row-label">MCS Config (all devices)</th>
+            <td>{mcs_cell}</td>
+            <th class="row-label">Configured MCS</th>
+            <td>{escape(str(mcs_config.get('configured_mcs') or record.get('mcs') or '—'))}</td>
+          </tr>
+          <tr>
+            <th class="row-label">Total Downlink RX</th>
+            <td>{_throughput_cell(dl_mbps, dl_target)}</td>
+            <th class="row-label">Total Uplink RX</th>
+            <td>{_throughput_cell(ul_mbps, ul_target)}</td>
+          </tr>
+          <tr>
+            <th class="row-label">Total Bi-Directional</th>
+            <td>{_throughput_cell(bidi_mbps, bidi_target)}</td>
+            <th class="row-label">Result</th>
+            <td>{status_cell}</td>
+          </tr>
+          <tr>
+            <th class="row-label">Noise (dBm)</th>
+            <td colspan="3">{escape(str(record.get('noise_dbm', '—')))}</td>
+          </tr>
+          {error_row}
+        </tbody>
+      </table>
+    </div>
+    """
+
+
+def _render_result_block(record: dict[str, Any], *, index: int, total: int) -> str:
+    return (
+        _iteration_heading(record, index, total)
+        + _render_link_stream_table(record)
+        + _render_throughput_summary_table(record)
+    )
 
 
 def _render_results_table(records: list[dict[str, Any]]) -> str:
-    rows = [_render_result_row(record) for record in records]
-    if not rows:
-        rows = [
-            "<tr><td colspan='15'>No performance iterations recorded.</td></tr>",
-        ]
-    return f"""
-    <div class="sheet-scroll">
-    <table class="sheet">
-      <thead>
-        <tr>
-          <th rowspan="2">Bandwidth</th>
-          <th rowspan="2">MCS</th>
-          <th rowspan="2">DL:UL</th>
-          <th rowspan="2">Connected CPE</th>
-          <th rowspan="2">Modulation</th>
-          <th rowspan="2">Data Rate<br/><span class="muted">(Mbps)</span></th>
-          <th colspan="2">Rate (Mbps)</th>
-          <th colspan="3">Throughput (Mbps)<br/><span class="muted">% of DL/UL share</span></th>
-          <th colspan="2">Local SNR (dB)</th>
-          <th colspan="2">Remote SNR (dB)</th>
-          <th rowspan="2">Noise<br/>(dBm)</th>
-        </tr>
-        <tr>
-          <th>Tx</th><th>Rx</th>
-          <th>DL</th><th>UL</th><th>Bi-Di</th>
-          <th>A1</th><th>A2</th><th>A1</th><th>A2</th>
-        </tr>
-      </thead>
-      <tbody>
-        {''.join(rows)}
-      </tbody>
-    </table>
-    </div>
-    """
+    if not records:
+        return "<p>No performance iterations recorded.</p>"
+    total = len(records)
+    blocks = [
+        f"<div class='iteration-block'>{_render_result_block(record, index=idx, total=total)}</div>"
+        for idx, record in enumerate(records, start=1)
+    ]
+    return "\n".join(blocks)
 
 
 def write_summary_csv(records: list[dict[str, Any]], path: Path) -> None:
@@ -290,8 +322,8 @@ def write_summary_csv(records: list[dict[str, Any]], path: Path) -> None:
         "ratio",
         "connected_cpe_count",
         "expected_operating_rate_mbps",
-        "actual_tx_rate_mbps",
-        "actual_rx_rate_mbps",
+        "actual_out_rate_mbps",
+        "actual_in_rate_mbps",
         "operating_rate_ok",
         "combined_rx_mbps",
         "downlink_rx_mbps",
@@ -312,7 +344,10 @@ def write_summary_csv(records: list[dict[str, Any]], path: Path) -> None:
             link = record.get("link_validation") or {}
             primary = (link.get("clients") or [{}])[0]
             ratio = str(record.get("ratio") or "50:50")
-            dl_target, ul_target, bidi_target = _direction_targets(expected, ratio)
+            _, _, bidi_target = _direction_targets(
+                float(record.get("effective_target_mbps") or expected),
+                ratio,
+            )
             bidi = float(combined.get("rx_mbps") or 0)
             writer.writerow(
                 {
@@ -322,8 +357,8 @@ def write_summary_csv(records: list[dict[str, Any]], path: Path) -> None:
                     "ratio": record.get("ratio"),
                     "connected_cpe_count": link.get("connected_cpe_count"),
                     "expected_operating_rate_mbps": expected,
-                    "actual_tx_rate_mbps": primary.get("tx_rate_mbps"),
-                    "actual_rx_rate_mbps": primary.get("rx_rate_mbps"),
+                    "actual_out_rate_mbps": primary.get("out_rate_mbps") or primary.get("tx_rate_mbps"),
+                    "actual_in_rate_mbps": primary.get("in_rate_mbps") or primary.get("rx_rate_mbps"),
                     "operating_rate_ok": link.get("operating_rate_ok"),
                     "combined_rx_mbps": bidi,
                     "downlink_rx_mbps": downlink.get("rx_mbps", 0),
@@ -480,56 +515,39 @@ def write_html_report(
       padding: 20px 22px;
     }}
     .panel > h2 {{ margin: 0 0 16px; font-size: 17px; color: var(--title); }}
-    .ip-cell {{ white-space: nowrap; font-family: Consolas, Monaco, monospace; font-size: 12px; }}
+    .iteration-block {{
+      margin-bottom: 28px; padding-bottom: 24px; border-bottom: 1px solid var(--border);
+    }}
+    .iteration-block:last-child {{ border-bottom: none; margin-bottom: 0; padding-bottom: 0; }}
+    .iteration-title {{
+      margin: 0 0 14px; font-size: 15px; color: var(--head); font-weight: 600;
+    }}
+    .table-block {{ margin-bottom: 18px; }}
+    .table-title {{
+      font-size: 13px; font-weight: 700; color: var(--head); margin: 0 0 8px;
+      text-transform: uppercase; letter-spacing: 0.4px;
+    }}
+    .ip-cell {{ white-space: nowrap; font-family: Consolas, Monaco, monospace; font-size: 11px; }}
     table.matrix {{
       width: 100%; max-width: 100%; border-collapse: collapse; background: #fff;
       border: 2px solid var(--border); border-radius: 8px; overflow: hidden;
       box-shadow: 0 1px 3px rgba(15,23,42,0.06);
     }}
     table.matrix th, table.matrix td {{
-      border: 1px solid var(--border); padding: 12px 16px; text-align: center;
+      border: 1px solid var(--border); padding: 12px 14px; text-align: center;
+      vertical-align: middle;
     }}
     table.matrix thead th {{
-      background: #f8fafc; color: var(--head); font-size: 13px; font-weight: 700;
-      text-transform: uppercase; letter-spacing: 0.5px;
+      background: #f8fafc; color: var(--head); font-size: 12px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.4px;
     }}
-    table.matrix th.corner {{ background: #f1f5f9; width: 100px; }}
     table.matrix th.row-label {{
       text-align: left; background: #f8fafc; color: var(--title);
-      font-size: 13px; font-weight: 600; padding-left: 14px;
+      font-size: 13px; font-weight: 600; padding-left: 14px; width: 18%;
     }}
+    table.matrix tbody tr.rate-mismatch td {{ background: #fff8f8; }}
+    table.summary-matrix td {{ text-align: left; }}
     .sheet-scroll {{ width: 100%; overflow-x: auto; }}
-    table.sheet {{
-      width: 100%; min-width: 100%; table-layout: auto; border-collapse: collapse;
-      font-size: 13px; border: 2px solid var(--border); border-radius: 8px;
-    }}
-    table.sheet th, table.sheet td {{
-      border: 1px solid var(--border); padding: 12px 10px; text-align: center;
-      vertical-align: middle; word-wrap: break-word;
-    }}
-    table.sheet thead th {{
-      background: #f8fafc; color: var(--head); font-weight: 700; font-size: 12px;
-    }}
-    table.sheet tbody tr:nth-child(even) td {{ background: #fafcff; }}
-    table.sheet tbody tr.rate-mismatch td {{ background: #fff8f8; }}
-    table.sheet tbody tr.run-error td {{ background: #fff5f5; }}
-    table.sheet tbody tr.cpe-detail-row td {{
-      background: #f8fafc; padding: 10px 14px 14px; text-align: left;
-    }}
-    .cpe-detail-wrap {{ width: 100%; }}
-    .cpe-detail-title {{
-      font-size: 12px; font-weight: 600; color: var(--head); margin: 0 0 8px;
-    }}
-    table.cpe-sheet {{
-      width: 100%; border-collapse: collapse; font-size: 12px;
-      border: 1px solid var(--border); background: #fff;
-    }}
-    table.cpe-sheet th, table.cpe-sheet td {{
-      border: 1px solid var(--border); padding: 8px 10px; text-align: center;
-    }}
-    table.cpe-sheet thead th {{
-      background: #eef2ff; color: var(--head); font-weight: 600; font-size: 11px;
-    }}
     .muted {{ color: #64748b; font-size: 11px; }}
     .tput-good {{
       color: #166534; font-weight: 700; background: #dcfce7;
@@ -552,6 +570,7 @@ def write_html_report(
       color: var(--fail); font-weight: 700; background: #fee2e2;
       padding: 2px 6px; border-radius: 4px;
     }}
+    .error-cell {{ color: #991b1b; text-align: left; }}
     .footnote {{ margin-top: 14px; font-size: 12px; color: #64748b; line-height: 1.6; }}
     .trex-cmd {{
       display: block; margin-top: 8px; font-size: 12px; line-height: 1.5;
@@ -588,15 +607,13 @@ def write_html_report(
       {outcome_banner}
       {results_table}
       <p class="footnote">
-        <strong>Throughput</strong> % uses each direction&apos;s share of spec data rate
-        (e.g. 75:25 → DL vs 75%, UL vs 25%; Bi-Di vs 100%):
-        <span class="tput-good">green ≥70%</span>,
+        <strong>Link table</strong> mirrors BTS Monitor → Link: Out/In rates include MCS index when available.
+        Out rate (BTS→CPE) is validated against the configured MCS; In rate (uplink) is informational.
+        <strong>Throughput summary</strong> uses TRex totals vs effective target split by DL:UL ratio
+        (<span class="tput-good">green ≥70%</span>,
         <span class="tput-warn">orange 50–70%</span>,
-        <span class="tput-bad">red &lt;50%</span>,
-        <span class="tput-zero">zero = no traffic</span>.
-        <strong>Data rate</strong> is from the spec sheet; <strong>Tx/Rx</strong> are DUT link operating rates from SSH/SNMP (green = match, red = mismatch).
-        Pink rows highlight data rate mismatch; throughput pass/fail is based on TRex unless
-        <code>--fail-on-rate-mismatch</code> is enabled. Run errors (e.g. TRex ports down) also use pink rows.
+        <span class="tput-bad">red &lt;50%</span>).
+        Pink per-SU rows highlight Out-rate mismatch with the MCS sheet.
       </p>
     </section>
   </div>
