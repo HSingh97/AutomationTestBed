@@ -173,13 +173,16 @@ def _operating_rate_for_traffic(
                 measured.append(float(value))
     if not measured:
         return sheet_rate
-    stable = min(measured)
-    if stable < sheet_rate * 0.9:
+    stable_min = min(measured)
+    stable_max = max(measured)
+    if stable_max >= sheet_rate * 0.9:
+        return sheet_rate
+    if stable_min < sheet_rate * 0.9:
         print(
-            f"[TARGET] Measured link rate {stable:.0f} Mbps < sheet {sheet_rate:.0f} Mbps "
+            f"[TARGET] Measured link rate {stable_min:.0f} Mbps < sheet {sheet_rate:.0f} Mbps "
             f"— using measured rate for TRex load"
         )
-        return stable
+        return stable_min
     return sheet_rate
 
 
