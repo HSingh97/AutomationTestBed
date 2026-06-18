@@ -3,7 +3,7 @@
 Performance matrix runner: sweep bandwidth x MCS x DL/UL ratio and capture throughput.
 
 For each combination the script:
-  1. Applies DUT radio settings (htmode + modulation) over SSH
+  1. Applies BTS bandwidth once per htmode, then MCS per iteration
   2. Runs TRex throughput (stats_check)
   3. Saves per-iteration JSON plus consolidated CSV/HTML reports
 
@@ -31,7 +31,11 @@ from config.defaults import PERFORMANCE_DEFAULTS, TRAFFIC_DEFAULTS
 
 # Throughput matrix always runs bidirectional 75:25 (DL:UL).
 FIXED_DL_UL_RATIO = "75:25"
-from traffic.dut_radio_config import configure_radio_profile, read_running_bandwidth
+from traffic.dut_radio_config import (
+    configure_bandwidth_profile,
+    configure_mcs_profile,
+    read_running_bandwidth,
+)
 from traffic.link_stats import fetch_link_clients, validate_operating_rates
 from traffic.operating_rate_table import normalize_bandwidth, operating_rate_mbps
 from traffic.operating_rate_table import lookup_spec
@@ -664,22 +668,69 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
 
     try:
         for bandwidth in bandwidths:
+            bandwidth_group_ok = True
+            bw_group_error = ""
+            bw_group_config: dict[str, object] = {}
+            group_ratio = traffic_profiles[0]["ratio"] if traffic_profiles else FIXED_DL_UL_RATIO
+
+            if not args.skip_dut_config:
+                print(
+                    f"\n>>> Applying bandwidth once for all MCS: "
+                    f"bw={bandwidth}, ratio={group_ratio}"
+                )
+                try:
+                    bw_group_config = configure_bandwidth_profile(
+                        dut_ssh_ip,
+                        dut_user,
+                        dut_password,
+                        args.radio_index,
+                        bandwidth,
+                        group_ratio,
+                        cpe_hosts=cpe_hosts,
+                        su_count=args.su_count,
+                        bandwidth_apply_wait_s=args.bandwidth_apply_wait_s,
+                        su_link_wait_s=args.su_link_wait_s,
+                        bandwidth_running_wait_s=args.bandwidth_running_wait_s,
+                        require_all_su_for_bandwidth=args.require_all_su_for_bandwidth,
+                        profile_tb=testbed_tb,
+                        dut_cfg=dut,
+                        skip_if_unchanged=args.skip_config_if_unchanged,
+                    )
+                except Exception as exc:
+                    bandwidth_group_ok = False
+                    bw_group_error = str(exc)
+                    print(f"[ERROR] Bandwidth profile failed for {bandwidth}: {exc}")
+
             for mcs in mcs_rates:
                 for profile in traffic_profiles:
                     iteration += 1
                     ratio = profile["ratio"]
                     mode = profile["name"]
                     print(
-                        f"\n>>> Configuring: MCS on all devices, then BTS bw/ratio | "
+                        f"\n>>> Configuring MCS only | "
                         f"bw={bandwidth}, mcs={mcs}, ratio={ratio}, cpe={cpe_hosts or 'none'}"
                     )
                     pre_trex_link_validation: dict[str, object] = {}
-                    mcs_config: dict[str, object] = {}
+                    mcs_config: dict[str, object] = dict(bw_group_config)
                     if args.skip_dut_config:
                         print("[CONFIG] Skipping DUT radio apply (--skip-dut-config)")
+                    elif not bandwidth_group_ok:
+                        print(f"[ERROR] {bw_group_error} — skipping MCS/TRex for {mcs}")
+                        _append_skipped_iteration(
+                            records,
+                            bandwidth=bandwidth,
+                            mcs=mcs,
+                            mode=mode,
+                            ratio=ratio,
+                            target_mbps=args.target,
+                            error=bw_group_error,
+                            mcs_config=mcs_config,
+                            noise_dbm=args.noise_dbm,
+                        )
+                        continue
                     else:
                         try:
-                            mcs_config = configure_radio_profile(
+                            mcs_config = configure_mcs_profile(
                                 dut_ssh_ip,
                                 dut_user,
                                 dut_password,
@@ -690,16 +741,9 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 args.spatial_stream,
                                 cpe_hosts=cpe_hosts,
                                 cpe_radio_idx=args.cpe_radio_index,
-                                cpe_su_index=args.cpe_su_index,
                                 su_count=args.su_count,
                                 prefer_cpe_via_bts=args.cpe_via_bts,
                                 settle_s=args.radio_settle_s,
-                                bandwidth_apply_wait_s=args.bandwidth_apply_wait_s,
-                                su_link_wait_s=args.su_link_wait_s,
-                                bandwidth_running_wait_s=args.bandwidth_running_wait_s,
-                                require_all_su_for_bandwidth=args.require_all_su_for_bandwidth,
-                                profile_tb=testbed_tb,
-                                dut_cfg=dut,
                                 snmp_community=args.snmp_community,
                                 snmp_radio_idx=args.snmp_radio_index,
                                 skip_if_unchanged=args.skip_config_if_unchanged,

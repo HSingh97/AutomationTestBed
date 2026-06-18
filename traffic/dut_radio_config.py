@@ -1457,6 +1457,245 @@ def radio_profile_already_matches(
     return uci_bw_ok and running_bw_ok and ratio_ok, mcs_report
 
 
+def bandwidth_profile_matches(
+    bts_ip: str,
+    user: str,
+    password: str,
+    radio_idx: int,
+    bandwidth: str,
+    ratio: str,
+) -> bool:
+    """Return True when BTS htmode, running mode, and DL:UL ratio already match."""
+    expected_bw = normalize_bandwidth(bandwidth)
+    dl_ul_percent = ratio_to_uci_dl_percent(ratio)
+    actual_bw = _read_uci(bts_ip, user, password, f"uci get wireless.wifi{radio_idx}.htmode")
+    running_bw = _read_running_bandwidth(bts_ip, user, password, radio_idx)
+    actual_ratio = _read_uci(
+        bts_ip, user, password, f"uci get ath{radio_idx}qos.qoscfg.dlulratio"
+    )
+    return (
+        uci_htmode_matches(expected_bw, actual_bw.strip())
+        and running_bw == expected_bw
+        and actual_ratio.strip() == dl_ul_percent
+    )
+
+
+def configure_bandwidth_profile(
+    bts_ip: str,
+    user: str,
+    password: str,
+    radio_idx: int,
+    bandwidth: str,
+    ratio: str,
+    *,
+    cpe_hosts: list[str] | None = None,
+    su_count: int = 1,
+    profile_tb: dict | None = None,
+    dut_cfg: dict | None = None,
+    ssh_timeout_s: int = 60,
+    bandwidth_apply_wait_s: float = 60.0,
+    su_link_wait_s: float = 120.0,
+    bandwidth_running_wait_s: float = 120.0,
+    require_all_su_for_bandwidth: bool | None = None,
+    verify: bool = True,
+    skip_if_unchanged: bool = True,
+) -> dict[str, object]:
+    """Apply BTS htmode + DL:UL ratio once per bandwidth group (no MCS change)."""
+    from traffic.su_link_ping import wait_for_su_links
+
+    require_all_su = (
+        require_all_su_for_bandwidth
+        if require_all_su_for_bandwidth is not None
+        else su_count == 4
+    )
+    if skip_if_unchanged and bandwidth_profile_matches(
+        bts_ip, user, password, radio_idx, bandwidth, ratio
+    ):
+        print(
+            f"[CONFIG] Bandwidth already {normalize_bandwidth(bandwidth)}, "
+            f"ratio={ratio} — skipping apply"
+        )
+        return {"bandwidth_ok": True, "bandwidth_skipped": True}
+
+    print(
+        f"[CONFIG] Applying BTS bw={normalize_bandwidth(bandwidth)}, DL:UL ratio={ratio}"
+    )
+    dl_ul_percent = configure_bts_bandwidth_ratio(
+        bts_ip,
+        user,
+        password,
+        radio_idx,
+        bandwidth,
+        ratio,
+        ssh_timeout_s=ssh_timeout_s,
+        bandwidth_apply_wait_s=bandwidth_apply_wait_s,
+        verify=verify,
+    )
+
+    if su_link_wait_s > 0:
+        post_link = wait_for_su_links(
+            cpe_hosts=cpe_hosts or [],
+            profile_tb=profile_tb,
+            bts_ip=bts_ip,
+            bts_user=user,
+            bts_password=password,
+            dut=dut_cfg,
+            timeout_s=su_link_wait_s,
+            min_responding=su_count if require_all_su else None,
+            phase="after bandwidth apply",
+            strict=require_all_su,
+        )
+        if require_all_su and not post_link.get("ok"):
+            raise RuntimeError(
+                f"Only {len(post_link.get('responding', []))}/{su_count} SUs linked after bandwidth apply"
+            )
+
+    if verify and bandwidth_running_wait_s > 0:
+        _wait_for_running_bandwidth(
+            bts_ip,
+            user, password, radio_idx, bandwidth, timeout_s=bandwidth_running_wait_s
+        )
+        _verify_bts_bandwidth_ratio(
+            bts_ip,
+            user,
+            password,
+            radio_idx,
+            bandwidth=bandwidth,
+            dl_ul_percent=dl_ul_percent,
+            check_running=True,
+        )
+
+    return {"bandwidth_ok": True, "bandwidth_skipped": False}
+
+
+def configure_mcs_profile(
+    bts_ip: str,
+    user: str,
+    password: str,
+    radio_idx: int,
+    bandwidth: str,
+    mcs_rate: str,
+    ratio: str,
+    spatial_stream: str = "2",
+    *,
+    cpe_hosts: list[str] | None = None,
+    cpe_radio_idx: int | None = None,
+    su_count: int = 1,
+    prefer_cpe_via_bts: bool = False,
+    settle_s: float = 4.0,
+    ssh_timeout_s: int = 60,
+    verify: bool = True,
+    snmp_community: str | None = None,
+    snmp_radio_idx: int = 2,
+    skip_if_unchanged: bool = True,
+) -> dict[str, object]:
+    """Apply MCS on BTS + all CPEs without changing bandwidth (matrix inner loop)."""
+    effective_settle = _settle_seconds(bandwidth, settle_s)
+    cpe_radio = cpe_radio_idx if cpe_radio_idx is not None else radio_idx
+    spec = lookup_spec(mcs_rate, bandwidth, spatial_streams=int(spatial_stream))
+    effective_su_count = max(su_count, len([h for h in (cpe_hosts or []) if h.strip()]), 1)
+
+    if skip_if_unchanged:
+        matches, mcs_report = radio_profile_already_matches(
+            bts_ip,
+            user,
+            password,
+            radio_idx,
+            bandwidth,
+            mcs_rate,
+            ratio,
+            spatial_stream,
+            cpe_radio_idx=cpe_radio,
+            su_count=effective_su_count,
+            cpe_hosts=cpe_hosts,
+            prefer_cpe_via_bts=prefer_cpe_via_bts,
+            ssh_timeout_s=ssh_timeout_s,
+            snmp_community=snmp_community,
+            snmp_radio_idx=snmp_radio_idx,
+        )
+        if matches:
+            print(
+                f"[CONFIG] Already configured: {mcs_rate}, {bandwidth}, ratio={ratio} "
+                f"on BTS + {effective_su_count} CPE(s) — skipping MCS apply"
+            )
+            mcs_report["bandwidth_skipped"] = False
+            return mcs_report
+
+    print(
+        f"[CONFIG] Target MCS {spec['mcs']} ({spec['modulation']}); "
+        f"operating rate ~{spec['operating_rate_mbps']:.0f} Mbps checked after config"
+    )
+    print(f"[CONFIG] MCS={mcs_rate} on BTS + {effective_su_count} CPE(s)")
+    if prefer_cpe_via_bts:
+        configure_mcs_broadcast_bts_and_all_cpes(
+            bts_ip,
+            user,
+            password,
+            radio_idx,
+            mcs_rate,
+            spatial_stream,
+            ssh_timeout_s=ssh_timeout_s,
+            verify_bts=verify,
+        )
+    else:
+        configure_bts_mcs_only(
+            bts_ip,
+            user,
+            password,
+            radio_idx,
+            mcs_rate,
+            spatial_stream,
+            ssh_timeout_s=ssh_timeout_s,
+            verify=verify,
+        )
+        _apply_mcs_all_cpes(
+            bts_ip,
+            user,
+            password,
+            cpe_radio,
+            mcs_rate,
+            spatial_stream,
+            cpe_hosts=cpe_hosts,
+            su_count=effective_su_count,
+            prefer_cpe_via_bts=prefer_cpe_via_bts,
+            ssh_timeout_s=ssh_timeout_s,
+            verify=verify,
+        )
+
+    print("[CONFIG] Verify MCS on all devices")
+    mcs_report = verify_mcs_all_devices(
+        bts_ip,
+        user,
+        password,
+        radio_idx,
+        cpe_radio,
+        mcs_rate,
+        spatial_stream,
+        su_count=effective_su_count,
+        cpe_hosts=cpe_hosts,
+        prefer_cpe_via_bts=prefer_cpe_via_bts,
+        ssh_timeout_s=ssh_timeout_s,
+        snmp_community=snmp_community,
+        snmp_radio_idx=snmp_radio_idx,
+        bandwidth=bandwidth,
+    )
+    if verify and not mcs_report.get("mcs_config_ok"):
+        bad = [
+            str(row.get("label"))
+            for row in (mcs_report.get("checks") or [])
+            if not row.get("ok")
+        ]
+        mcs_report["error"] = (
+            f"MCS config mismatch — not all devices have {mcs_rate}: {', '.join(bad)}"
+        )
+        print(f"[ERROR] {mcs_report['error']}")
+        return mcs_report
+
+    time.sleep(effective_settle)
+    mcs_report["bandwidth_skipped"] = False
+    return mcs_report
+
+
 def configure_radio_profile(
     bts_ip: str,
     user: str,

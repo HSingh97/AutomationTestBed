@@ -1,6 +1,11 @@
 from unittest.mock import patch
 
-from traffic.dut_radio_config import configure_bts_bandwidth_ratio, configure_radio_profile
+from traffic.dut_radio_config import (
+    configure_bandwidth_profile,
+    configure_bts_bandwidth_ratio,
+    configure_mcs_profile,
+    configure_radio_profile,
+)
 
 
 def test_bandwidth_apply_uses_single_and_chain():
@@ -91,3 +96,60 @@ def test_configure_radio_profile_applies_bandwidth_without_pre_link_gate():
     mock_wait.assert_called_once()
     assert mock_wait.call_args.kwargs["phase"] == "after bandwidth apply"
     assert report.get("bandwidth_skipped") is False
+
+
+def test_configure_bandwidth_profile_applies_once_per_group():
+    with patch("traffic.dut_radio_config.configure_bts_bandwidth_ratio", return_value="75") as mock_bw:
+        with patch(
+            "traffic.su_link_ping.wait_for_su_links",
+            return_value={"ok": True, "responding": ["a", "b", "c", "d"]},
+        ):
+            with patch("traffic.dut_radio_config._wait_for_running_bandwidth"):
+                with patch("traffic.dut_radio_config._verify_bts_bandwidth_ratio"):
+                    with patch(
+                        "traffic.dut_radio_config.bandwidth_profile_matches",
+                        return_value=False,
+                    ):
+                        report = configure_bandwidth_profile(
+                            "10.0.0.1",
+                            "root",
+                            "pw",
+                            1,
+                            "HT80",
+                            "75:25",
+                            su_count=4,
+                            verify=False,
+                        )
+
+    mock_bw.assert_called_once()
+    assert report.get("bandwidth_ok") is True
+
+
+def test_configure_mcs_profile_does_not_apply_bandwidth():
+    with patch("traffic.dut_radio_config.configure_bts_mcs_only"):
+        with patch("traffic.dut_radio_config._apply_mcs_all_cpes"):
+            with patch(
+                "traffic.dut_radio_config.verify_mcs_all_devices",
+                return_value={"mcs_config_ok": True},
+            ):
+                with patch(
+                    "traffic.dut_radio_config.configure_bts_bandwidth_ratio"
+                ) as mock_bw:
+                    with patch(
+                        "traffic.dut_radio_config.radio_profile_already_matches",
+                        return_value=(False, {}),
+                    ):
+                        report = configure_mcs_profile(
+                            "10.0.0.1",
+                            "root",
+                            "pw",
+                            1,
+                            "HT80",
+                            "MCS23",
+                            "75:25",
+                            su_count=4,
+                            verify=False,
+                        )
+
+    mock_bw.assert_not_called()
+    assert report.get("mcs_config_ok") is True
