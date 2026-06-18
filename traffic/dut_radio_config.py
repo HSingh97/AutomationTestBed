@@ -88,6 +88,16 @@ def _read_running_bandwidth(
     return parsed
 
 
+def read_running_bandwidth(
+    ip: str,
+    user: str,
+    password: str,
+    radio_idx: int,
+) -> str | None:
+    """Return canonical HT mode (HT20/HT40/HT80) from cfg80211tool, or None."""
+    return _read_running_bandwidth(ip, user, password, radio_idx)
+
+
 def run_ssh_command(ip: str, user: str, password: str, command: str, *, timeout_s: int = 30) -> str:
     ssh_opts = (
         "-T -o LogLevel=ERROR -o StrictHostKeyChecking=no "

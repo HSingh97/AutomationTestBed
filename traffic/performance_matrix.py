@@ -31,9 +31,9 @@ from config.defaults import PERFORMANCE_DEFAULTS, TRAFFIC_DEFAULTS
 
 # Throughput matrix always runs bidirectional 75:25 (DL:UL).
 FIXED_DL_UL_RATIO = "75:25"
-from traffic.dut_radio_config import configure_radio_profile
+from traffic.dut_radio_config import configure_radio_profile, read_running_bandwidth
 from traffic.link_stats import fetch_link_clients, validate_operating_rates
-from traffic.operating_rate_table import operating_rate_mbps
+from traffic.operating_rate_table import normalize_bandwidth, operating_rate_mbps
 from traffic.operating_rate_table import lookup_spec
 from traffic.phy_rate_targets import compute_traffic_targets
 from traffic.trex_runner import (
@@ -402,6 +402,113 @@ def _wait_for_link_rate(
     return last_validation
 
 
+def _check_bandwidth_before_trex(
+    dut_ip: str,
+    *,
+    user: str,
+    password: str,
+    radio_idx: int,
+    bandwidth: str,
+    mcs: str,
+    bandwidth_skipped: bool,
+    link_wifi_idx: int,
+    spatial_stream: int,
+    tolerance_mbps: float,
+    tolerance_pct: float,
+    source: str,
+    cpe_hosts: list[str] | None,
+) -> tuple[bool, str, dict[str, object]]:
+    """Return (ready, error_message, link_validation). Skips TRex when BW does not match."""
+    if bandwidth_skipped:
+        return (
+            False,
+            f"Bandwidth {bandwidth} was not applied (waiting for all SUs to link)",
+            {},
+        )
+
+    expected_bw = normalize_bandwidth(bandwidth)
+    running_bw = read_running_bandwidth(dut_ip, user, password, radio_idx)
+    if running_bw and running_bw != expected_bw:
+        return (
+            False,
+            f"Running bandwidth {running_bw} != requested {expected_bw}",
+            {},
+        )
+
+    validation = _fetch_link_validation(
+        dut_ip,
+        bandwidth=bandwidth,
+        mcs=mcs,
+        link_wifi_idx=link_wifi_idx,
+        spatial_stream=spatial_stream,
+        tolerance_mbps=tolerance_mbps,
+        tolerance_pct=tolerance_pct,
+        source=source,
+        ssh_user=user,
+        ssh_password=password,
+        cpe_hosts=cpe_hosts,
+    )
+    if validation.get("operating_rate_ok"):
+        return True, "", validation
+
+    if running_bw is None or running_bw != expected_bw:
+        clients = validation.get("clients") or []
+        if clients:
+            primary = clients[0]
+            actual = primary.get("out_rate") or primary.get("tx_rate")
+            expected_rate = validation.get("expected_operating_rate_mbps")
+            return (
+                False,
+                (
+                    f"Operating rate mismatch for {expected_bw}/{mcs}: "
+                    f"expected ~{expected_rate} Mbps, current Out={actual}"
+                ),
+                validation,
+            )
+        return (
+            False,
+            (
+                f"Bandwidth/rate not confirmed for {expected_bw} "
+                f"(running={running_bw or 'unknown'})"
+            ),
+            validation,
+        )
+
+    return True, "", validation
+
+
+def _append_skipped_iteration(
+    records: list[dict[str, object]],
+    *,
+    bandwidth: str,
+    mcs: str,
+    mode: str,
+    ratio: str,
+    target_mbps: float,
+    error: str,
+    mcs_config: dict[str, object] | None = None,
+    link_validation: dict[str, object] | None = None,
+    noise_dbm: str,
+) -> None:
+    records.append(
+        {
+            "bandwidth": bandwidth,
+            "mcs": mcs,
+            "mode": mode,
+            "ratio": ratio,
+            "requested_target_mbps": target_mbps,
+            "passed": False,
+            "skipped_trex": True,
+            "operating_rate_ok": bool((link_validation or {}).get("operating_rate_ok")),
+            "error": error,
+            "stats": {},
+            "mcs_config": mcs_config or {},
+            "link_validation": link_validation or {},
+            "noise_dbm": noise_dbm,
+        }
+    )
+
+
 async def _ensure_dut_ready(recovery_manager: RecoveryManager, dut_ip: str) -> None:
     if not await recovery_manager.is_gui_reachable(dut_ip):
         print("[RECOVERY] DUT GUI not reachable — running soft recovery before matrix...")
@@ -597,32 +704,56 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 snmp_radio_idx=args.snmp_radio_index,
                                 skip_if_unchanged=args.skip_config_if_unchanged,
                             )
-                            if mcs_config.get("bandwidth_skipped"):
-                                print(
-                                    f"[WARN] Bandwidth {bandwidth} was not applied "
-                                    f"(waiting for all {args.su_count} SUs to link)"
-                                )
                             if not mcs_config.get("mcs_config_ok", True):
                                 err = str(
                                     mcs_config.get("error")
                                     or "MCS config mismatch — throughput skipped"
                                 )
                                 print(f"[ERROR] {err}")
-                                records.append(
-                                    {
-                                        "bandwidth": bandwidth,
-                                        "mcs": mcs,
-                                        "mode": mode,
-                                        "ratio": ratio,
-                                        "requested_target_mbps": args.target,
-                                        "passed": False,
-                                        "skipped_trex": True,
-                                        "error": err,
-                                        "stats": {},
-                                        "mcs_config": mcs_config,
-                                        "link_validation": {},
-                                        "noise_dbm": args.noise_dbm,
-                                    }
+                                _append_skipped_iteration(
+                                    records,
+                                    bandwidth=bandwidth,
+                                    mcs=mcs,
+                                    mode=mode,
+                                    ratio=ratio,
+                                    target_mbps=args.target,
+                                    error=err,
+                                    mcs_config=mcs_config,
+                                    noise_dbm=args.noise_dbm,
+                                )
+                                continue
+                            bw_ready, bw_error, pre_trex_link_validation = (
+                                _check_bandwidth_before_trex(
+                                    dut_ssh_ip,
+                                    user=dut_user,
+                                    password=dut_password,
+                                    radio_idx=args.radio_index,
+                                    bandwidth=bandwidth,
+                                    mcs=mcs,
+                                    bandwidth_skipped=bool(
+                                        mcs_config.get("bandwidth_skipped")
+                                    ),
+                                    link_wifi_idx=args.link_wifi_idx,
+                                    spatial_stream=int(args.spatial_stream),
+                                    tolerance_mbps=args.rate_tolerance_mbps,
+                                    tolerance_pct=args.rate_tolerance_pct,
+                                    source=args.link_stats_source,
+                                    cpe_hosts=cpe_hosts,
+                                )
+                            )
+                            if not bw_ready:
+                                print(f"[ERROR] {bw_error} — skipping TRex")
+                                _append_skipped_iteration(
+                                    records,
+                                    bandwidth=bandwidth,
+                                    mcs=mcs,
+                                    mode=mode,
+                                    ratio=ratio,
+                                    target_mbps=args.target,
+                                    error=bw_error,
+                                    mcs_config=mcs_config,
+                                    link_validation=pre_trex_link_validation,
+                                    noise_dbm=args.noise_dbm,
                                 )
                                 continue
                             print(
@@ -844,12 +975,19 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         rate_ok = bool(link_validation.get("operating_rate_ok"))
                         record["operating_rate_ok"] = rate_ok
                         record["throughput_passed"] = trex_passed
-                        record["passed"] = trex_passed
+                        record["passed"] = trex_passed and (
+                            rate_ok or not args.fail_on_rate_mismatch
+                        )
                         record["stats"] = export
                         record["finished_at"] = datetime.now(timezone.utc).isoformat()
                         with artifact.open("w", encoding="utf-8") as handle:
                             json.dump(export, handle, indent=2)
-                        rate_note = "rate OK" if rate_ok else "data rate mismatch (report only)"
+                        if rate_ok:
+                            rate_note = "rate OK"
+                        elif args.fail_on_rate_mismatch:
+                            rate_note = "data rate mismatch (FAIL)"
+                        else:
+                            rate_note = "data rate mismatch (report only)"
                         trex_status = "PASS" if record["passed"] else "FAIL"
                         print(
                             f"Result: {trex_status} | "
