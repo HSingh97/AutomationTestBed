@@ -24,6 +24,36 @@ def ratio_to_uci_dl_percent(ratio: str) -> str:
     return str(int(round(100 * dl_val / total)))
 
 
+def parse_running_htmode(get_mode_output: str) -> str | None:
+    """Map ``cfg80211tool athN get_mode`` output (e.g. ``11AHE20``) to HT20/HT40/HT80/HT160."""
+    text = str(get_mode_output or "").strip().upper()
+    if ":" in text:
+        text = text.split(":")[-1].strip()
+    for width in ("160", "80", "40", "20"):
+        if f"HE{width}" in text or f"VHT{width}" in text or f"HT{width}" in text:
+            return f"HT{width}"
+    match = re.search(r"(?:HE|VHT|HT)(\d+)", text)
+    if match:
+        return f"HT{match.group(1)}"
+    return None
+
+
+def _read_running_bandwidth(
+    ip: str,
+    user: str,
+    password: str,
+    radio_idx: int,
+) -> str | None:
+    raw = run_ssh_command(
+        ip,
+        user,
+        password,
+        RootCommands.get_bandwidth(radio_idx),
+        timeout_s=20,
+    )
+    return parse_running_htmode(raw)
+
+
 def run_ssh_command(ip: str, user: str, password: str, command: str, *, timeout_s: int = 30) -> str:
     ssh_opts = (
         "-T -o LogLevel=ERROR -o StrictHostKeyChecking=no "
@@ -355,15 +385,23 @@ def _verify_bts_bandwidth_ratio(
 ) -> None:
     expected_bw = normalize_bandwidth(bandwidth)
     actual_bw = _read_uci(ip, user, password, f"uci get wireless.wifi{radio_idx}.htmode")
+    running_bw = _read_running_bandwidth(ip, user, password, radio_idx)
     actual_ratio = _read_uci(ip, user, password, f"uci get ath{radio_idx}qos.qoscfg.dlulratio")
     mismatches: list[str] = []
     if expected_bw not in actual_bw.upper():
         mismatches.append(f"htmode expected {expected_bw}, got {actual_bw}")
+    if running_bw != expected_bw:
+        mismatches.append(
+            f"running mode expected {expected_bw}, got {running_bw or 'unknown'} (cfg80211tool)"
+        )
     if actual_ratio != dl_ul_percent:
         mismatches.append(f"dlulratio expected {dl_ul_percent}, got {actual_ratio}")
     if mismatches:
         raise RuntimeError(f"BTS bandwidth/ratio verify failed on {ip}: " + "; ".join(mismatches))
-    print(f"[BTS] Bandwidth/ratio verified on {ip}: htmode={actual_bw}, dlulratio={actual_ratio}")
+    print(
+        f"[BTS] Bandwidth/ratio verified on {ip}: htmode={actual_bw}, "
+        f"running={running_bw}, dlulratio={actual_ratio}"
+    )
 
 
 def _verify_bts_config(
@@ -1296,12 +1334,19 @@ def radio_profile_already_matches(
         return False, mcs_report
 
     actual_bw = _read_uci(bts_ip, user, password, f"uci get wireless.wifi{radio_idx}.htmode")
+    running_bw = _read_running_bandwidth(bts_ip, user, password, radio_idx)
     actual_ratio = _read_uci(
         bts_ip, user, password, f"uci get ath{radio_idx}qos.qoscfg.dlulratio"
     )
-    bw_ok = actual_bw.strip().upper() == expected_bw
+    uci_bw_ok = actual_bw.strip().upper() == expected_bw
+    running_bw_ok = running_bw == expected_bw
     ratio_ok = actual_ratio.strip() == dl_ul_percent
-    return bw_ok and ratio_ok, mcs_report
+    if uci_bw_ok and not running_bw_ok:
+        print(
+            f"[CONFIG] UCI htmode={actual_bw.strip()} but running mode is "
+            f"{running_bw or 'unknown'} (cfg80211tool) — bandwidth apply required"
+        )
+    return uci_bw_ok and running_bw_ok and ratio_ok, mcs_report
 
 
 def configure_radio_profile(
