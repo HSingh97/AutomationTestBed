@@ -36,7 +36,12 @@ from traffic.link_stats import fetch_link_clients, validate_operating_rates
 from traffic.operating_rate_table import operating_rate_mbps
 from traffic.operating_rate_table import lookup_spec
 from traffic.phy_rate_targets import compute_traffic_targets
-from traffic.trex_runner import build_trex_client_command, run_trex_stats_check, stop_remote_trex_servers
+from traffic.trex_runner import (
+    build_trex_client_command,
+    run_trex_stats_check,
+    stop_remote_trex_servers,
+)
+from utils.vlan_uci import qinq_tags_from_profile
 from utils.bench_config import profile_for_stand, recovery_profile_for_stand
 from utils.console_output import enable_live_console_output
 from utils.net_utils import normalize_ip
@@ -421,6 +426,21 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     dut_ssh_ip = _resolve_dut_ssh_ip(profile_bundle, dut_ip)
     dut_user = args.dut_user or dut["username"]
     dut_password = args.dut_password or dut["password"]
+    testbed_tb = dict(profile_bundle.active.get("testbed") or {})
+
+    qinq_svlan = args.trex_svlan
+    qinq_cvlan = args.trex_cvlan
+    if args.trex_qinq and qinq_svlan is None and qinq_cvlan is None:
+        qinq_svlan, qinq_cvlan = qinq_tags_from_profile(testbed_tb)
+        if qinq_svlan is not None and qinq_cvlan is not None:
+            print(f"[QinQ] TRex tags from profile: svlan={qinq_svlan} cvlan={qinq_cvlan}")
+        else:
+            print("[QinQ] No testbed.qinq in profile; TRex streams will be untagged")
+    elif qinq_svlan is not None and qinq_cvlan is not None:
+        print(f"[QinQ] TRex tags: svlan={qinq_svlan} cvlan={qinq_cvlan} (CLI override)")
+    elif not args.trex_qinq:
+        print("[QinQ] Disabled (--no-qinq); TRex streams will be untagged")
+        qinq_svlan, qinq_cvlan = None, None
 
     output_dir, html_path, executed_at = _resolve_logs_paths(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -706,6 +726,11 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             trex_packet_size=args.packet_size,
                             trex_direction=direction,
                             trex_protocol=args.trex_proto,
+                            trex_svlan=qinq_svlan,
+                            trex_cvlan=qinq_cvlan,
+                            trex_qinq_enabled=args.trex_qinq,
+                            trex_qinq_host=dut_ssh_ip,
+                            profile_tb=testbed_tb,
                             dut_host=dut_ssh_ip,
                             dut_user=dut_user,
                             dut_password=dut_password,
@@ -911,6 +936,8 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
             duration_s=args.time,
             trex_direction=str(trex_cmd_record.get("trex_direction") or "bidi"),
             trex_protocol=args.trex_proto,
+            trex_svlan=qinq_svlan,
+            trex_cvlan=qinq_cvlan,
         )
     write_summary_csv(records, csv_path)
     write_html_report(
@@ -1072,6 +1099,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trex-server-cores", type=int, default=trex["server_cores"])
     parser.add_argument("--trex-server-startup-s", type=int, default=trex.get("server_startup_s", 25))
     parser.add_argument("--trex-proto", choices=["udp", "tcp", "both"], default="udp")
+    parser.add_argument("--trex-svlan", type=int, default=None, help="QinQ outer S-VLAN override for TRex")
+    parser.add_argument("--trex-cvlan", type=int, default=None, help="QinQ inner C-VLAN override for TRex")
+    parser.add_argument(
+        "--no-qinq",
+        dest="trex_qinq",
+        action="store_false",
+        help="Disable QinQ tag read from BTS; send untagged TRex streams",
+    )
+    parser.set_defaults(trex_qinq=True)
     return parser
 
 
@@ -1079,6 +1115,8 @@ def main(argv: list[str] | None = None) -> int:
     enable_live_console_output()
     parser = build_parser()
     args = parser.parse_args(argv)
+    if (args.trex_svlan is None) ^ (args.trex_cvlan is None):
+        parser.error("QinQ requires both --trex-svlan and --trex-cvlan when either is set.")
     _resolve_stand_profile_args(args)
     summary = run_performance_matrix(args)
     if summary.get("dry_run"):

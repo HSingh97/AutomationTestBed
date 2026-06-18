@@ -30,13 +30,13 @@ testbed:
     bts_vlan_mode: transparent
     cpe_vlan_mode: transparent
   qinq:
-    svlan: 100
-    cvlan: 101
+    svlan: 200
+    cvlan: 201
   mgmt_vlan:
     prefix_len: 120
     uci_key: vlan.ath1.mgmtvlan
-    uci_value: 101
-    lab_pc_vlan_id: 101
+    uci_value: 201
+    lab_pc_vlan_id: 201
     ipv6_bts: "2401:4900:d0:40d4:0:17b8:0:330"
     ipv6_cpe: "2401:4900:d0:40d4::17b8:0:331"
     ipv6_bts_pc: "2401:4900:d0:40d4::17b8:0:301"
@@ -62,7 +62,7 @@ testbed:
   lab_pc_tagging:
     bts:
       mode: single
-      vlan_id: 101
+      vlan_id: 201
     cpe:
       mode: untagged
   vlan_ssh: {}

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from utils.net_utils import format_ssh_host, is_ipv6_literal, normalize_ip
+from utils.vlan_uci import _iface_keys, _qinq, qinq_tags_from_profile
 
 SSH_OPTIONS = [
     "-o",
@@ -510,6 +511,94 @@ def _all_trex_servers_running(
 BUNDLED_CLIENT_SCRIPT = (
     Path(__file__).resolve().parent / "scripts" / "master_script_extended_16SU.py"
 )
+BUNDLED_QINQ_TAGS = Path(__file__).resolve().parent / "scripts" / "qinq_tags.py"
+
+
+def _parse_uci_int_value(text: str) -> int | None:
+    lines = (text or "").strip().splitlines()
+    raw = lines[-1].strip().strip("'").strip('"') if lines else ""
+    if not raw or raw.lower() in {"undefined", "uci: entry not found"}:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def read_bts_qinq_tags_from_device(
+    *,
+    host: str,
+    user: str,
+    password: str,
+    profile_tb: dict | None = None,
+) -> tuple[int | None, int | None, str]:
+    """
+    Read BTS QinQ S-VLAN / C-VLAN from UCI over SSH.
+
+    Returns (svlan, cvlan, source) where source is 'device', 'profile', or 'none'.
+    """
+    tb = profile_tb or {}
+    keys = _iface_keys(tb, "bts")
+    svlan: int | None = None
+    cvlan: int | None = None
+    try:
+        svlan_result = _run_remote_command(
+            host,
+            user,
+            password,
+            f"uci get {keys['svlan']} 2>/dev/null",
+            timeout_s=20,
+            check=False,
+        )
+        cvlan_result = _run_remote_command(
+            host,
+            user,
+            password,
+            f"uci get {keys['cvlan']} 2>/dev/null",
+            timeout_s=20,
+            check=False,
+        )
+        svlan = _parse_uci_int_value(svlan_result.stdout)
+        cvlan = _parse_uci_int_value(cvlan_result.stdout)
+    except Exception as exc:
+        print(f"[QinQ][WARN] Failed to read VLAN UCI from {host}: {exc}")
+
+    if svlan is not None and cvlan is not None:
+        return svlan, cvlan, "device"
+
+    qinq = _qinq(tb)
+    profile_svlan = qinq.get("svlan")
+    profile_cvlan = qinq.get("cvlan")
+    if profile_svlan is not None and profile_cvlan is not None:
+        return int(profile_svlan), int(profile_cvlan), "profile"
+    return None, None, "none"
+
+
+def resolve_trex_qinq_tags(
+    *,
+    host: str | None,
+    user: str,
+    password: str,
+    profile_tb: dict | None,
+    trex_svlan: int | None = None,
+    trex_cvlan: int | None = None,
+    qinq_enabled: bool = True,
+) -> tuple[int | None, int | None]:
+    """Resolve QinQ tags for TRex: CLI override, then profile testbed.qinq only."""
+    del host, user, password  # profile is authoritative for TRex QinQ tagging
+    if not qinq_enabled:
+        return None, None
+    if trex_svlan is not None and trex_cvlan is not None:
+        print(f"[QinQ] Using CLI override svlan={trex_svlan} cvlan={trex_cvlan}")
+        return trex_svlan, trex_cvlan
+    if (trex_svlan is None) ^ (trex_cvlan is None):
+        raise ValueError("QinQ requires both trex_svlan and trex_cvlan when either is set.")
+    svlan, cvlan = qinq_tags_from_profile(profile_tb or {})
+    if svlan is not None and cvlan is not None:
+        print(f"[QinQ] Using profile svlan={svlan} cvlan={cvlan}")
+        return svlan, cvlan
+    print("[QinQ] No testbed.qinq in profile; TRex streams will be untagged.")
+    return None, None
 
 
 def bundled_client_script_path() -> str:
@@ -574,6 +663,24 @@ def deploy_trex_client_script(
             f"Failed to deploy TRex client script to {trex_server}: "
             f"{(result.stderr or result.stdout).strip()}"
         )
+    if BUNDLED_QINQ_TAGS.is_file():
+        qinq_remote = (
+            "~/qinq_tags.py"
+            if remote_dir == "~"
+            else f"{remote_dir.rstrip('/')}/qinq_tags.py"
+        )
+        qinq_result = subprocess.run(
+            _build_scp_command(trex_server, trex_user, trex_password, str(BUNDLED_QINQ_TAGS), qinq_remote),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if qinq_result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to deploy qinq_tags.py to {trex_server}: "
+                f"{(qinq_result.stderr or qinq_result.stdout).strip()}"
+            )
     _run_remote_command(
         trex_server,
         trex_user,
@@ -851,6 +958,8 @@ def build_trex_client_command(
     trex_direction: str = "bidi",
     trex_protocol: str = "udp",
     trex_vlan: int | None = None,
+    trex_svlan: int | None = None,
+    trex_cvlan: int | None = None,
     trex_enable_graph: bool = False,
 ) -> str:
     """Return the shell snippet run on the BSU TRex host to launch the client."""
@@ -887,7 +996,9 @@ def build_trex_client_command(
         client_args.extend(["--server-su4", trex_server_su4])
     if trex_subw:
         client_args.extend(["--subw", trex_subw])
-    if trex_vlan is not None:
+    if trex_svlan is not None and trex_cvlan is not None:
+        client_args.extend(["--svlan", str(trex_svlan), "--cvlan", str(trex_cvlan)])
+    elif trex_vlan is not None:
         client_args.extend(["--vlan", str(trex_vlan)])
     if trex_enable_graph:
         client_args.append("--graph")
@@ -927,6 +1038,11 @@ def run_trex_stats_check(
     trex_direction: str = "bidi",
     trex_protocol: str = "udp",
     trex_vlan: int | None = None,
+    trex_svlan: int | None = None,
+    trex_cvlan: int | None = None,
+    trex_qinq_enabled: bool = True,
+    trex_qinq_host: str | None = None,
+    profile_tb: dict | None = None,
     trex_enable_graph: bool = False,
     run_mode: str = "max_throughput",
     dut_host: str | None = None,
@@ -951,6 +1067,7 @@ def run_trex_stats_check(
         trex_server_su4,
     )
     all_server_hosts = _unique_trex_hosts(trex_server, *su_hosts)
+    qinq_host = trex_qinq_host or dut_host
 
     if deploy_client_script:
         deployed_path = deploy_trex_client_script(
@@ -960,6 +1077,22 @@ def run_trex_stats_check(
             remote_script=trex_client_script,
         )
         trex_client_script = deployed_path
+
+    resolved_svlan: int | None = trex_svlan
+    resolved_cvlan: int | None = trex_cvlan
+    if resolved_svlan is None or resolved_cvlan is None:
+        if trex_qinq_enabled:
+            resolved_svlan, resolved_cvlan = resolve_trex_qinq_tags(
+                host=qinq_host,
+                user=dut_user,
+                password=dut_password,
+                profile_tb=profile_tb,
+                trex_svlan=trex_svlan,
+                trex_cvlan=trex_cvlan,
+                qinq_enabled=True,
+            )
+        else:
+            resolved_svlan, resolved_cvlan = None, None
 
     client_script = build_trex_client_command(
         trex_client_script=trex_client_script,
@@ -978,6 +1111,8 @@ def run_trex_stats_check(
         trex_direction=trex_direction,
         trex_protocol=trex_protocol,
         trex_vlan=trex_vlan,
+        trex_svlan=resolved_svlan,
+        trex_cvlan=resolved_cvlan,
         trex_enable_graph=trex_enable_graph,
     )
     client_script = "\n".join(["set -euo pipefail", client_script])
@@ -1196,6 +1331,8 @@ def run_trex_stats_check(
                 "direction": trex_direction,
                 "protocol": trex_protocol,
                 "vlan": trex_vlan,
+                "svlan": resolved_svlan,
+                "cvlan": resolved_cvlan,
                 "graph": trex_enable_graph,
             },
             "combined": parsed["combined"],

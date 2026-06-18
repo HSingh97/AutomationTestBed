@@ -24,6 +24,8 @@ import pandas as pd
 from prettytable import PrettyTable
 from trex_stl_lib.api import *
 
+from qinq_tags import apply_downlink_tags, apply_uplink_tags, format_vlan_label, header_sizes
+
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 RESULTS_CSV_FILE = "trex_test_results.csv"
@@ -38,6 +40,22 @@ IMIX_PROFILE = [
     {"size": 256, "percent": 30},
     {"size": 512, "percent": 20},
 ]
+
+
+def _format_vlan_label(vlan_id, svlan_id, cvlan_id) -> str:
+    return format_vlan_label(vlan_id, svlan_id, cvlan_id)
+
+
+def _header_sizes(vlan_id, svlan_id, cvlan_id) -> tuple[int, int]:
+    return header_sizes(vlan_id, svlan_id, cvlan_id)
+
+
+def _apply_downlink_tags(l2_header, vlan_id, svlan_id, cvlan_id):
+    return apply_downlink_tags(l2_header, vlan_id, svlan_id, cvlan_id, dot1q_cls=Dot1Q)
+
+
+def _apply_uplink_tags(l2_header, vlan_id, svlan_id, cvlan_id):
+    return apply_uplink_tags(l2_header, vlan_id, svlan_id, cvlan_id, dot1q_cls=Dot1Q)
 
 
 def parse_bw_str_to_mbps(bw_str):
@@ -366,6 +384,8 @@ def run_multi_server_test(
     enable_graph,
     proto_mode,
     vlan_id,
+    svlan_id,
+    cvlan_id,
     enable_debug,
     ports_spec=None,
 ):
@@ -524,7 +544,7 @@ def run_multi_server_test(
         param_table.add_row(["Protocols to be Tested", ", ".join(proto.upper() for proto in protocols_to_run)])
         param_table.add_row(["Packet Sizes to be Tested", ", ".join(map(str, sizes_to_test))])
         param_table.add_row(["Directions to be Tested", ", ".join(direction.capitalize() for direction in directions_to_run)])
-        param_table.add_row(["VLAN", vlan_id if vlan_id is not None else "Untagged"])
+        param_table.add_row(["VLAN", _format_vlan_label(vlan_id, svlan_id, cvlan_id)])
         if allowed_bsu_ports is not None:
             param_table.add_row(["BSU Port Allowlist", ", ".join(str(port) for port in sorted(allowed_bsu_ports))])
         param_table.add_row(["-" * 40, "-" * 40])
@@ -573,9 +593,7 @@ def run_multi_server_test(
                 l4_layer = TCP(sport=8000, dport=8080, flags="PA")
             else:
                 l4_layer = UDP(sport=1025, dport=1234)
-            base_header_size = 42
-            if vlan_id is not None:
-                base_header_size += 4
+            dl_header_size, ul_header_size = _header_sizes(vlan_id, svlan_id, cvlan_id)
 
             for size in sizes_to_test:
                 current_size = size
@@ -583,7 +601,8 @@ def run_multi_server_test(
                 is_imix_test_current_size = size == "IMIX"
                 if is_imix_test_current_size:
                     for item in IMIX_PROFILE:
-                        item["pad"] = "x" * max(0, item["size"] - base_header_size)
+                        item["dl_pad"] = "x" * max(0, item["size"] - dl_header_size)
+                        item["ul_pad"] = "x" * max(0, item["size"] - ul_header_size)
 
                 for direction in directions_to_run:
                     current_direction = direction
@@ -610,21 +629,24 @@ def run_multi_server_test(
                     active_ports = {name: set() for name in clients}
                     if direction in ["downlink", "bidi"]:
                         for su_mac in all_su_macs:
-                            l2_header = Ether(src=macs["bsu"][bsu_port_id], dst=su_mac)
-                            if vlan_id is not None:
-                                l2_header = l2_header / Dot1Q(vlan=vlan_id)
+                            l2_header = _apply_downlink_tags(
+                                Ether(src=macs["bsu"][bsu_port_id], dst=su_mac),
+                                vlan_id,
+                                svlan_id,
+                                cvlan_id,
+                            )
                             if is_imix_test_current_size:
                                 for item in IMIX_PROFILE:
                                     bw = downlink_bw_per_su_mbps * (item["percent"] / 100.0)
                                     pps = (bw * 1_000_000) / (item["size"] * 8) if item["size"] > 0 else 0
-                                    packet = l2_header / IP() / l4_layer / item["pad"]
+                                    packet = l2_header / IP() / l4_layer / item["dl_pad"]
                                     clients["bsu"].add_streams(
                                         STLStream(packet=STLPktBuilder(pkt=packet), mode=STLTXCont(pps=pps)),
                                         ports=[bsu_port_id],
                                     )
                             else:
                                 pps = (downlink_bw_per_su_mbps * 1_000_000) / (size * 8)
-                                pad = "x" * max(0, size - base_header_size)
+                                pad = "x" * max(0, size - dl_header_size)
                                 packet = l2_header / IP() / l4_layer / pad
                                 clients["bsu"].add_streams(
                                     STLStream(packet=STLPktBuilder(pkt=packet), mode=STLTXCont(pps=pps)),
@@ -637,21 +659,24 @@ def run_multi_server_test(
                             if port["role"] != "SU":
                                 continue
                             client = clients[port["server"]]
-                            l2_header = Ether(src=port["mac"], dst=macs["bsu"][bsu_port_id])
-                            if vlan_id is not None:
-                                l2_header = l2_header / Dot1Q(vlan=vlan_id)
+                            l2_header = _apply_uplink_tags(
+                                Ether(src=port["mac"], dst=macs["bsu"][bsu_port_id]),
+                                vlan_id,
+                                svlan_id,
+                                cvlan_id,
+                            )
                             if is_imix_test_current_size:
                                 for item in IMIX_PROFILE:
                                     bw = uplink_bw_per_su_mbps * (item["percent"] / 100.0)
                                     pps = (bw * 1_000_000) / (item["size"] * 8) if item["size"] > 0 else 0
-                                    packet = l2_header / IP() / l4_layer / item["pad"]
+                                    packet = l2_header / IP() / l4_layer / item["ul_pad"]
                                     client.add_streams(
                                         STLStream(packet=STLPktBuilder(pkt=packet), mode=STLTXCont(pps=pps)),
                                         ports=[port["port_id"]],
                                     )
                             else:
                                 pps = (uplink_bw_per_su_mbps * 1_000_000) / (size * 8)
-                                pad = "x" * max(0, size - base_header_size)
+                                pad = "x" * max(0, size - ul_header_size)
                                 packet = l2_header / IP() / l4_layer / pad
                                 client.add_streams(
                                     STLStream(packet=STLPktBuilder(pkt=packet), mode=STLTXCont(pps=pps)),
@@ -865,7 +890,9 @@ def main():
         choices=["udp", "tcp", "both"],
         help="Protocol to use (udp, tcp, or both).",
     )
-    parser.add_argument("--vlan", type=int, default=None, help="Optional VLAN ID for 802.1Q tagged traffic.")
+    parser.add_argument("--vlan", type=int, default=None, help="Optional single 802.1Q VLAN ID (mutually exclusive with QinQ).")
+    parser.add_argument("--svlan", type=int, default=None, help="Outer S-VLAN for QinQ double-tag (requires --cvlan).")
+    parser.add_argument("--cvlan", type=int, default=None, help="Inner C-VLAN for QinQ double-tag (requires --svlan).")
     parser.add_argument("--debug", action="store_true", help="Enable verbose live stats during the test.")
     parser.add_argument(
         "--ports",
@@ -874,6 +901,11 @@ def main():
         help="Comma-separated BSU port IDs (e.g. 0,1). Falls back to TREX_PORTS env var.",
     )
     args = parser.parse_args()
+
+    if (args.svlan is None) ^ (args.cvlan is None):
+        parser.error("QinQ requires both --svlan and --cvlan.")
+    if args.vlan is not None and args.svlan is not None:
+        parser.error("Use either --vlan (single tag) or --svlan/--cvlan (QinQ), not both.")
 
     run_multi_server_test(
         args.server_bsu,
@@ -892,6 +924,8 @@ def main():
         args.graph,
         args.proto,
         args.vlan,
+        args.svlan,
+        args.cvlan,
         args.debug,
         ports_spec=args.ports,
     )
