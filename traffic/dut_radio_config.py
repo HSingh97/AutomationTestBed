@@ -1323,6 +1323,7 @@ def configure_radio_profile(
     bandwidth_apply_wait_s: float = 45.0,
     su_link_wait_s: float = 120.0,
     profile_tb: dict | None = None,
+    dut_cfg: dict | None = None,
     ssh_timeout_s: int = 60,
     verify: bool = True,
     snmp_community: str | None = None,
@@ -1432,6 +1433,7 @@ def configure_radio_profile(
             bts_ip=bts_ip,
             bts_user=user,
             bts_password=password,
+            dut=dut_cfg,
             timeout_s=su_link_wait_s,
             min_responding=max(su_count, len([h for h in cpe_hosts if h.strip()])),
         )
@@ -1498,6 +1500,7 @@ def configure_bandwidth_and_mcs(
     bandwidth_apply_wait_s: float = 45.0,
     su_link_wait_s: float = 120.0,
     profile_tb: dict | None = None,
+    dut_cfg: dict | None = None,
     ssh_timeout_s: int = 60,
 ) -> None:
     """Backward-compatible wrapper."""
@@ -1515,5 +1518,6 @@ def configure_bandwidth_and_mcs(
         bandwidth_apply_wait_s=bandwidth_apply_wait_s,
         su_link_wait_s=su_link_wait_s,
         profile_tb=profile_tb,
+        dut_cfg=dut_cfg,
         ssh_timeout_s=ssh_timeout_s,
     )

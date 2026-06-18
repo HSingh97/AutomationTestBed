@@ -577,6 +577,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 bandwidth_apply_wait_s=args.bandwidth_apply_wait_s,
                                 su_link_wait_s=args.su_link_wait_s,
                                 profile_tb=testbed_tb,
+                                dut_cfg=dut,
                                 snmp_community=args.snmp_community,
                                 snmp_radio_idx=args.snmp_radio_index,
                                 skip_if_unchanged=args.skip_config_if_unchanged,
