@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>UBR Performance Report</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    :root {
+      --bg: #eef2f7; --card: #ffffff; --text: #334155; --title: #0f172a;
+      --border: #cbd5e1; --pass: #16a34a; --fail: #dc2626; --warn: #ea580c; --head: #1e3a8a;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px 10px; font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); }
+    .wrap { width: 100%; max-width: none; margin: 0 auto; }
+    .hero {
+      background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #2563eb 100%);
+      color: #fff; border-radius: 14px; padding: 22px 26px; margin-bottom: 18px;
+      display: flex; justify-content: space-between; align-items: center; gap: 20px;
+    }
+    .hero h1 { margin: 0 0 8px; font-size: 24px; }
+    .hero-date { margin: 0; font-size: 14px; opacity: 0.92; }
+    .hero-logo { background: #fff; border-radius: 10px; padding: 10px 14px; }
+    .hero-logo img { display: block; height: 42px; }
+    .panel-top, .panel {
+      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+      padding: 20px 22px; margin-bottom: 16px;
+    }
+    .panel-top h2, .panel > h2 { margin: 0 0 14px; font-size: 17px; color: var(--title); }
+    table.data-table { width: 100%; border-collapse: collapse; }
+    table.data-table th, table.data-table td {
+      border: 1px solid var(--border); padding: 10px 14px; text-align: center;
+    }
+    table.data-table th.row-label { text-align: left; background: #f8fafc; }
+    .run-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; font-size: 13px; }
+    .run-meta span { padding: 8px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid var(--border); }
+    .run-outcome { margin-bottom: 16px; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); }
+    .run-outcome.pass { background: #f0fdf4; border-color: #bbf7d0; color: #166534; }
+    .run-outcome.fail { background: #fff5f5; border-color: #fecaca; color: #991b1b; }
+    .run-outcome.warn { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+    .iteration-block { margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+    .iteration-block:last-child { border-bottom: none; }
+    .iteration-title { margin: 0 0 12px; font-size: 15px; color: var(--head); }
+    .table-block { margin-bottom: 18px; }
+    .table-title { font-size: 13px; font-weight: 700; color: var(--head); margin: 0 0 8px; text-transform: uppercase; }
+    table.matrix { width: 100%; border-collapse: collapse; background: #fff; border: 2px solid var(--border); }
+    table.matrix th, table.matrix td { border: 1px solid var(--border); padding: 11px 12px; text-align: center; }
+    table.matrix thead th { background: #f8fafc; color: var(--head); font-size: 12px; font-weight: 700; }
+    table.matrix th.row-label { text-align: left; background: #f8fafc; width: 18%; }
+    table.summary-table td { text-align: left; }
+    table.throughput-sheet {
+      width: 100%;
+      table-layout: fixed;
+    }
+    table.throughput-sheet col.col-bw { width: 6%; }
+    table.throughput-sheet col.col-mimo { width: 4%; }
+    table.throughput-sheet col.col-pkt { width: 4%; }
+    table.throughput-sheet col.col-mcs-group { width: 8%; }
+    table.throughput-sheet col.col-ratio { width: 5%; }
+    table.throughput-sheet col.col-noise { width: 5%; }
+    table.throughput-sheet col.col-dur { width: 4%; }
+    table.throughput-sheet col.col-unit { width: 18%; }
+    table.throughput-sheet col.col-snr { width: 5%; }
+    table.throughput-sheet col.col-rssi { width: 5%; }
+    table.throughput-sheet col.col-rate { width: 7%; }
+    table.throughput-sheet col.col-tput { width: 5%; }
+    table.throughput-sheet col.col-total { width: 9%; }
+    table.throughput-sheet col.col-remarks { width: 6%; }
+    table.throughput-sheet th,
+    table.throughput-sheet td {
+      padding: 6px 5px;
+      font-size: 12px;
+      white-space: normal;
+      line-height: 1.3;
+      word-break: break-word;
+    }
+    table.throughput-sheet thead th {
+      background: #f4a261; color: #1a1a1a; font-size: 11px; font-weight: 700;
+    }
+    table.throughput-sheet td[rowspan] { background: #fffbeb; font-weight: 600; vertical-align: middle; }
+    table.throughput-sheet .unit-line {
+      display: block;
+      font-weight: 600;
+      text-align: left;
+      font-size: 10px;
+      line-height: 1.25;
+    }
+    table.throughput-sheet .unit-ip {
+      display: block;
+      font-family: Consolas, Monaco, monospace;
+      font-weight: 400;
+      font-size: 9px;
+      line-height: 1.35;
+      word-break: break-all;
+      white-space: normal;
+      color: #334155;
+      margin-top: 2px;
+    }
+    table.throughput-sheet .mcs-group-cell { line-height: 1.2; vertical-align: middle; }
+    table.throughput-sheet .mcs-label { font-weight: 700; }
+    table.throughput-sheet .modulation { color: #64748b; font-size: 10px; }
+    table.throughput-sheet .rate-mismatch {
+      color: #991b1b; font-weight: 700; background: #fee2e2;
+      padding: 1px 5px; border-radius: 3px; display: inline-block;
+    }
+    table.throughput-sheet .total-cell { font-size: 11px; }
+    table.throughput-sheet .remarks-cell { font-size: 11px; }
+    table.throughput-sheet tr.mcs-spacer td {
+      height: 14px; padding: 0; border: none; background: var(--bg);
+    }
+    .throughput-matrix-block { overflow: visible; }
+    .ip-cell { font-family: Consolas, Monaco, monospace; font-size: 11px; white-space: nowrap; }
+    .muted { color: #64748b; font-size: 11px; }
+    .tput-good { color: #166534; font-weight: 700; background: #dcfce7; padding: 2px 8px; border-radius: 4px; }
+    .tput-warn { color: #9a3412; font-weight: 700; background: #ffedd5; padding: 2px 8px; border-radius: 4px; }
+    .tput-bad { color: #991b1b; font-weight: 700; background: #fee2e2; padding: 2px 8px; border-radius: 4px; }
+    .tput-zero { color: #991b1b; font-weight: 700; background: #fecaca; padding: 2px 8px; border-radius: 4px; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+    .badge.pass { background: #dcfce7; color: #166534; }
+    .badge.fail { background: #fee2e2; color: #991b1b; }
+    .badge.neutral { background: #e2e8f0; color: #475569; }
+    .skip-note { color: #991b1b; font-size: 13px; }
+    .bw-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .bw-card {
+      text-align: left;
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent, #475569);
+      border-radius: 12px;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      padding: 14px 16px;
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+    }
+    .bw-card:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08); }
+    .bw-card.active {
+      border-color: var(--accent, #2563eb);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #2563eb) 18%, transparent);
+    }
+    .bw-card-label { display: block; font-size: 13px; font-weight: 800; color: var(--title); }
+    .bw-card-pass { display: block; margin-top: 6px; font-size: 12px; font-weight: 700; color: var(--pass); }
+    .bw-card-tput { display: block; margin-top: 8px; font-size: 22px; font-weight: 800; color: var(--title); }
+    .bw-card-peak { display: block; margin-top: 4px; font-size: 11px; color: #64748b; }
+    .bw-toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      background: rgba(255,255,255,0.96);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+    }
+    .bw-toolbar-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .bw-toolbar-label {
+      font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #64748b;
+    }
+    .bw-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+    .bw-btn {
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--title);
+      border-radius: 999px;
+      padding: 8px 14px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .bw-btn:hover { border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }
+    .bw-btn.active {
+      background: var(--accent, #2563eb);
+      border-color: var(--accent, #2563eb);
+      color: #fff;
+      box-shadow: 0 4px 12px color-mix(in srgb, var(--accent, #2563eb) 28%, transparent);
+    }
+    .bw-filter-stats { font-size: 12px; font-weight: 600; color: #475569; }
+    .sheet-scroll {
+      overflow: auto;
+      max-height: 72vh;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
+    }
+    table.throughput-sheet thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    table.throughput-sheet tbody tr:nth-child(even):not(.mcs-spacer) td {
+      background: #fcfdff;
+    }
+    table.throughput-sheet tbody tr:hover:not(.mcs-spacer) td {
+      background: #eff6ff;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <div>
+        <h1>UBR Performance Report</h1>
+        <p class="hero-date">2026-06-18 17:58:44 IST</p>
+      </div>
+      <div class="hero-logo">
+        <img src="https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png" alt="Senao Networks"/>
+      </div>
+    </header>
+
+    <section class="panel-top">
+      <h2>Testbed Summary</h2>
+      
+    <table class="data-table summary-top">
+      <thead>
+        <tr>
+          <th class="corner"></th>
+          <th>BTS</th>
+          <th>CPE</th>
+        </tr>
+      </thead>
+      <tbody>
+        
+            <tr>
+              <th class="row-label">Model</th>
+              <td>UBR-630</td>
+              <td>UBR-620 ×4</td>
+            </tr>
+            
+            <tr>
+              <th class="row-label">FW Version</th>
+              <td>qa-lab-02</td>
+              <td>qa-lab-02</td>
+            </tr>
+            
+            <tr>
+              <th class="row-label">IP</th>
+              <td><span class='ip-cell'>2001:2002:2003:2004:2005:2006:2007:1111</span></td>
+              <td><span class='ip-cell'>4 SU /120</span></td>
+            </tr>
+            
+            <tr>
+              <th class="row-label">Vlan</th>
+              <td>200/201</td>
+              <td>200/201</td>
+            </tr>
+            
+            <tr>
+              <th class="row-label">QOS</th>
+              <td>75:25</td>
+              <td>—</td>
+            </tr>
+            
+      </tbody>
+    </table>
+    
+      <div class="run-meta"><span><strong>Bandwidths:</strong> HT20, HT40, HT80</span><span><strong>MCS Rates:</strong> MCS23</span><span><strong>Ratios:</strong> 75:25</span><span><strong>Duration (s):</strong> 30</span></div>
+    </section>
+
+    <section class="panel">
+      <h2>Performance Results</h2>
+      <div class="run-outcome pass"><strong>3/3 passed</strong></div>
+      
+    <div class="table-block throughput-matrix-block">
+      <div class="bw-cards">
+        <button type="button" class="bw-card" data-bw-filter="HT20"
+                style="--accent:#059669">
+          <span class="bw-card-label">HT20</span>
+          <span class="bw-card-pass">1/1 PASS</span>
+          <span class="bw-card-tput">178 Mbps avg</span>
+          <span class="bw-card-peak">peak 178 Mbps</span>
+        </button>
+            
+        <button type="button" class="bw-card" data-bw-filter="HT40"
+                style="--accent:#2563eb">
+          <span class="bw-card-label">HT40</span>
+          <span class="bw-card-pass">1/1 PASS</span>
+          <span class="bw-card-tput">401 Mbps avg</span>
+          <span class="bw-card-peak">peak 401 Mbps</span>
+        </button>
+            
+        <button type="button" class="bw-card" data-bw-filter="HT80"
+                style="--accent:#7c3aed">
+          <span class="bw-card-label">HT80</span>
+          <span class="bw-card-pass">1/1 PASS</span>
+          <span class="bw-card-tput">790 Mbps avg</span>
+          <span class="bw-card-peak">peak 790 Mbps</span>
+        </button>
+            </div>
+      
+    <div class="bw-toolbar" id="bwToolbar">
+      <div class="bw-toolbar-left">
+        <span class="bw-toolbar-label">Show bandwidth</span>
+        <div class="bw-filters"><button type="button" class="bw-btn active" data-bw="all">All</button><button type="button" class="bw-btn" data-bw="HT20" style="--accent:#059669">HT20</button><button type="button" class="bw-btn" data-bw="HT40" style="--accent:#2563eb">HT40</button><button type="button" class="bw-btn" data-bw="HT80" style="--accent:#7c3aed">HT80</button></div>
+      </div>
+      <div class="bw-filter-stats" id="bwFilterStats"></div>
+    </div>
+    
+      <div class="sheet-scroll">
+      <table class="matrix throughput-sheet" id="throughputMatrix">
+          <colgroup>
+            <col class="col-bw"/><col class="col-mimo"/><col class="col-pkt"/><col class="col-mcs-group"/>
+            <col class="col-ratio"/><col class="col-noise"/><col class="col-dur"/><col class="col-unit"/>
+            <col class="col-snr"/><col class="col-snr"/><col class="col-rssi"/><col class="col-rssi"/>
+            <col class="col-rate"/><col class="col-rate"/><col class="col-tput"/><col class="col-tput"/>
+            <col class="col-total"/><col class="col-remarks"/>
+          </colgroup>
+          <thead>
+            <tr>
+              <th rowspan="2">Bandwidth</th>
+              <th rowspan="2">MIMO</th>
+              <th rowspan="2">Packet<br/>Size</th>
+              <th rowspan="2">MCS</th>
+              <th rowspan="2">DL:UL<br/>Ratio</th>
+              <th rowspan="2">Noise Floor<br/><span class="muted">dBm</span></th>
+              <th rowspan="2">Duration<br/><span class="muted">s</span></th>
+              <th rowspan="2">Unit / IP</th>
+              <th colspan="2">SNR</th>
+              <th colspan="2">RSSI</th>
+              <th rowspan="2">Tx Data Rate<br/><span class="muted">Mb/s</span></th>
+              <th rowspan="2">Rx Data Rate<br/><span class="muted">Mb/s</span></th>
+              <th rowspan="2">Tx Traffic<br/><span class="muted">Mb/s</span></th>
+              <th rowspan="2">Rx Traffic<br/><span class="muted">Mb/s</span></th>
+              <th rowspan="2">Total Throughput<br/><span class="muted">Mb/s</span></th>
+              <th rowspan="2">Remarks</th>
+            </tr>
+            <tr>
+              <th>Local A1/A2</th>
+              <th>Remote A1/A2</th>
+              <th>Local A1/A2</th>
+              <th>Remote A1/A2</th>
+            </tr>
+          </thead>
+          <tbody>
+            
+          <tr data-bw="HT20" data-iter-key="0" data-passed="1">
+            
+            <td rowspan="4">HT20</td>
+            <td rowspan="4">Dual</td>
+            <td rowspan="4">1500</td>
+            <td rowspan="4" class="mcs-group-cell"><span class='mcs-label'>MCS23</span><br/><span class='modulation'>1024-QAM 5/6</span></td>
+            <td rowspan="4">75-25</td>
+            <td rowspan="4">-93</td>
+            <td rowspan="4">30</td>
+                
+            <td class="unit-cell"><span class="unit-line">cpe1</span><span class="unit-ip">2001:2002:2003:2004:2005:2006:2007:11c9</span></td>
+            <td>38/37</td>
+            <td>36/35</td>
+            <td>-52/-53</td>
+            <td>-54/-55</td>
+            <td><span class="rate-mismatch">72 (1)</span></td>
+            <td><span class="rate-mismatch">72 (1)</span></td>
+            <td>33.4</td>
+            <td>11.1</td>
+            
+            <td rowspan="4" class="total-cell"><span class='tput-good'>178.1 Mbps</span></td>
+            <td rowspan="4" class="remarks-cell"><span class='badge pass'>PASS</span></td>
+                
+          </tr>
+                
+          <tr data-bw="HT20" data-iter-key="0" data-passed="1">
+            
+            <td class="unit-cell"><span class="unit-line">cpe2</span><span class="unit-ip">2001:2002:2003:2004:2005:2006:2007:118b</span></td>
+            <td>38/37</td>
+            <td>36/35</td>
+            <td>-52/-53</td>
+            <td>-54/-55</td>
+            <td><span class="rate-mismatch">72 (2)</span></td>
+            <td><span class="rate-mismatch">72 (2)</span></td>
+            <td>33.4</td>
+            <td>11.1</td>
+            
+          </tr>
+                
+          <tr data-bw="HT20" data-iter-key="0" data-passed="1">
+            
+            <td class="unit-cell"><span class="unit-line">cpe3</span><span class="unit-ip">2001:2002:2003:2004:2005:2006:2007:1178</span></td>
+            <td>38/37</td>
+            <td>36/35</td>
+            <td>-52/-53</td>
+            <td>-54/-55</td>
+            <td><span class="rate-mismatch">72 (3)</span></td>
+            <td><span class="rate-mismatch">72 (3)</span></td>
+            <td>33.4</td>
+            <td>11.1</td>
+            
+          </tr>
+                
+          <tr data-bw="HT20" data-iter-key="0" data-passed="1">
+            
+            <td class="unit-cell"><span class="unit-line">cpe4</span><span class="unit-ip">2001:2002:2003:2004:2005:2006:2007:113d</span></td>
+            <td>38/37</td>
+            <td>36/35</td>
+            <td>-52/-53</td>
+            <td>-54/-55</td>
+            <td><span class="rate-mismatch">72 (4)</span></td>
+            <td><span class="rate-mismatch">72 (4)</span></td>
+            <td>33.4</td>
+            <td>11.1</td>
+            
+          </tr>
+                <tr class="mcs-spacer" data-bw="HT20"><td colspan="18"></td></tr>
+          <tr data-bw="HT40" data-iter-key="1" data-passed="1">
+            
+            <td rowspan="4">HT40</td>
+            <td rowspan="4">Dual</td>
+            <td rowspan="4">1500</td>
+            <td rowspan="4" class="mcs-group-cell"><span class='mcs-label'>MCS23</span><br/><span class='modulation'>1024-QAM 5/6</span></td>
+            <td rowspan="4">75-25</td>
+            <td rowspan="4">-93</td>
+            <td rowspan="4">30</td>
+                
+            <td class="unit-cell"><span class="unit-line">cpe1</span><span class="unit-ip">2001:2002:2003:2004:2005:2006:2007:11c9</span></td>
+            <td>38/37</td>
+            <td>36/35</td>
+            <td>-52/-53</td>
+            <td>-54/-55</td>
+            <td><span class="rate-mismatch">143 (1)</span></td>
+            <td><span class="rate-mismatch">143 (1)</span></td>
+            <td>75.2</td>
+            <td>25.1</td>
+            
+            <td rowspan="4" class="total-cell"><span class='tput-good'>400.9 Mbps</span></td>
+            <td rowspan="4" class="remarks-cell"><span class='badge pass'>PASS</span></td>
+                
+          </tr>
+                
+          <tr data-bw="HT40" data-iter-key="1" data-passed="1">
+            
+            <td class="unit-cell"><span class="unit-line">cpe2</span><span class="unit-ip">2001:2002:2003:2004:2005:2006:2007:118b</span></td>
+            <td>38/37</td>
+            <td>36/35</td>
+            <td>-52/-53</td>
+            <td>-54/-55</td>
+            <td><span class="rate-mismatch">143 (2)</span></td>
+            <td><span class="rate-mismatch">143 (2)</span></td>
+            <td>75.2</td>
+            <td>25.1</td>
+            
+          </tr>
+                
+          <tr data-bw="HT40" data-iter-key="1" data-passed="1">
+            
+            <td class="unit-cell"><span class="unit-line">cpe3</span><span class="unit-ip">2001:2002:2003:2004:2005:2006:2007:1178</span></td>
+            <td>38/37</td>
+            <td>36/35</td>
+            <td>-52/-53</td>
+            <td>-54/-55</td>
+            <td><span class="rate-mismatch">143 (3)</span></td>
+            <td><span class="rate-mismatch">143 (3)</span></td>
+            <td>75.2</td>
+            <td>25.1</td>
+            
+          </tr>
+                
+          <tr data-bw="HT40" data-iter-key="1" data-passed="1">
+            
+            <td class="unit-cell"><span class="unit-line">cpe4</span><span class="unit-ip">2001:2002:2003:2004:2005:2006:2007:113d</span></td>
+            <td>38/37</td>
+            <td>36/35</td>
+            <td>-52/-53</td>
+            <td>-54/-55</td>
+            <td><span class="rate-mismatch">143 (4)</span></td>
+            <td><span class="rate-mismatch">143 (4)</span></td>
+            <td>75.2</td>
+            <td>25.1</td>
+            
+          </tr>
+                <tr class="mcs-spacer" data-bw="HT40"><td colspan="18"></td></tr>
+          <tr data-bw="HT80" data-iter-key="2" data-passed="1">
+            
+            <td rowspan="4">HT80</td>
+            <td rowspan="4">Dual</td>
+            <td rowspan="4">1500</td>
+            <td rowspan="4" class="mcs-group-cell"><span class='mcs-label'>MCS23</span><br/><span class='modulation'>1024-QAM 5/6</span></td>
+            <td rowspan="4">75-25</td>
+            <td rowspan="4">-93</td>
+            <td rowspan="4">30</td>
+                
+            <td class="unit-cell"><span class="unit-line">cpe1</span><span class="unit-ip">2001:2002:2003:2004:2005:2006:2007:11c9</span></td>
+            <td>38/37</td>
+            <td>36/35</td>
+            <td>-52/-53</td>
+            <td>-54/-55</td>
+            <td><span class="rate-mismatch">300 (1)</span></td>
+            <td><span class="rate-mismatch">300 (1)</span></td>
+            <td>148.2</td>
+            <td>49.4</td>
+            
+            <td rowspan="4" class="total-cell"><span class='tput-good'>790.1 Mbps</span></td>
+            <td rowspan="4" class="remarks-cell"><span class='badge pass'>PASS</span></td>
+                
+          </tr>
+                
+          <tr data-bw="HT80" data-iter-key="2" data-passed="1">
+            
+            <td class="unit-cell"><span class="unit-line">cpe2</span><span class="unit-ip">2001:2002:2003:2004:2005:2006:2007:118b</span></td>
+            <td>38/37</td>
+            <td>36/35</td>
+            <td>-52/-53</td>
+            <td>-54/-55</td>
+            <td><span class="rate-mismatch">300 (2)</span></td>
+            <td><span class="rate-mismatch">300 (2)</span></td>
+            <td>148.2</td>
+            <td>49.4</td>
+            
+          </tr>
+                
+          <tr data-bw="HT80" data-iter-key="2" data-passed="1">
+            
+            <td class="unit-cell"><span class="unit-line">cpe3</span><span class="unit-ip">2001:2002:2003:2004:2005:2006:2007:1178</span></td>
+            <td>38/37</td>
+            <td>36/35</td>
+            <td>-52/-53</td>
+            <td>-54/-55</td>
+            <td><span class="rate-mismatch">300 (3)</span></td>
+            <td><span class="rate-mismatch">300 (3)</span></td>
+            <td>148.2</td>
+            <td>49.4</td>
+            
+          </tr>
+                
+          <tr data-bw="HT80" data-iter-key="2" data-passed="1">
+            
+            <td class="unit-cell"><span class="unit-line">cpe4</span><span class="unit-ip">2001:2002:2003:2004:2005:2006:2007:113d</span></td>
+            <td>38/37</td>
+            <td>36/35</td>
+            <td>-52/-53</td>
+            <td>-54/-55</td>
+            <td><span class="rate-mismatch">300 (4)</span></td>
+            <td><span class="rate-mismatch">300 (4)</span></td>
+            <td>148.2</td>
+            <td>49.4</td>
+            
+          </tr>
+                
+          </tbody>
+        </table>
+      </div>
+    </div>
+    
+    </section>
+  </div>
+  
+    <script>
+    (function () {
+      const rows = Array.from(document.querySelectorAll('tr[data-bw]'));
+      const statsEl = document.getElementById('bwFilterStats');
+      const buttons = Array.from(document.querySelectorAll('.bw-btn'));
+      const cards = Array.from(document.querySelectorAll('.bw-card'));
+
+      function rowStats(bw) {
+        const groups = new Map();
+        rows.forEach((row) => {
+          if (row.style.display === 'none') return;
+          const key = row.dataset.iterKey;
+          if (!key || groups.has(key)) return;
+          groups.set(key, row.dataset.passed === '1');
+        });
+        const iterTotal = groups.size;
+        const passed = Array.from(groups.values()).filter(Boolean).length;
+        if (bw === 'all') {
+          return `${iterTotal} iteration(s) visible · ${passed}/${iterTotal} passed`;
+        }
+        return `${bw}: ${passed}/${iterTotal} passed`;
+      }
+
+      function applyFilter(bw) {
+        rows.forEach((row) => {
+          const show = bw === 'all' || row.dataset.bw === bw;
+          row.style.display = show ? '' : 'none';
+        });
+        buttons.forEach((btn) => btn.classList.toggle('active', btn.dataset.bw === bw));
+        cards.forEach((card) => card.classList.toggle('active', card.dataset.bwFilter === bw));
+        if (statsEl) statsEl.textContent = rowStats(bw);
+      }
+
+      buttons.forEach((btn) => btn.addEventListener('click', () => applyFilter(btn.dataset.bw || 'all')));
+      cards.forEach((card) => card.addEventListener('click', () => applyFilter(card.dataset.bwFilter || 'all')));
+      applyFilter('all');
+    })();
+    </script>
+    
+</body>
+</html>

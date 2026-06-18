@@ -417,18 +417,153 @@ def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _unique_bandwidths(records: list[dict[str, Any]]) -> list[str]:
+    seen: list[str] = []
+    for record in records:
+        bw = str(record.get("bandwidth") or "").strip()
+        if bw and bw not in seen:
+            seen.append(bw)
+    return seen
+
+
+def _bandwidth_stats(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    stats: dict[str, dict[str, Any]] = {}
+    for record in records:
+        bw = str(record.get("bandwidth") or "").strip()
+        if not bw:
+            continue
+        bucket = stats.setdefault(
+            bw,
+            {"total": 0, "passed": 0, "throughputs": []},
+        )
+        bucket["total"] += 1
+        if record.get("passed"):
+            bucket["passed"] += 1
+        row = _throughput_row_values(record)
+        if not row["skipped"] and row["bidi_mbps"] > 0:
+            bucket["throughputs"].append(row["bidi_mbps"])
+    return stats
+
+
+def _bw_card_accent(bandwidth: str) -> str:
+    accents = {
+        "HT20": "#059669",
+        "HT40": "#2563eb",
+        "HT80": "#7c3aed",
+        "HT160": "#db2777",
+    }
+    return accents.get(bandwidth.upper(), "#475569")
+
+
+def _render_bandwidth_summary_cards(records: list[dict[str, Any]]) -> str:
+    stats = _bandwidth_stats(records)
+    if not stats:
+        return ""
+    cards: list[str] = []
+    for bw, bucket in stats.items():
+        accent = _bw_card_accent(bw)
+        throughputs = bucket["throughputs"]
+        avg_tput = sum(throughputs) / len(throughputs) if throughputs else 0.0
+        max_tput = max(throughputs) if throughputs else 0.0
+        pass_text = f"{bucket['passed']}/{bucket['total']} PASS"
+        cards.append(
+            f"""
+        <button type="button" class="bw-card" data-bw-filter="{escape(bw)}"
+                style="--accent:{accent}">
+          <span class="bw-card-label">{escape(bw)}</span>
+          <span class="bw-card-pass">{escape(pass_text)}</span>
+          <span class="bw-card-tput">{avg_tput:.0f} Mbps avg</span>
+          <span class="bw-card-peak">peak {max_tput:.0f} Mbps</span>
+        </button>
+            """
+        )
+    return f'<div class="bw-cards">{"".join(cards)}</div>'
+
+
+def _render_bandwidth_toolbar(bandwidths: list[str]) -> str:
+    buttons = [
+        '<button type="button" class="bw-btn active" data-bw="all">All</button>',
+    ]
+    for bw in bandwidths:
+        accent = _bw_card_accent(bw)
+        buttons.append(
+            f'<button type="button" class="bw-btn" data-bw="{escape(bw)}" '
+            f'style="--accent:{accent}">{escape(bw)}</button>'
+        )
+    return f"""
+    <div class="bw-toolbar" id="bwToolbar">
+      <div class="bw-toolbar-left">
+        <span class="bw-toolbar-label">Show bandwidth</span>
+        <div class="bw-filters">{''.join(buttons)}</div>
+      </div>
+      <div class="bw-filter-stats" id="bwFilterStats"></div>
+    </div>
+    """
+
+
+def _render_report_javascript() -> str:
+    return """
+    <script>
+    (function () {
+      const rows = Array.from(document.querySelectorAll('tr[data-bw]'));
+      const statsEl = document.getElementById('bwFilterStats');
+      const buttons = Array.from(document.querySelectorAll('.bw-btn'));
+      const cards = Array.from(document.querySelectorAll('.bw-card'));
+
+      function rowStats(bw) {
+        const groups = new Map();
+        rows.forEach((row) => {
+          if (row.style.display === 'none') return;
+          const key = row.dataset.iterKey;
+          if (!key || groups.has(key)) return;
+          groups.set(key, row.dataset.passed === '1');
+        });
+        const iterTotal = groups.size;
+        const passed = Array.from(groups.values()).filter(Boolean).length;
+        if (bw === 'all') {
+          return `${iterTotal} iteration(s) visible · ${passed}/${iterTotal} passed`;
+        }
+        return `${bw}: ${passed}/${iterTotal} passed`;
+      }
+
+      function applyFilter(bw) {
+        rows.forEach((row) => {
+          const show = bw === 'all' || row.dataset.bw === bw;
+          row.style.display = show ? '' : 'none';
+        });
+        buttons.forEach((btn) => btn.classList.toggle('active', btn.dataset.bw === bw));
+        cards.forEach((card) => card.classList.toggle('active', card.dataset.bwFilter === bw));
+        if (statsEl) statsEl.textContent = rowStats(bw);
+      }
+
+      buttons.forEach((btn) => btn.addEventListener('click', () => applyFilter(btn.dataset.bw || 'all')));
+      cards.forEach((card) => card.addEventListener('click', () => applyFilter(card.dataset.bwFilter || 'all')));
+      applyFilter('all');
+    })();
+    </script>
+    """
+
+
 def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
     """Sheet-style matrix: CPE rows per MCS, shared columns rowspan."""
     if not records:
         return ""
 
     col_count = 18
+    bandwidths = _unique_bandwidths(records)
     body_rows: list[str] = []
     for rec_idx, record in enumerate(records):
         units = _unit_rows_for_record(record)
         row_span = len(units)
         row = _throughput_row_values(record)
-        bandwidth = escape(row["bandwidth"])
+        bw_raw = str(row["bandwidth"])
+        bandwidth = escape(bw_raw)
+        iter_key = f"{rec_idx}"
+        passed_flag = "1" if record.get("passed") else "0"
+        row_attrs = (
+            f'data-bw="{escape(bw_raw)}" data-iter-key="{iter_key}" '
+            f'data-passed="{passed_flag}"'
+        )
         mimo = "Dual" if int(record.get("spatial_stream") or 2) >= 2 else "Single"
         packet = escape(str(record.get("packet_size") or "—"))
         mcs_group = _record_mcs_group_cell(record, row)
@@ -463,7 +598,7 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
                 """
             body_rows.append(
                 f"""
-          <tr>
+          <tr {row_attrs}>
             {shared}
             <td class="unit-cell">{unit['unit_ip']}</td>
             <td>{escape(str(unit['snr_local']))}</td>
@@ -479,12 +614,19 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
                 """
             )
         if rec_idx < len(records) - 1:
-            body_rows.append(f'<tr class="mcs-spacer"><td colspan="{col_count}"></td></tr>')
+            body_rows.append(
+                f'<tr class="mcs-spacer" data-bw="{escape(bw_raw)}"><td colspan="{col_count}"></td></tr>'
+            )
+
+    summary_cards = _render_bandwidth_summary_cards(records)
+    toolbar = _render_bandwidth_toolbar(bandwidths)
 
     return f"""
     <div class="table-block throughput-matrix-block">
-      <div class="table-title">Throughput Matrix</div>
-      <table class="matrix throughput-sheet">
+      {summary_cards}
+      {toolbar}
+      <div class="sheet-scroll">
+      <table class="matrix throughput-sheet" id="throughputMatrix">
           <colgroup>
             <col class="col-bw"/><col class="col-mimo"/><col class="col-pkt"/><col class="col-mcs-group"/>
             <col class="col-ratio"/><col class="col-noise"/><col class="col-dur"/><col class="col-unit"/>
@@ -522,6 +664,7 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
             {''.join(body_rows)}
           </tbody>
         </table>
+      </div>
     </div>
     """
 
@@ -744,7 +887,6 @@ def write_html_report(
     }}
     .throughput-matrix-block {{ overflow: visible; }}
     .ip-cell {{ font-family: Consolas, Monaco, monospace; font-size: 11px; white-space: nowrap; }}
-    .sheet-scroll {{ overflow-x: auto; }}
     .muted {{ color: #64748b; font-size: 11px; }}
     .tput-good {{ color: #166534; font-weight: 700; background: #dcfce7; padding: 2px 8px; border-radius: 4px; }}
     .tput-warn {{ color: #9a3412; font-weight: 700; background: #ffedd5; padding: 2px 8px; border-radius: 4px; }}
@@ -755,6 +897,91 @@ def write_html_report(
     .badge.fail {{ background: #fee2e2; color: #991b1b; }}
     .badge.neutral {{ background: #e2e8f0; color: #475569; }}
     .skip-note {{ color: #991b1b; font-size: 13px; }}
+    .bw-cards {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }}
+    .bw-card {{
+      text-align: left;
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent, #475569);
+      border-radius: 12px;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      padding: 14px 16px;
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+    }}
+    .bw-card:hover {{ transform: translateY(-1px); box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08); }}
+    .bw-card.active {{
+      border-color: var(--accent, #2563eb);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #2563eb) 18%, transparent);
+    }}
+    .bw-card-label {{ display: block; font-size: 13px; font-weight: 800; color: var(--title); }}
+    .bw-card-pass {{ display: block; margin-top: 6px; font-size: 12px; font-weight: 700; color: var(--pass); }}
+    .bw-card-tput {{ display: block; margin-top: 8px; font-size: 22px; font-weight: 800; color: var(--title); }}
+    .bw-card-peak {{ display: block; margin-top: 4px; font-size: 11px; color: #64748b; }}
+    .bw-toolbar {{
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      background: rgba(255,255,255,0.96);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+    }}
+    .bw-toolbar-left {{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }}
+    .bw-toolbar-label {{
+      font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #64748b;
+    }}
+    .bw-filters {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+    .bw-btn {{
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--title);
+      border-radius: 999px;
+      padding: 8px 14px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }}
+    .bw-btn:hover {{ border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }}
+    .bw-btn.active {{
+      background: var(--accent, #2563eb);
+      border-color: var(--accent, #2563eb);
+      color: #fff;
+      box-shadow: 0 4px 12px color-mix(in srgb, var(--accent, #2563eb) 28%, transparent);
+    }}
+    .bw-filter-stats {{ font-size: 12px; font-weight: 600; color: #475569; }}
+    .sheet-scroll {{
+      overflow: auto;
+      max-height: 72vh;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
+    }}
+    table.throughput-sheet thead th {{
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }}
+    table.throughput-sheet tbody tr:nth-child(even):not(.mcs-spacer) td {{
+      background: #fcfdff;
+    }}
+    table.throughput-sheet tbody tr:hover:not(.mcs-spacer) td {{
+      background: #eff6ff;
+    }}
   </style>
 </head>
 <body>
@@ -781,6 +1008,7 @@ def write_html_report(
       {results_table}
     </section>
   </div>
+  {_render_report_javascript()}
 </body>
 </html>
 """
