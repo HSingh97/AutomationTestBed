@@ -53,4 +53,7 @@ def test_html_report_includes_bandwidth_filter_controls(tmp_path):
     assert 'data-bw="HT40"' in html
     assert 'data-bw-filter="HT80"' in html
     assert 'class="bw-btn active" data-bw="all"' in html
+    assert "790 Mbps" in html
+    assert "1/1 PASS" not in html
+    assert "peak " not in html.lower()
     assert "applyFilter('all')" in html

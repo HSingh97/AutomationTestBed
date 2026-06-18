@@ -143,9 +143,8 @@
       box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #2563eb) 18%, transparent);
     }
     .bw-card-label { display: block; font-size: 13px; font-weight: 800; color: var(--title); }
-    .bw-card-pass { display: block; margin-top: 6px; font-size: 12px; font-weight: 700; color: var(--pass); }
-    .bw-card-tput { display: block; margin-top: 8px; font-size: 22px; font-weight: 800; color: var(--title); }
-    .bw-card-peak { display: block; margin-top: 4px; font-size: 11px; color: #64748b; }
+    .bw-card-tput { display: block; margin-top: 10px; font-size: 24px; font-weight: 800; color: var(--title); }
+    .bw-card-mcs { display: block; margin-top: 6px; font-size: 11px; font-weight: 600; color: #64748b; }
     .bw-toolbar {
       position: sticky;
       top: 0;
@@ -186,7 +185,6 @@
       color: #fff;
       box-shadow: 0 4px 12px color-mix(in srgb, var(--accent, #2563eb) 28%, transparent);
     }
-    .bw-filter-stats { font-size: 12px; font-weight: 600; color: #475569; }
     .sheet-scroll {
       overflow: auto;
       max-height: 72vh;
@@ -277,25 +275,22 @@
         <button type="button" class="bw-card" data-bw-filter="HT20"
                 style="--accent:#059669">
           <span class="bw-card-label">HT20</span>
-          <span class="bw-card-pass">3/3 PASS</span>
-          <span class="bw-card-tput">172 Mbps avg</span>
-          <span class="bw-card-peak">peak 178 Mbps</span>
+          <span class="bw-card-tput">178 Mbps</span>
+          <span class="bw-card-mcs">MCS23</span>
         </button>
             
         <button type="button" class="bw-card" data-bw-filter="HT40"
                 style="--accent:#2563eb">
           <span class="bw-card-label">HT40</span>
-          <span class="bw-card-pass">3/3 PASS</span>
-          <span class="bw-card-tput">381 Mbps avg</span>
-          <span class="bw-card-peak">peak 401 Mbps</span>
+          <span class="bw-card-tput">401 Mbps</span>
+          <span class="bw-card-mcs">MCS23</span>
         </button>
             
         <button type="button" class="bw-card" data-bw-filter="HT80"
                 style="--accent:#7c3aed">
           <span class="bw-card-label">HT80</span>
-          <span class="bw-card-pass">3/3 PASS</span>
-          <span class="bw-card-tput">755 Mbps avg</span>
-          <span class="bw-card-peak">peak 790 Mbps</span>
+          <span class="bw-card-tput">790 Mbps</span>
+          <span class="bw-card-mcs">MCS23</span>
         </button>
             </div>
       
@@ -304,7 +299,6 @@
         <span class="bw-toolbar-label">Show bandwidth</span>
         <div class="bw-filters"><button type="button" class="bw-btn active" data-bw="all">All</button><button type="button" class="bw-btn" data-bw="HT20" style="--accent:#059669">HT20</button><button type="button" class="bw-btn" data-bw="HT40" style="--accent:#2563eb">HT40</button><button type="button" class="bw-btn" data-bw="HT80" style="--accent:#7c3aed">HT80</button></div>
       </div>
-      <div class="bw-filter-stats" id="bwFilterStats"></div>
     </div>
     
       <div class="sheet-scroll">
@@ -958,25 +952,8 @@
     <script>
     (function () {
       const rows = Array.from(document.querySelectorAll('tr[data-bw]'));
-      const statsEl = document.getElementById('bwFilterStats');
       const buttons = Array.from(document.querySelectorAll('.bw-btn'));
       const cards = Array.from(document.querySelectorAll('.bw-card'));
-
-      function rowStats(bw) {
-        const groups = new Map();
-        rows.forEach((row) => {
-          if (row.style.display === 'none') return;
-          const key = row.dataset.iterKey;
-          if (!key || groups.has(key)) return;
-          groups.set(key, row.dataset.passed === '1');
-        });
-        const iterTotal = groups.size;
-        const passed = Array.from(groups.values()).filter(Boolean).length;
-        if (bw === 'all') {
-          return `${iterTotal} iteration(s) visible · ${passed}/${iterTotal} passed`;
-        }
-        return `${bw}: ${passed}/${iterTotal} passed`;
-      }
 
       function applyFilter(bw) {
         rows.forEach((row) => {
@@ -985,7 +962,6 @@
         });
         buttons.forEach((btn) => btn.classList.toggle('active', btn.dataset.bw === bw));
         cards.forEach((card) => card.classList.toggle('active', card.dataset.bwFilter === bw));
-        if (statsEl) statsEl.textContent = rowStats(bw);
       }
 
       buttons.forEach((btn) => btn.addEventListener('click', () => applyFilter(btn.dataset.bw || 'all')));

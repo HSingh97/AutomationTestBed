@@ -426,25 +426,6 @@ def _unique_bandwidths(records: list[dict[str, Any]]) -> list[str]:
     return seen
 
 
-def _bandwidth_stats(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    stats: dict[str, dict[str, Any]] = {}
-    for record in records:
-        bw = str(record.get("bandwidth") or "").strip()
-        if not bw:
-            continue
-        bucket = stats.setdefault(
-            bw,
-            {"total": 0, "passed": 0, "throughputs": []},
-        )
-        bucket["total"] += 1
-        if record.get("passed"):
-            bucket["passed"] += 1
-        row = _throughput_row_values(record)
-        if not row["skipped"] and row["bidi_mbps"] > 0:
-            bucket["throughputs"].append(row["bidi_mbps"])
-    return stats
-
-
 def _bw_card_accent(bandwidth: str) -> str:
     accents = {
         "HT20": "#059669",
@@ -455,25 +436,48 @@ def _bw_card_accent(bandwidth: str) -> str:
     return accents.get(bandwidth.upper(), "#475569")
 
 
+def _max_throughput_per_bandwidth(
+    records: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Best combined throughput per htmode (highest MCS row wins on multi-MCS runs)."""
+    best: dict[str, dict[str, Any]] = {}
+    for record in records:
+        bw = str(record.get("bandwidth") or "").strip()
+        if not bw:
+            continue
+        row = _throughput_row_values(record)
+        if row["skipped"] or row["bidi_mbps"] <= 0:
+            continue
+        current = best.get(bw)
+        if current is None or row["bidi_mbps"] > float(current["bidi_mbps"]):
+            best[bw] = {
+                "bidi_mbps": row["bidi_mbps"],
+                "mcs": str(record.get("mcs") or "—"),
+            }
+    return best
+
+
 def _render_bandwidth_summary_cards(records: list[dict[str, Any]]) -> str:
-    stats = _bandwidth_stats(records)
-    if not stats:
+    peaks = _max_throughput_per_bandwidth(records)
+    if not peaks:
         return ""
     cards: list[str] = []
-    for bw, bucket in stats.items():
+    for bw, peak in peaks.items():
         accent = _bw_card_accent(bw)
-        throughputs = bucket["throughputs"]
-        avg_tput = sum(throughputs) / len(throughputs) if throughputs else 0.0
-        max_tput = max(throughputs) if throughputs else 0.0
-        pass_text = f"{bucket['passed']}/{bucket['total']} PASS"
+        max_tput = float(peak["bidi_mbps"])
+        mcs = str(peak.get("mcs") or "")
+        mcs_hint = (
+            f'<span class="bw-card-mcs">{escape(mcs)}</span>'
+            if mcs and mcs != "—"
+            else ""
+        )
         cards.append(
             f"""
         <button type="button" class="bw-card" data-bw-filter="{escape(bw)}"
                 style="--accent:{accent}">
           <span class="bw-card-label">{escape(bw)}</span>
-          <span class="bw-card-pass">{escape(pass_text)}</span>
-          <span class="bw-card-tput">{avg_tput:.0f} Mbps avg</span>
-          <span class="bw-card-peak">peak {max_tput:.0f} Mbps</span>
+          <span class="bw-card-tput">{max_tput:.0f} Mbps</span>
+          {mcs_hint}
         </button>
             """
         )
@@ -496,7 +500,6 @@ def _render_bandwidth_toolbar(bandwidths: list[str]) -> str:
         <span class="bw-toolbar-label">Show bandwidth</span>
         <div class="bw-filters">{''.join(buttons)}</div>
       </div>
-      <div class="bw-filter-stats" id="bwFilterStats"></div>
     </div>
     """
 
@@ -506,25 +509,8 @@ def _render_report_javascript() -> str:
     <script>
     (function () {
       const rows = Array.from(document.querySelectorAll('tr[data-bw]'));
-      const statsEl = document.getElementById('bwFilterStats');
       const buttons = Array.from(document.querySelectorAll('.bw-btn'));
       const cards = Array.from(document.querySelectorAll('.bw-card'));
-
-      function rowStats(bw) {
-        const groups = new Map();
-        rows.forEach((row) => {
-          if (row.style.display === 'none') return;
-          const key = row.dataset.iterKey;
-          if (!key || groups.has(key)) return;
-          groups.set(key, row.dataset.passed === '1');
-        });
-        const iterTotal = groups.size;
-        const passed = Array.from(groups.values()).filter(Boolean).length;
-        if (bw === 'all') {
-          return `${iterTotal} iteration(s) visible · ${passed}/${iterTotal} passed`;
-        }
-        return `${bw}: ${passed}/${iterTotal} passed`;
-      }
 
       function applyFilter(bw) {
         rows.forEach((row) => {
@@ -533,7 +519,6 @@ def _render_report_javascript() -> str:
         });
         buttons.forEach((btn) => btn.classList.toggle('active', btn.dataset.bw === bw));
         cards.forEach((card) => card.classList.toggle('active', card.dataset.bwFilter === bw));
-        if (statsEl) statsEl.textContent = rowStats(bw);
       }
 
       buttons.forEach((btn) => btn.addEventListener('click', () => applyFilter(btn.dataset.bw || 'all')));
@@ -920,9 +905,8 @@ def write_html_report(
       box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #2563eb) 18%, transparent);
     }}
     .bw-card-label {{ display: block; font-size: 13px; font-weight: 800; color: var(--title); }}
-    .bw-card-pass {{ display: block; margin-top: 6px; font-size: 12px; font-weight: 700; color: var(--pass); }}
-    .bw-card-tput {{ display: block; margin-top: 8px; font-size: 22px; font-weight: 800; color: var(--title); }}
-    .bw-card-peak {{ display: block; margin-top: 4px; font-size: 11px; color: #64748b; }}
+    .bw-card-tput {{ display: block; margin-top: 10px; font-size: 24px; font-weight: 800; color: var(--title); }}
+    .bw-card-mcs {{ display: block; margin-top: 6px; font-size: 11px; font-weight: 600; color: #64748b; }}
     .bw-toolbar {{
       position: sticky;
       top: 0;
@@ -963,7 +947,6 @@ def write_html_report(
       color: #fff;
       box-shadow: 0 4px 12px color-mix(in srgb, var(--accent, #2563eb) 28%, transparent);
     }}
-    .bw-filter-stats {{ font-size: 12px; font-weight: 600; color: #475569; }}
     .sheet-scroll {{
       overflow: auto;
       max-height: 72vh;
