@@ -110,6 +110,8 @@ def _apply_profile_run_defaults(args, profile_bundle) -> None:
         args.bandwidth_apply_wait_s = float(perf_section["bandwidth_apply_wait_s"])
     if perf_section.get("su_link_wait_s") is not None:
         args.su_link_wait_s = float(perf_section["su_link_wait_s"])
+    if perf_section.get("bandwidth_running_wait_s") is not None:
+        args.bandwidth_running_wait_s = float(perf_section["bandwidth_running_wait_s"])
     if perf_section.get("link_stats_source"):
         args.link_stats_source = str(perf_section["link_stats_source"]).strip()
     if perf_section.get("link_wifi_idx") is not None:
@@ -576,6 +578,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 settle_s=args.radio_settle_s,
                                 bandwidth_apply_wait_s=args.bandwidth_apply_wait_s,
                                 su_link_wait_s=args.su_link_wait_s,
+                                bandwidth_running_wait_s=args.bandwidth_running_wait_s,
                                 profile_tb=testbed_tb,
                                 dut_cfg=dut,
                                 snmp_community=args.snmp_community,
@@ -1075,6 +1078,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=float(perf.get("su_link_wait_s", 120)),
         help="Seconds to ping SUs after bandwidth apply before MCS re-sync (default 120)",
+    )
+    parser.add_argument(
+        "--bandwidth-running-wait-s",
+        type=float,
+        default=float(perf.get("bandwidth_running_wait_s", 120)),
+        help="Seconds to poll cfg80211tool running htmode after SU link wait (default 120)",
     )
     parser.add_argument("--link-wait-s", type=float, default=perf.get("link_wait_s", 45.0),
                         help="Poll SNMP until operating rate matches spec before TRex")

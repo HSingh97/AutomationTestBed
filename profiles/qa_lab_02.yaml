@@ -177,6 +177,7 @@ performance:
   radio_settle_s: 10
   bandwidth_apply_wait_s: 45
   su_link_wait_s: 120
+  bandwidth_running_wait_s: 120
   link_stats_source: ssh
 
 capture:

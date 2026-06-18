@@ -382,15 +382,16 @@ def _verify_bts_bandwidth_ratio(
     *,
     bandwidth: str,
     dl_ul_percent: str,
+    check_running: bool = True,
 ) -> None:
     expected_bw = normalize_bandwidth(bandwidth)
     actual_bw = _read_uci(ip, user, password, f"uci get wireless.wifi{radio_idx}.htmode")
-    running_bw = _read_running_bandwidth(ip, user, password, radio_idx)
+    running_bw = _read_running_bandwidth(ip, user, password, radio_idx) if check_running else None
     actual_ratio = _read_uci(ip, user, password, f"uci get ath{radio_idx}qos.qoscfg.dlulratio")
     mismatches: list[str] = []
     if expected_bw not in actual_bw.upper():
         mismatches.append(f"htmode expected {expected_bw}, got {actual_bw}")
-    if running_bw != expected_bw:
+    if check_running and running_bw != expected_bw:
         mismatches.append(
             f"running mode expected {expected_bw}, got {running_bw or 'unknown'} (cfg80211tool)"
         )
@@ -398,10 +399,53 @@ def _verify_bts_bandwidth_ratio(
         mismatches.append(f"dlulratio expected {dl_ul_percent}, got {actual_ratio}")
     if mismatches:
         raise RuntimeError(f"BTS bandwidth/ratio verify failed on {ip}: " + "; ".join(mismatches))
+    if check_running:
+        print(
+            f"[BTS] Bandwidth/ratio verified on {ip}: htmode={actual_bw}, "
+            f"running={running_bw}, dlulratio={actual_ratio}"
+        )
+    else:
+        print(
+            f"[BTS] Bandwidth/ratio UCI verified on {ip}: htmode={actual_bw}, dlulratio={actual_ratio}"
+        )
+
+
+def _wait_for_running_bandwidth(
+    ip: str,
+    user: str,
+    password: str,
+    radio_idx: int,
+    bandwidth: str,
+    *,
+    timeout_s: float = 120.0,
+    poll_s: float = 5.0,
+) -> bool:
+    """Poll cfg80211tool until runtime htmode matches (after apply + link recovery)."""
+    expected_bw = normalize_bandwidth(bandwidth)
+    deadline = time.time() + timeout_s
+    attempt = 0
     print(
-        f"[BTS] Bandwidth/ratio verified on {ip}: htmode={actual_bw}, "
-        f"running={running_bw}, dlulratio={actual_ratio}"
+        f"[BTS] Waiting for running bandwidth {expected_bw} via cfg80211tool "
+        f"(timeout {timeout_s:.0f}s)"
     )
+    while time.time() < deadline:
+        attempt += 1
+        running_bw = _read_running_bandwidth(ip, user, password, radio_idx)
+        if running_bw == expected_bw:
+            print(f"[BTS] Running bandwidth {expected_bw} confirmed (attempt {attempt})")
+            return True
+        if attempt == 1 or attempt % 4 == 0:
+            print(
+                f"[BTS] Running bandwidth {running_bw or 'unknown'} != {expected_bw} "
+                f"(attempt {attempt})"
+            )
+        time.sleep(poll_s)
+    running_bw = _read_running_bandwidth(ip, user, password, radio_idx)
+    print(
+        f"[WARN] Running bandwidth still {running_bw or 'unknown'} after {timeout_s:.0f}s "
+        f"(expected {expected_bw})"
+    )
+    return False
 
 
 def _verify_bts_config(
@@ -537,6 +581,7 @@ def configure_bts_bandwidth_ratio(
             radio_idx,
             bandwidth=bandwidth,
             dl_ul_percent=dl_ul_percent,
+            check_running=False,
         )
     return dl_ul_percent
 
@@ -1367,6 +1412,7 @@ def configure_radio_profile(
     settle_s: float = 4.0,
     bandwidth_apply_wait_s: float = 45.0,
     su_link_wait_s: float = 120.0,
+    bandwidth_running_wait_s: float = 120.0,
     profile_tb: dict | None = None,
     dut_cfg: dict | None = None,
     ssh_timeout_s: int = 60,
@@ -1457,7 +1503,7 @@ def configure_radio_profile(
         )
 
     print(f"[CONFIG] Step 2/4: BTS bw={bandwidth}, DL:UL ratio={ratio}")
-    configure_bts_bandwidth_ratio(
+    dl_ul_percent = configure_bts_bandwidth_ratio(
         bts_ip,
         user,
         password,
@@ -1481,6 +1527,25 @@ def configure_radio_profile(
             dut=dut_cfg,
             timeout_s=su_link_wait_s,
             min_responding=max(su_count, len([h for h in cpe_hosts if h.strip()])),
+        )
+
+    if verify and bandwidth_running_wait_s > 0:
+        _wait_for_running_bandwidth(
+            bts_ip,
+            user,
+            password,
+            radio_idx,
+            bandwidth,
+            timeout_s=bandwidth_running_wait_s,
+        )
+        _verify_bts_bandwidth_ratio(
+            bts_ip,
+            user,
+            password,
+            radio_idx,
+            bandwidth=bandwidth,
+            dl_ul_percent=dl_ul_percent,
+            check_running=True,
         )
 
     print(f"[CONFIG] Step 3/4: Re-sync MCS on BTS + SU1–SU{effective_su_count}")
@@ -1544,6 +1609,7 @@ def configure_bandwidth_and_mcs(
     settle_s: float = 4.0,
     bandwidth_apply_wait_s: float = 45.0,
     su_link_wait_s: float = 120.0,
+    bandwidth_running_wait_s: float = 120.0,
     profile_tb: dict | None = None,
     dut_cfg: dict | None = None,
     ssh_timeout_s: int = 60,
@@ -1562,6 +1628,7 @@ def configure_bandwidth_and_mcs(
         settle_s=settle_s,
         bandwidth_apply_wait_s=bandwidth_apply_wait_s,
         su_link_wait_s=su_link_wait_s,
+        bandwidth_running_wait_s=bandwidth_running_wait_s,
         profile_tb=profile_tb,
         dut_cfg=dut_cfg,
         ssh_timeout_s=ssh_timeout_s,
