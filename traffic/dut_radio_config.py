@@ -65,7 +65,7 @@ def run_ssh_bash_session(
         ip,
         user,
         password,
-        f"bash -lc {shlex.quote(script)}",
+        f"sh -lc {shlex.quote(script)}",
         timeout_s=timeout_s,
     )
 
