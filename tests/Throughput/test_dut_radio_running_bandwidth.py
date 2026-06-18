@@ -11,6 +11,7 @@ def test_parse_running_htmode_maps_cfg80211_output():
     assert parse_running_htmode("ath1\tget_mode:11AHE20") == "HT20"
     assert parse_running_htmode("11AHE80") == "HT80"
     assert parse_running_htmode("11AHE40PLUS") == "HT40"
+    assert parse_running_htmode("11AHE40MINUS") == "HT40"
     assert parse_running_htmode("11ACVHT40") == "HT40"
     assert parse_running_htmode("11AHE160") == "HT160"
 

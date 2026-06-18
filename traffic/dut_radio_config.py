@@ -610,8 +610,10 @@ def configure_bts_bandwidth_ratio(
             f"(device must finish before session closes)"
         )
     commands.append(RootCommands.get_bandwidth(radio_idx))
+    chain = " && ".join(commands)
     session_timeout = ssh_timeout_s + wait_s + 30
-    session_output = run_ssh_bash_session(ip, user, password, commands, timeout_s=session_timeout)
+    print(f"[BTS] Bandwidth apply chain: {chain}")
+    session_output = run_ssh_command(ip, user, password, chain, timeout_s=session_timeout)
     mode_line = _extract_get_mode_line(session_output)
     if mode_line:
         parsed = parse_running_htmode(mode_line)
