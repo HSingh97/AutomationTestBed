@@ -34,7 +34,10 @@ def run_ssh_command(ip: str, user: str, password: str, command: str, *, timeout_
         target = f"-6 -l {user} {ssh_target}"
     else:
         target = f"{user}@{format_ssh_host(ip)}"
-    ssh_cmd = f"sshpass -p '{password}' ssh {ssh_opts} {target} {command!r}"
+    ssh_cmd = (
+        f"sshpass -p {shlex.quote(password)} ssh {ssh_opts} {target} "
+        f"{shlex.quote(command)}"
+    )
     try:
         return subprocess.check_output(
             ssh_cmd,
