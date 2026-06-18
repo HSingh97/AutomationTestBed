@@ -357,7 +357,13 @@ def _is_populated_summary_value(value: object) -> bool:
 
 
 def _render_testbed_summary_table(summary: dict[str, Any]) -> str:
-    """Fixed header: Model, FW, IP, Vlan (+ QOS only when populated) for BTS and CPE."""
+    """BTS + one column per SU when ``cpes`` is populated; legacy BTS/CPE otherwise."""
+    if not summary:
+        summary = {}
+    cpes = summary.get("cpes")
+    if isinstance(cpes, list) and cpes:
+        return _render_multi_unit_testbed_table(summary.get("bts", {}), cpes, summary)
+
     bts = summary.get("bts", {}) if summary else {}
     cpe = summary.get("cpe", {}) if summary else {}
 
@@ -400,6 +406,102 @@ def _render_testbed_summary_table(summary: dict[str, Any]) -> str:
         {''.join(body_rows)}
       </tbody>
     </table>
+    """
+
+
+def _render_testbed_context_chips(summary: dict[str, Any]) -> str:
+    chips: list[str] = []
+    for key, label in (
+        ("stand", "Stand"),
+        ("profile", "Profile"),
+        ("su_count", "Connected SUs"),
+    ):
+        value = summary.get(key)
+        if value is None or str(value).strip() in {"", "—", "0"}:
+            continue
+        chips.append(
+            f"<span class='testbed-chip'><strong>{escape(label)}:</strong> "
+            f"{escape(str(value))}</span>"
+        )
+    if not chips:
+        return ""
+    return f'<div class="testbed-chips">{"".join(chips)}</div>'
+
+
+def _device_header_cell(unit: dict[str, Any], *, default_label: str) -> str:
+    label = str(unit.get("label") or default_label)
+    ip = str(unit.get("ip") or "").strip()
+    ip_line = (
+        f"<span class='device-ip'>{escape(ip)}</span>"
+        if ip and ip not in {"—", "-"}
+        else ""
+    )
+    return (
+        f"<span class='device-name'>{escape(label)}</span>"
+        f"{ip_line}"
+    )
+
+
+def _summary_cell(data: dict[str, Any], key: str) -> str:
+    value = str(data.get(key, "—") or "—")
+    if key == "ip":
+        return f"<span class='ip-cell'>{escape(value)}</span>"
+    return escape(value)
+
+
+def _render_multi_unit_testbed_table(
+    bts: dict[str, Any],
+    cpes: list[dict[str, Any]],
+    summary: dict[str, Any],
+) -> str:
+    units: list[tuple[str, dict[str, Any]]] = [("BTS", bts or {})]
+    for unit in cpes:
+        label = str(unit.get("label") or f"SU{unit.get('su_index', len(units))}")
+        units.append((label, unit))
+
+    rows = (
+        ("Model", "model"),
+        ("FW Version", "fw_version"),
+        ("IP", "ip"),
+        ("Vlan", "vlan"),
+    )
+    if any(_is_populated_summary_value(unit.get("qos")) for _, unit in units):
+        rows = (*rows, ("QOS", "qos"))
+
+    header_cells = "".join(
+        f"<th class='device-head'>{_device_header_cell(unit, default_label=label)}</th>"
+        for label, unit in units
+    )
+    body_rows = []
+    for row_label, key in rows:
+        cells = "".join(
+            f"<td>{_summary_cell(unit, key)}</td>" for _, unit in units
+        )
+        body_rows.append(
+            f"""
+            <tr>
+              <th class="row-label">{row_label}</th>
+              {cells}
+            </tr>
+            """
+        )
+
+    chips = _render_testbed_context_chips(summary)
+    return f"""
+    {chips}
+    <div class="testbed-scroll">
+      <table class="data-table summary-top summary-multi">
+        <thead>
+          <tr>
+            <th class="corner"></th>
+            {header_cells}
+          </tr>
+        </thead>
+        <tbody>
+          {''.join(body_rows)}
+        </tbody>
+      </table>
+    </div>
     """
 
 

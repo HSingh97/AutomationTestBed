@@ -180,14 +180,38 @@ async def collect_testbed_summary(
     cpe_hosts: list[str],
     password: str,
 ) -> dict[str, Any]:
-    cpe_host = cpe_hosts[0] if cpe_hosts else ""
+    hosts = [str(h).strip() for h in cpe_hosts if str(h).strip()]
     bts = await collect_device_summary(bts_host, password, fallback_ip=bts_host)
-    if cpe_host:
-        try:
-            cpe = await collect_device_summary(cpe_host, password, fallback_ip=cpe_host)
-        except Exception as exc:
-            print(f"[testbed] CPE summary unavailable ({cpe_host}): {exc}")
-            cpe = DeviceSummary(ip=cpe_host)
-    else:
-        cpe = DeviceSummary(ip="—")
-    return {"bts": bts.as_dict(), "cpe": cpe.as_dict()}
+
+    cpe_entries: list[dict[str, Any]] = []
+    if hosts:
+        results = await asyncio.gather(
+            *[collect_device_summary(host, password, fallback_ip=host) for host in hosts],
+            return_exceptions=True,
+        )
+        for index, (host, result) in enumerate(zip(hosts, results), start=1):
+            if isinstance(result, Exception):
+                print(f"[testbed] SU{index} summary unavailable ({host}): {result}")
+                device = DeviceSummary(ip=host)
+            else:
+                device = result
+            cpe_entries.append(
+                {
+                    "label": f"SU{index}",
+                    "su_index": index,
+                    **device.as_dict(),
+                }
+            )
+
+    legacy_cpe = cpe_entries[0] if cpe_entries else DeviceSummary(ip="—").as_dict()
+    legacy_cpe = {
+        key: value
+        for key, value in legacy_cpe.items()
+        if key not in {"label", "su_index"}
+    }
+    return {
+        "bts": bts.as_dict(),
+        "cpe": legacy_cpe,
+        "cpes": cpe_entries,
+        "su_count": len(cpe_entries),
+    }

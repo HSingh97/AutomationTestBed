@@ -32,6 +32,48 @@
       border: 1px solid var(--border); padding: 10px 14px; text-align: center;
     }
     table.data-table th.row-label { text-align: left; background: #f8fafc; }
+    .testbed-chips {
+      display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;
+    }
+    .testbed-chip {
+      padding: 8px 12px; background: #f8fafc; border: 1px solid var(--border);
+      border-radius: 999px; font-size: 12px;
+    }
+    .testbed-scroll {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #fff;
+    }
+    table.summary-multi th.device-head {
+      min-width: 150px;
+      vertical-align: bottom;
+      line-height: 1.25;
+    }
+    table.summary-multi .device-name {
+      display: block;
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--head);
+    }
+    table.summary-multi .device-ip {
+      display: block;
+      margin-top: 4px;
+      font-family: Consolas, Monaco, monospace;
+      font-size: 10px;
+      font-weight: 500;
+      color: #64748b;
+      word-break: break-all;
+      white-space: normal;
+    }
+    table.summary-multi td,
+    table.summary-multi th.row-label {
+      font-size: 12px;
+    }
+    table.summary-multi thead th {
+      background: #eff6ff;
+      color: var(--head);
+    }
     .run-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; font-size: 13px; }
     .run-meta span { padding: 8px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid var(--border); }
     .run-outcome { margin-bottom: 16px; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); }
@@ -220,48 +262,45 @@
     <section class="panel-top">
       <h2>Testbed Summary</h2>
       
-    <table class="data-table summary-top">
-      <thead>
-        <tr>
-          <th class="corner"></th>
-          <th>BTS</th>
-          <th>CPE</th>
-        </tr>
-      </thead>
-      <tbody>
-        
+    <div class="testbed-chips"><span class='testbed-chip'><strong>Stand:</strong> test-qa-lab-02</span><span class='testbed-chip'><strong>Profile:</strong> qa_lab_02</span><span class='testbed-chip'><strong>Connected SUs:</strong> 4</span></div>
+    <div class="testbed-scroll">
+      <table class="data-table summary-top summary-multi">
+        <thead>
+          <tr>
+            <th class="corner"></th>
+            <th class='device-head'><span class='device-name'>BTS</span><span class='device-ip'>2001:2002:2003:2004:2005:2006:2007:1111</span></th><th class='device-head'><span class='device-name'>SU1</span><span class='device-ip'>2001:2002:2003:2004:2005:2006:2007:11c9</span></th><th class='device-head'><span class='device-name'>SU2</span><span class='device-ip'>2001:2002:2003:2004:2005:2006:2007:118b</span></th><th class='device-head'><span class='device-name'>SU3</span><span class='device-ip'>2001:2002:2003:2004:2005:2006:2007:1178</span></th><th class='device-head'><span class='device-name'>SU4</span><span class='device-ip'>2001:2002:2003:2004:2005:2006:2007:113d</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          
             <tr>
               <th class="row-label">Model</th>
-              <td>UBR-630</td>
-              <td>UBR-620 ×4</td>
+              <td>UBR-630</td><td>UBR-620</td><td>UBR-620</td><td>UBR-620</td><td>UBR-620</td>
             </tr>
             
             <tr>
               <th class="row-label">FW Version</th>
-              <td>qa-lab-02</td>
-              <td>qa-lab-02</td>
+              <td>2.4.1.0</td><td>2.4.1.0</td><td>2.4.1.0</td><td>2.4.1.0</td><td>2.4.1.0</td>
             </tr>
             
             <tr>
               <th class="row-label">IP</th>
-              <td><span class='ip-cell'>2001:2002:2003:2004:2005:2006:2007:1111</span></td>
-              <td><span class='ip-cell'>4 SU /120</span></td>
+              <td><span class='ip-cell'>2001:2002:2003:2004:2005:2006:2007:1111</span></td><td><span class='ip-cell'>2001:2002:2003:2004:2005:2006:2007:11c9</span></td><td><span class='ip-cell'>2001:2002:2003:2004:2005:2006:2007:118b</span></td><td><span class='ip-cell'>2001:2002:2003:2004:2005:2006:2007:1178</span></td><td><span class='ip-cell'>2001:2002:2003:2004:2005:2006:2007:113d</span></td>
             </tr>
             
             <tr>
               <th class="row-label">Vlan</th>
-              <td>200/201</td>
-              <td>200/201</td>
+              <td>Enabled ( QinQ )</td><td>Enabled ( QinQ )</td><td>Enabled ( QinQ )</td><td>Enabled ( QinQ )</td><td>Enabled ( QinQ )</td>
             </tr>
             
             <tr>
               <th class="row-label">QOS</th>
-              <td>75:25</td>
-              <td>—</td>
+              <td>75:25</td><td>—</td><td>—</td><td>—</td><td>—</td>
             </tr>
             
-      </tbody>
-    </table>
+        </tbody>
+      </table>
+    </div>
     
       <div class="run-meta"><span><strong>Bandwidths:</strong> HT20, HT40, HT80</span><span><strong>MCS Rates:</strong> MCS23</span><span><strong>Ratios:</strong> 75:25</span><span><strong>Duration (s):</strong> 30</span></div>
     </section>

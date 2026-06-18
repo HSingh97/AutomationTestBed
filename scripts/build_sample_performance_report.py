@@ -116,6 +116,36 @@ def _records(rows: list[tuple[str, str, float, float]]) -> list[dict]:
     return records
 
 
+def _cpe_entry(index: int, ip: str, fw: str = "2.4.1.0") -> dict:
+    return {
+        "label": f"SU{index}",
+        "su_index": index,
+        "model": "UBR-620",
+        "fw_version": fw,
+        "ip": ip,
+        "vlan": "Enabled ( QinQ )",
+        "qos": "—",
+    }
+
+
+def _sample_testbed_summary(*, build: str) -> dict:
+    return {
+        "stand": "test-qa-lab-02",
+        "profile": "qa_lab_02",
+        "su_count": len(CPE_HOSTS),
+        "jenkins_build": build,
+        "bts": {
+            "model": "UBR-630",
+            "fw_version": "2.4.1.0",
+            "ip": "2001:2002:2003:2004:2005:2006:2007:1111",
+            "vlan": "Enabled ( QinQ )",
+            "qos": "75:25",
+        },
+        "cpe": {k: v for k, v in _cpe_entry(1, CPE_HOSTS[0]).items() if k not in {"label", "su_index"}},
+        "cpes": [_cpe_entry(i, ip) for i, ip in enumerate(CPE_HOSTS, start=1)],
+    }
+
+
 def main() -> None:
     samples_dir = ROOT / "docs" / "samples"
     samples_dir.mkdir(parents=True, exist_ok=True)
@@ -131,23 +161,7 @@ def main() -> None:
             "Duration (s)": "30",
         },
         path=build71_path,
-        testbed_summary={
-            "bts": {
-                "model": "UBR-630",
-                "fw_version": "qa-lab-02",
-                "ip": "2001:2002:2003:2004:2005:2006:2007:1111",
-                "vlan": "200/201",
-                "qos": "75:25",
-            },
-            "cpe": {
-                "model": "UBR-620 ×4",
-                "fw_version": "qa-lab-02",
-                "ip": "4 SU /120",
-                "vlan": "200/201",
-            },
-            "stand": "test-qa-lab-02",
-            "jenkins_build": "71",
-        },
+        testbed_summary=_sample_testbed_summary(build="71"),
     )
 
     demo_path = samples_dir / "Senao_Performance_Sample_MultiMCS_Report.html"
@@ -161,23 +175,7 @@ def main() -> None:
             "Duration (s)": "30",
         },
         path=demo_path,
-        testbed_summary={
-            "bts": {
-                "model": "UBR-630",
-                "fw_version": "qa-lab-02",
-                "ip": "2001:2002:2003:2004:2005:2006:2007:1111",
-                "vlan": "200/201",
-                "qos": "75:25",
-            },
-            "cpe": {
-                "model": "UBR-620 ×4",
-                "fw_version": "qa-lab-02",
-                "ip": "4 SU /120",
-                "vlan": "200/201",
-            },
-            "stand": "test-qa-lab-02",
-            "jenkins_build": "sample",
-        },
+        testbed_summary=_sample_testbed_summary(build="sample"),
     )
 
     print(f"Wrote {build71_path}")

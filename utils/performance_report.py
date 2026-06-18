@@ -794,6 +794,48 @@ def write_html_report(
       border: 1px solid var(--border); padding: 10px 14px; text-align: center;
     }}
     table.data-table th.row-label {{ text-align: left; background: #f8fafc; }}
+    .testbed-chips {{
+      display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;
+    }}
+    .testbed-chip {{
+      padding: 8px 12px; background: #f8fafc; border: 1px solid var(--border);
+      border-radius: 999px; font-size: 12px;
+    }}
+    .testbed-scroll {{
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #fff;
+    }}
+    table.summary-multi th.device-head {{
+      min-width: 150px;
+      vertical-align: bottom;
+      line-height: 1.25;
+    }}
+    table.summary-multi .device-name {{
+      display: block;
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--head);
+    }}
+    table.summary-multi .device-ip {{
+      display: block;
+      margin-top: 4px;
+      font-family: Consolas, Monaco, monospace;
+      font-size: 10px;
+      font-weight: 500;
+      color: #64748b;
+      word-break: break-all;
+      white-space: normal;
+    }}
+    table.summary-multi td,
+    table.summary-multi th.row-label {{
+      font-size: 12px;
+    }}
+    table.summary-multi thead th {{
+      background: #eff6ff;
+      color: var(--head);
+    }}
     .run-meta {{ display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; font-size: 13px; }}
     .run-meta span {{ padding: 8px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid var(--border); }}
     .run-outcome {{ margin-bottom: 16px; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); }}

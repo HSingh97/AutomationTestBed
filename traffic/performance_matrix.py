@@ -655,6 +655,8 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
             testbed_summary = asyncio.run(
                 collect_testbed_summary(dut_ip, cpe_hosts, dut_password)
             )
+            testbed_summary["stand"] = args.stand or profile_bundle.active.get("name", "")
+            testbed_summary["profile"] = args.profile
         except Exception as exc:
             print(f"[WARN] Testbed summary collection failed: {exc}")
 
