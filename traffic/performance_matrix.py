@@ -1070,8 +1070,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--bandwidth-apply-wait-s",
         type=float,
-        default=float(perf.get("bandwidth_apply_wait_s", 45)),
-        help="Seconds to hold BTS SSH open after bandwidth/ratio ucidyn apply (default 45)",
+        default=float(perf.get("bandwidth_apply_wait_s", 60)),
+        help="Seconds to hold BTS SSH open after bandwidth/ratio ucidyn apply (default 60)",
     )
     parser.add_argument(
         "--su-link-wait-s",

@@ -25,7 +25,7 @@ def ratio_to_uci_dl_percent(ratio: str) -> str:
 
 
 def parse_running_htmode(get_mode_output: str) -> str | None:
-    """Map ``cfg80211tool athN get_mode`` output (e.g. ``11AHE20``) to HT20/HT40/HT80/HT160."""
+    """Map ``cfg80211tool athN get_mode`` output (e.g. ``11AHE20``, ``11AHE40PLUS``) to HT modes."""
     text = str(get_mode_output or "").strip().upper()
     if ":" in text:
         text = text.split(":")[-1].strip()
@@ -38,12 +38,12 @@ def parse_running_htmode(get_mode_output: str) -> str | None:
     return None
 
 
-def _read_running_bandwidth(
+def _fetch_cfg80211_mode(
     ip: str,
     user: str,
     password: str,
     radio_idx: int,
-) -> str | None:
+) -> tuple[str, str | None]:
     raw = run_ssh_command(
         ip,
         user,
@@ -51,7 +51,41 @@ def _read_running_bandwidth(
         RootCommands.get_bandwidth(radio_idx),
         timeout_s=20,
     )
-    return parse_running_htmode(raw)
+    return raw, parse_running_htmode(raw)
+
+
+def _log_cfg80211_mode(
+    ip: str,
+    user: str,
+    password: str,
+    radio_idx: int,
+    *,
+    label: str = "",
+) -> tuple[str, str | None]:
+    raw, parsed = _fetch_cfg80211_mode(ip, user, password, radio_idx)
+    tag = f" ({label})" if label else ""
+    print(
+        f"[BTS] cfg80211tool ath{radio_idx} get_mode{tag}: {raw} "
+        f"-> {parsed or 'unparsed'}"
+    )
+    return raw, parsed
+
+
+def _extract_get_mode_line(output: str) -> str:
+    for line in str(output or "").splitlines():
+        if "get_mode" in line.lower():
+            return line.strip()
+    return ""
+
+
+def _read_running_bandwidth(
+    ip: str,
+    user: str,
+    password: str,
+    radio_idx: int,
+) -> str | None:
+    _, parsed = _fetch_cfg80211_mode(ip, user, password, radio_idx)
+    return parsed
 
 
 def run_ssh_command(ip: str, user: str, password: str, command: str, *, timeout_s: int = 30) -> str:
@@ -430,20 +464,23 @@ def _wait_for_running_bandwidth(
     )
     while time.time() < deadline:
         attempt += 1
-        running_bw = _read_running_bandwidth(ip, user, password, radio_idx)
+        raw, running_bw = _fetch_cfg80211_mode(ip, user, password, radio_idx)
         if running_bw == expected_bw:
-            print(f"[BTS] Running bandwidth {expected_bw} confirmed (attempt {attempt})")
+            print(
+                f"[BTS] Running bandwidth {expected_bw} confirmed "
+                f"(attempt {attempt}, {raw})"
+            )
             return True
         if attempt == 1 or attempt % 4 == 0:
             print(
                 f"[BTS] Running bandwidth {running_bw or 'unknown'} != {expected_bw} "
-                f"(attempt {attempt})"
+                f"(attempt {attempt}, cfg: {raw})"
             )
         time.sleep(poll_s)
-    running_bw = _read_running_bandwidth(ip, user, password, radio_idx)
+    raw, running_bw = _fetch_cfg80211_mode(ip, user, password, radio_idx)
     print(
         f"[WARN] Running bandwidth still {running_bw or 'unknown'} after {timeout_s:.0f}s "
-        f"(expected {expected_bw})"
+        f"(expected {expected_bw}, cfg: {raw})"
     )
     return False
 
@@ -551,7 +588,7 @@ def configure_bts_bandwidth_ratio(
     ratio: str,
     *,
     ssh_timeout_s: int = 60,
-    bandwidth_apply_wait_s: float = 45.0,
+    bandwidth_apply_wait_s: float = 60.0,
     verify: bool = True,
 ) -> str:
     """BTS only: htmode and DL/UL ratio (no MCS change)."""
@@ -571,8 +608,17 @@ def configure_bts_bandwidth_ratio(
             f"[BTS] Holding SSH session {wait_s}s after bandwidth apply "
             f"(device must finish before session closes)"
         )
+    commands.append(RootCommands.get_bandwidth(radio_idx))
     session_timeout = ssh_timeout_s + wait_s + 30
-    run_ssh_bash_session(ip, user, password, commands, timeout_s=session_timeout)
+    session_output = run_ssh_bash_session(ip, user, password, commands, timeout_s=session_timeout)
+    mode_line = _extract_get_mode_line(session_output)
+    if mode_line:
+        parsed = parse_running_htmode(mode_line)
+        print(
+            f"[BTS] cfg80211tool in-session after {wait_s}s wait: {mode_line} "
+            f"-> {parsed or 'unparsed'}"
+        )
+    _log_cfg80211_mode(ip, user, password, radio_idx, label=f"post-apply after {wait_s}s")
     if verify:
         _verify_bts_bandwidth_ratio(
             ip,
@@ -1410,7 +1456,7 @@ def configure_radio_profile(
     su_count: int = 1,
     prefer_cpe_via_bts: bool = False,
     settle_s: float = 4.0,
-    bandwidth_apply_wait_s: float = 45.0,
+    bandwidth_apply_wait_s: float = 60.0,
     su_link_wait_s: float = 120.0,
     bandwidth_running_wait_s: float = 120.0,
     profile_tb: dict | None = None,
@@ -1607,7 +1653,7 @@ def configure_bandwidth_and_mcs(
     ratio: str = "50:50",
     cpe_hosts: list[str] | None = None,
     settle_s: float = 4.0,
-    bandwidth_apply_wait_s: float = 45.0,
+    bandwidth_apply_wait_s: float = 60.0,
     su_link_wait_s: float = 120.0,
     bandwidth_running_wait_s: float = 120.0,
     profile_tb: dict | None = None,

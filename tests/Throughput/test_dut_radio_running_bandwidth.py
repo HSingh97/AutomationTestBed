@@ -10,6 +10,7 @@ from traffic.dut_radio_config import (
 def test_parse_running_htmode_maps_cfg80211_output():
     assert parse_running_htmode("ath1\tget_mode:11AHE20") == "HT20"
     assert parse_running_htmode("11AHE80") == "HT80"
+    assert parse_running_htmode("11AHE40PLUS") == "HT40"
     assert parse_running_htmode("11ACVHT40") == "HT40"
     assert parse_running_htmode("11AHE160") == "HT160"
 
@@ -17,11 +18,12 @@ def test_parse_running_htmode_maps_cfg80211_output():
 def test_wait_for_running_bandwidth_polls_until_match():
     calls = {"n": 0}
 
-    def fake_read(ip, user, password, radio_idx):
+    def fake_fetch(ip, user, password, radio_idx):
         calls["n"] += 1
-        return "HT80" if calls["n"] >= 2 else "HT20"
+        mode = "HT80" if calls["n"] >= 2 else "HT20"
+        return f"ath1\tget_mode:11AHE{mode[2:]}", mode
 
-    with patch("traffic.dut_radio_config._read_running_bandwidth", side_effect=fake_read):
+    with patch("traffic.dut_radio_config._fetch_cfg80211_mode", side_effect=fake_fetch):
         ok = _wait_for_running_bandwidth(
             "10.0.0.1",
             "root",

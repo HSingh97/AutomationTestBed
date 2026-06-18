@@ -175,7 +175,7 @@ performance:
   # cpe_via_bts: skip direct lab-PC→CPE SSH; use BTS→CPE relay then remote_exec
   link_wait_s: 10
   radio_settle_s: 10
-  bandwidth_apply_wait_s: 45
+  bandwidth_apply_wait_s: 60
   su_link_wait_s: 120
   bandwidth_running_wait_s: 120
   link_stats_source: ssh

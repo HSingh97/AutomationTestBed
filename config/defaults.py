@@ -105,7 +105,7 @@ PERFORMANCE_DEFAULTS = {
     "cpe_su_index": 1,
     "snmp_radio_index": 2,
     "link_wait_s": 10,
-    "bandwidth_apply_wait_s": 45,
+    "bandwidth_apply_wait_s": 60,
     "su_link_wait_s": 120,
     "bandwidth_running_wait_s": 120,
     "skip_config_if_unchanged": True,
