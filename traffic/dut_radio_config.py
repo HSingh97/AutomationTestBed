@@ -1321,6 +1321,8 @@ def configure_radio_profile(
     prefer_cpe_via_bts: bool = False,
     settle_s: float = 4.0,
     bandwidth_apply_wait_s: float = 45.0,
+    su_link_wait_s: float = 120.0,
+    profile_tb: dict | None = None,
     ssh_timeout_s: int = 60,
     verify: bool = True,
     snmp_community: str | None = None,
@@ -1421,6 +1423,19 @@ def configure_radio_profile(
         verify=verify,
     )
 
+    if cpe_hosts and su_link_wait_s > 0:
+        from traffic.su_link_ping import wait_for_su_links
+
+        wait_for_su_links(
+            cpe_hosts=cpe_hosts,
+            profile_tb=profile_tb,
+            bts_ip=bts_ip,
+            bts_user=user,
+            bts_password=password,
+            timeout_s=su_link_wait_s,
+            min_responding=max(su_count, len([h for h in cpe_hosts if h.strip()])),
+        )
+
     print(f"[CONFIG] Step 3/4: Re-sync MCS on BTS + SU1–SU{effective_su_count}")
     _reapply_mcs_all_devices(
         bts_ip,
@@ -1481,6 +1496,8 @@ def configure_bandwidth_and_mcs(
     cpe_hosts: list[str] | None = None,
     settle_s: float = 4.0,
     bandwidth_apply_wait_s: float = 45.0,
+    su_link_wait_s: float = 120.0,
+    profile_tb: dict | None = None,
     ssh_timeout_s: int = 60,
 ) -> None:
     """Backward-compatible wrapper."""
@@ -1496,5 +1513,7 @@ def configure_bandwidth_and_mcs(
         cpe_hosts=cpe_hosts,
         settle_s=settle_s,
         bandwidth_apply_wait_s=bandwidth_apply_wait_s,
+        su_link_wait_s=su_link_wait_s,
+        profile_tb=profile_tb,
         ssh_timeout_s=ssh_timeout_s,
     )

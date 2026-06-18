@@ -108,6 +108,8 @@ def _apply_profile_run_defaults(args, profile_bundle) -> None:
         args.radio_settle_s = float(perf_section["radio_settle_s"])
     if perf_section.get("bandwidth_apply_wait_s") is not None:
         args.bandwidth_apply_wait_s = float(perf_section["bandwidth_apply_wait_s"])
+    if perf_section.get("su_link_wait_s") is not None:
+        args.su_link_wait_s = float(perf_section["su_link_wait_s"])
     if perf_section.get("link_stats_source"):
         args.link_stats_source = str(perf_section["link_stats_source"]).strip()
     if perf_section.get("link_wifi_idx") is not None:
@@ -573,6 +575,8 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 prefer_cpe_via_bts=args.cpe_via_bts,
                                 settle_s=args.radio_settle_s,
                                 bandwidth_apply_wait_s=args.bandwidth_apply_wait_s,
+                                su_link_wait_s=args.su_link_wait_s,
+                                profile_tb=testbed_tb,
                                 snmp_community=args.snmp_community,
                                 snmp_radio_idx=args.snmp_radio_index,
                                 skip_if_unchanged=args.skip_config_if_unchanged,
@@ -1064,6 +1068,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=float(perf.get("bandwidth_apply_wait_s", 45)),
         help="Seconds to hold BTS SSH open after bandwidth/ratio ucidyn apply (default 45)",
+    )
+    parser.add_argument(
+        "--su-link-wait-s",
+        type=float,
+        default=float(perf.get("su_link_wait_s", 120)),
+        help="Seconds to ping SUs after bandwidth apply before MCS re-sync (default 120)",
     )
     parser.add_argument("--link-wait-s", type=float, default=perf.get("link_wait_s", 45.0),
                         help="Poll SNMP until operating rate matches spec before TRex")
