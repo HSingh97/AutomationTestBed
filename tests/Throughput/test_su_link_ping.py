@@ -48,7 +48,25 @@ def test_wait_for_su_links_discovers_targets_from_bts(monkeypatch):
     assert result["targets"] == discovered
 
 
-def test_wait_for_su_links_uses_bts_ping_when_qinq_unavailable(monkeypatch):
+def test_wait_for_su_links_strict_does_not_say_continuing(monkeypatch):
+    monkeypatch.setattr("traffic.su_link_ping.discover_su_hosts_from_bts", lambda *a, **k: ["::1"])
+    monkeypatch.setattr("traffic.su_link_ping._ensure_local_qinq_iface", lambda *a, **k: None)
+    monkeypatch.setattr("traffic.su_link_ping._bts_ping_ok", lambda *a, **k: False)
+
+    result = wait_for_su_links(
+        cpe_hosts=["::1"],
+        profile_tb={},
+        bts_ip="10.0.0.1",
+        bts_user="root",
+        bts_password="pw",
+        timeout_s=0.2,
+        poll_s=0.1,
+        min_responding=4,
+        strict=True,
+    )
+
+    assert result["ok"] is False
+
     monkeypatch.setattr("traffic.su_link_ping.discover_su_hosts_from_bts", lambda *a, **k: [])
     monkeypatch.setattr("traffic.su_link_ping._ensure_local_qinq_iface", lambda *a, **k: None)
     calls: list[str] = []

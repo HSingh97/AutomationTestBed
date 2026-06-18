@@ -108,6 +108,7 @@ PERFORMANCE_DEFAULTS = {
     "bandwidth_apply_wait_s": 60,
     "su_link_wait_s": 120,
     "bandwidth_running_wait_s": 120,
+    "require_all_su_for_bandwidth": True,
     "skip_config_if_unchanged": True,
     "fail_on_rate_mismatch": False,
     "su_count": 1,

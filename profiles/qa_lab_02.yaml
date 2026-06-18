@@ -178,6 +178,7 @@ performance:
   bandwidth_apply_wait_s: 60
   su_link_wait_s: 120
   bandwidth_running_wait_s: 120
+  require_all_su_for_bandwidth: true
   link_stats_source: ssh
 
 capture:

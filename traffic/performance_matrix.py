@@ -112,6 +112,8 @@ def _apply_profile_run_defaults(args, profile_bundle) -> None:
         args.su_link_wait_s = float(perf_section["su_link_wait_s"])
     if perf_section.get("bandwidth_running_wait_s") is not None:
         args.bandwidth_running_wait_s = float(perf_section["bandwidth_running_wait_s"])
+    if perf_section.get("require_all_su_for_bandwidth") is not None:
+        args.require_all_su_for_bandwidth = bool(perf_section["require_all_su_for_bandwidth"])
     if perf_section.get("link_stats_source"):
         args.link_stats_source = str(perf_section["link_stats_source"]).strip()
     if perf_section.get("link_wifi_idx") is not None:
@@ -519,11 +521,20 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         ssh_password=dut_password,
         cpe_hosts=cpe_hosts,
     )
+    configured_su = args.su_count
     detected_count = len(detected_clients)
     if detected_count > 0:
-        if args.su_count != detected_count:
-            print(f"[DUT] Connected CPE detected: {detected_count} (override su_count={args.su_count} -> {detected_count})")
+        if detected_count > configured_su:
+            print(
+                f"[DUT] Connected CPE detected: {detected_count} "
+                f"(override su_count={configured_su} -> {detected_count})"
+            )
             args.su_count = detected_count
+        elif detected_count < configured_su:
+            print(
+                f"[DUT] Connected CPE detected: {detected_count}/{configured_su} — "
+                f"will wait for all {configured_su} before bandwidth apply"
+            )
         else:
             print(f"[DUT] Connected CPE detected: {detected_count}")
     else:
@@ -579,12 +590,18 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 bandwidth_apply_wait_s=args.bandwidth_apply_wait_s,
                                 su_link_wait_s=args.su_link_wait_s,
                                 bandwidth_running_wait_s=args.bandwidth_running_wait_s,
+                                require_all_su_for_bandwidth=args.require_all_su_for_bandwidth,
                                 profile_tb=testbed_tb,
                                 dut_cfg=dut,
                                 snmp_community=args.snmp_community,
                                 snmp_radio_idx=args.snmp_radio_index,
                                 skip_if_unchanged=args.skip_config_if_unchanged,
                             )
+                            if mcs_config.get("bandwidth_skipped"):
+                                print(
+                                    f"[WARN] Bandwidth {bandwidth} was not applied "
+                                    f"(waiting for all {args.su_count} SUs to link)"
+                                )
                             if not mcs_config.get("mcs_config_ok", True):
                                 err = str(
                                     mcs_config.get("error")
@@ -1084,6 +1101,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=float(perf.get("bandwidth_running_wait_s", 120)),
         help="Seconds to poll cfg80211tool running htmode after SU link wait (default 120)",
+    )
+    parser.add_argument(
+        "--require-all-su-for-bandwidth",
+        action=argparse.BooleanOptionalAction,
+        default=perf.get("require_all_su_for_bandwidth"),
+        help="Wait for all su_count SUs before bandwidth; skip bw if not all linked (default: true when su_count=4)",
     )
     parser.add_argument("--link-wait-s", type=float, default=perf.get("link_wait_s", 45.0),
                         help="Poll SNMP until operating rate matches spec before TRex")

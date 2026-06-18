@@ -261,6 +261,8 @@ def wait_for_su_links(
     poll_s: float = 5.0,
     ping_count: int = 2,
     min_responding: int | None = None,
+    phase: str = "after bandwidth apply",
+    strict: bool = False,
 ) -> dict[str, Any]:
     """
     After bandwidth apply, poll until SU mgmt addresses respond to ping.
@@ -279,6 +281,9 @@ def wait_for_su_links(
             print(f"[LINK] SU targets from profile (BTS sysfs empty): {', '.join(targets)}")
 
     if not targets:
+        if strict and min_responding:
+            print(f"[LINK] No SU targets discovered {phase} — need {min_responding}")
+            return {"ok": False, "responding": [], "method": "none", "reason": "no cpe hosts"}
         return {"ok": True, "responding": [], "method": "none", "reason": "no cpe hosts"}
 
     required = min_responding if min_responding is not None else len(targets)
@@ -294,12 +299,15 @@ def wait_for_su_links(
     attempt = 0
 
     print(
-        f"[LINK] Waiting for {required}/{len(targets)} SU ping(s) after bandwidth apply "
+        f"[LINK] Waiting for {required}/{max(len(targets), required)} SU link(s) {phase} "
         f"(timeout {timeout_s:.0f}s, via {last_method})"
     )
 
     while time.time() < deadline:
         attempt += 1
+        live = discover_su_hosts_from_bts(bts_ip, bts_user, bts_password)
+        if live:
+            targets = live
         responding: list[str] = []
         for host in targets:
             ok = False
@@ -314,7 +322,7 @@ def wait_for_su_links(
 
         if len(responding) >= required:
             print(
-                f"[LINK] SU ping OK: {len(responding)}/{len(targets)} responding "
+                f"[LINK] SU ping OK: {len(responding)}/{required} responding "
                 f"(method={last_method}, attempt={attempt})"
             )
             return {
@@ -335,9 +343,10 @@ def wait_for_su_links(
         time.sleep(poll_s)
 
     missing = [h for h in targets if h not in responding]
+    suffix = "" if strict else " — continuing"
     print(
         f"[WARN] SU ping timeout: only {len(responding)}/{required} responded "
-        f"(missing: {', '.join(missing)}) — continuing"
+        f"(missing: {', '.join(missing)}){suffix}"
     )
     return {
         "ok": False,

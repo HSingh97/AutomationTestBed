@@ -1462,6 +1462,7 @@ def configure_radio_profile(
     bandwidth_apply_wait_s: float = 60.0,
     su_link_wait_s: float = 120.0,
     bandwidth_running_wait_s: float = 120.0,
+    require_all_su_for_bandwidth: bool | None = None,
     profile_tb: dict | None = None,
     dut_cfg: dict | None = None,
     ssh_timeout_s: int = 60,
@@ -1484,6 +1485,11 @@ def configure_radio_profile(
     cpe_radio = cpe_radio_idx if cpe_radio_idx is not None else radio_idx
     spec = lookup_spec(mcs_rate, bandwidth, spatial_streams=int(spatial_stream))
     effective_su_count = max(su_count, len([h for h in (cpe_hosts or []) if h.strip()]), 1)
+    require_all_su = (
+        require_all_su_for_bandwidth
+        if require_all_su_for_bandwidth is not None
+        else su_count == 4
+    )
     if skip_if_unchanged:
         matches, mcs_report = radio_profile_already_matches(
             bts_ip,
@@ -1507,6 +1513,7 @@ def configure_radio_profile(
                 f"[CONFIG] Already configured: {mcs_rate}, {bandwidth}, ratio={ratio} "
                 f"on BTS + {effective_su_count} CPE(s) — skipping apply"
             )
+            mcs_report["bandwidth_skipped"] = False
             return mcs_report
 
     print(
@@ -1551,51 +1558,82 @@ def configure_radio_profile(
             verify=verify,
         )
 
-    print(f"[CONFIG] Step 2/4: BTS bw={bandwidth}, DL:UL ratio={ratio}")
-    dl_ul_percent = configure_bts_bandwidth_ratio(
-        bts_ip,
-        user,
-        password,
-        radio_idx,
-        bandwidth,
-        ratio,
-        ssh_timeout_s=ssh_timeout_s,
-        bandwidth_apply_wait_s=bandwidth_apply_wait_s,
-        verify=verify,
-    )
+    from traffic.su_link_ping import wait_for_su_links
 
-    if cpe_hosts and su_link_wait_s > 0:
-        from traffic.su_link_ping import wait_for_su_links
-
-        wait_for_su_links(
-            cpe_hosts=cpe_hosts,
+    skip_bandwidth = False
+    if require_all_su and su_link_wait_s > 0:
+        pre_link = wait_for_su_links(
+            cpe_hosts=cpe_hosts or [],
             profile_tb=profile_tb,
             bts_ip=bts_ip,
             bts_user=user,
             bts_password=password,
             dut=dut_cfg,
             timeout_s=su_link_wait_s,
-            min_responding=max(su_count, len([h for h in cpe_hosts if h.strip()])),
+            min_responding=su_count,
+            phase="before bandwidth apply",
+            strict=True,
         )
+        if not pre_link.get("ok"):
+            skip_bandwidth = True
+            print(
+                f"[CONFIG] Skipping bandwidth apply — only "
+                f"{len(pre_link.get('responding', []))}/{su_count} SU(s) linked"
+            )
 
-    if verify and bandwidth_running_wait_s > 0:
-        _wait_for_running_bandwidth(
+    dl_ul_percent = ratio_to_uci_dl_percent(ratio)
+    if not skip_bandwidth:
+        print(f"[CONFIG] Step 2/4: BTS bw={bandwidth}, DL:UL ratio={ratio}")
+        dl_ul_percent = configure_bts_bandwidth_ratio(
             bts_ip,
             user,
             password,
             radio_idx,
             bandwidth,
-            timeout_s=bandwidth_running_wait_s,
+            ratio,
+            ssh_timeout_s=ssh_timeout_s,
+            bandwidth_apply_wait_s=bandwidth_apply_wait_s,
+            verify=verify,
         )
-        _verify_bts_bandwidth_ratio(
-            bts_ip,
-            user,
-            password,
-            radio_idx,
-            bandwidth=bandwidth,
-            dl_ul_percent=dl_ul_percent,
-            check_running=True,
-        )
+
+        if su_link_wait_s > 0:
+            post_link = wait_for_su_links(
+                cpe_hosts=cpe_hosts or [],
+                profile_tb=profile_tb,
+                bts_ip=bts_ip,
+                bts_user=user,
+                bts_password=password,
+                dut=dut_cfg,
+                timeout_s=su_link_wait_s,
+                min_responding=su_count if require_all_su else None,
+                phase="after bandwidth apply",
+                strict=require_all_su,
+            )
+            if require_all_su and not post_link.get("ok"):
+                raise RuntimeError(
+                    f"Only {len(post_link.get('responding', []))}/{su_count} SUs linked after bandwidth apply"
+                )
+
+        if verify and bandwidth_running_wait_s > 0:
+            _wait_for_running_bandwidth(
+                bts_ip,
+                user,
+                password,
+                radio_idx,
+                bandwidth,
+                timeout_s=bandwidth_running_wait_s,
+            )
+            _verify_bts_bandwidth_ratio(
+                bts_ip,
+                user,
+                password,
+                radio_idx,
+                bandwidth=bandwidth,
+                dl_ul_percent=dl_ul_percent,
+                check_running=True,
+            )
+    else:
+        print(f"[CONFIG] Step 2/4: Skipped BTS bw={bandwidth} (waiting for all {su_count} SUs)")
 
     print(f"[CONFIG] Step 3/4: Re-sync MCS on BTS + SU1–SU{effective_su_count}")
     _reapply_mcs_all_devices(
@@ -1640,6 +1678,7 @@ def configure_radio_profile(
         return mcs_report
 
     time.sleep(effective_settle)
+    mcs_report["bandwidth_skipped"] = skip_bandwidth
     return mcs_report
 
 
@@ -1659,6 +1698,7 @@ def configure_bandwidth_and_mcs(
     bandwidth_apply_wait_s: float = 60.0,
     su_link_wait_s: float = 120.0,
     bandwidth_running_wait_s: float = 120.0,
+    require_all_su_for_bandwidth: bool | None = None,
     profile_tb: dict | None = None,
     dut_cfg: dict | None = None,
     ssh_timeout_s: int = 60,
@@ -1678,6 +1718,7 @@ def configure_bandwidth_and_mcs(
         bandwidth_apply_wait_s=bandwidth_apply_wait_s,
         su_link_wait_s=su_link_wait_s,
         bandwidth_running_wait_s=bandwidth_running_wait_s,
+        require_all_su_for_bandwidth=require_all_su_for_bandwidth,
         profile_tb=profile_tb,
         dut_cfg=dut_cfg,
         ssh_timeout_s=ssh_timeout_s,
