@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from traffic.dut_radio_config import configure_bts_bandwidth_ratio
+from traffic.dut_radio_config import configure_bts_bandwidth_ratio, configure_radio_profile
 
 
 def test_bandwidth_apply_uses_single_and_chain():
@@ -58,3 +58,36 @@ def test_bandwidth_apply_ht40_uses_ht40_plus_uci_value():
                 )
 
     assert "ucidyn set wireless.wifi1.htmode HT40+" in captured[0]["command"]
+
+
+def test_configure_radio_profile_applies_bandwidth_without_pre_link_gate():
+    with patch("traffic.dut_radio_config.radio_profile_already_matches", return_value=(False, {})):
+        with patch("traffic.dut_radio_config.configure_bts_mcs_only"):
+            with patch("traffic.dut_radio_config._apply_mcs_all_cpes"):
+                with patch("traffic.dut_radio_config.configure_bts_bandwidth_ratio", return_value="75") as mock_bw:
+                    with patch("traffic.dut_radio_config._reapply_mcs_all_devices"):
+                        with patch(
+                            "traffic.dut_radio_config.verify_mcs_all_devices",
+                            return_value={"mcs_config_ok": True},
+                        ):
+                            with patch(
+                                "traffic.su_link_ping.wait_for_su_links",
+                                return_value={"ok": True, "responding": ["a", "b", "c", "d"]},
+                            ) as mock_wait:
+                                report = configure_radio_profile(
+                                    "10.0.0.1",
+                                    "root",
+                                    "pw",
+                                    1,
+                                    "HT80",
+                                    "MCS23",
+                                    "75:25",
+                                    su_count=4,
+                                    su_link_wait_s=120,
+                                    verify=False,
+                                )
+
+    mock_bw.assert_called_once()
+    mock_wait.assert_called_once()
+    assert mock_wait.call_args.kwargs["phase"] == "after bandwidth apply"
+    assert report.get("bandwidth_skipped") is False

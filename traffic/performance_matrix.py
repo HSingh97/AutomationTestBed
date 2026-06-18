@@ -640,7 +640,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         elif detected_count < configured_su:
             print(
                 f"[DUT] Connected CPE detected: {detected_count}/{configured_su} — "
-                f"will wait for all {configured_su} before bandwidth apply"
+                f"will wait for all {configured_su} after bandwidth apply"
             )
         else:
             print(f"[DUT] Connected CPE detected: {detected_count}")
