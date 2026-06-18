@@ -92,7 +92,7 @@ TRAFFIC_DEFAULTS = {
 
 
 PERFORMANCE_DEFAULTS = {
-    "bandwidths": ["HT20", "HT40", "HT80", "HT160"],
+    "bandwidths": ["HT20", "HT40", "HT80"],
     "mcs_rates": [f"MCS{i}" for i in range(24)],
     "ratios": ["75:25"],
     "target_mbps": 800,

@@ -33,7 +33,7 @@ pipeline {
         string(
             name: 'Bandwidth',
             defaultValue: 'HT80',
-            description: 'Comma-separated htmode values (e.g. HT20,HT40,HT80,HT160)'
+            description: 'Comma-separated htmode values (e.g. HT20,HT40,HT80)'
         )
         string(
             name: 'MCS',

@@ -9,7 +9,7 @@ import time
 import re
 
 from pages.commands import RootCommands
-from traffic.operating_rate_table import lookup_spec, mcs_number, normalize_bandwidth
+from traffic.operating_rate_table import lookup_spec, mcs_number, normalize_bandwidth, uci_htmode_matches, uci_htmode_value
 from utils.net_utils import format_ssh_host, is_ipv6_literal, normalize_ip
 
 
@@ -423,8 +423,10 @@ def _verify_bts_bandwidth_ratio(
     running_bw = _read_running_bandwidth(ip, user, password, radio_idx) if check_running else None
     actual_ratio = _read_uci(ip, user, password, f"uci get ath{radio_idx}qos.qoscfg.dlulratio")
     mismatches: list[str] = []
-    if expected_bw not in actual_bw.upper():
-        mismatches.append(f"htmode expected {expected_bw}, got {actual_bw}")
+    if not uci_htmode_matches(bandwidth, actual_bw):
+        mismatches.append(
+            f"htmode expected {uci_htmode_value(bandwidth)}, got {actual_bw}"
+        )
     if check_running and running_bw != expected_bw:
         mismatches.append(
             f"running mode expected {expected_bw}, got {running_bw or 'unknown'} (cfg80211tool)"
@@ -504,8 +506,10 @@ def _verify_bts_config(
     actual_spatial = _read_uci(ip, user, password, f"uci get txparam.ath{radio_idx}.spatialstream")
 
     mismatches: list[str] = []
-    if expected_bw not in actual_bw.upper():
-        mismatches.append(f"htmode expected {expected_bw}, got {actual_bw}")
+    if not uci_htmode_matches(bandwidth, actual_bw):
+        mismatches.append(
+            f"htmode expected {uci_htmode_value(bandwidth)}, got {actual_bw}"
+        )
     if actual_mcs != expected_mcs:
         mismatches.append(f"ddrsrate expected {expected_mcs}, got {actual_mcs}")
     if actual_ratio != dl_ul_percent:
@@ -544,7 +548,7 @@ def _verify_cpe_mcs(
 
 def _settle_seconds(bandwidth: str, base_s: float) -> float:
     bw = normalize_bandwidth(bandwidth)
-    if bw in ("HT80", "HT160"):
+    if bw == "HT80":
         return max(base_s, 8.0)
     if bw == "HT40":
         return max(base_s, 6.0)
@@ -599,7 +603,7 @@ def configure_bts_bandwidth_ratio(
     )
     commands = RootCommands.set_bandwidth_ratio_apply_commands(
         radio_idx,
-        normalize_bandwidth(bandwidth),
+        uci_htmode_value(bandwidth),
         dl_ul_percent,
     )
     wait_s = max(0, int(round(bandwidth_apply_wait_s)))
@@ -1432,7 +1436,7 @@ def radio_profile_already_matches(
     actual_ratio = _read_uci(
         bts_ip, user, password, f"uci get ath{radio_idx}qos.qoscfg.dlulratio"
     )
-    uci_bw_ok = actual_bw.strip().upper() == expected_bw
+    uci_bw_ok = uci_htmode_matches(expected_bw, actual_bw.strip())
     running_bw_ok = running_bw == expected_bw
     ratio_ok = actual_ratio.strip() == dl_ul_percent
     if uci_bw_ok and not running_bw_ok:

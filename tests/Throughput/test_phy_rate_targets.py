@@ -1,4 +1,4 @@
-from traffic.operating_rate_table import operating_rate_mbps
+from traffic.operating_rate_table import operating_rate_mbps, uci_htmode_matches, uci_htmode_value
 from traffic.phy_rate_targets import compute_traffic_targets
 
 
@@ -23,11 +23,6 @@ def test_ht20_mcs23_75_25_dynamic_targets():
 
 def test_ht80_mcs23_operating_rate_dual_from_sheet():
     assert operating_rate_mbps("HT80", "MCS23") == 1201.0
-
-
-def test_ht160_mcs23_operating_rate_dual_from_sheet():
-    assert operating_rate_mbps("HT160", "MCS23") == 2401.0
-
 
 def test_ht80_mcs23_uses_explicit_operating_rate_override():
     targets = compute_traffic_targets(
@@ -63,3 +58,13 @@ def test_ht80_mcs23_75_25_with_800_ceiling_and_70_efficiency():
     assert targets["downlink_per_cpe_mbps"] == 150.0
     assert targets["uplink_per_cpe_mbps"] == 50.0
 
+
+def test_uci_htmode_value_ht40_plus():
+    assert uci_htmode_value("HT40") == "HT40+"
+    assert uci_htmode_value("HT80") == "HT80"
+
+
+def test_uci_htmode_matches_accepts_ht40_plus():
+    assert uci_htmode_matches("HT40", "HT40+")
+    assert uci_htmode_matches("HT40", "HT40")
+    assert not uci_htmode_matches("HT80", "HT40+")

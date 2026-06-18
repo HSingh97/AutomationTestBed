@@ -10,7 +10,7 @@ For each combination the script:
 Example:
   PYTHONPATH=. python3 traffic/performance_matrix.py \\
     --profile default \\
-    --bandwidths HT20,HT40,HT80,HT160 \\
+    --bandwidths HT20,HT40,HT80 \\
     --mcs MCS0,MCS1,MCS7 \\
     --ratios 80:20,50:50 \\
     --time 30
@@ -1083,7 +1083,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-min-mbps", type=float, default=0.0)
     parser.add_argument("--pause-s", type=float, default=2.0, help="Pause between iterations")
     parser.add_argument("--radio-settle-s", type=float, default=6.0,
-                        help="Wait after DUT radio apply (HT80/HT160 use at least 8s)")
+                        help="Wait after DUT radio apply (HT80 uses at least 8s)")
     parser.add_argument(
         "--bandwidth-apply-wait-s",
         type=float,

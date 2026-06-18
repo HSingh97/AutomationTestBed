@@ -20,6 +20,7 @@ import sys, os, time, traceback, subprocess, re, argparse, json, asyncio
 from ixnetwork_restpy import *
 from config.defaults import TRAFFIC_DEFAULTS
 from pages.commands import RootCommands
+from traffic.operating_rate_table import uci_htmode_value
 from utils.net_utils import format_snmp_host, format_ssh_host, normalize_ip
 from utils.profile_manager import load_profile_bundle
 from utils.recovery_manager import RecoveryManager
@@ -130,7 +131,7 @@ def run_ssh_command(ip, user, pw, command):
 
 def configure_bandwidth_and_mcs(ip, user, pw, radio_idx, bandwidth, mcs_rate, spatial_stream, ddrs_rate):
     print(f"Applying radio profile: bw={bandwidth}, mcs={mcs_rate}, spatial_stream={spatial_stream}, ddrs_rate={ddrs_rate}")
-    for cmd in RootCommands.set_bandwidth_commands(radio_idx, bandwidth):
+    for cmd in RootCommands.set_bandwidth_commands(radio_idx, uci_htmode_value(bandwidth)):
         run_ssh_command(ip, user, pw, f"{cmd} || true")
     for cmd in RootCommands.set_mcs_sequence_commands(radio_idx, mcs_rate, spatial_stream, ddrs_rate):
         run_ssh_command(ip, user, pw, f"{cmd} || true")
