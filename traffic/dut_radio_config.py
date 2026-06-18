@@ -597,10 +597,11 @@ def configure_bts_bandwidth_ratio(
         f"[BTS] Applying bandwidth/ratio on {ip}: bw={bandwidth}, "
         f"ratio={ratio} (dlulratio={dl_ul_percent})"
     )
-    commands: list[str] = []
-    commands.extend(RootCommands.set_bandwidth_commands(radio_idx, normalize_bandwidth(bandwidth)))
-    commands.extend(RootCommands.set_dl_ul_ratio_commands(radio_idx, dl_ul_percent))
-    commands.append(RootCommands.remote_apply_all_su())
+    commands = RootCommands.set_bandwidth_ratio_apply_commands(
+        radio_idx,
+        normalize_bandwidth(bandwidth),
+        dl_ul_percent,
+    )
     wait_s = max(0, int(round(bandwidth_apply_wait_s)))
     if wait_s > 0:
         commands.append(f"sleep {wait_s}")

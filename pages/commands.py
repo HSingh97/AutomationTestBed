@@ -246,6 +246,15 @@ class RootCommands:
         ]
 
     @staticmethod
+    def set_bandwidth_ratio_apply_commands(radio_idx, bandwidth, dl_ul_percent: str):
+        """Set htmode + DL:UL ratio, then single ucidyn apply (no remote_exec for BTS bw)."""
+        return [
+            f"ucidyn set wireless.wifi{radio_idx}.htmode {bandwidth}",
+            f"ucidyn set ath{radio_idx}qos.qoscfg.dlulratio {dl_ul_percent}",
+            "ucidyn apply",
+        ]
+
+    @staticmethod
     def remote_exec_command(su_index: int, command: str) -> str:
         safe = str(command).replace('"', '\\"')
         return f'/usr/sbin/remote_exec.sh {su_index} "{safe}"'

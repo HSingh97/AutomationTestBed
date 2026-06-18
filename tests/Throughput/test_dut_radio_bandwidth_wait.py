@@ -3,7 +3,7 @@ from unittest.mock import patch
 from traffic.dut_radio_config import configure_bts_bandwidth_ratio
 
 
-def test_bandwidth_apply_holds_ssh_session_with_sleep_and_cfg80211():
+def test_bandwidth_apply_single_ucidyn_apply_no_remote_exec():
     captured: list[dict] = []
 
     def fake_bash(ip, user, password, lines, *, timeout_s=120):
@@ -26,8 +26,11 @@ def test_bandwidth_apply_holds_ssh_session_with_sleep_and_cfg80211():
 
     assert len(captured) == 1
     lines = captured[0]["lines"]
-    assert any("wireless.wifi1.htmode HT80" in line for line in lines)
-    assert any("remote_exec.sh" in line for line in lines)
-    assert lines[-2] == "sleep 60"
-    assert lines[-1] == "cfg80211tool ath1 get_mode"
+    assert lines == [
+        "ucidyn set wireless.wifi1.htmode HT80",
+        "ucidyn set ath1qos.qoscfg.dlulratio 75",
+        "ucidyn apply",
+        "sleep 60",
+        "cfg80211tool ath1 get_mode",
+    ]
     assert captured[0]["timeout_s"] >= 90
