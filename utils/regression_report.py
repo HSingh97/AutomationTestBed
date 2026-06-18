@@ -18,6 +18,9 @@ SENAO_LOGO_URL = (
     "https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png"
 )
 
+# Above this SU count, testbed summary switches from wide columns to a vertical list.
+TESTBED_WIDE_COLUMN_MAX = 4
+
 # Human-readable labels so REG_01 / REG_02 are not repeated without context.
 CASE_CATALOG: dict[str, dict[str, str]] = {
     "REG_01": {
@@ -454,6 +457,16 @@ def _render_multi_unit_testbed_table(
     cpes: list[dict[str, Any]],
     summary: dict[str, Any],
 ) -> str:
+    if len(cpes) > TESTBED_WIDE_COLUMN_MAX:
+        return _render_vertical_testbed_table(bts, cpes, summary)
+    return _render_wide_testbed_table(bts, cpes, summary)
+
+
+def _render_wide_testbed_table(
+    bts: dict[str, Any],
+    cpes: list[dict[str, Any]],
+    summary: dict[str, Any],
+) -> str:
     units: list[tuple[str, dict[str, Any]]] = [("BTS", bts or {})]
     for unit in cpes:
         label = str(unit.get("label") or f"SU{unit.get('su_index', len(units))}")
@@ -494,6 +507,80 @@ def _render_multi_unit_testbed_table(
         <thead>
           <tr>
             <th class="corner"></th>
+            {header_cells}
+          </tr>
+        </thead>
+        <tbody>
+          {''.join(body_rows)}
+        </tbody>
+      </table>
+    </div>
+    """
+
+
+def _render_unit_label_cell(label: str, unit: dict[str, Any]) -> str:
+    ip = str(unit.get("ip") or "").strip()
+    ip_line = (
+        f"<span class='device-ip'>{escape(ip)}</span>"
+        if ip and ip not in {"—", "-"}
+        else ""
+    )
+    row_class = "bts-row" if label == "BTS" else ""
+    return (
+        f"<td class='unit-label-cell {row_class}'>"
+        f"<span class='device-name'>{escape(label)}</span>{ip_line}</td>"
+    )
+
+
+def _render_vertical_testbed_table(
+    bts: dict[str, Any],
+    cpes: list[dict[str, Any]],
+    summary: dict[str, Any],
+) -> str:
+    units: list[tuple[str, dict[str, Any]]] = [("BTS", bts or {})]
+    for unit in cpes:
+        label = str(unit.get("label") or f"SU{unit.get('su_index', len(units))}")
+        units.append((label, unit))
+
+    columns = (
+        ("Model", "model"),
+        ("FW Version", "fw_version"),
+        ("IP", "ip"),
+        ("Vlan", "vlan"),
+    )
+    include_qos = any(_is_populated_summary_value(unit.get("qos")) for _, unit in units)
+    if include_qos:
+        columns = (*columns, ("QOS", "qos"))
+
+    header_cells = "".join(f"<th>{label}</th>" for label, _ in columns)
+    body_rows = []
+    for label, unit in units:
+        cells = "".join(
+            f"<td>{_summary_cell(unit, key)}</td>" for _, key in columns
+        )
+        body_rows.append(
+            f"""
+            <tr>
+              {_render_unit_label_cell(label, unit)}
+              {cells}
+            </tr>
+            """
+        )
+
+    chips = _render_testbed_context_chips(summary)
+    device_count = len(units)
+    layout_note = (
+        f"<p class='testbed-layout-note'>Compact list view for "
+        f"{device_count} devices (BTS + {device_count - 1} SU(s)).</p>"
+    )
+    return f"""
+    {chips}
+    {layout_note}
+    <div class="testbed-scroll testbed-scroll-vertical">
+      <table class="data-table summary-top summary-vertical">
+        <thead>
+          <tr>
+            <th>Unit</th>
             {header_cells}
           </tr>
         </thead>

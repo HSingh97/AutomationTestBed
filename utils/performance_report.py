@@ -836,6 +836,46 @@ def write_html_report(
       background: #eff6ff;
       color: var(--head);
     }}
+    .testbed-layout-note {{
+      margin: 0 0 10px;
+      font-size: 12px;
+      color: #64748b;
+    }}
+    .testbed-scroll-vertical {{
+      max-height: 420px;
+      overflow: auto;
+    }}
+    table.summary-vertical {{
+      width: 100%;
+      table-layout: auto;
+    }}
+    table.summary-vertical thead th {{
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #eff6ff;
+      color: var(--head);
+      font-size: 12px;
+    }}
+    table.summary-vertical td,
+    table.summary-vertical th {{
+      font-size: 12px;
+      vertical-align: top;
+    }}
+    table.summary-vertical .unit-label-cell {{
+      min-width: 120px;
+      background: #f8fafc;
+      font-weight: 700;
+    }}
+    table.summary-vertical .unit-label-cell.bts-row {{
+      background: #eff6ff;
+    }}
+    table.summary-vertical tbody tr:nth-child(even) td {{
+      background: #fcfdff;
+    }}
+    table.summary-vertical tbody tr:hover td {{
+      background: #eff6ff;
+    }}
     .run-meta {{ display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; font-size: 13px; }}
     .run-meta span {{ padding: 8px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid var(--border); }}
     .run-outcome {{ margin-bottom: 16px; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); }}

@@ -178,8 +178,32 @@ def main() -> None:
         testbed_summary=_sample_testbed_summary(build="sample"),
     )
 
+    su16_path = samples_dir / "Senao_Performance_Sample_16SU_Testbed.html"
+    su16_hosts = [
+        f"2001:2002:2003:2004:2005:2006:2007:{idx:04x}" for idx in range(1, 17)
+    ]
+    write_html_report(
+        records=_records(BUILD71_ROWS[:1]),
+        run_meta={
+            "executed_at": "2026-06-18 19:00:00 IST",
+            "Bandwidths": "HT80",
+            "MCS Rates": "MCS23",
+            "Ratios": "75:25",
+            "Duration (s)": "30",
+        },
+        path=su16_path,
+        testbed_summary={
+            "stand": "test-harman2",
+            "profile": "default",
+            "su_count": 16,
+            "bts": _sample_testbed_summary(build="16su")["bts"],
+            "cpes": [_cpe_entry(i, ip) for i, ip in enumerate(su16_hosts, start=1)],
+        },
+    )
+
     print(f"Wrote {build71_path}")
     print(f"Wrote {demo_path}")
+    print(f"Wrote {su16_path}")
 
 
 if __name__ == "__main__":

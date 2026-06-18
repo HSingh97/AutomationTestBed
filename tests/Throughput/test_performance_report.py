@@ -91,3 +91,35 @@ def test_testbed_summary_renders_one_column_per_su():
     assert "<span class='device-name'>SU1</span>" in html
     assert "<span class='device-name'>SU4</span>" in html
     assert "Connected SUs" in html
+
+
+def test_testbed_summary_uses_vertical_layout_for_many_sus():
+    summary = {
+        "stand": "test-harman2",
+        "profile": "default",
+        "su_count": 16,
+        "bts": {
+            "model": "UBR-630",
+            "fw_version": "2.4.1.0",
+            "ip": "2001:2002:2003:2004:2005:2006:2007:1111",
+            "vlan": "Enabled ( QinQ )",
+            "qos": "75:25",
+        },
+        "cpes": [
+            {
+                "label": f"SU{idx}",
+                "su_index": idx,
+                "model": "UBR-620",
+                "fw_version": "2.4.1.0",
+                "ip": f"2001:2002:2003:2004:2005:2006:2007:{idx:04x}",
+                "vlan": "Enabled ( QinQ )",
+                "qos": "—",
+            }
+            for idx in range(1, 17)
+        ],
+    }
+    html = _render_testbed_summary_table(summary)
+    assert "summary-vertical" in html
+    assert "summary-multi" not in html
+    assert "Compact list view" in html
+    assert "<span class='device-name'>SU16</span>" in html
