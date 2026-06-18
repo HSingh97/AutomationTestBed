@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import shlex
 import subprocess
 import time
 import re
@@ -45,6 +46,25 @@ def run_ssh_command(ip: str, user: str, password: str, command: str, *, timeout_
     except subprocess.CalledProcessError as exc:
         output = (exc.output or "").strip()
         raise RuntimeError(f"SSH command failed on {ip}: {output}") from exc
+
+
+def run_ssh_bash_session(
+    ip: str,
+    user: str,
+    password: str,
+    lines: list[str],
+    *,
+    timeout_s: int = 120,
+) -> str:
+    """Run multiple shell lines in one SSH session (wait/sleep must complete before exit)."""
+    script = "set -e\n" + "\n".join(lines)
+    return run_ssh_command(
+        ip,
+        user,
+        password,
+        f"bash -lc {shlex.quote(script)}",
+        timeout_s=timeout_s,
+    )
 
 
 def _run_ucidyn_sequence(
@@ -446,6 +466,7 @@ def configure_bts_bandwidth_ratio(
     ratio: str,
     *,
     ssh_timeout_s: int = 60,
+    bandwidth_apply_wait_s: float = 45.0,
     verify: bool = True,
 ) -> str:
     """BTS only: htmode and DL/UL ratio (no MCS change)."""
@@ -457,8 +478,16 @@ def configure_bts_bandwidth_ratio(
     commands: list[str] = []
     commands.extend(RootCommands.set_bandwidth_commands(radio_idx, normalize_bandwidth(bandwidth)))
     commands.extend(RootCommands.set_dl_ul_ratio_commands(radio_idx, dl_ul_percent))
-    _run_ucidyn_sequence(ip, user, password, commands, ssh_timeout_s=ssh_timeout_s)
-    run_ssh_command(ip, user, password, RootCommands.remote_apply_all_su(), timeout_s=ssh_timeout_s)
+    commands.append(RootCommands.remote_apply_all_su())
+    wait_s = max(0, int(round(bandwidth_apply_wait_s)))
+    if wait_s > 0:
+        commands.append(f"sleep {wait_s}")
+        print(
+            f"[BTS] Holding SSH session {wait_s}s after bandwidth apply "
+            f"(device must finish before session closes)"
+        )
+    session_timeout = ssh_timeout_s + wait_s + 30
+    run_ssh_bash_session(ip, user, password, commands, timeout_s=session_timeout)
     if verify:
         _verify_bts_bandwidth_ratio(
             ip,
@@ -1288,6 +1317,7 @@ def configure_radio_profile(
     su_count: int = 1,
     prefer_cpe_via_bts: bool = False,
     settle_s: float = 4.0,
+    bandwidth_apply_wait_s: float = 45.0,
     ssh_timeout_s: int = 60,
     verify: bool = True,
     snmp_community: str | None = None,
@@ -1384,6 +1414,7 @@ def configure_radio_profile(
         bandwidth,
         ratio,
         ssh_timeout_s=ssh_timeout_s,
+        bandwidth_apply_wait_s=bandwidth_apply_wait_s,
         verify=verify,
     )
 
@@ -1446,6 +1477,7 @@ def configure_bandwidth_and_mcs(
     ratio: str = "50:50",
     cpe_hosts: list[str] | None = None,
     settle_s: float = 4.0,
+    bandwidth_apply_wait_s: float = 45.0,
     ssh_timeout_s: int = 60,
 ) -> None:
     """Backward-compatible wrapper."""
@@ -1460,5 +1492,6 @@ def configure_bandwidth_and_mcs(
         spatial_stream,
         cpe_hosts=cpe_hosts,
         settle_s=settle_s,
+        bandwidth_apply_wait_s=bandwidth_apply_wait_s,
         ssh_timeout_s=ssh_timeout_s,
     )

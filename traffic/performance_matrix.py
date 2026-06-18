@@ -106,6 +106,8 @@ def _apply_profile_run_defaults(args, profile_bundle) -> None:
         args.link_wait_s = float(perf_section["link_wait_s"])
     if perf_section.get("radio_settle_s") is not None:
         args.radio_settle_s = float(perf_section["radio_settle_s"])
+    if perf_section.get("bandwidth_apply_wait_s") is not None:
+        args.bandwidth_apply_wait_s = float(perf_section["bandwidth_apply_wait_s"])
     if perf_section.get("link_stats_source"):
         args.link_stats_source = str(perf_section["link_stats_source"]).strip()
     if perf_section.get("link_wifi_idx") is not None:
@@ -570,6 +572,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 su_count=args.su_count,
                                 prefer_cpe_via_bts=args.cpe_via_bts,
                                 settle_s=args.radio_settle_s,
+                                bandwidth_apply_wait_s=args.bandwidth_apply_wait_s,
                                 snmp_community=args.snmp_community,
                                 snmp_radio_idx=args.snmp_radio_index,
                                 skip_if_unchanged=args.skip_config_if_unchanged,
@@ -1056,6 +1059,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pause-s", type=float, default=2.0, help="Pause between iterations")
     parser.add_argument("--radio-settle-s", type=float, default=6.0,
                         help="Wait after DUT radio apply (HT80/HT160 use at least 8s)")
+    parser.add_argument(
+        "--bandwidth-apply-wait-s",
+        type=float,
+        default=float(perf.get("bandwidth_apply_wait_s", 45)),
+        help="Seconds to hold BTS SSH open after bandwidth/ratio ucidyn apply (default 45)",
+    )
     parser.add_argument("--link-wait-s", type=float, default=perf.get("link_wait_s", 45.0),
                         help="Poll SNMP until operating rate matches spec before TRex")
     parser.add_argument(
