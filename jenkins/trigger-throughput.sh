@@ -28,6 +28,11 @@ BTS_IP="${BTS_IP:-}"
 CPE_IP="${CPE_IP:-}"
 WAIT="${WAIT:-false}"
 POLL_SECONDS="${POLL_SECONDS:-20}"
+VLAN_DEBUG="${VLAN_DEBUG:-false}"
+CAMPAIGN_ITERATIONS="${CAMPAIGN_ITERATIONS:-3}"
+SU_LINK_WAIT="${SU_LINK_WAIT:-240}"
+BW_APPLY_WAIT="${BW_APPLY_WAIT:-90}"
+BW_RUNNING_WAIT="${BW_RUNNING_WAIT:-180}"
 
 usage() {
   cat <<'EOF'
@@ -47,6 +52,11 @@ Options:
   --bts-ip IP         BTS IPv6 override
   --cpe-ip IP         CPE IPv6 override
   --wait              Poll until build completes
+  --vlan-debug        Run QinQ vs transparent link-recovery campaign
+  --iterations N      Campaign runs per VLAN mode (default: 3)
+  --su-link-wait SEC  SU ping wait after BW apply (default: 240)
+  --bw-apply-wait SEC BTS hold after ucidyn apply (default: 90)
+  --bw-running-wait SEC  cfg80211tool poll timeout (default: 180)
   -h, --help          Show help
 EOF
 }
@@ -66,6 +76,11 @@ while [[ $# -gt 0 ]]; do
     --bts-ip) BTS_IP="$2"; shift 2 ;;
     --cpe-ip) CPE_IP="$2"; shift 2 ;;
     --wait) WAIT=true; shift ;;
+    --vlan-debug) VLAN_DEBUG=true; shift ;;
+    --iterations) CAMPAIGN_ITERATIONS="$2"; shift 2 ;;
+    --su-link-wait) SU_LINK_WAIT="$2"; shift 2 ;;
+    --bw-apply-wait) BW_APPLY_WAIT="$2"; shift 2 ;;
+    --bw-running-wait) BW_RUNNING_WAIT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
   esac
@@ -91,6 +106,11 @@ POST_DATA=(
   --data-urlencode "DL:UL Ratio=${RATIO}"
   --data-urlencode "Throughput Test Time=${DURATION}"
   --data-urlencode "Packet Size=${PACKET_SIZE}"
+  --data-urlencode "VLAN_DEBUG_CAMPAIGN=${VLAN_DEBUG}"
+  --data-urlencode "Campaign Iterations=${CAMPAIGN_ITERATIONS}"
+  --data-urlencode "SU Link Wait (s)=${SU_LINK_WAIT}"
+  --data-urlencode "BW Apply Wait (s)=${BW_APPLY_WAIT}"
+  --data-urlencode "BW Running Wait (s)=${BW_RUNNING_WAIT}"
 )
 [[ -n "$PROFILE" ]] && POST_DATA+=(--data-urlencode "PROFILE=${PROFILE}")
 [[ -n "$SU_COUNT" ]] && POST_DATA+=(--data-urlencode "SU Count=${SU_COUNT}")
@@ -120,24 +140,25 @@ if [[ "$WAIT" != "true" ]]; then
 fi
 
 echo "[jenkins] Waiting for build to start..."
-BUILD_URL=""
+BUILD_NUM=""
 for _ in $(seq 1 60); do
   sleep 2
-  BUILD_URL="$(curl -fsS -u "${JENKINS_USER}:${JENKINS_TOKEN}" \
-    "${JENKINS_URL}/${JOB_PATH}/lastBuild/api/json?tree=url,building" | \
-    python3 -c "import json,sys; d=json.load(sys.stdin); print(d['url'] if d.get('building') else '')")"
-  [[ -n "$BUILD_URL" ]] && break
+  BUILD_NUM="$(curl -fsS -u "${JENKINS_USER}:${JENKINS_TOKEN}" \
+    "${JENKINS_URL}/${JOB_PATH}/lastBuild/api/json?tree=number,building" | \
+    python3 -c "import json,sys; d=json.load(sys.stdin); print(d['number'] if d.get('building') else '')")"
+  [[ -n "$BUILD_NUM" ]] && break
 done
 
-if [[ -z "$BUILD_URL" ]]; then
+if [[ -z "$BUILD_NUM" ]]; then
   echo "[jenkins] Timed out waiting for build to start" >&2
   exit 1
 fi
 
-echo "[jenkins] Build: ${BUILD_URL}"
+BUILD_API="${JENKINS_URL}/${JOB_PATH}/${BUILD_NUM}/"
+echo "[jenkins] Build #${BUILD_NUM}: ${BUILD_API}"
 while true; do
   BUILDING="$(curl -fsS -u "${JENKINS_USER}:${JENKINS_TOKEN}" \
-    "${BUILD_URL}api/json?tree=building,result" | \
+    "${BUILD_API}api/json?tree=building,result" | \
     python3 -c "import json,sys; d=json.load(sys.stdin); print('yes' if d.get('building') else d.get('result',''))")"
   if [[ "$BUILDING" != "yes" ]]; then
     echo "[jenkins] Finished: ${BUILDING}"

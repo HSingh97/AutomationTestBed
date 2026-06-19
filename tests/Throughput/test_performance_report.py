@@ -1,4 +1,4 @@
-from utils.performance_report import write_html_report
+from utils.performance_report import _result_badge, _throughput_cell, write_html_report
 from utils.regression_report import _render_testbed_summary_table
 
 
@@ -35,6 +35,23 @@ def _sample_record(bandwidth: str, mcs: str, bidi: float) -> dict:
         },
         "mcs_config": {"mcs_config_ok": True},
     }
+
+
+def test_throughput_cell_uses_mcs_thresholds():
+    target = 100.0
+    assert "tput-good" in _throughput_cell(70.0, target)
+    assert "tput-mcs-warn" in _throughput_cell(50.0, target)
+    assert "tput-bad" in _throughput_cell(30.0, target)
+    assert "tput-zero" in _throughput_cell(0.0, target)
+
+
+def test_result_badge_shows_warn_for_low_mcs_throughput():
+    record = {
+        "throughput_passed": True,
+        "throughput_grade": "warn",
+        "throughput_warn": True,
+    }
+    assert "badge warn" in _result_badge(record)
 
 
 def test_html_report_includes_bandwidth_filter_controls(tmp_path):

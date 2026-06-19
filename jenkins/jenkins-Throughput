@@ -75,6 +75,31 @@ pipeline {
             defaultValue: '',
             description: 'TRex SU count (empty = profile default; qa_lab_02 uses 4)'
         )
+        booleanParam(
+            name: 'VLAN_DEBUG_CAMPAIGN',
+            defaultValue: false,
+            description: 'Run QinQ vs transparent link-recovery campaign (multiple iterations + debug JSON)'
+        )
+        string(
+            name: 'Campaign Iterations',
+            defaultValue: '3',
+            description: 'Matrix runs per VLAN mode when VLAN_DEBUG_CAMPAIGN is enabled'
+        )
+        string(
+            name: 'SU Link Wait (s)',
+            defaultValue: '240',
+            description: 'SU ping wait after bandwidth apply (campaign / extended timeouts)'
+        )
+        string(
+            name: 'BW Apply Wait (s)',
+            defaultValue: '90',
+            description: 'BTS hold time after ucidyn bandwidth apply'
+        )
+        string(
+            name: 'BW Running Wait (s)',
+            defaultValue: '180',
+            description: 'cfg80211tool running htmode poll timeout'
+        )
     }
 
     stages {
@@ -94,6 +119,7 @@ pipeline {
                     echo "TRex:       ${params['TRex Server']}"
                     echo "Profile:    ${params.PROFILE ?: "(from TARGET_STAND / benches.yaml)"}"
                     echo "SU count:   ${params['SU Count'] ?: '(profile default)'}"
+                    echo "VLAN debug: ${params.VLAN_DEBUG_CAMPAIGN}"
                     echo '------------------------------------------'
                 }
             }
@@ -123,43 +149,90 @@ pipeline {
                     def profileName = (params.PROFILE ?: '').trim()
                     def suCount = (params['SU Count'] ?: '').trim()
                     def packetRaw = (params['Packet Size'] ?: '1500').trim()
+                    def vlanDebug = params.VLAN_DEBUG_CAMPAIGN
+                    def campaignIterations = (params['Campaign Iterations'] ?: '3').trim()
+                    def suLinkWait = (params['SU Link Wait (s)'] ?: '240').trim()
+                    def bwApplyWait = (params['BW Apply Wait (s)'] ?: '90').trim()
+                    def bwRunningWait = (params['BW Running Wait (s)'] ?: '180').trim()
                     if (!(packetRaw ==~ /^\d+$/)) {
                         error("Packet Size must be numeric bytes (e.g. 1500), got: ${packetRaw}")
                     }
 
-                    sh 'rm -rf reports/artifacts/performance_* reports/artifacts/Performance_Report_*.html Senao_Performance_*.html || true'
+                    if (vlanDebug) {
+                        sh 'rm -rf reports/link_debug_campaign/* || true'
+                    } else {
+                        sh 'rm -rf reports/artifacts/performance_* reports/artifacts/Performance_Report_*.html Senao_Performance_*.html || true'
+                    }
 
-                    def cmd = new StringBuilder('PYTHONPATH=. venv/bin/python traffic/performance_matrix.py')
-                    cmd.append(" --bandwidths '${bandwidths}'")
-                    cmd.append(" --mcs '${mcsList}'")
-                    cmd.append(" --ratios '${ratio}'")
-                    cmd.append(' --ratios-only')
-                    cmd.append(' --no-fail-on-rate-mismatch')
-                    cmd.append(" --time ${testTime}")
-                    cmd.append(" --packet-size ${packetRaw}")
-                    if (trexServer) {
-                        cmd.append(" --trex-server '${trexServer}'")
-                    }
-                    if (trexSuServer) {
-                        cmd.append(" --trex-server-su '${trexSuServer}'")
-                    }
-                    cmd.append(' --deploy-client-script')
-                    cmd.append(" --stand '${TARGET_STAND}'")
-                    if (profileName) {
-                        cmd.append(" --profile '${profileName}'")
-                    }
-                    if (suCount ==~ /^\d+$/) {
-                        cmd.append(" --su-count ${suCount}")
-                    }
-                    if (btsIp) {
-                        cmd.append(" --local-ip '${btsIp}'")
-                    }
-                    if (cpeIp) {
-                        cmd.append(" --cpe-ip '${cpeIp}'")
+                    def cmd
+                    if (vlanDebug) {
+                        cmd = new StringBuilder('PYTHONPATH=. venv/bin/python scripts/vlan_link_debug_campaign.py')
+                        cmd.append(" --stand '${TARGET_STAND}'")
+                        cmd.append(" --bandwidths '${bandwidths}'")
+                        cmd.append(" --mcs '${mcsList}'")
+                        cmd.append(" --iterations ${campaignIterations}")
+                        cmd.append(" --duration-s ${testTime}")
+                        cmd.append(" --su-link-wait-s ${suLinkWait}")
+                        cmd.append(" --bandwidth-apply-wait-s ${bwApplyWait}")
+                        cmd.append(" --bandwidth-running-wait-s ${bwRunningWait}")
+                        if (profileName) {
+                            cmd.append(" --profile '${profileName}'")
+                        }
+                        if (suCount ==~ /^\d+$/) {
+                            cmd.append(" --su-count ${suCount}")
+                        }
+                    } else {
+                        cmd = new StringBuilder('PYTHONPATH=. venv/bin/python traffic/performance_matrix.py')
+                        cmd.append(" --bandwidths '${bandwidths}'")
+                        cmd.append(" --mcs '${mcsList}'")
+                        cmd.append(" --ratios '${ratio}'")
+                        cmd.append(' --ratios-only')
+                        cmd.append(' --no-fail-on-rate-mismatch')
+                        cmd.append(" --time ${testTime}")
+                        cmd.append(" --packet-size ${packetRaw}")
+                        cmd.append(" --su-link-wait-s ${suLinkWait}")
+                        cmd.append(" --bandwidth-apply-wait-s ${bwApplyWait}")
+                        cmd.append(" --bandwidth-running-wait-s ${bwRunningWait}")
+                        if (trexServer) {
+                            cmd.append(" --trex-server '${trexServer}'")
+                        }
+                        if (trexSuServer) {
+                            cmd.append(" --trex-server-su '${trexSuServer}'")
+                        }
+                        cmd.append(' --deploy-client-script')
+                        cmd.append(" --stand '${TARGET_STAND}'")
+                        if (profileName) {
+                            cmd.append(" --profile '${profileName}'")
+                        }
+                        if (suCount ==~ /^\d+$/) {
+                            cmd.append(" --su-count ${suCount}")
+                        }
+                        if (btsIp) {
+                            cmd.append(" --local-ip '${btsIp}'")
+                        }
+                        if (cpeIp) {
+                            cmd.append(" --cpe-ip '${cpeIp}'")
+                        }
                     }
 
                     def exitCode = sh(script: cmd.toString(), returnStatus: true)
                     env.PERF_MATRIX_EXIT = "${exitCode}"
+
+                    if (vlanDebug) {
+                        def summaryPath = sh(
+                            script: 'ls -t reports/link_debug_campaign/*/campaign_summary.json 2>/dev/null | head -1',
+                            returnStdout: true
+                        ).trim()
+                        if (!summaryPath) {
+                            error('VLAN debug campaign finished but campaign_summary.json was not found')
+                        }
+                        env.CAMPAIGN_SUMMARY = summaryPath
+                        echo "Campaign summary: ${summaryPath}"
+                        if (exitCode != 0) {
+                            unstable("VLAN debug campaign completed with matrix failures (exit ${exitCode})")
+                        }
+                        return
+                    }
 
                     def reportPath = sh(
                         script: 'ls -t reports/artifacts/Performance_Report_*.html 2>/dev/null | head -1',
@@ -178,6 +251,9 @@ pipeline {
         }
 
         stage('Finalize Report') {
+            when {
+                expression { return !params.VLAN_DEBUG_CAMPAIGN }
+            }
             steps {
                 script {
                     def senao = load 'jenkins/jenkins-common.groovy'
@@ -192,9 +268,13 @@ pipeline {
         stage('Archive Report') {
             steps {
                 script {
-                    archiveBuildArtifacts('Senao_Performance_*.html')
-                    archiveBuildArtifacts('reports/artifacts/Performance_Report_*.html', true)
-                    archiveBuildArtifacts('reports/artifacts/performance_*/**', true)
+                    if (params.VLAN_DEBUG_CAMPAIGN) {
+                        archiveBuildArtifacts('reports/link_debug_campaign/**', true)
+                    } else {
+                        archiveBuildArtifacts('Senao_Performance_*.html')
+                        archiveBuildArtifacts('reports/artifacts/Performance_Report_*.html', true)
+                        archiveBuildArtifacts('reports/artifacts/performance_*/**', true)
+                    }
                 }
             }
         }
@@ -203,6 +283,13 @@ pipeline {
     post {
         always {
             script {
+                if (params.VLAN_DEBUG_CAMPAIGN) {
+                    echo '-----------------------------------------'
+                    echo 'VLAN debug campaign complete.'
+                    echo "Summary: ${env.CAMPAIGN_SUMMARY ?: 'see archived reports/link_debug_campaign/'}"
+                    echo '-----------------------------------------'
+                    return
+                }
                 def senao = load 'jenkins/jenkins-common.groovy'
                 def reportFile = env.PERFORMANCE_REPORT ?: "${senao.standardReportBasename('Senao_Performance')}.html"
                 def hasReport = fileExists(reportFile)

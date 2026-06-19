@@ -263,6 +263,8 @@ def wait_for_su_links(
     min_responding: int | None = None,
     phase: str = "after bandwidth apply",
     strict: bool = False,
+    link_debug_dir: str | None = None,
+    radio_idx: int = 1,
 ) -> dict[str, Any]:
     """
     After bandwidth apply, poll until SU mgmt addresses respond to ping.
@@ -303,6 +305,28 @@ def wait_for_su_links(
         f"(timeout {timeout_s:.0f}s, via {last_method})"
     )
 
+    def _maybe_debug_snapshot(attempt_no: int, suffix: str) -> None:
+        if not link_debug_dir:
+            return
+        from traffic.link_debug_snapshot import write_link_debug_snapshot
+
+        write_link_debug_snapshot(
+            link_debug_dir,
+            label=f"attempt{attempt_no}_{suffix}",
+            bts_ip=bts_ip,
+            bts_user=bts_user,
+            bts_password=bts_password,
+            profile_tb=tb,
+            dut_cfg=dut,
+            cpe_hosts=cpe_hosts,
+            radio_idx=radio_idx,
+            attempt=attempt_no,
+            phase=phase,
+            qinq_iface=qinq_iface,
+        )
+
+    _maybe_debug_snapshot(0, "start")
+
     while time.time() < deadline:
         attempt += 1
         live = discover_su_hosts_from_bts(bts_ip, bts_user, bts_password)
@@ -325,6 +349,7 @@ def wait_for_su_links(
                 f"[LINK] SU ping OK: {len(responding)}/{required} responding "
                 f"(method={last_method}, attempt={attempt})"
             )
+            _maybe_debug_snapshot(attempt, "success")
             return {
                 "ok": True,
                 "responding": responding,
@@ -340,14 +365,20 @@ def wait_for_su_links(
                 f"[LINK] SU ping {len(responding)}/{len(targets)} up "
                 f"(attempt {attempt}, waiting for {', '.join(missing[:4])})"
             )
+            _maybe_debug_snapshot(attempt, "poll")
         time.sleep(poll_s)
 
     missing = [h for h in targets if h not in responding]
+    not_in_targets = max(0, required - len(targets))
+    missing_detail = missing if missing else (
+        [f"(sysfs/profile only lists {len(targets)}; need {required})"] if not_in_targets else []
+    )
     suffix = "" if strict else " — continuing"
     print(
         f"[WARN] SU ping timeout: only {len(responding)}/{required} responded "
-        f"(missing: {', '.join(missing)}){suffix}"
+        f"(missing: {', '.join(missing_detail)}){suffix}"
     )
+    _maybe_debug_snapshot(attempt, "timeout")
     return {
         "ok": False,
         "responding": responding,

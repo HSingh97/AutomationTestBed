@@ -12,6 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from traffic.throughput_validation import evaluate_mcs_throughput
 from utils.net_utils import format_ssh_host, is_ipv6_literal, normalize_ip
 from utils.vlan_uci import _iface_keys, _qinq, qinq_tags_from_profile
 
@@ -1017,6 +1018,7 @@ def run_trex_stats_check(
     trex_server: str,
     duration_s: int,
     expected_min_mbps: float = 0.0,
+    mcs_target_mbps: float = 0.0,
     output_json: str | None = None,
     trex_user: str = "root",
     trex_password: str = "",
@@ -1275,8 +1277,18 @@ def run_trex_stats_check(
         parsed = parse_trex_client_output(client_output)
         observed_rx_mbps = float(parsed["combined"]["rx_mbps"])
         traffic_observed = observed_rx_mbps > 0.0 or bool(parsed["live_samples"])
+        throughput_grade = None
+        throughput_warn = False
+        pct_of_target = None
 
-        if expected_min_mbps > 0:
+        if mcs_target_mbps > 0:
+            mcs_eval = evaluate_mcs_throughput(observed_rx_mbps, mcs_target_mbps)
+            passed = bool(mcs_eval["passed"])
+            reason = str(mcs_eval["reason"])
+            throughput_grade = str(mcs_eval["grade"])
+            throughput_warn = bool(mcs_eval["throughput_warn"])
+            pct_of_target = mcs_eval["pct_of_target"]
+        elif expected_min_mbps > 0:
             passed = observed_rx_mbps >= expected_min_mbps
             reason = (
                 f"Combined RX {observed_rx_mbps:.2f} Mbps met expected minimum {expected_min_mbps:.2f} Mbps."
@@ -1294,16 +1306,25 @@ def run_trex_stats_check(
                 else "TRex output or DUT-side throughput counters did not show active traffic."
             )
         else:
-            passed = traffic_observed
-            reason = "Traffic samples were captured from TRex output." if passed else "No traffic samples were captured."
+            passed = observed_rx_mbps > 0.0
+            reason = (
+                f"Combined RX {observed_rx_mbps:.2f} Mbps observed."
+                if passed
+                else "No measurable throughput (0 Mbps combined RX)."
+            )
 
         validation = {
             "passed": passed,
             "reason": reason,
             "expected_min_mbps": expected_min_mbps,
+            "mcs_target_mbps": mcs_target_mbps,
             "observed_rx_mbps": observed_rx_mbps,
             "run_mode": run_mode,
         }
+        if throughput_grade is not None:
+            validation["grade"] = throughput_grade
+            validation["throughput_warn"] = throughput_warn
+            validation["pct_of_target"] = pct_of_target
 
         result = {
             "backend": "trex",
@@ -1354,8 +1375,12 @@ def run_trex_stats_check(
             "passed": False,
             "reason": err_text,
             "expected_min_mbps": expected_min_mbps,
+            "mcs_target_mbps": mcs_target_mbps,
             "observed_rx_mbps": 0.0,
             "run_mode": run_mode,
+            "grade": "fail",
+            "throughput_warn": False,
+            "pct_of_target": 0.0,
         }
         result = {
             "backend": "trex",

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from traffic.operating_rate_table import lookup_spec, modulation_scheme, operating_rate_mbps
+from traffic.throughput_validation import MCS_THROUGHPUT_FAIL_PCT, MCS_THROUGHPUT_WARN_PCT
 from utils.regression_report import _render_testbed_summary_table
 
 SENAO_LOGO_URL = (
@@ -68,13 +69,14 @@ def _throughput_cell(measured: float, target_mbps: float) -> str:
     if measured <= 0:
         return "<span class='tput-zero'>0.0 Mbps</span>"
     pct = _throughput_pct_of_rate(measured, target_mbps)
-    if pct >= 70:
-        css = "tput-good"
-    elif pct >= 50:
-        css = "tput-warn"
-    else:
-        css = "tput-bad"
-    return f"<span class='{css}'>{measured:.1f} Mbps</span>"
+    if pct >= MCS_THROUGHPUT_WARN_PCT:
+        return f"<span class='tput-good'>{measured:.1f} Mbps</span>"
+    if pct >= MCS_THROUGHPUT_FAIL_PCT:
+        return (
+            f"<span class='tput-mcs-warn' title='Getting less throughput as per MCS "
+            f"({pct:.0f}% of target)'>{measured:.1f} Mbps</span>"
+        )
+    return f"<span class='tput-bad'>{measured:.1f} Mbps</span>"
 
 
 def _rate_cell(raw: str | None) -> str:
@@ -185,6 +187,8 @@ def _operating_rate_cell(
 def _result_badge(record: dict[str, Any]) -> str:
     if record.get("skipped_trex"):
         return "<span class='badge fail'>SKIP</span>"
+    if record.get("throughput_grade") == "warn" or record.get("throughput_warn"):
+        return "<span class='badge warn'>WARN</span>"
     passed = record.get("throughput_passed")
     if passed is True:
         return "<span class='badge pass'>PASS</span>"
@@ -956,11 +960,12 @@ def write_html_report(
     .ip-cell {{ font-family: Consolas, Monaco, monospace; font-size: 11px; white-space: nowrap; }}
     .muted {{ color: #64748b; font-size: 11px; }}
     .tput-good {{ color: #166534; font-weight: 700; background: #dcfce7; padding: 2px 8px; border-radius: 4px; }}
-    .tput-warn {{ color: #9a3412; font-weight: 700; background: #ffedd5; padding: 2px 8px; border-radius: 4px; }}
+    .tput-mcs-warn {{ color: #9a3412; font-weight: 700; background: #ffedd5; padding: 2px 8px; border-radius: 4px; }}
     .tput-bad {{ color: #991b1b; font-weight: 700; background: #fee2e2; padding: 2px 8px; border-radius: 4px; }}
     .tput-zero {{ color: #991b1b; font-weight: 700; background: #fecaca; padding: 2px 8px; border-radius: 4px; }}
     .badge {{ display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }}
     .badge.pass {{ background: #dcfce7; color: #166534; }}
+    .badge.warn {{ background: #ffedd5; color: #9a3412; }}
     .badge.fail {{ background: #fee2e2; color: #991b1b; }}
     .badge.neutral {{ background: #e2e8f0; color: #475569; }}
     .skip-note {{ color: #991b1b; font-size: 13px; }}

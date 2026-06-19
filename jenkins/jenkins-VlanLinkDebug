@@ -1,0 +1,94 @@
+// VLAN link-recovery debug campaign — QinQ (tagged TRex) then transparent (untagged TRex).
+// Archives reports/link_debug_campaign/<timestamp>/ with per-iteration sysfs/ping snapshots.
+
+def archiveBuildArtifacts(pattern, allowEmpty = false) {
+    step([
+        $class: 'ArtifactArchiver',
+        artifacts: pattern,
+        fingerprint: true,
+        onlyIfSuccessful: false,
+        allowEmptyArchive: allowEmpty,
+    ])
+}
+
+pipeline {
+    agent { node { label "${TARGET_STAND}" } }
+
+    parameters {
+        choice(
+            name: 'TARGET_STAND',
+            choices: ['test-qa-lab-02', 'test-harman2', 'test-puneet'],
+            description: 'Jenkins agent / bench label'
+        )
+        string(name: 'Bandwidth', defaultValue: 'HT20,HT40,HT80', description: 'Matrix bandwidths')
+        string(name: 'MCS', defaultValue: 'MCS14', description: 'Matrix MCS list')
+        string(name: 'Iterations', defaultValue: '3', description: 'Runs per VLAN mode (qinq + transparent)')
+        string(name: 'SU Link Wait (s)', defaultValue: '240', description: 'SU ping wait after BW apply')
+        string(name: 'BW Apply Wait (s)', defaultValue: '90', description: 'BTS hold after ucidyn apply')
+        string(name: 'BW Running Wait (s)', defaultValue: '180', description: 'cfg80211tool poll timeout')
+        string(name: 'PROFILE', defaultValue: '', description: 'Profile override (empty = benches.yaml)')
+    }
+
+    stages {
+        stage('Prepare') {
+            steps {
+                echo "VLAN link debug campaign on ${TARGET_STAND}"
+                echo "Bandwidths: ${params.Bandwidth} | MCS: ${params.MCS} | iterations/mode: ${params.Iterations}"
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh '''
+                    python3 -m venv venv
+                    venv/bin/pip install --upgrade pip
+                    venv/bin/pip install -r requirements.txt
+                '''
+            }
+        }
+
+        stage('Run VLAN Debug Campaign') {
+            steps {
+                script {
+                    def profileArg = (params.PROFILE ?: '').trim()
+                    def cmd = new StringBuilder('PYTHONPATH=. venv/bin/python scripts/vlan_link_debug_campaign.py')
+                    cmd.append(" --stand '${TARGET_STAND}'")
+                    cmd.append(" --bandwidths '${params.Bandwidth}'")
+                    cmd.append(" --mcs '${params.MCS}'")
+                    cmd.append(" --iterations ${params.Iterations}")
+                    cmd.append(" --su-link-wait-s ${params['SU Link Wait (s)']}")
+                    cmd.append(" --bandwidth-apply-wait-s ${params['BW Apply Wait (s)']}")
+                    cmd.append(" --bandwidth-running-wait-s ${params['BW Running Wait (s)']}")
+                    if (profileArg) {
+                        cmd.append(" --profile '${profileArg}'")
+                    }
+                    def exitCode = sh(script: cmd.toString(), returnStatus: true)
+                    env.CAMPAIGN_EXIT = "${exitCode}"
+                    if (exitCode != 0) {
+                        unstable("Campaign finished with matrix failures (exit ${exitCode})")
+                    }
+                }
+            }
+        }
+
+        stage('Archive Campaign') {
+            steps {
+                archiveBuildArtifacts('reports/link_debug_campaign/**', true)
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                def summary = sh(
+                    script: 'ls -t reports/link_debug_campaign/*/campaign_summary.json 2>/dev/null | head -1',
+                    returnStdout: true
+                ).trim()
+                if (summary) {
+                    echo "Campaign summary: ${summary}"
+                }
+            }
+        }
+    }
+}

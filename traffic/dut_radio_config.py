@@ -1497,6 +1497,7 @@ def configure_bandwidth_profile(
     su_link_wait_s: float = 120.0,
     bandwidth_running_wait_s: float = 120.0,
     require_all_su_for_bandwidth: bool | None = None,
+    link_debug_dir: str | None = None,
     verify: bool = True,
     skip_if_unchanged: bool = True,
 ) -> dict[str, object]:
@@ -1544,6 +1545,8 @@ def configure_bandwidth_profile(
             min_responding=su_count if require_all_su else None,
             phase="after bandwidth apply",
             strict=require_all_su,
+            link_debug_dir=link_debug_dir,
+            radio_idx=radio_idx,
         )
         if require_all_su and not post_link.get("ok"):
             raise RuntimeError(

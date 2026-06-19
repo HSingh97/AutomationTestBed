@@ -697,6 +697,11 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         profile_tb=testbed_tb,
                         dut_cfg=dut,
                         skip_if_unchanged=args.skip_config_if_unchanged,
+                        link_debug_dir=(
+                            str(Path(args.link_debug_dir) / normalize_bandwidth(bandwidth))
+                            if args.link_debug_dir
+                            else None
+                        ),
                     )
                 except Exception as exc:
                     bandwidth_group_ok = False
@@ -925,6 +930,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             trex_server_startup_s=args.trex_server_startup_s,
                             duration_s=args.time,
                             expected_min_mbps=args.expected_min_mbps,
+                            mcs_target_mbps=effective_target,
                             trex_su_count=args.su_count,
                             trex_dl_bw=dl_bw,
                             trex_ul_bw=ul_bw,
@@ -1018,9 +1024,13 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         export["link_validation"] = link_validation
                         export["link_validation_post"] = post_link_validation
                         trex_passed = bool(validation.get("passed"))
+                        throughput_grade = validation.get("grade")
                         rate_ok = bool(link_validation.get("operating_rate_ok"))
                         record["operating_rate_ok"] = rate_ok
                         record["throughput_passed"] = trex_passed
+                        record["throughput_grade"] = throughput_grade
+                        record["throughput_warn"] = bool(validation.get("throughput_warn"))
+                        record["throughput_pct_of_target"] = validation.get("pct_of_target")
                         record["passed"] = trex_passed and (
                             rate_ok or not args.fail_on_rate_mismatch
                         )
@@ -1034,11 +1044,18 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             rate_note = "data rate mismatch (FAIL)"
                         else:
                             rate_note = "data rate mismatch (report only)"
-                        trex_status = "PASS" if record["passed"] else "FAIL"
+                        if not record["passed"]:
+                            trex_status = "FAIL"
+                        elif throughput_grade == "warn":
+                            trex_status = "WARN"
+                        else:
+                            trex_status = "PASS"
                         print(
                             f"Result: {trex_status} | "
                             f"combined_rx={export['combined'].get('rx_mbps', 0):.2f} Mbps | {rate_note}"
                         )
+                        if validation.get("reason") and throughput_grade in {"warn", "fail"}:
+                            print(f"  {validation['reason']}")
                         if link_validation.get("operating_rate_mismatch") and clients:
                             primary = clients[0]
                             print(
@@ -1285,6 +1302,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=float(perf.get("bandwidth_running_wait_s", 120)),
         help="Seconds to poll cfg80211tool running htmode after SU link wait (default 120)",
+    )
+    parser.add_argument(
+        "--link-debug-dir",
+        default="",
+        help="Write per-attempt link/VLAN/sysfs JSON snapshots under this directory (per bandwidth subdir)",
     )
     parser.add_argument(
         "--require-all-su-for-bandwidth",
