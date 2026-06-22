@@ -91,6 +91,7 @@ class IpSuiteProgress:
         eta_txt = _format_duration(eta_s)
 
         passed = sum(1 for r in self._rows if r.outcome == "PASSED")
+        partial = sum(1 for r in self._rows if r.outcome == "PARTIAL")
         failed = sum(1 for r in self._rows if r.outcome == "FAILED")
         skipped = sum(1 for r in self._rows if r.outcome == "SKIPPED")
         errors = sum(1 for r in self._rows if r.outcome == "ERROR")
@@ -115,7 +116,7 @@ class IpSuiteProgress:
 
         print(
             f"\n[suite] Progress {done}/{total} ({pct}%) | "
-            f"PASS {passed} FAIL {failed} SKIP {skipped} ERR {errors} | "
+            f"PASS {passed} PARTIAL {partial} FAIL {failed} SKIP {skipped} ERR {errors} | "
             f"elapsed {_format_duration(int(elapsed))} | ETA ~{eta_txt}\n"
         )
         print(table)
@@ -158,7 +159,12 @@ def outcome_from_report(report) -> str:
     if report.skipped:
         return "SKIPPED"
     if report.failed:
-        return "FAILED" if report.when == "call" else "ERROR"
+        if report.when != "call":
+            return "ERROR"
+        longrepr = str(getattr(report, "longrepr", "") or "")
+        if "FAILURE:" in longrepr:
+            return "PARTIAL"
+        return "FAILED"
     if report.passed:
         return "PASSED"
     return "—"

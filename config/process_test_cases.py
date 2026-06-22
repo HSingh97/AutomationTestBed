@@ -19,7 +19,12 @@ class ProcessTestCase:
 
 
 PROCESS_TEST_CASES: tuple[ProcessTestCase, ...] = (
-    ProcessTestCase("PROCESS_01", "Normal Operation – Visibility", "Functional", "BTS"),
+    ProcessTestCase(
+        "PROCESS_01",
+        "Normal Operation – Visibility & Baseline Counters",
+        "Functional",
+        "BTS",
+    ),
     ProcessTestCase("PROCESS_02", "Normal Operation – Uptime", "Functional", "BTS"),
     ProcessTestCase("PROCESS_03", "Normal Operation – Restart Count", "Functional", "BTS"),
     ProcessTestCase("PROCESS_04", "Normal Operation – Timestamp", "Functional", "BTS"),

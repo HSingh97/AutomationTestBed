@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import pytest
+import pytest_check as check
 from scrapli.driver.generic import AsyncGenericDriver
 
 from config.process_monitor_catalog import (
@@ -754,14 +755,30 @@ async def assert_process_01_visibility(ssh: AsyncGenericDriver, *, case_id: str 
     if other_down:
         _log(case_id, f"Other monitored services not running: {', '.join(other_down)}")
     assert not hard_down, f"{case_id}: required services not running: {', '.join(hard_down)}"
-    prior = [
-        f"{name}(respawn={inst.respawn_count},crashes={inst.total_crashes})"
-        for name, inst in visible.items()
-        if inst.respawn_count or inst.total_crashes
-    ]
-    if prior:
-        _log(case_id, f"Pre-existing crash counters noted: {', '.join(prior)}")
-    _log(case_id, f"All {len(visible)} monitored services visible and running.")
+
+    counter_issues: list[str] = []
+    for name, inst in sorted(visible.items()):
+        if not inst.respawn_count and not inst.total_crashes:
+            continue
+        label = f"{name}(respawn={inst.respawn_count},crashes={inst.total_crashes})"
+        if name in PREFLIGHT_COUNTER_EXEMPT:
+            counter_issues.append(f"{label} — known firmware quirk (expected 0 after reboot)")
+            check.fail(
+                f"{name}: baseline crash counters not zero after reboot "
+                f"(respawn={inst.respawn_count}, crashes={inst.total_crashes}); "
+                f"known firmware quirk ({name} exempt from preflight block)"
+            )
+        else:
+            counter_issues.append(label)
+            check.fail(
+                f"{name}: baseline crash counters not zero after reboot "
+                f"(respawn={inst.respawn_count}, crashes={inst.total_crashes})"
+            )
+    if counter_issues:
+        _log(case_id, f"Baseline counter discrepancies: {', '.join(counter_issues)}")
+    else:
+        _log(case_id, "Baseline crash counters are zero for all visible monitored services.")
+    _log(case_id, f"All {len(visible)} monitored services visible; required services running.")
 
 
 async def assert_process_02_uptime(ssh: AsyncGenericDriver, *, case_id: str = "PROCESS_02") -> None:
