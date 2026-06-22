@@ -11,6 +11,7 @@ from pathlib import Path
 from prettytable import PrettyTable
 
 IP_SUITE_PROGRESS_PATH = Path("reports/artifacts/ip_suite_progress.json")
+PROC_PARTIAL_MARKER = "[PROC_PARTIAL]"
 
 # Any suite case id: IP_01, JMB_04, REG_12, ...
 _CASE_ID_RE = re.compile(r"([A-Z]{2,}_\d+)", re.I)
@@ -162,7 +163,7 @@ def outcome_from_report(report) -> str:
         if report.when != "call":
             return "ERROR"
         longrepr = str(getattr(report, "longrepr", "") or "")
-        if "FAILURE:" in longrepr:
+        if PROC_PARTIAL_MARKER in longrepr:
             return "PARTIAL"
         return "FAILED"
     if report.passed:

@@ -61,6 +61,40 @@ def get_group_marker(keywords):
     return "Ungrouped"
 
 
+PROC_PARTIAL_MARKER = "[PROC_PARTIAL]"
+PROC_FAILED_MARKER = "[PROC_FAILED]"
+
+
+def _is_process_monitor_test(test: dict) -> bool:
+    keywords = test.get("keywords") or []
+    return "ProcessMonitor" in keywords or any(str(k).startswith("PROCESS_") for k in keywords)
+
+
+def _process_monitor_case_reason(test: dict, longrepr: str) -> tuple[str, str] | None:
+    """Return (FAILED|PARTIAL, reason) for Process Monitor cases."""
+    stdout = str((test.get("call") or {}).get("stdout") or "")
+    blob = f"{longrepr}\n{stdout}"
+    if PROC_PARTIAL_MARKER in blob:
+        match = re.search(r"\[PROC_PARTIAL\]\s+\S+\s+PARTIAL:\s*(.+)", blob, re.DOTALL)
+        reason = match.group(1).strip().splitlines()[0] if match else ""
+        if not reason:
+            for line in reversed(stdout.splitlines()):
+                if "] PARTIAL:" in line:
+                    reason = line.split("] PARTIAL:", 1)[-1].strip()
+                    break
+        return "PARTIAL", reason or "Baseline discrepancy (see console log)"
+    if PROC_FAILED_MARKER in blob:
+        match = re.search(r"\[PROC_FAILED\]\s+\S+\s+FAILED:\s*(.+)", blob, re.DOTALL)
+        reason = match.group(1).strip().splitlines()[0] if match else ""
+        if not reason:
+            for line in reversed(stdout.splitlines()):
+                if "] FAILED:" in line:
+                    reason = line.split("] FAILED:", 1)[-1].strip()
+                    break
+        return "FAILED", reason or "Test failed (see console log)"
+    return None
+
+
 def _effective_outcome_for_report(test: dict) -> str:
     """
     Map pytest-json-report outcome for customer reports.
@@ -253,7 +287,30 @@ def generate():
         elif outcome == 'FAILED':
             longrepr = test.get('call', {}).get('longrepr', '')
 
-            if "FAILURE:" in longrepr:
+            proc_verdict = _process_monitor_case_reason(test, longrepr) if _is_process_monitor_test(test) else None
+            if proc_verdict:
+                proc_status, proc_reason = proc_verdict
+                if proc_status == "PARTIAL":
+                    stats['partial'] += 1
+                    status = "PARTIAL"
+                    reason_html = (
+                        f"<div class='reason-title' style='color:#b45309;'>Test Partial:</div>"
+                        f"<div class='failure-list'><div class='failure-item'>{proc_reason}</div></div>"
+                    )
+                    reason_csv = f"Test Partial:\n- {proc_reason}"
+                    color = "#d97706"
+                    bg = "#fffbeb"
+                else:
+                    stats['failed'] += 1
+                    status = "FAILED"
+                    reason_html = (
+                        f"<div class='reason-title' style='color:#991b1b;'>Test Failed:</div>"
+                        f"<div class='failure-list'><div class='failure-item'>{proc_reason}</div></div>"
+                    )
+                    reason_csv = f"Test Failed:\n- {proc_reason}"
+                    color = "#ef4444"
+                    bg = "#fef2f2"
+            elif "FAILURE:" in longrepr:
                 stats['partial'] += 1
                 status = "PARTIAL"
                 raw_failures = re.findall(r'FAILURE: (.*)', longrepr)

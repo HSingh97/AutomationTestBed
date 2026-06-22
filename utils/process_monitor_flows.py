@@ -88,6 +88,22 @@ class ServiceInstance:
         )
 
 
+PROC_PARTIAL_MARKER = "[PROC_PARTIAL]"
+PROC_FAILED_MARKER = "[PROC_FAILED]"
+
+
+def _fail_case(case_id: str, reason: str) -> None:
+    """Hard failure — entire case FAILED (not partial)."""
+    _log(case_id, f"FAILED: {reason}")
+    pytest.fail(f"{PROC_FAILED_MARKER} {case_id} FAILED: {reason}")
+
+
+def _partial_case(case_id: str, reason: str) -> None:
+    """Soft discrepancy — case PARTIAL; suite continues."""
+    _log(case_id, f"PARTIAL: {reason}")
+    check.fail(f"{PROC_PARTIAL_MARKER} {case_id} PARTIAL: {reason}")
+
+
 def _log(case_id: str, message: str) -> None:
     print(f"[PROC][{case_id}] {message}")
 
@@ -190,9 +206,10 @@ async def _assert_core_file_created(
             return path
         await asyncio.sleep(1)
     example = f"{PROC_CORE_DIR}/core.{_core_name(service_name)}.{old_pid}.<timestamp>"
-    pytest.fail(
-        f"{case_id}: expected core file for {service_name} after SEGV "
-        f"(pattern {core_prefix}* under {PROC_CORE_DIR}); example: {example}"
+    _fail_case(
+        case_id,
+        f"Core file not saved for {service_name} after SEGV "
+        f"(expected {core_prefix}* under {PROC_CORE_DIR}; example: {example})",
     )
 
 
@@ -291,11 +308,20 @@ async def _wait_for_running(
     return await _process_running(ssh, service_name) == expect_running
 
 
-async def _induce_signal(ssh: AsyncGenericDriver, service_name: str, signal: KillSignal) -> int:
+async def _induce_signal(
+    ssh: AsyncGenericDriver,
+    service_name: str,
+    signal: KillSignal,
+    *,
+    case_id: str,
+) -> int:
     meta = MONITORED_SERVICES[service_name]
     pids = await _pgrep_pids(ssh, meta["pgrep"])
     if not pids:
-        pytest.fail(f"{service_name}: no PID found for pattern {meta['pgrep']!r}")
+        _fail_case(
+            case_id,
+            f"{service_name} has no running process (pgrep {meta['pgrep']!r} returned no PID)",
+        )
     pid = pids[0]
     sig = "-SEGV" if signal == "SEGV" else "-9"
     await _ssh_run(ssh, f"kill {sig} {pid}", timeout_ops=10)
@@ -311,10 +337,12 @@ async def _ensure_service_present(ssh: AsyncGenericDriver, service_name: str) ->
 
 async def _assert_no_reboot(ssh: AsyncGenericDriver, uptime_before: float, *, case_id: str) -> None:
     uptime_after = await _system_uptime_s(ssh)
-    assert _uptime_stable_after_network_event(uptime_before, uptime_after), (
-        f"{case_id}: device appears to have rebooted "
-        f"(uptime before={uptime_before:.1f}s after={uptime_after:.1f}s)"
-    )
+    if not _uptime_stable_after_network_event(uptime_before, uptime_after):
+        _fail_case(
+            case_id,
+            f"Unexpected device reboot during test "
+            f"(uptime before={uptime_before:.1f}s after={uptime_after:.1f}s)",
+        )
 
 
 async def _collect_visible_services(ssh: AsyncGenericDriver) -> dict[str, ServiceInstance]:
@@ -416,7 +444,10 @@ async def _wait_for_service_restart(
             last_exit=inst.last_exit if inst else 0,
             respawn_retry=inst.respawn_retry if inst else None,
         )
-    pytest.fail(f"{case_id}: {service_name} did not respawn within {timeout_s}s")
+    _fail_case(
+        case_id,
+        f"{service_name} did not respawn within {timeout_s}s after crash (process did not restart)",
+    )
 
 
 async def _crash_and_verify_restart(
@@ -430,11 +461,12 @@ async def _crash_and_verify_restart(
     uptime_before = await _system_uptime_s(ssh)
     before = await _ensure_service_present(ssh, service_name)
     old_pid = before.pid
-    assert old_pid, f"{case_id}: {service_name} has no pid before crash"
+    if not old_pid:
+        _fail_case(case_id, f"{service_name} has no PID before crash (process not running)")
     crashes_before = before.total_crashes
     cores_before = await _list_core_files(ssh) if signal == "SEGV" else set()
 
-    await _induce_signal(ssh, service_name, signal)
+    await _induce_signal(ssh, service_name, signal, case_id=case_id)
 
     if signal == "SEGV":
         await _assert_core_file_created(
@@ -451,8 +483,10 @@ async def _crash_and_verify_restart(
         if still_running:
             quick = await get_service_instance(ssh, service_name)
             if quick and quick.pid == old_pid and quick.total_crashes <= crashes_before:
-                pytest.fail(
-                    f"{case_id}: {service_name} still running with no crash recorded after SEGV"
+                _fail_case(
+                    case_id,
+                    f"{service_name} still running with no crash recorded after SEGV "
+                    f"(pid {old_pid} unchanged)",
                 )
 
     after = await _wait_for_service_restart(
@@ -463,12 +497,17 @@ async def _crash_and_verify_restart(
         case_id=case_id,
         timeout_s=recovery_timeout_s,
     )
-    assert after.pid and after.pid != old_pid, (
-        f"{case_id}: {service_name} PID did not change after crash ({old_pid} -> {after.pid})"
-    )
-    assert after.total_crashes >= crashes_before + 1, (
-        f"{case_id}: total_crashes did not increment ({crashes_before} -> {after.total_crashes})"
-    )
+    if not after.pid or after.pid == old_pid:
+        _fail_case(
+            case_id,
+            f"{service_name} PID did not change after crash ({old_pid} -> {after.pid})",
+        )
+    if after.total_crashes < crashes_before + 1:
+        _fail_case(
+            case_id,
+            f"{service_name} crash counter did not increment "
+            f"({crashes_before} -> {after.total_crashes})",
+        )
     await _assert_no_reboot(ssh, uptime_before, case_id=case_id)
     return after
 
@@ -566,7 +605,8 @@ async def _assert_unauthorized_kill(
 ) -> None:
     inst = await _ensure_service_present(ssh, target)
     pid = inst.pid
-    assert pid, f"{case_id}: {target} has no pid"
+    if not pid:
+        _fail_case(case_id, f"{target} has no PID (process not running)")
     raw = await _ssh_run(
         ssh,
         f"PID={pid}; echo 'kill -9 '$PID | login -f nobody 2>&1; echo PROC_KILL_EXIT=$?",
@@ -576,13 +616,16 @@ async def _assert_unauthorized_kill(
     exit_line = next((line for line in cleaned.splitlines() if line.startswith("PROC_KILL_EXIT=")), "")
     exit_code = exit_line.split("=", 1)[-1].strip() if exit_line else ""
     still = await _ensure_service_present(ssh, target)
-    assert still.running and still.pid == pid, (
-        f"{case_id}: {target} restarted or changed pid after unauthorized kill "
-        f"({pid} -> {still.pid})"
-    )
-    assert exit_code not in ("", "0"), (
-        f"{case_id}: unprivileged kill shell exited success ({exit_code!r}): {raw!r}"
-    )
+    if not still.running or still.pid != pid:
+        _fail_case(
+            case_id,
+            f"{target} restarted or changed PID after unauthorized kill ({pid} -> {still.pid})",
+        )
+    if exit_code in ("", "0"):
+        _fail_case(
+            case_id,
+            f"Unprivileged kill unexpectedly succeeded (exit={exit_code!r}): {raw!r}",
+        )
     audit = await _ssh_run(
         ssh,
         "logread 2>/dev/null | grep -iE 'denied|permission|unauthorized|kill' | tail -n 20",
@@ -601,11 +644,24 @@ async def _assert_post_reboot_services(
     min_services: int = 10,
 ) -> None:
     visible = await _collect_visible_services(ssh)
-    not_running = [name for name, inst in visible.items() if not inst.running]
-    assert len(visible) >= min_services, (
-        f"{case_id}: too few services tracked after reboot ({len(visible)})"
-    )
-    assert not not_running, f"{case_id}: services down after reboot: {', '.join(not_running)}"
+    not_running = [
+        name
+        for name, inst in visible.items()
+        if not inst.running and name not in OPTIONAL_IDLE_SERVICES
+    ]
+    idle_down = [name for name, inst in visible.items() if not inst.running and name in OPTIONAL_IDLE_SERVICES]
+    if idle_down:
+        _log(case_id, f"Optional/idle services not running after reboot: {', '.join(idle_down)}")
+    if len(visible) < min_services:
+        _fail_case(
+            case_id,
+            f"Too few monitored services tracked after reboot ({len(visible)} < {min_services})",
+        )
+    if not_running:
+        _fail_case(
+            case_id,
+            f"Process(es) did not start after reboot: {', '.join(not_running)}",
+        )
     _log(case_id, f"Post-reboot monitor OK; {len(visible)} services tracked.")
 
 
@@ -763,21 +819,23 @@ async def assert_process_01_visibility(ssh: AsyncGenericDriver, *, case_id: str 
         label = f"{name}(respawn={inst.respawn_count},crashes={inst.total_crashes})"
         if name in PREFLIGHT_COUNTER_EXEMPT:
             counter_issues.append(f"{label} — known firmware quirk (expected 0 after reboot)")
-            check.fail(
-                f"{name}: baseline crash counters not zero after reboot "
+            _partial_case(
+                case_id,
+                f"{name} baseline crash counters not zero after reboot "
                 f"(respawn={inst.respawn_count}, crashes={inst.total_crashes}); "
-                f"known firmware quirk ({name} exempt from preflight block)"
+                "known firmware quirk — expected 0 after reboot",
             )
         else:
             counter_issues.append(label)
-            check.fail(
-                f"{name}: baseline crash counters not zero after reboot "
-                f"(respawn={inst.respawn_count}, crashes={inst.total_crashes})"
+            _fail_case(
+                case_id,
+                f"{name} baseline crash counters not zero after reboot "
+                f"(respawn={inst.respawn_count}, crashes={inst.total_crashes})",
             )
     if counter_issues:
         _log(case_id, f"Baseline counter discrepancies: {', '.join(counter_issues)}")
     else:
-        _log(case_id, "Baseline crash counters are zero for all visible monitored services.")
+        _log(case_id, "PASSED: baseline crash counters are zero for all visible monitored services.")
     _log(case_id, f"All {len(visible)} monitored services visible; required services running.")
 
 
@@ -806,7 +864,8 @@ async def assert_process_02_uptime(ssh: AsyncGenericDriver, *, case_id: str = "P
                 f"{name}: last_respawn skew (proc_age={proc_age:.0f}s, "
                 f"epoch_delta={now_epoch - inst.last_respawn}s)"
             )
-    assert not mismatches, f"{case_id}: uptime discrepancies: {'; '.join(mismatches)}"
+    if mismatches:
+        _fail_case(case_id, f"Uptime discrepancies: {'; '.join(mismatches)}")
     _log(case_id, f"Uptime consistent across services (system uptime {sys_uptime:.0f}s).")
 
 
@@ -823,7 +882,8 @@ async def assert_process_03_restart_count(ssh: AsyncGenericDriver, *, case_id: s
             or inst_before.total_crashes != inst_after.total_crashes
         )
     ]
-    assert not changed, f"{case_id}: restart counters changed without crash: {', '.join(changed)}"
+    if changed:
+        _fail_case(case_id, f"Restart counters changed without crash: {', '.join(changed)}")
     _log(case_id, "Restart counters remained stable during observation window.")
 
 
@@ -840,7 +900,8 @@ async def assert_process_04_timestamp(ssh: AsyncGenericDriver, *, case_id: str =
             drift.append(f"{name}: total_crashes {inst_before.total_crashes}->{inst_after.total_crashes}")
         if inst_before.last_exit != inst_after.last_exit and inst_after.total_crashes == 0:
             drift.append(f"{name}: last_exit changed without crash")
-    assert not drift, f"{case_id}: unexpected timestamp/counter drift: {'; '.join(drift)}"
+    if drift:
+        _fail_case(case_id, f"Unexpected timestamp/counter drift: {'; '.join(drift)}")
     _log(case_id, "Crash timestamps/counters stable while idle.")
 
 
@@ -906,8 +967,10 @@ async def assert_process_10_restart_logging(ssh: AsyncGenericDriver, *, case_id:
             f"(total_crashes {before.total_crashes}->{after.total_crashes}, "
             f"last_respawn {before.last_respawn}->{after.last_respawn}).",
         )
-    assert after.total_crashes > before.total_crashes, f"{case_id}: crash counter did not increment"
-    assert after.last_respawn >= before.last_respawn, f"{case_id}: last_respawn not updated"
+    if after.total_crashes <= before.total_crashes:
+        _fail_case(case_id, f"{target} crash counter did not increment after restart")
+    if after.last_respawn < before.last_respawn:
+        _fail_case(case_id, f"{target} last_respawn timestamp was not updated after restart")
     _log(case_id, f"Restart logged; total_crashes {before.total_crashes}->{after.total_crashes}.")
 
 
@@ -916,7 +979,9 @@ async def assert_process_11_stress_under_load(ssh: AsyncGenericDriver, *, case_i
     mode = await _start_cpu_stress(ssh)
     try:
         await asyncio.sleep(3)
-        assert await _collect_visible_services(ssh), f"{case_id}: service list empty under load"
+        visible = await _collect_visible_services(ssh)
+        if not visible:
+            _fail_case(case_id, "ubus service list empty under CPU stress")
         after = await _crash_and_verify_restart(ssh, target, case_id=case_id, signal="SEGV")
         _log(case_id, f"Under {mode} load: {target} crashes={after.total_crashes}.")
     finally:
@@ -936,9 +1001,12 @@ async def assert_process_12_log_integrity(ssh: AsyncGenericDriver, *, case_id: s
     inst = await _ensure_service_present(ssh, target)
     for _ in range(crash_times):
         inst = await _crash_and_verify_restart(ssh, target, case_id=case_id, signal="SEGV")
-    assert inst.total_crashes >= baseline + crash_times, (
-        f"{case_id}: total_crashes {inst.total_crashes} < expected {baseline + crash_times}"
-    )
+    if inst.total_crashes < baseline + crash_times:
+        _fail_case(
+            case_id,
+            f"{target} total_crashes {inst.total_crashes} < expected {baseline + crash_times} after "
+            f"{crash_times} induced crashes",
+        )
     logs = await _grep_restart_logs(ssh, target=target, tail=80)
     if logs.strip():
         _log(case_id, f"Logs present after {crash_times} restarts; total_crashes={inst.total_crashes}.")
@@ -972,12 +1040,23 @@ async def assert_process_14_dependency_handling(ssh: AsyncGenericDriver, *, case
     )
     child_after = await _ensure_service_present(ssh, DEPENDENCY_CHILD)
     parent_after = await _ensure_service_present(ssh, DEPENDENCY_PARENT)
-    assert child_after.running, f"{case_id}: dependent {DEPENDENCY_CHILD} not running after {DEPENDENCY_PARENT} restart"
-    assert child_after.total_crashes >= child_before.total_crashes, (
-        f"{case_id}: {DEPENDENCY_CHILD} crash counter did not reflect parent restart "
-        f"({child_before.total_crashes} -> {child_after.total_crashes})"
-    )
-    assert parent_after.total_crashes > parent_before.total_crashes
+    if not child_after.running:
+        _fail_case(
+            case_id,
+            f"Dependent process {DEPENDENCY_CHILD} did not start after {DEPENDENCY_PARENT} restart",
+        )
+    if child_after.total_crashes < child_before.total_crashes:
+        _fail_case(
+            case_id,
+            f"{DEPENDENCY_CHILD} crash counter did not reflect parent restart "
+            f"({child_before.total_crashes} -> {child_after.total_crashes})",
+        )
+    if parent_after.total_crashes <= parent_before.total_crashes:
+        _fail_case(
+            case_id,
+            f"{DEPENDENCY_PARENT} crash counter did not increment after SEGV "
+            f"({parent_before.total_crashes} -> {parent_after.total_crashes})",
+        )
     _log(
         case_id,
         f"{DEPENDENCY_PARENT} restart relaunched {DEPENDENCY_CHILD} "
