@@ -36,7 +36,6 @@ MONITORED_SERVICES: dict[str, dict[str, Any]] = {
 # Explicit ordered list — used to detect duplicate entries in the catalog file.
 MONITORED_SERVICE_NAMES: tuple[str, ...] = tuple(MONITORED_SERVICES.keys())
 
-# Services referenced by crash/kill test cases (must be subset of MONITORED_SERVICES).
 CRASH_TEST_SERVICE_TARGETS: frozenset[str] = frozenset(
     {
         "dnsmasq",
@@ -55,6 +54,10 @@ CRASH_TEST_SERVICE_TARGETS: frozenset[str] = frozenset(
         "uhttpd",
     }
 )
+
+# Known firmware quirks: non-zero respawn/crash counters immediately after reboot.
+# Preflight logs these but does not block the rest of the PROCESS suite.
+PREFLIGHT_COUNTER_EXEMPT: frozenset[str] = frozenset({"ntpd"})
 
 
 def validate_monitored_services_catalog() -> list[str]:

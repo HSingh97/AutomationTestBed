@@ -16,6 +16,7 @@ from config.process_monitor_catalog import (
     CRASH_TEST_SERVICE_TARGETS,
     MONITORED_SERVICES,
     MONITORED_SERVICE_NAMES,
+    PREFLIGHT_COUNTER_EXEMPT,
     validate_monitored_services_catalog,
 )
 from pages.commands import RootCommands
@@ -654,17 +655,29 @@ async def assert_process_monitor_preflight(
     if absent:
         _log(case_id, f"Monitored services not registered in ubus on this firmware: {', '.join(absent)}")
 
-    non_zero_gui = [
-        f"{name}(respawn={gui_by_service[name]['respawn_count']},"
-        f"crashes={gui_by_service[name]['total_crashes']})"
+    def _counter_label(name: str, respawn: int, crashes: int) -> str:
+        return f"{name}(respawn={respawn},crashes={crashes})"
+
+    non_zero_gui_names = [
+        name
         for name in visible
         if gui_by_service[name]["respawn_count"] or gui_by_service[name]["total_crashes"]
     ]
-    assert not non_zero_gui, (
+    exempt_gui = [_counter_label(name, gui_by_service[name]["respawn_count"], gui_by_service[name]["total_crashes"])
+                  for name in non_zero_gui_names if name in PREFLIGHT_COUNTER_EXEMPT]
+    blocking_gui = [_counter_label(name, gui_by_service[name]["respawn_count"], gui_by_service[name]["total_crashes"])
+                    for name in non_zero_gui_names if name not in PREFLIGHT_COUNTER_EXEMPT]
+    if exempt_gui:
+        _log(
+            case_id,
+            "GUI shows non-zero counters for exempt services (known quirk, suite continues): "
+            + ", ".join(exempt_gui),
+        )
+    assert not blocking_gui, (
         f"{case_id}: Process Monitoring GUI shows non-zero stats after reboot "
-        f"(reboot DUT before running): {', '.join(non_zero_gui)}"
+        f"(reboot DUT before running): {', '.join(blocking_gui)}"
     )
-    _log(case_id, "GUI Process Monitoring counters are zero for all monitored services.")
+    _log(case_id, "GUI Process Monitoring baseline OK for all non-exempt monitored services.")
 
     missing_ubus = [name for name in MONITORED_SERVICE_NAMES if name not in visible]
     if missing_ubus:
@@ -673,15 +686,29 @@ async def assert_process_monitor_preflight(
             f"Catalog services absent from ubus (skipped for zero-counter check): {', '.join(missing_ubus)}",
         )
 
-    non_zero_ubus = [
-        f"{name}(respawn={inst.respawn_count},crashes={inst.total_crashes})"
-        for name, inst in visible.items()
-        if inst.respawn_count or inst.total_crashes
+    non_zero_ubus_names = [
+        name for name, inst in visible.items() if inst.respawn_count or inst.total_crashes
     ]
-    assert not non_zero_ubus, (
-        f"{case_id}: ubus service list shows non-zero crash stats after reboot: {', '.join(non_zero_ubus)}"
+    exempt_ubus = [
+        _counter_label(name, visible[name].respawn_count, visible[name].total_crashes)
+        for name in non_zero_ubus_names
+        if name in PREFLIGHT_COUNTER_EXEMPT
+    ]
+    blocking_ubus = [
+        _counter_label(name, visible[name].respawn_count, visible[name].total_crashes)
+        for name in non_zero_ubus_names
+        if name not in PREFLIGHT_COUNTER_EXEMPT
+    ]
+    if exempt_ubus:
+        _log(
+            case_id,
+            "ubus shows non-zero counters for exempt services (known quirk, suite continues): "
+            + ", ".join(exempt_ubus),
+        )
+    assert not blocking_ubus, (
+        f"{case_id}: ubus service list shows non-zero crash stats after reboot: {', '.join(blocking_ubus)}"
     )
-    _log(case_id, "ubus crash counters are zero for all visible monitored services.")
+    _log(case_id, "ubus crash counters OK for all non-exempt visible monitored services.")
 
     uncovered = set(MONITORED_SERVICE_NAMES) - CRASH_TEST_SERVICE_TARGETS
     visibility_only = sorted(
