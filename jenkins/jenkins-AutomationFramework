@@ -180,6 +180,13 @@ pipeline {
                     def kParts = (params.TEST_FILTER ?: '').split(',')
                         .collect { it.trim() }
                         .findAll { it }
+                    // ProcessMonitor-only: do not apply GUI default -k filter.
+                    if (markers.contains('ProcessMonitor') && !markers.contains('GUI') && !markersIncludeIpSuite(markers)) {
+                        def guiDefault = ['Summary', 'TopPanel', 'WirelessProperties']
+                        if (kParts.isEmpty() || kParts == guiDefault || kParts == ['ProcessMonitor']) {
+                            kParts = []
+                        }
+                    }
                     def runIpCpe = params.RUN_IP_CPE ||
                         kParts.any { (it ?: '').trim().equalsIgnoreCase('cpe') }
                     def ipScope = runIpCpe ? 'IP_' : '(IP_ and bts)'

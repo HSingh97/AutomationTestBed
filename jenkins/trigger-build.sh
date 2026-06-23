@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-JENKINS_URL="${JENKINS_URL:-http://127.0.0.1:8081}"
+JENKINS_URL="${JENKINS_URL:-http://127.0.0.1:8080}"
 JENKINS_USER="${JENKINS_USER:-harman}"
 JOB_PATH="job/Automation%20Framework/job/Automation%20Test%20Cases"
 
@@ -90,7 +90,7 @@ is_process_monitor_markers() {
 
 if [[ -z "${TEST_FILTER}" ]]; then
   if is_process_monitor_markers; then
-    TEST_FILTER="ProcessMonitor"
+    TEST_FILTER=""
   else
     echo "TEST_FILTER is required (e.g. JMB_04 or --filter JMB_04). For ProcessMonitor use --markers ProcessMonitor." >&2
     usage >&2
