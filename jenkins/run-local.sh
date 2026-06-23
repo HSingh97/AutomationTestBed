@@ -60,13 +60,6 @@ if [[ ${#MARKERS[@]} -eq 0 ]]; then
   exit 1
 fi
 
-# ProcessMonitor-only runs must not inherit the GUI default -k filter.
-if has_marker ProcessMonitor && ! has_marker GUI && ! markers_include_ip_suite; then
-  if [[ -z "${TEST_FILTER+x}" ]] || [[ "${TEST_FILTER}" == "Summary, TopPanel, WirelessProperties" ]]; then
-    TEST_FILTER=""
-  fi
-fi
-
 is_ipv4_only_ip_token() {
   local t u n
   t="$(echo "$1" | xargs)"
@@ -90,6 +83,13 @@ has_marker() {
 markers_include_ip_suite() {
   has_marker IP || has_marker IPv4 || has_marker IPv6
 }
+
+# ProcessMonitor-only runs must not inherit the GUI default -k filter.
+if has_marker ProcessMonitor && ! has_marker GUI && ! markers_include_ip_suite; then
+  if [[ -z "${TEST_FILTER+x}" ]] || [[ "${TEST_FILTER}" == "Summary, TopPanel, WirelessProperties" ]]; then
+    TEST_FILTER=""
+  fi
+fi
 
 # Profile resolution (mirrors resolveProfileName)
 PROFILE_NAME="default"
