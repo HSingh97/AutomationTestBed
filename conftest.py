@@ -179,7 +179,7 @@ def pytest_addoption(parser):
         "--allow-process-monitor",
         action="store_true",
         default=False,
-        help="Enable PROCESS_01–PROCESS_20 process monitor tests (crashes/kills on local DUT).",
+        help="Enable PROCESS_01–PROCESS_19 process monitor tests (crashes/kills on local DUT).",
     )
     group.addoption(
         "--allow-destructive-process",
@@ -779,9 +779,9 @@ def pytest_configure(config):
 
     for case in IP_TEST_CASES:
         config.addinivalue_line("markers", f"{case.case_id}: {case.title} ({case.category})")
-    from config.process_test_cases import PROCESS_TEST_CASES
+    from config.process_test_cases import OFFICIAL_PROCESS_TEST_CASES
 
-    for case in PROCESS_TEST_CASES:
+    for case in OFFICIAL_PROCESS_TEST_CASES:
         config.addinivalue_line("markers", f"{case.case_id}: {case.title} ({case.category})")
     config.addinivalue_line(
         "markers",

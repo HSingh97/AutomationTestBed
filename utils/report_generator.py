@@ -70,6 +70,30 @@ def get_group_marker(keywords):
 PROC_PARTIAL_MARKER = "[PROC_PARTIAL]"
 PROC_FAILED_MARKER = "[PROC_FAILED]"
 
+# Official suite runs PROCESS_01–PROCESS_19 only (extended 21–28 are catalog-only).
+OFFICIAL_PROCESS_REPORT_ORDER: tuple[int, ...] = tuple(range(1, 20))
+
+
+def _process_case_number(test_id: str) -> int | None:
+    match = re.match(r"PROCESS_(\d+)", str(test_id), re.I)
+    return int(match.group(1)) if match else None
+
+
+def _sort_process_monitor_records(records: list[dict]) -> list[dict]:
+    """Present ProcessMonitor rows as PROCESS_01 … PROCESS_19, not pytest run order."""
+
+    def sort_key(record: dict) -> tuple[int, int]:
+        num = _process_case_number(record.get("id", ""))
+        if num is None:
+            return (2, 0)
+        try:
+            seq = OFFICIAL_PROCESS_REPORT_ORDER.index(num)
+            return (0, seq)
+        except ValueError:
+            return (1, num)
+
+    return sorted(records, key=sort_key)
+
 
 def _is_process_monitor_test(test: dict) -> bool:
     keywords = test.get("keywords") or []
@@ -290,7 +314,6 @@ def generate():
             stats['passed'] += 1
             status = "PASSED"
             if validated_params:
-                # Create CSS pills for each parameter
                 pills = "".join([f"<span class='param-pill'>{p}</span>" for p in validated_params])
                 reason_html = f"<div class='reason-title'>Successfully Verified ({len(validated_params)} parameters):</div><div class='param-container'>{pills}</div>"
                 reason_csv = f"Successfully Verified ({len(validated_params)} parameters):\n" + ", ".join(
@@ -391,6 +414,10 @@ def generate():
         if group_name not in groups:
             groups[group_name] = []
         groups[group_name].append(record)
+
+    for group_name, records in groups.items():
+        if group_name == "ProcessMonitor":
+            groups[group_name] = _sort_process_monitor_records(records)
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     html_filename = ARTIFACTS_DIR / f"{output_prefix}_{build_no}_Report_{date_str}.html"

@@ -1,11 +1,9 @@
-"""Canonical process-monitor service catalog (Process_Monitor_Overview.pdf)."""
+"""Canonical process-monitor service catalog for PROCESS_01–PROCESS_28 automation."""
 
 from __future__ import annotations
 
 from typing import Any
 
-# ubus service name -> process metadata.
-# core_name: basename used in /overlay/data/procmon/cores/core.<core_name>.<pid>.<ts>
 MONITORED_SERVICES: dict[str, dict[str, Any]] = {
     "cron": {"pgrep": "crond", "core_name": "crond", "critical": False},
     "rpcd": {"pgrep": "rpcd", "core_name": "rpcd", "critical": True},
@@ -33,35 +31,69 @@ MONITORED_SERVICES: dict[str, dict[str, Any]] = {
     "compass": {"pgrep": "Kwn-compass", "core_name": "Kwn-compass", "critical": False},
 }
 
-# Explicit ordered list — used to detect duplicate entries in the catalog file.
 MONITORED_SERVICE_NAMES: tuple[str, ...] = tuple(MONITORED_SERVICES.keys())
 
-CRASH_TEST_SERVICE_TARGETS: frozenset[str] = frozenset(
-    {
-        "dnsmasq",
-        "snmpd",
-        "odhcpd",
-        "log",
-        "snlog-scraper",
-        "snlogd",
-        "ezmcloud",
-        "mcsd",
-        "netlinkevents",
-        "senao-openapi-server",
-        "network",
-        "compass",
-        "kwn_devlocator",
-        "uhttpd",
-    }
+CRASH_TEST_SERVICE_TARGETS: frozenset[str] = frozenset(MONITORED_SERVICE_NAMES)
+
+# Least disruptive first; sshd/network last (may drop SSH during crash).
+SERVICE_SWEEP_ORDER: tuple[str, ...] = (
+    "cron",
+    "breakpad",
+    "sysstat",
+    "compass",
+    "snlogd",
+    "snlog-scraper",
+    "netlinkevents",
+    "kwn_devlocator",
+    "ezmcloud",
+    "mcsd",
+    "senao-openapi-server",
+    "snmpd",
+    "odhcpd",
+    "dnsmasq",
+    "ntpd",
+    "uhttpd",
+    "log",
+    "rpcd",
+    "sshd",
+    "network",
 )
 
-# Preflight only: non-zero baseline on these services does not block the suite.
-# PROCESS_01 still reports them as PARTIAL (possible firmware bug).
+SSH_RECONNECT_SERVICES: frozenset[str] = frozenset({"sshd", "network"})
+
+# Each crash/kill case runs against every crashable service on the DUT.
+CASE_SERVICE_TARGETS: dict[str, tuple[str, ...]] = {
+    "PROCESS_01": MONITORED_SERVICE_NAMES,
+    "PROCESS_02": MONITORED_SERVICE_NAMES,
+    "PROCESS_03": MONITORED_SERVICE_NAMES,
+    "PROCESS_04": MONITORED_SERVICE_NAMES,
+    "PROCESS_05": MONITORED_SERVICE_NAMES,
+    "PROCESS_06": MONITORED_SERVICE_NAMES,
+    "PROCESS_07": MONITORED_SERVICE_NAMES,
+    "PROCESS_08": MONITORED_SERVICE_NAMES,
+    "PROCESS_10": MONITORED_SERVICE_NAMES,
+    "PROCESS_11": MONITORED_SERVICE_NAMES,
+    "PROCESS_12": MONITORED_SERVICE_NAMES,
+    "PROCESS_13": MONITORED_SERVICE_NAMES,
+    "PROCESS_14": ("network", "dnsmasq"),
+    "PROCESS_16": MONITORED_SERVICE_NAMES,
+    "PROCESS_17": MONITORED_SERVICE_NAMES,
+    "PROCESS_18": MONITORED_SERVICE_NAMES,
+    "PROCESS_19": MONITORED_SERVICE_NAMES,
+    "PROCESS_21": MONITORED_SERVICE_NAMES,
+    "PROCESS_22": MONITORED_SERVICE_NAMES,
+    "PROCESS_23": MONITORED_SERVICE_NAMES,
+    "PROCESS_24": ("sshd", "network"),
+    "PROCESS_25": MONITORED_SERVICE_NAMES,
+    "PROCESS_26": MONITORED_SERVICE_NAMES,
+    "PROCESS_27": ("network", "dnsmasq", "odhcpd"),
+    "PROCESS_28": MONITORED_SERVICE_NAMES,
+}
+
 PREFLIGHT_COUNTER_EXEMPT: frozenset[str] = frozenset({"ntpd"})
 
 
 def validate_monitored_services_catalog() -> list[str]:
-    """Return human-readable errors for duplicate or inconsistent catalog entries."""
     errors: list[str] = []
 
     if len(MONITORED_SERVICE_NAMES) != len(set(MONITORED_SERVICE_NAMES)):
