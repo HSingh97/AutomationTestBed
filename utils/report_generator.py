@@ -34,6 +34,10 @@ def _humanize_module_name(nodeid: str, test_id: str) -> str:
         raw = re.sub(r"^jmb_\d+_?", "", raw, flags=re.I)
         return raw.replace("_", " ").strip().title()
 
+    if re.match(r"PROCESS_\d+", test_id, re.I):
+        raw = re.sub(r"^process_\d+_?", "", raw, flags=re.I)
+        return raw.replace("_", " ").strip().title()
+
     return raw.replace("_", " ").strip().title()
 
 
@@ -54,8 +58,10 @@ def get_group_marker(keywords):
                 return "IP"
             if re.match(r"JMB_\d+", kw, re.I):
                 return "JumboFrames"
-            if kw.lower() in ("jumboframes", "jumbo"):
-                return "JumboFrames"
+            if re.match(r"PROCESS_\d+", kw, re.I):
+                return "ProcessMonitor"
+            if kw.lower() in ("processmonitor", "process_monitor"):
+                return "ProcessMonitor"
             return kw.capitalize()
 
     return "Ungrouped"
@@ -245,7 +251,18 @@ def generate():
 
         if not parsed_ip:
             jmb_id = parse_jmb_case_id(nodeid)
-            if jmb_id:
+            proc_kw = next(
+                (str(k).upper() for k in test.get("keywords", []) if re.match(r"PROCESS_\d+", str(k), re.I)),
+                None,
+            )
+            proc_fn = re.search(r"test_process_(\d+)_", nodeid, re.I)
+            if proc_kw or proc_fn:
+                if proc_kw:
+                    test_id = proc_kw
+                else:
+                    test_id = f"PROCESS_{int(proc_fn.group(1)):02d}"
+                test_name = _humanize_module_name(nodeid, test_id)
+            elif jmb_id:
                 test_id = jmb_id
                 test_name = _humanize_module_name(nodeid, test_id)
             else:

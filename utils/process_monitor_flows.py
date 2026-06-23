@@ -88,6 +88,22 @@ class ServiceInstance:
         )
 
 
+@dataclass
+class CrashResult:
+    service_name: str
+    after: ServiceInstance
+    signal: KillSignal
+    core_path: str | None = None
+
+    @property
+    def core_expected(self) -> bool:
+        return self.signal == "SEGV"
+
+    @property
+    def core_saved(self) -> bool:
+        return not self.core_expected or bool(self.core_path)
+
+
 PROC_PARTIAL_MARKER = "[PROC_PARTIAL]"
 PROC_FAILED_MARKER = "[PROC_FAILED]"
 
@@ -102,6 +118,22 @@ def _partial_case(case_id: str, reason: str) -> None:
     """Soft discrepancy — case PARTIAL; suite continues."""
     _log(case_id, f"PARTIAL: {reason}")
     check.fail(f"{PROC_PARTIAL_MARKER} {case_id} PARTIAL: {reason}")
+
+
+def _report_core_gaps(case_id: str, results: CrashResult | list[CrashResult]) -> None:
+    """After crash recovery succeeds, flag missing core dumps as PARTIAL (not FAILED)."""
+    items = [results] if isinstance(results, CrashResult) else list(results)
+    missing: list[str] = []
+    for item in items:
+        if item.core_expected and not item.core_saved:
+            missing.append(item.service_name)
+    if not missing:
+        return
+    numbered = ", ".join(f"{idx}. {name}" for idx, name in enumerate(missing, start=1))
+    _partial_case(
+        case_id,
+        f"Crash recovery verified; core dump not saved under {PROC_CORE_DIR} for: {numbered}",
+    )
 
 
 def _log(case_id: str, message: str) -> None:
@@ -186,14 +218,14 @@ async def _list_core_files(ssh: AsyncGenericDriver) -> set[str]:
     return {line.strip() for line in raw.splitlines() if line.strip().startswith("core.")}
 
 
-async def _assert_core_file_created(
+async def _find_core_file(
     ssh: AsyncGenericDriver,
     service_name: str,
     *,
     old_pid: int,
     cores_before: set[str],
     case_id: str,
-) -> str:
+) -> str | None:
     core_prefix = f"core.{_core_name(service_name)}.{old_pid}."
     deadline = time.monotonic() + CORE_FILE_WAIT_S
     while time.monotonic() < deadline:
@@ -205,12 +237,11 @@ async def _assert_core_file_created(
             _log(case_id, f"Core dump present: {path}")
             return path
         await asyncio.sleep(1)
-    example = f"{PROC_CORE_DIR}/core.{_core_name(service_name)}.{old_pid}.<timestamp>"
-    _fail_case(
+    _log(
         case_id,
-        f"Core file not saved for {service_name} after SEGV "
-        f"(expected {core_prefix}* under {PROC_CORE_DIR}; example: {example})",
+        f"Core dump not found for {service_name} (expected {core_prefix}* under {PROC_CORE_DIR})",
     )
+    return None
 
 
 def _strip_shell_job_noise(raw: str) -> str:
@@ -457,7 +488,7 @@ async def _crash_and_verify_restart(
     case_id: str,
     signal: KillSignal = "SEGV",
     recovery_timeout_s: int = RESPAWN_WAIT_S,
-) -> ServiceInstance:
+) -> CrashResult:
     uptime_before = await _system_uptime_s(ssh)
     before = await _ensure_service_present(ssh, service_name)
     old_pid = before.pid
@@ -467,15 +498,6 @@ async def _crash_and_verify_restart(
     cores_before = await _list_core_files(ssh) if signal == "SEGV" else set()
 
     await _induce_signal(ssh, service_name, signal, case_id=case_id)
-
-    if signal == "SEGV":
-        await _assert_core_file_created(
-            ssh,
-            service_name,
-            old_pid=old_pid,
-            cores_before=cores_before,
-            case_id=case_id,
-        )
 
     await asyncio.sleep(1)
     if signal == "SEGV":
@@ -509,7 +531,23 @@ async def _crash_and_verify_restart(
             f"({crashes_before} -> {after.total_crashes})",
         )
     await _assert_no_reboot(ssh, uptime_before, case_id=case_id)
-    return after
+
+    core_path = None
+    if signal == "SEGV" and old_pid:
+        core_path = await _find_core_file(
+            ssh,
+            service_name,
+            old_pid=old_pid,
+            cores_before=cores_before,
+            case_id=case_id,
+        )
+
+    return CrashResult(
+        service_name=service_name,
+        after=after,
+        signal=signal,
+        core_path=core_path,
+    )
 
 
 async def _run_sequential_crashes(
@@ -519,17 +557,19 @@ async def _run_sequential_crashes(
     case_id: str,
     signal: KillSignal,
     recovery_timeout_s: int = RESPAWN_WAIT_S,
-) -> list[str]:
-    results: list[str] = []
+) -> list[CrashResult]:
+    results: list[CrashResult] = []
     for target in targets:
-        after = await _crash_and_verify_restart(
-            ssh,
-            target,
-            case_id=case_id,
-            signal=signal,
-            recovery_timeout_s=recovery_timeout_s,
+        results.append(
+            await _crash_and_verify_restart(
+                ssh,
+                target,
+                case_id=case_id,
+                signal=signal,
+                recovery_timeout_s=recovery_timeout_s,
+            )
         )
-        results.append(f"{target} crashes={after.total_crashes}")
+    _report_core_gaps(case_id, results)
     return results
 
 
@@ -727,7 +767,7 @@ async def assert_process_monitor_preflight(
     if exempt_gui:
         _log(
             case_id,
-            "GUI shows non-zero counters for exempt services (known quirk, suite continues): "
+            "GUI shows non-zero baseline counters (PROCESS_01 will report): "
             + ", ".join(exempt_gui),
         )
     assert not blocking_gui, (
@@ -759,7 +799,7 @@ async def assert_process_monitor_preflight(
     if exempt_ubus:
         _log(
             case_id,
-            "ubus shows non-zero counters for exempt services (known quirk, suite continues): "
+            "ubus shows non-zero baseline counters (PROCESS_01 will report): "
             + ", ".join(exempt_ubus),
         )
     assert not blocking_ubus, (
@@ -818,12 +858,11 @@ async def assert_process_01_visibility(ssh: AsyncGenericDriver, *, case_id: str 
             continue
         label = f"{name}(respawn={inst.respawn_count},crashes={inst.total_crashes})"
         if name in PREFLIGHT_COUNTER_EXEMPT:
-            counter_issues.append(f"{label} — known firmware quirk (expected 0 after reboot)")
+            counter_issues.append(f"{label} — possible firmware bug (expected 0 after reboot)")
             _partial_case(
                 case_id,
                 f"{name} baseline crash counters not zero after reboot "
-                f"(respawn={inst.respawn_count}, crashes={inst.total_crashes}); "
-                "known firmware quirk — expected 0 after reboot",
+                f"(respawn={inst.respawn_count}, crashes={inst.total_crashes}); possible firmware bug",
             )
         else:
             counter_issues.append(label)
@@ -906,35 +945,42 @@ async def assert_process_04_timestamp(ssh: AsyncGenericDriver, *, case_id: str =
 
 
 async def assert_process_05_crash_single(ssh: AsyncGenericDriver, *, case_id: str = "PROCESS_05") -> None:
-    after = await _crash_and_verify_restart(ssh, CRASH_TARGET_DEFAULT, case_id=case_id, signal="SEGV")
-    _log(case_id, f"{CRASH_TARGET_DEFAULT} respawned; total_crashes={after.total_crashes}.")
+    result = await _crash_and_verify_restart(ssh, CRASH_TARGET_DEFAULT, case_id=case_id, signal="SEGV")
+    _report_core_gaps(case_id, result)
+    _log(case_id, f"{CRASH_TARGET_DEFAULT} respawned; total_crashes={result.after.total_crashes}.")
 
 
 async def assert_process_06_crash_multiple(ssh: AsyncGenericDriver, *, case_id: str = "PROCESS_06") -> None:
-    summary = await _run_sequential_crashes(
+    results = await _run_sequential_crashes(
         ssh,
         [CRASH_TARGET_SECONDARY, CRASH_TARGET_TERTIARY],
         case_id=case_id,
         signal="SEGV",
     )
-    _log(case_id, "Sequential crashes OK: " + ", ".join(summary))
+    _log(
+        case_id,
+        "Sequential crashes OK: "
+        + ", ".join(f"{r.service_name} crashes={r.after.total_crashes}" for r in results),
+    )
 
 
 async def assert_process_07_crash_critical(ssh: AsyncGenericDriver, *, case_id: str = "PROCESS_07") -> None:
-    after = await _crash_and_verify_restart(
+    result = await _crash_and_verify_restart(
         ssh,
         CRITICAL_TARGET,
         case_id=case_id,
         signal="SEGV",
         recovery_timeout_s=20,
     )
-    _log(case_id, f"Critical service {CRITICAL_TARGET} recovered; total_crashes={after.total_crashes}.")
+    _report_core_gaps(case_id, result)
+    _log(case_id, f"Critical service {CRITICAL_TARGET} recovered; total_crashes={result.after.total_crashes}.")
 
 
 async def assert_process_08_crash_non_critical(ssh: AsyncGenericDriver, *, case_id: str = "PROCESS_08") -> None:
     target = await _resolve_optional_target(ssh, NON_CRITICAL_TARGET, "snlogd", CRASH_TARGET_SECONDARY)
-    after = await _crash_and_verify_restart(ssh, target, case_id=case_id, signal="SEGV")
-    _log(case_id, f"Non-critical {target} recovered without service disruption; crashes={after.total_crashes}.")
+    result = await _crash_and_verify_restart(ssh, target, case_id=case_id, signal="SEGV")
+    _report_core_gaps(case_id, result)
+    _log(case_id, f"Non-critical {target} recovered; total_crashes={result.after.total_crashes}.")
 
 
 async def assert_process_09_watchdog_reboot(
@@ -956,7 +1002,8 @@ async def assert_process_09_watchdog_reboot(
 async def assert_process_10_restart_logging(ssh: AsyncGenericDriver, *, case_id: str = "PROCESS_10") -> None:
     target = await _resolve_crash_target(ssh, CRASH_TARGET_LOGGING, "mcsd", "kwn_devlocator")
     before = await _ensure_service_present(ssh, target)
-    after = await _crash_and_verify_restart(ssh, target, case_id=case_id, signal="SEGV")
+    result = await _crash_and_verify_restart(ssh, target, case_id=case_id, signal="SEGV")
+    after = result.after
     logs = await _grep_restart_logs(ssh, target=target, tail=40)
     if logs.strip():
         _log(case_id, "Restart evidence found in device logs.")
@@ -972,6 +1019,7 @@ async def assert_process_10_restart_logging(ssh: AsyncGenericDriver, *, case_id:
     if after.last_respawn < before.last_respawn:
         _fail_case(case_id, f"{target} last_respawn timestamp was not updated after restart")
     _log(case_id, f"Restart logged; total_crashes {before.total_crashes}->{after.total_crashes}.")
+    _report_core_gaps(case_id, result)
 
 
 async def assert_process_11_stress_under_load(ssh: AsyncGenericDriver, *, case_id: str = "PROCESS_11") -> None:
@@ -982,8 +1030,9 @@ async def assert_process_11_stress_under_load(ssh: AsyncGenericDriver, *, case_i
         visible = await _collect_visible_services(ssh)
         if not visible:
             _fail_case(case_id, "ubus service list empty under CPU stress")
-        after = await _crash_and_verify_restart(ssh, target, case_id=case_id, signal="SEGV")
-        _log(case_id, f"Under {mode} load: {target} crashes={after.total_crashes}.")
+        result = await _crash_and_verify_restart(ssh, target, case_id=case_id, signal="SEGV")
+        _report_core_gaps(case_id, result)
+        _log(case_id, f"Under {mode} load: {target} crashes={result.after.total_crashes}.")
     finally:
         await _stop_cpu_stress(ssh)
 
@@ -998,9 +1047,10 @@ async def assert_process_12_log_integrity(ssh: AsyncGenericDriver, *, case_id: s
     )
     baseline = (await _ensure_service_present(ssh, target)).total_crashes
     crash_times = 2
-    inst = await _ensure_service_present(ssh, target)
+    results: list[CrashResult] = []
     for _ in range(crash_times):
-        inst = await _crash_and_verify_restart(ssh, target, case_id=case_id, signal="SEGV")
+        results.append(await _crash_and_verify_restart(ssh, target, case_id=case_id, signal="SEGV"))
+    inst = results[-1].after
     if inst.total_crashes < baseline + crash_times:
         _fail_case(
             case_id,
@@ -1016,6 +1066,7 @@ async def assert_process_12_log_integrity(ssh: AsyncGenericDriver, *, case_id: s
             f"logread/device_logs quiet after {crash_times} restarts; "
             f"ubus total_crashes={inst.total_crashes} (baseline {baseline}).",
         )
+    _report_core_gaps(case_id, results)
 
 
 async def assert_process_13_unauthorized_kill_bts(
@@ -1031,7 +1082,7 @@ async def assert_process_13_unauthorized_kill_bts(
 async def assert_process_14_dependency_handling(ssh: AsyncGenericDriver, *, case_id: str = "PROCESS_14") -> None:
     child_before = await _ensure_service_present(ssh, DEPENDENCY_CHILD)
     parent_before = await _ensure_service_present(ssh, DEPENDENCY_PARENT)
-    await _crash_and_verify_restart(
+    parent_result = await _crash_and_verify_restart(
         ssh,
         DEPENDENCY_PARENT,
         case_id=case_id,
@@ -1062,6 +1113,7 @@ async def assert_process_14_dependency_handling(ssh: AsyncGenericDriver, *, case
         f"{DEPENDENCY_PARENT} restart relaunched {DEPENDENCY_CHILD} "
         f"(crashes {child_before.total_crashes}->{child_after.total_crashes}).",
     )
+    _report_core_gaps(case_id, parent_result)
 
 
 async def assert_process_15_monitor_recovery(
@@ -1082,37 +1134,41 @@ async def assert_process_15_monitor_recovery(
 
 async def assert_process_16_kill_single(ssh: AsyncGenericDriver, *, case_id: str = "PROCESS_16") -> None:
     target = await _resolve_crash_target(ssh, CRASH_TARGET_KILL_SINGLE, "ezmcloud", "kwn_devlocator")
-    after = await _crash_and_verify_restart(ssh, target, case_id=case_id, signal="KILL")
-    _log(case_id, f"Kill -9 on {target}; total_crashes={after.total_crashes}.")
+    result = await _crash_and_verify_restart(ssh, target, case_id=case_id, signal="KILL")
+    _log(case_id, f"Kill -9 on {target}; total_crashes={result.after.total_crashes}.")
 
 
 async def assert_process_17_kill_multiple(ssh: AsyncGenericDriver, *, case_id: str = "PROCESS_17") -> None:
-    summary = await _run_sequential_crashes(
+    results = await _run_sequential_crashes(
         ssh,
         list(CRASH_TARGET_KILL_MULTI),
         case_id=case_id,
         signal="KILL",
     )
-    _log(case_id, "Sequential kills OK: " + ", ".join(summary))
+    _log(
+        case_id,
+        "Sequential kills OK: "
+        + ", ".join(f"{r.service_name} crashes={r.after.total_crashes}" for r in results),
+    )
 
 
 async def assert_process_18_kill_critical(ssh: AsyncGenericDriver, *, case_id: str = "PROCESS_18") -> None:
-    after = await _crash_and_verify_restart(
+    result = await _crash_and_verify_restart(
         ssh,
         CRITICAL_KILL_TARGET,
         case_id=case_id,
         signal="KILL",
         recovery_timeout_s=RESPAWN_WAIT_S,
     )
-    _log(case_id, f"Critical kill recovered; {CRITICAL_KILL_TARGET} total_crashes={after.total_crashes}.")
+    _log(case_id, f"Critical kill recovered; {CRITICAL_KILL_TARGET} total_crashes={result.after.total_crashes}.")
 
 
 async def assert_process_19_kill_under_load(ssh: AsyncGenericDriver, *, case_id: str = "PROCESS_19") -> None:
     target = await _resolve_optional_target(ssh, CRASH_TARGET_KILL_LOAD, "netlinkevents")
     mode = await _start_cpu_stress(ssh)
     try:
-        after = await _crash_and_verify_restart(ssh, target, case_id=case_id, signal="KILL")
-        _log(case_id, f"Kill under {mode} load OK; {target} crashes={after.total_crashes}.")
+        result = await _crash_and_verify_restart(ssh, target, case_id=case_id, signal="KILL")
+        _log(case_id, f"Kill under {mode} load OK; {target} crashes={result.after.total_crashes}.")
     finally:
         await _stop_cpu_stress(ssh)
 

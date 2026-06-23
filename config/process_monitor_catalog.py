@@ -55,8 +55,8 @@ CRASH_TEST_SERVICE_TARGETS: frozenset[str] = frozenset(
     }
 )
 
-# Known firmware quirks: non-zero respawn/crash counters immediately after reboot.
-# Preflight logs these but does not block the rest of the PROCESS suite.
+# Preflight only: non-zero baseline on these services does not block the suite.
+# PROCESS_01 still reports them as PARTIAL (possible firmware bug).
 PREFLIGHT_COUNTER_EXEMPT: frozenset[str] = frozenset({"ntpd"})
 
 
