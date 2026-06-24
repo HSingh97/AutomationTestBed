@@ -86,9 +86,9 @@ _PREPARE_SSH_TIMEOUT_S = 25
 _BATCH_SWEEP_ENABLED = True
 _BATCH_POLL_INTERVAL_S = 0.4
 # Floor for batch respawn deadline — many services restart simultaneously so procd needs slack.
-_BATCH_RESPAWN_TIMEOUT_S = 25
-# Per-service confirm window if batch missed it before marking the service non-respawning.
-_BATCH_RECONFIRM_TIMEOUT_S = 8
+_BATCH_RESPAWN_TIMEOUT_S = 18
+# Single shared poll window if batch missed services before marking them non-respawning.
+_BATCH_RECONFIRM_TIMEOUT_S = 6
 
 
 @dataclass
@@ -1171,24 +1171,6 @@ async def _crash_and_verify_restart(
     )
 
 
-async def _wait_for_service_restart_quick(
-    ssh: AsyncGenericDriver,
-    service_name: str,
-    *,
-    old_pid: int | None,
-    crashes_before: int,
-    timeout_s: int,
-) -> ServiceInstance | None:
-    """Lightweight respawn check used when batch missed a service before declaring it dead."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        inst = await get_service_instance(ssh, service_name)
-        if inst and inst.running and inst.pid and inst.pid != old_pid:
-            return inst
-        await asyncio.sleep(POLL_INTERVAL_S)
-    return None
-
-
 def _recovery_timeout_for(service_name: str) -> int:
     if service_name == "network":
         return NETIFD_RECOVERY_S
@@ -1280,23 +1262,26 @@ async def _crash_services_batch(
         if pending:
             await asyncio.sleep(_BATCH_POLL_INTERVAL_S)
 
-    for name in list(pending):
-        old_pid, crashes_before, _ = pre[name]
-        late_inst = await _wait_for_service_restart_quick(
-            ssh,
-            name,
-            old_pid=old_pid,
-            crashes_before=crashes_before,
-            timeout_s=_BATCH_RECONFIRM_TIMEOUT_S,
+    if pending:
+        recheck_deadline = time.monotonic() + _BATCH_RECONFIRM_TIMEOUT_S
+        while pending and time.monotonic() < recheck_deadline:
+            services_after = await fetch_service_list(ssh)
+            for name in list(pending):
+                old_pid, _crashes_before, _ = pre[name]
+                inst = _first_instance(services_after, name)
+                if inst and inst.running and inst.pid and inst.pid != old_pid:
+                    after_by_name[name] = inst
+                    pending.discard(name)
+                    _log(case_id, f"{name} respawned late (after batch deadline); accepting")
+            if pending:
+                await asyncio.sleep(_BATCH_POLL_INTERVAL_S)
+
+    for name in pending:
+        reason = (
+            f"{name} did not respawn within {timeout_s + _BATCH_RECONFIRM_TIMEOUT_S}s after batch crash"
         )
-        if late_inst is not None:
-            after_by_name[name] = late_inst
-            pending.discard(name)
-            _log(case_id, f"{name} respawned late (after batch deadline); accepting")
-        else:
-            reason = f"{name} did not respawn within {timeout_s + _BATCH_RECONFIRM_TIMEOUT_S}s after batch crash"
-            _note_non_respawning_service(case_id, name, reason)
-            skipped.append((name, reason))
+        _note_non_respawning_service(case_id, name, reason)
+        skipped.append((name, reason))
 
     cores_after: set[str] = set()
     if signal == "SEGV":
