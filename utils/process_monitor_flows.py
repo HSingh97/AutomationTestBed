@@ -181,7 +181,32 @@ async def prepare_procmon_case(
 ) -> AsyncGenericDriver:
     """Reconnect SSH if needed and disarm dead-man recovery before a PROCESS_* case."""
     await instant_recover_dut_if_armed(host, password, case_id=f"{case_id}_PRE")
-    return await _ensure_live_ssh(ssh, host, password)
+    ping_ok, ping_detail = await _local_ping_host(host)
+    if not ping_ok:
+        _log(case_id, f"prepare: lab ping to {host} down ({ping_detail}) — recovery reboot")
+        recovered = await _instant_reboot_and_wait(
+            None,
+            host,
+            password,
+            case_id=case_id,
+            recovery_reason=f"prepare: lab ping to {host} not reachable before {case_id}",
+        )
+        if recovered is not None:
+            return recovered
+    try:
+        return await _ensure_live_ssh(ssh, host, password)
+    except Exception as exc:
+        _log(case_id, f"prepare: SSH not ready on {host} ({exc}) — recovery reboot")
+        recovered = await _instant_reboot_and_wait(
+            ssh,
+            host,
+            password,
+            case_id=case_id,
+            recovery_reason=f"prepare: SSH to {host} not ready before {case_id} ({exc})",
+        )
+        if recovered is not None:
+            return recovered
+        raise
 
 
 def recovery_reboot_may_be_armed() -> bool:
@@ -855,6 +880,21 @@ async def _wait_for_service_restart(
     reason = (
         f"{service_name} did not respawn within {timeout_s}s after crash (process did not restart)"
     )
+    if service_name in MUST_BE_RUNNING:
+        try:
+            await _ssh_run(
+                ssh,
+                f"/etc/init.d/{service_name} restart 2>/dev/null || "
+                f"service {service_name} restart 2>/dev/null || true",
+                timeout_ops=20,
+            )
+            await asyncio.sleep(2)
+            inst = await get_service_instance(ssh, service_name)
+            if inst and inst.running and inst.pid and inst.pid != old_pid:
+                _log(case_id, f"{service_name} recovered via init.d restart after crash timeout")
+                return inst
+        except Exception:
+            pass
     if service_name in OPTIONAL_IDLE_SERVICES:
         _log(case_id, f"{reason} — optional/idle service, skipping")
         raise _ServiceCrashSkipped(service_name)
@@ -1298,7 +1338,7 @@ async def _ensure_live_ssh(
             await _close_ssh(ssh)
         except Exception:
             pass
-        return await _wait_for_ssh(host, password, timeout_s=60, interval_s=2)
+        return await _wait_for_ssh(host, password, timeout_s=120, interval_s=2)
 
 
 async def _wait_for_reboot_and_ssh(
