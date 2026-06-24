@@ -49,10 +49,10 @@ def _require_destructive_process(request):
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_01
 @pytest.mark.ProcessMonitor
-async def test_process_01_visibility(request, root_ssh, bsu_ip, device_creds):
+async def test_process_01_visibility(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
     await assert_process_01_visibility(
-        root_ssh, host=bsu_ip, password=device_creds["pass"]
+        procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"]
     )
 
 
@@ -60,10 +60,10 @@ async def test_process_01_visibility(request, root_ssh, bsu_ip, device_creds):
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_02
 @pytest.mark.ProcessMonitor
-async def test_process_02_uptime(request, root_ssh, bsu_ip, device_creds):
+async def test_process_02_uptime(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
     await assert_process_02_uptime(
-        root_ssh, host=bsu_ip, password=device_creds["pass"]
+        procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"]
     )
 
 
@@ -71,10 +71,10 @@ async def test_process_02_uptime(request, root_ssh, bsu_ip, device_creds):
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_03
 @pytest.mark.ProcessMonitor
-async def test_process_03_restart_count(request, root_ssh, bsu_ip, device_creds):
+async def test_process_03_restart_count(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
     await assert_process_03_restart_count(
-        root_ssh, host=bsu_ip, password=device_creds["pass"]
+        procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"]
     )
 
 
@@ -82,10 +82,10 @@ async def test_process_03_restart_count(request, root_ssh, bsu_ip, device_creds)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_04
 @pytest.mark.ProcessMonitor
-async def test_process_04_timestamp(request, root_ssh, bsu_ip, device_creds):
+async def test_process_04_timestamp(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
     await assert_process_04_timestamp(
-        root_ssh, host=bsu_ip, password=device_creds["pass"]
+        procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"]
     )
 
 
@@ -93,73 +93,73 @@ async def test_process_04_timestamp(request, root_ssh, bsu_ip, device_creds):
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_05
 @pytest.mark.ProcessMonitor
-async def test_process_05_crash_single(request, root_ssh, bsu_ip, device_creds):
+async def test_process_05_crash_single(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_05_crash_single(root_ssh, host=bsu_ip, password=device_creds["pass"])
+    await assert_process_05_crash_single(procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"])
 
 
 @pytest.mark.order(6)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_06
 @pytest.mark.ProcessMonitor
-async def test_process_06_crash_multiple(request, root_ssh, bsu_ip, device_creds):
+async def test_process_06_crash_multiple(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_06_crash_multiple(root_ssh, host=bsu_ip, password=device_creds["pass"])
+    await assert_process_06_crash_multiple(procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"])
 
 
 @pytest.mark.order(7)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_07
 @pytest.mark.ProcessMonitor
-async def test_process_07_crash_critical(request, root_ssh, bsu_ip, device_creds):
+async def test_process_07_crash_critical(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_07_crash_critical(root_ssh, host=bsu_ip, password=device_creds["pass"])
+    await assert_process_07_crash_critical(procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"])
 
 
 @pytest.mark.order(8)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_08
 @pytest.mark.ProcessMonitor
-async def test_process_08_crash_non_critical(request, root_ssh, bsu_ip, device_creds):
+async def test_process_08_crash_non_critical(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_08_crash_non_critical(root_ssh, host=bsu_ip, password=device_creds["pass"])
+    await assert_process_08_crash_non_critical(procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"])
 
 
 @pytest.mark.order(9)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_10
 @pytest.mark.ProcessMonitor
-async def test_process_10_restart_logging(request, root_ssh, bsu_ip, device_creds):
+async def test_process_10_restart_logging(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_10_restart_logging(root_ssh, host=bsu_ip, password=device_creds["pass"])
+    await assert_process_10_restart_logging(procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"])
 
 
 @pytest.mark.order(10)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_11
 @pytest.mark.ProcessMonitor
-async def test_process_11_stress_under_load(request, root_ssh, bsu_ip, device_creds):
+async def test_process_11_stress_under_load(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_11_stress_under_load(root_ssh, host=bsu_ip, password=device_creds["pass"])
+    await assert_process_11_stress_under_load(procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"])
 
 
 @pytest.mark.order(11)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_12
 @pytest.mark.ProcessMonitor
-async def test_process_12_log_integrity(request, root_ssh, bsu_ip, device_creds):
+async def test_process_12_log_integrity(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_12_log_integrity(root_ssh, host=bsu_ip, password=device_creds["pass"])
+    await assert_process_12_log_integrity(procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"])
 
 
 @pytest.mark.order(12)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_13
 @pytest.mark.ProcessMonitor
-async def test_process_13_unauthorized_kill(request, root_ssh, bsu_ip, device_creds):
+async def test_process_13_unauthorized_kill(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
     await assert_process_13_unauthorized_kill_bts(
-        root_ssh, host=bsu_ip, password=device_creds["pass"]
+        procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"]
     )
 
 
@@ -167,10 +167,10 @@ async def test_process_13_unauthorized_kill(request, root_ssh, bsu_ip, device_cr
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_14
 @pytest.mark.ProcessMonitor
-async def test_process_14_dependency_handling(request, root_ssh, bsu_ip, device_creds):
+async def test_process_14_dependency_handling(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
     await assert_process_14_dependency_handling(
-        root_ssh, host=bsu_ip, password=device_creds["pass"]
+        procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"]
     )
 
 
@@ -178,46 +178,46 @@ async def test_process_14_dependency_handling(request, root_ssh, bsu_ip, device_
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_16
 @pytest.mark.ProcessMonitor
-async def test_process_16_kill_single(request, root_ssh, bsu_ip, device_creds):
+async def test_process_16_kill_single(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_16_kill_single(root_ssh, host=bsu_ip, password=device_creds["pass"])
+    await assert_process_16_kill_single(procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"])
 
 
 @pytest.mark.order(16)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_17
 @pytest.mark.ProcessMonitor
-async def test_process_17_kill_multiple(request, root_ssh, bsu_ip, device_creds):
+async def test_process_17_kill_multiple(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_17_kill_multiple(root_ssh, host=bsu_ip, password=device_creds["pass"])
+    await assert_process_17_kill_multiple(procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"])
 
 
 @pytest.mark.order(17)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_18
 @pytest.mark.ProcessMonitor
-async def test_process_18_kill_critical(request, root_ssh, bsu_ip, device_creds):
+async def test_process_18_kill_critical(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_18_kill_critical(root_ssh, host=bsu_ip, password=device_creds["pass"])
+    await assert_process_18_kill_critical(procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"])
 
 
 @pytest.mark.order(18)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_19
 @pytest.mark.ProcessMonitor
-async def test_process_19_kill_under_load(request, root_ssh, bsu_ip, device_creds):
+async def test_process_19_kill_under_load(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_19_kill_under_load(root_ssh, host=bsu_ip, password=device_creds["pass"])
+    await assert_process_19_kill_under_load(procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"])
 
 
 @pytest.mark.order(19)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_09
 @pytest.mark.ProcessMonitor
-async def test_process_09_watchdog_reboot(request, root_ssh, bsu_ip, device_creds):
+async def test_process_09_watchdog_reboot(request, procmon_ssh, bsu_ip, device_creds):
     _require_destructive_process(request)
     await assert_process_09_watchdog_reboot(
-        root_ssh,
+        procmon_ssh.conn,
         host=bsu_ip,
         password=device_creds["pass"],
     )
@@ -227,10 +227,10 @@ async def test_process_09_watchdog_reboot(request, root_ssh, bsu_ip, device_cred
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_15
 @pytest.mark.ProcessMonitor
-async def test_process_15_monitor_recovery(request, root_ssh, bsu_ip, device_creds):
+async def test_process_15_monitor_recovery(request, procmon_ssh, bsu_ip, device_creds):
     _require_destructive_process(request)
     await assert_process_15_monitor_recovery(
-        root_ssh,
+        procmon_ssh.conn,
         host=bsu_ip,
         password=device_creds["pass"],
     )

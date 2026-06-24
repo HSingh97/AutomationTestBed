@@ -4,19 +4,26 @@ import pytest
 
 from utils.process_monitor_flows import (
     assert_process_monitor_preflight,
+    bind_procmon_ssh,
     _disarm_recovery_reboot,
     non_respawning_services_summary,
     recovery_reboot_may_be_armed,
 )
 
 
+@pytest.fixture(scope="session")
+async def procmon_ssh(root_ssh):
+    """Mutable session SSH shared across PROCESS_* tests (survives reconnect/reboot)."""
+    return bind_procmon_ssh(root_ssh)
+
+
 @pytest.fixture(scope="session", autouse=True)
-async def process_monitor_preflight(request, root_ssh, gui_page):
+async def process_monitor_preflight(request, procmon_ssh, gui_page):
     """Run GUI + SSH preflight before any PROCESS_* test when the suite is enabled."""
     if not request.config.getoption("--allow-process-monitor"):
         yield
         return
-    await assert_process_monitor_preflight(root_ssh, gui_page)
+    await assert_process_monitor_preflight(procmon_ssh.conn, gui_page)
     yield
     summary = non_respawning_services_summary()
     if summary != "none":
@@ -30,6 +37,6 @@ async def process_monitor_preflight(request, root_ssh, gui_page):
         )
         return
     try:
-        await _disarm_recovery_reboot(root_ssh, case_id="PROC_SESSION")
+        await _disarm_recovery_reboot(procmon_ssh.conn, case_id="PROC_SESSION")
     except Exception:
         pass

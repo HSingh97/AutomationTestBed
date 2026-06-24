@@ -58,7 +58,7 @@ PROCESS_MONITOR_GUI_PATH = "/monitor/system_stats/process_monitoring"
 RESPAWN_WAIT_S = 5
 CORE_FILE_WAIT_S = 6
 NETIFD_RECOVERY_S = 25
-SSH_RECONNECT_WAIT_S = 60
+SSH_RECONNECT_WAIT_S = 90
 POLL_INTERVAL_S = 0.35
 KillSignal = Literal["SEGV", "KILL"]
 _SHELL_JOB_NOISE = re.compile(r"^\[\d+\]\+|^Done\(")
@@ -78,6 +78,42 @@ _LAST_RECOVERY_TRIGGER = ""
 _NON_RESPAWNING_SERVICES: dict[str, str] = {}
 _KNOWN_RESPAWN_QUIRK_SERVICES = frozenset({"ntpd", "rpcd"})
 _PREPARE_SSH_TIMEOUT_S = 25
+
+
+@dataclass
+class ProcmonSshHandle:
+    """Mutable session SSH — updated when prepare/reconnect opens a new connection."""
+
+    conn: AsyncGenericDriver
+
+
+_PROCMON_SSH: ProcmonSshHandle | None = None
+
+
+def bind_procmon_ssh(conn: AsyncGenericDriver) -> ProcmonSshHandle:
+    """Attach ProcessMonitor flows to the session SSH handle (pytest fixture)."""
+    global _PROCMON_SSH
+    _PROCMON_SSH = ProcmonSshHandle(conn)
+    return _PROCMON_SSH
+
+
+def _resolve_ssh(ssh: AsyncGenericDriver) -> AsyncGenericDriver:
+    if _PROCMON_SSH is not None:
+        return _PROCMON_SSH.conn
+    return ssh
+
+
+async def _publish_ssh(ssh: AsyncGenericDriver) -> AsyncGenericDriver:
+    global _PROCMON_SSH
+    if _PROCMON_SSH is not None:
+        old = _PROCMON_SSH.conn
+        _PROCMON_SSH.conn = ssh
+        if old is not ssh:
+            try:
+                await _close_ssh(old)
+            except Exception:
+                pass
+    return ssh
 
 
 class _ServiceCrashSkipped(Exception):
@@ -202,6 +238,7 @@ async def prepare_procmon_case(
     case_id: str,
 ) -> AsyncGenericDriver:
     """Reconnect SSH if needed and disarm dead-man recovery before a PROCESS_* case."""
+    ssh = _resolve_ssh(ssh)
     if _NON_RESPAWNING_SERVICES:
         _log(case_id, f"SESSION non-respawning (skip): {_non_respawning_summary()}")
     await instant_recover_dut_if_armed(host, password, case_id=f"{case_id}_PRE")
@@ -216,10 +253,10 @@ async def prepare_procmon_case(
             recovery_reason=f"prepare: lab ping to {host} not reachable before {case_id}",
         )
         if recovered is not None:
-            return recovered
+            return await _publish_ssh(recovered)
         raise ConnectionError(f"prepare: {host} unreachable after recovery reboot ({ping_detail})")
     try:
-        return await _ensure_live_ssh(ssh, host, password)
+        return await _publish_ssh(await _ensure_live_ssh(ssh, host, password))
     except Exception as exc:
         _log(case_id, f"prepare: SSH not ready on {host} ({exc}) — recovery reboot")
         recovered = await _instant_reboot_and_wait(
@@ -230,7 +267,7 @@ async def prepare_procmon_case(
             recovery_reason=f"prepare: SSH to {host} not ready before {case_id} ({exc})",
         )
         if recovered is not None:
-            return recovered
+            return await _publish_ssh(recovered)
         raise ConnectionError(f"prepare: SSH to {host} not restored after recovery reboot") from exc
 
 
@@ -1114,8 +1151,39 @@ async def _crashable_services_on_dut(ssh: AsyncGenericDriver) -> set[str]:
 
 
 async def _reconnect_ssh(host: str, password: str, *, case_id: str, service_name: str) -> AsyncGenericDriver:
+    """Wait for sshd/network to restore SSH; recovery-reboot if the link does not return."""
     _log(case_id, f"Reconnecting SSH after {service_name} crash...")
-    return await _wait_for_ssh(host, password, timeout_s=SSH_RECONNECT_WAIT_S, interval_s=1)
+    deadline = time.monotonic() + SSH_RECONNECT_WAIT_S
+    last_error = ""
+    while time.monotonic() < deadline:
+        ping_ok, ping_detail = await _local_ping_host(host)
+        if not ping_ok:
+            last_error = f"ping down ({ping_detail})"
+            await asyncio.sleep(POLL_INTERVAL_S)
+            continue
+        try:
+            return await _wait_for_ssh(host, password, timeout_s=10, interval_s=1)
+        except Exception as exc:
+            last_error = str(exc)
+            await asyncio.sleep(1)
+    _log(
+        case_id,
+        f"SSH reconnect after {service_name} timed out ({last_error}); triggering recovery reboot",
+    )
+    recovered = await _instant_reboot_and_wait(
+        None,
+        host,
+        password,
+        case_id=case_id,
+        recovery_reason=(
+            f"SSH not restored within {SSH_RECONNECT_WAIT_S}s after {service_name} crash ({last_error})"
+        ),
+    )
+    if recovered is None:
+        raise TimeoutError(
+            f"SSH to {host} not ready after {service_name} crash and recovery reboot: {last_error}"
+        )
+    return recovered
 
 
 async def _crash_and_verify_restart_maybe_reconnect(
@@ -1167,7 +1235,9 @@ async def _crash_and_verify_restart_maybe_reconnect(
     except Exception:
         pass
 
-    ssh = await _reconnect_ssh(host, password, case_id=case_id, service_name=service_name)
+    ssh = await _publish_ssh(
+        await _reconnect_ssh(host, password, case_id=case_id, service_name=service_name)
+    )
     await _recovery_reboot_hello(ssh, case_id=case_id, delay_s=reboot_delay)
     after = await _wait_for_service_restart(
         ssh,
@@ -1281,8 +1351,10 @@ async def _run_all_services_crash_case(
                     except _ServiceCrashSkipped as exc:
                         skipped.append((exc.service_name, "did not respawn after crash"))
                         try:
-                            ssh = await _ensure_live_ssh(
-                                ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S
+                            ssh = await _publish_ssh(
+                                await _ensure_live_ssh(
+                                    ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S
+                                )
                             )
                             await _disarm_recovery_reboot(ssh, case_id=case_id)
                         except Exception:
@@ -1290,8 +1362,10 @@ async def _run_all_services_crash_case(
                         break
                     except ServiceCrashFailure as exc:
                         skipped.append((exc.service_name, exc.reason))
-                        ssh = await _ensure_live_ssh(
-                            ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S
+                        ssh = await _publish_ssh(
+                            await _ensure_live_ssh(
+                                ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S
+                            )
                         )
                         break
                     results.append(result)
@@ -1313,10 +1387,19 @@ async def _run_all_services_crash_case(
             case_completed = True
         finally:
             if under_stress:
-                await _stop_cpu_stress(ssh)
+                try:
+                    live = await _ensure_live_ssh(
+                        ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S
+                    )
+                    await _stop_cpu_stress(live)
+                    ssh = live
+                except Exception as exc:
+                    _log(case_id, f"CPU stress cleanup skipped ({exc})")
 
     if not case_completed:
-        return await _ensure_live_ssh(ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S)
+        return await _publish_ssh(
+            await _ensure_live_ssh(ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S)
+        )
 
     tested = {result.service_name for result in results}
     attempted = set(tested)
@@ -1340,7 +1423,7 @@ async def _run_all_services_crash_case(
     )
     ssh = await _ensure_live_ssh(ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S)
     await _disarm_recovery_reboot(ssh, case_id=case_id)
-    return ssh
+    return await _publish_ssh(ssh)
 
 
 async def _assert_unauthorized_kill_all_services(
@@ -1685,7 +1768,7 @@ async def assert_process_01_visibility(
     host: str,
     password: str,
     case_id: str = "PROCESS_01",
-) -> None:
+) -> AsyncGenericDriver:
     ssh = await prepare_procmon_case(ssh, host=host, password=password, case_id=case_id)
     await _require_procmon_ready(ssh, case_id=case_id)
     visible = await _collect_visible_services(ssh)
@@ -1727,6 +1810,7 @@ async def assert_process_01_visibility(
     else:
         _log(case_id, "PASSED: baseline crash counters are zero for all visible monitored services.")
     _log(case_id, f"All {len(visible)} monitored services visible; required services running.")
+    return ssh
 
 
 async def assert_process_02_uptime(
@@ -1735,7 +1819,7 @@ async def assert_process_02_uptime(
     host: str,
     password: str,
     case_id: str = "PROCESS_02",
-) -> None:
+) -> AsyncGenericDriver:
     ssh = await prepare_procmon_case(ssh, host=host, password=password, case_id=case_id)
     await _require_procmon_ready(ssh, case_id=case_id)
     sys_uptime = await _system_uptime_s(ssh)
@@ -1764,6 +1848,7 @@ async def assert_process_02_uptime(
     if mismatches:
         _fail_case(case_id, f"Uptime discrepancies: {'; '.join(mismatches)}")
     _log(case_id, f"Uptime consistent across services (system uptime {sys_uptime:.0f}s).")
+    return ssh
 
 
 async def assert_process_03_restart_count(
@@ -1772,7 +1857,7 @@ async def assert_process_03_restart_count(
     host: str,
     password: str,
     case_id: str = "PROCESS_03",
-) -> None:
+) -> AsyncGenericDriver:
     ssh = await prepare_procmon_case(ssh, host=host, password=password, case_id=case_id)
     before = await _collect_visible_services(ssh)
     await asyncio.sleep(3)
@@ -1789,6 +1874,7 @@ async def assert_process_03_restart_count(
     if changed:
         _fail_case(case_id, f"Restart counters changed without crash: {', '.join(changed)}")
     _log(case_id, "Restart counters remained stable during observation window.")
+    return ssh
 
 
 async def assert_process_04_timestamp(
@@ -1797,7 +1883,7 @@ async def assert_process_04_timestamp(
     host: str,
     password: str,
     case_id: str = "PROCESS_04",
-) -> None:
+) -> AsyncGenericDriver:
     ssh = await prepare_procmon_case(ssh, host=host, password=password, case_id=case_id)
     before = await _collect_visible_services(ssh)
     await asyncio.sleep(5)
@@ -1814,6 +1900,7 @@ async def assert_process_04_timestamp(
     if drift:
         _fail_case(case_id, f"Unexpected timestamp/counter drift: {'; '.join(drift)}")
     _log(case_id, "Crash timestamps/counters stable while idle.")
+    return ssh
 
 
 async def assert_process_05_crash_single(
@@ -1822,8 +1909,8 @@ async def assert_process_05_crash_single(
     host: str,
     password: str,
     case_id: str = "PROCESS_05",
-) -> None:
-    await _run_all_services_crash_case(
+) -> AsyncGenericDriver:
+    return await _run_all_services_crash_case(
         ssh, host=host, password=password, case_id=case_id, signal="SEGV", crashes_per_service=1
     )
 
@@ -1834,8 +1921,8 @@ async def assert_process_06_crash_multiple(
     host: str,
     password: str,
     case_id: str = "PROCESS_06",
-) -> None:
-    await _run_all_services_crash_case(
+) -> AsyncGenericDriver:
+    return await _run_all_services_crash_case(
         ssh, host=host, password=password, case_id=case_id, signal="SEGV", crashes_per_service=1
     )
 
@@ -1846,8 +1933,8 @@ async def assert_process_07_crash_critical(
     host: str,
     password: str,
     case_id: str = "PROCESS_07",
-) -> None:
-    await _run_all_services_crash_case(
+) -> AsyncGenericDriver:
+    return await _run_all_services_crash_case(
         ssh, host=host, password=password, case_id=case_id, signal="SEGV", crashes_per_service=1
     )
 
@@ -1858,8 +1945,8 @@ async def assert_process_08_crash_non_critical(
     host: str,
     password: str,
     case_id: str = "PROCESS_08",
-) -> None:
-    await _run_all_services_crash_case(
+) -> AsyncGenericDriver:
+    return await _run_all_services_crash_case(
         ssh, host=host, password=password, case_id=case_id, signal="SEGV", crashes_per_service=1
     )
 
@@ -1870,7 +1957,7 @@ async def assert_process_09_watchdog_reboot(
     host: str,
     password: str,
     case_id: str = "PROCESS_09",
-) -> None:
+) -> AsyncGenericDriver:
     ssh = await prepare_procmon_case(ssh, host=host, password=password, case_id=case_id)
     await _disarm_recovery_reboot(ssh, case_id=case_id)
     await _ssh_run(ssh, """ubus call system watchdog '{"stop":true}'""", timeout_ops=15)
@@ -1879,6 +1966,9 @@ async def assert_process_09_watchdog_reboot(
         await _assert_post_reboot_services(new_ssh, case_id=case_id)
     finally:
         await _close_ssh(new_ssh)
+    return await _publish_ssh(
+        await _wait_for_ssh(host, password, timeout_s=PROC_REBOOT_UP_TIMEOUT_S, interval_s=2)
+    )
 
 
 async def assert_process_10_restart_logging(
@@ -1887,8 +1977,8 @@ async def assert_process_10_restart_logging(
     host: str,
     password: str,
     case_id: str = "PROCESS_10",
-) -> None:
-    await _run_all_services_crash_case(
+) -> AsyncGenericDriver:
+    return await _run_all_services_crash_case(
         ssh,
         host=host,
         password=password,
@@ -1905,8 +1995,8 @@ async def assert_process_11_stress_under_load(
     host: str,
     password: str,
     case_id: str = "PROCESS_11",
-) -> None:
-    await _run_all_services_crash_case(
+) -> AsyncGenericDriver:
+    return await _run_all_services_crash_case(
         ssh,
         host=host,
         password=password,
@@ -1923,8 +2013,8 @@ async def assert_process_12_log_integrity(
     host: str,
     password: str,
     case_id: str = "PROCESS_12",
-) -> None:
-    await _run_all_services_crash_case(
+) -> AsyncGenericDriver:
+    return await _run_all_services_crash_case(
         ssh,
         host=host,
         password=password,
@@ -1941,9 +2031,10 @@ async def assert_process_13_unauthorized_kill_bts(
     host: str,
     password: str,
     case_id: str = "PROCESS_13",
-) -> None:
+) -> AsyncGenericDriver:
     ssh = await prepare_procmon_case(ssh, host=host, password=password, case_id=case_id)
     await _assert_unauthorized_kill_all_services(ssh, case_id=case_id)
+    return ssh
 
 
 async def assert_process_14_dependency_handling(
@@ -1952,11 +2043,11 @@ async def assert_process_14_dependency_handling(
     host: str,
     password: str,
     case_id: str = "PROCESS_14",
-) -> None:
+) -> AsyncGenericDriver:
     ssh = await prepare_procmon_case(ssh, host=host, password=password, case_id=case_id)
     child_before = await _ensure_service_present(ssh, DEPENDENCY_CHILD)
     parent_before = await _ensure_service_present(ssh, DEPENDENCY_PARENT)
-    parent_result = await _crash_and_verify_restart(
+    parent_result, ssh = await _crash_and_verify_restart_maybe_reconnect(
         ssh,
         DEPENDENCY_PARENT,
         host=host,
@@ -1990,6 +2081,7 @@ async def assert_process_14_dependency_handling(
         f"(crashes {child_before.total_crashes}->{child_after.total_crashes}).",
     )
     _report_core_gaps(case_id, parent_result)
+    return await _publish_ssh(ssh)
 
 
 async def assert_process_15_monitor_recovery(
@@ -1998,7 +2090,7 @@ async def assert_process_15_monitor_recovery(
     host: str,
     password: str,
     case_id: str = "PROCESS_15",
-) -> None:
+) -> AsyncGenericDriver:
     ssh = await prepare_procmon_case(ssh, host=host, password=password, case_id=case_id)
     await _disarm_recovery_reboot(ssh, case_id=case_id)
     await _ssh_run(ssh, "kill -11 1", timeout_ops=10)
@@ -2007,6 +2099,9 @@ async def assert_process_15_monitor_recovery(
         await _assert_post_reboot_services(new_ssh, case_id=case_id)
     finally:
         await _close_ssh(new_ssh)
+    return await _publish_ssh(
+        await _wait_for_ssh(host, password, timeout_s=PROC_REBOOT_UP_TIMEOUT_S, interval_s=2)
+    )
 
 
 async def assert_process_16_kill_single(
@@ -2015,8 +2110,8 @@ async def assert_process_16_kill_single(
     host: str,
     password: str,
     case_id: str = "PROCESS_16",
-) -> None:
-    await _run_all_services_crash_case(
+) -> AsyncGenericDriver:
+    return await _run_all_services_crash_case(
         ssh, host=host, password=password, case_id=case_id, signal="KILL", crashes_per_service=1
     )
 
@@ -2027,8 +2122,8 @@ async def assert_process_17_kill_multiple(
     host: str,
     password: str,
     case_id: str = "PROCESS_17",
-) -> None:
-    await _run_all_services_crash_case(
+) -> AsyncGenericDriver:
+    return await _run_all_services_crash_case(
         ssh, host=host, password=password, case_id=case_id, signal="KILL", crashes_per_service=2
     )
 
@@ -2039,8 +2134,8 @@ async def assert_process_18_kill_critical(
     host: str,
     password: str,
     case_id: str = "PROCESS_18",
-) -> None:
-    await _run_all_services_crash_case(
+) -> AsyncGenericDriver:
+    return await _run_all_services_crash_case(
         ssh, host=host, password=password, case_id=case_id, signal="KILL", crashes_per_service=1
     )
 
@@ -2051,8 +2146,8 @@ async def assert_process_19_kill_under_load(
     host: str,
     password: str,
     case_id: str = "PROCESS_19",
-) -> None:
-    await _run_all_services_crash_case(
+) -> AsyncGenericDriver:
+    return await _run_all_services_crash_case(
         ssh,
         host=host,
         password=password,
