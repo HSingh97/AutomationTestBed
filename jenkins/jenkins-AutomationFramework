@@ -116,6 +116,16 @@ pipeline {
             defaultValue: false,
             description: 'IP suite: also run CPE-side cases (default BTS only). Or put cpe in TEST_FILTER / -k IP_18_cpe locally.'
         )
+        string(
+            name: 'PROCMON_SERIAL_DEVICE',
+            defaultValue: '',
+            description: 'ProcessMonitor only: USB/UART path for BTS serial console (e.g. /dev/ttyUSB0). Leave empty to use SSH-only path. Requires the Jenkins agent user to be in the dialout group and the port to be free (close minicom first).'
+        )
+        booleanParam(
+            name: 'PROCMON_CLEAN_REBOOT_BEFORE_KILL',
+            defaultValue: false,
+            description: 'ProcessMonitor only: reboot the DUT between PROCESS_08 (SEGV sweeps) and PROCESS_16 (KILL sweeps) so the kill cases see a clean device. Recommended with serial console.'
+        )
     }
 
     stages {
@@ -272,6 +282,11 @@ pipeline {
                     def ipv6Local = localIP ? "--local-ipv6 \"${localIP}\"" : ''
                     def ipv6Remote = remoteIP ? "--remote-ipv6 \"${remoteIP}\"" : ''
                     def localIpArg = markers.contains('ProcessMonitor') ? "--local-ip \"${fallbackIp}\"" : ''
+                    def procSerial = (params.PROCMON_SERIAL_DEVICE ?: '').trim()
+                    def procSerialArg = (markers.contains('ProcessMonitor') && procSerial) ?
+                        "--procmon-serial-device \"${procSerial}\"" : ''
+                    def procCleanRebootArg = (markers.contains('ProcessMonitor') && params.PROCMON_CLEAN_REBOOT_BEFORE_KILL) ?
+                        '--procmon-clean-reboot-before-kill' : ''
 
                     sh '''
                         rm -f reports/artifacts/report.json reports/artifacts/ip_suite_progress.json \
@@ -294,6 +309,8 @@ pipeline {
                             ${localIpArg} \
                             ${ipv6Local} \
                             ${ipv6Remote} \
+                            ${procSerialArg} \
+                            ${procCleanRebootArg} \
                             ${env.TEST_EXTRA_FLAGS} \
                             --json-report --json-report-file=reports/artifacts/report.json
                         """

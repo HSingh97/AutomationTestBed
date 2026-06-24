@@ -7,10 +7,12 @@ import pytest
 from utils.process_monitor_flows import (
     assert_process_monitor_preflight,
     bind_procmon_ssh,
+    bind_procmon_console,
     _disarm_recovery_reboot,
     non_respawning_services_summary,
     recovery_reboot_may_be_armed,
 )
+from utils.procmon_console import ProcmonConsole, ProcmonConsoleError
 
 # ProcessMonitor never uses the WAN/factory 10.0.0.1 path; the BTS is reached
 # only on the LAN-side mgmt IP. Pin it here so the suite-local fixtures always
@@ -65,8 +67,46 @@ async def procmon_ssh(root_ssh):
     return bind_procmon_ssh(root_ssh)
 
 
+@pytest.fixture(scope="session")
+async def procmon_console(request, device_creds):
+    """Optional BTS serial console (opt-in via --procmon-serial-device)."""
+    device = (request.config.getoption("--procmon-serial-device") or "").strip()
+    if not device:
+        bind_procmon_console(None)
+        yield None
+        return
+
+    baud = int(request.config.getoption("--procmon-serial-baud") or 115200)
+    log_path = Path("reports/artifacts/procmon_console.log")
+    try:
+        console = await ProcmonConsole.open(
+            device,
+            baudrate=baud,
+            username=device_creds["user"],
+            password=device_creds["pass"],
+            log_path=log_path,
+        )
+    except ProcmonConsoleError as exc:
+        print(
+            f"[procmon] Serial console disabled ({device}): {exc}. "
+            f"Continuing with SSH-only path."
+        )
+        bind_procmon_console(None)
+        yield None
+        return
+
+    print(f"[procmon] Serial console online: {device} @ {baud} baud "
+          f"(log -> {log_path})")
+    bind_procmon_console(console)
+    try:
+        yield console
+    finally:
+        bind_procmon_console(None)
+        await console.close()
+
+
 @pytest.fixture(scope="session", autouse=True)
-async def process_monitor_preflight(request, procmon_ssh, gui_page):
+async def process_monitor_preflight(request, procmon_ssh, procmon_console, gui_page):
     """Run GUI + SSH preflight before any PROCESS_* test when the suite is enabled."""
     if not request.config.getoption("--allow-process-monitor"):
         yield

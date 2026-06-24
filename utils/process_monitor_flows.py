@@ -109,6 +109,21 @@ def bind_procmon_ssh(conn: AsyncGenericDriver) -> ProcmonSshHandle:
     return _PROCMON_SSH
 
 
+# Optional serial console side-channel (bound by tests/ProcessMonitor/conftest.py).
+_PROCMON_CONSOLE: object | None = None
+
+
+def bind_procmon_console(console: object | None) -> object | None:
+    """Attach ProcessMonitor flows to a serial console handle (None disables it)."""
+    global _PROCMON_CONSOLE
+    _PROCMON_CONSOLE = console
+    return console
+
+
+def _get_procmon_console():
+    return _PROCMON_CONSOLE
+
+
 def _resolve_ssh(ssh: AsyncGenericDriver) -> AsyncGenericDriver:
     if _PROCMON_SSH is not None:
         return _PROCMON_SSH.conn
@@ -644,14 +659,34 @@ def _recovery_arm_shell(delay_s: int) -> str:
     )
 
 
+async def _console_alive(timeout_s: float = 5.0) -> bool:
+    """Quick liveness probe via serial console (if bound). Returns True on shell prompt."""
+    console = _get_procmon_console()
+    if console is None:
+        return False
+    try:
+        out = await console.run("echo PROCMON_CONSOLE_OK", timeout_s=timeout_s)
+    except Exception:
+        return False
+    return "PROCMON_CONSOLE_OK" in out
+
+
 async def _arm_recovery_reboot(
     ssh: AsyncGenericDriver,
     *,
     case_id: str,
     delay_s: int = RECOVERY_REBOOT_DELAY_S,
 ) -> None:
-    """Arm recovery reboot unless automation disarms with hello."""
+    """Arm recovery reboot unless automation disarms with hello.
+
+    When a serial console is bound the dead-man timer is unnecessary — if SSH
+    drops we recover via console instead — so we skip the on-device arm and
+    just record that the console will handle it.
+    """
     if not _RECOVERY_REBOOT_ENABLED:
+        return
+    if _get_procmon_console() is not None:
+        _log(case_id, "Recovery reboot skipped (serial console available)")
         return
     await _ssh_run(ssh, _recovery_arm_shell(delay_s), timeout_ops=15)
     _log(
@@ -667,7 +702,7 @@ async def _recovery_reboot_hello(
     delay_s: int = RECOVERY_REBOOT_DELAY_S,
 ) -> None:
     """Slide recovery timer — restart sleep job while SSH is alive."""
-    if not _RECOVERY_REBOOT_ENABLED:
+    if not _RECOVERY_REBOOT_ENABLED or _get_procmon_console() is not None:
         return
     try:
         await _ssh_run(ssh, _recovery_arm_shell(delay_s), timeout_ops=15)
@@ -1386,7 +1421,7 @@ async def _crashable_services_on_dut(ssh: AsyncGenericDriver) -> set[str]:
 
 
 async def _reconnect_ssh(host: str, password: str, *, case_id: str, service_name: str) -> AsyncGenericDriver:
-    """Wait for sshd/network to restore SSH; recovery-reboot if the link does not return."""
+    """Wait for sshd/network to restore SSH; fall back to console (or reboot) if needed."""
     _log(case_id, f"Reconnecting SSH after {service_name} crash...")
     deadline = time.monotonic() + SSH_RECONNECT_WAIT_S
     last_error = ""
@@ -1401,6 +1436,27 @@ async def _reconnect_ssh(host: str, password: str, *, case_id: str, service_name
         except Exception as exc:
             last_error = str(exc)
             await asyncio.sleep(1)
+
+    console = _get_procmon_console()
+    if console is not None and await _console_alive(timeout_s=5.0):
+        _log(
+            case_id,
+            f"SSH still down after {service_name} crash but console responds — "
+            f"restarting network via console instead of full reboot",
+        )
+        try:
+            await console.run(
+                "/etc/init.d/network restart 2>/dev/null || /etc/init.d/sshd restart 2>/dev/null; "
+                "sleep 2; ifup wan 2>/dev/null; ifconfig br-lan up 2>/dev/null; true",
+                timeout_s=30,
+            )
+        except Exception as exc:
+            _log(case_id, f"Console-driven network restart failed: {exc}")
+        try:
+            return await _wait_for_ssh(host, password, timeout_s=30, interval_s=2)
+        except Exception as exc:
+            last_error = f"console restart ok but SSH still refused: {exc}"
+
     _log(
         case_id,
         f"SSH reconnect after {service_name} timed out ({last_error}); triggering recovery reboot",
@@ -2637,14 +2693,60 @@ async def assert_process_15_monitor_recovery(
         raise
 
 
+_KILL_PHASE_CLEAN_REBOOT_DONE = False
+
+
+async def _clean_reboot_before_kill_phase(
+    ssh: AsyncGenericDriver,
+    *,
+    host: str,
+    password: str,
+    case_id: str,
+) -> AsyncGenericDriver:
+    """Reboot once before the first KILL case so the device is in a clean state.
+
+    The SEGV sweep cases (PROCESS_05-08) leave many services down on this
+    firmware, which would otherwise force PROCESS_16-19 to skip them. When the
+    console is bound we use it; otherwise we fall back to an SSH reboot.
+    """
+    global _KILL_PHASE_CLEAN_REBOOT_DONE
+    if _KILL_PHASE_CLEAN_REBOOT_DONE:
+        return ssh
+
+    console = _get_procmon_console()
+    if console is not None:
+        _log(case_id, "Clean reboot via console before KILL phase...")
+        try:
+            await console.reboot_and_wait(boot_timeout_s=240.0)
+            _log(case_id, "Console reports boot complete; re-establishing SSH")
+        except Exception as exc:
+            _log(case_id, f"Console reboot failed ({exc}); using SSH reboot fallback")
+    else:
+        _log(case_id, "Clean reboot via SSH before KILL phase (no console bound)...")
+        try:
+            await _ssh_run(ssh, "reboot; exit 0", timeout_ops=10)
+        except Exception:
+            pass
+        await asyncio.sleep(8)
+
+    new_ssh = await _wait_for_ssh(host, password, timeout_s=180, interval_s=3)
+    _KILL_PHASE_CLEAN_REBOOT_DONE = True
+    return await _publish_ssh(new_ssh)
+
+
 async def assert_process_16_kill_single(
     ssh: AsyncGenericDriver,
     *,
     host: str,
     password: str,
     case_id: str = "PROCESS_16",
+    clean_reboot: bool = False,
 ) -> AsyncGenericDriver:
     """Kill one randomly-chosen running service and confirm it respawns."""
+    if clean_reboot:
+        ssh = await _clean_reboot_before_kill_phase(
+            ssh, host=host, password=password, case_id=case_id
+        )
     return await _run_kill_single_random_case(
         ssh, host=host, password=password, case_id=case_id
     )
