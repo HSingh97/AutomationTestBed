@@ -1902,13 +1902,14 @@ async def _assert_post_reboot_services(
             bullets = "".join(f"\n  - {n}" for n in quirky)
             _partial_case(
                 case_id,
-                f"Known-quirky service(s) did not start after reboot:{bullets}",
+                f"Already-known firmware-quirk service(s) were still down "
+                f"{settle_s}s after reboot:{bullets}",
             )
         if critical:
             bullets = "".join(f"\n  - {n}" for n in critical)
             _fail_case(
                 case_id,
-                f"Critical process(es) did not start after reboot:{bullets}",
+                f"Critical process(es) did not start within {settle_s}s after reboot:{bullets}",
             )
     _log(case_id, f"Post-reboot monitor OK; {len(visible)} services tracked.")
 
