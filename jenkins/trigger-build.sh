@@ -49,6 +49,8 @@ Options:
   --recovery-profile NAME  RECOVERY_PROFILE_NAME (default: link_formation)
   --skip-bootstrap         SKIP_TESTBED_BOOTSTRAP=true
   --run-ip-cpe             RUN_IP_CPE=true
+  --procmon-serial URI     PROCMON_SERIAL_DEVICE (e.g. socket://127.0.0.1:7000)
+  --procmon-clean-reboot   PROCMON_CLEAN_REBOOT_BEFORE_KILL=true
   --url URL                JENKINS_URL (default: http://127.0.0.1:8081)
   --user USER              JENKINS_USER (default: harman)
   --wait                   Poll until the triggered build finishes (and show log tail)
@@ -65,6 +67,8 @@ while [[ $# -gt 0 ]]; do
     --recovery-profile) RECOVERY_PROFILE_NAME="$2"; shift 2 ;;
     --skip-bootstrap) SKIP_TESTBED_BOOTSTRAP=true; shift ;;
     --run-ip-cpe) RUN_IP_CPE=true; shift ;;
+    --procmon-serial) PROCMON_SERIAL_DEVICE="$2"; shift 2 ;;
+    --procmon-clean-reboot) PROCMON_CLEAN_REBOOT_BEFORE_KILL=true; shift ;;
     --url) JENKINS_URL="$2"; shift 2 ;;
     --user) JENKINS_USER="$2"; shift 2 ;;
     --wait) WAIT=true; shift ;;
@@ -228,6 +232,8 @@ PARAMS=(
   "SKIP_TESTBED_BOOTSTRAP=${SKIP_TESTBED_BOOTSTRAP}"
   "RUN_IP_CPE=${RUN_IP_CPE}"
   "TARGET_STAND=${TARGET_STAND}"
+  "PROCMON_SERIAL_DEVICE=${PROCMON_SERIAL_DEVICE:-}"
+  "PROCMON_CLEAN_REBOOT_BEFORE_KILL=${PROCMON_CLEAN_REBOOT_BEFORE_KILL:-false}"
 )
 
 # Form-encoded POST with per-param urlencoding (filters may contain spaces/commas).

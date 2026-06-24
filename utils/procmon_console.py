@@ -284,15 +284,23 @@ class ProcmonConsole:
     # ----------------------------------------------------------------- exec
 
     async def run(self, command: str, *, timeout_s: float = 10.0) -> str:
-        """Send a command and return its stdout (excluding the echoed command and prompt)."""
-        marker = f"_PRC_OK_{int(time.time() * 1000)}_{os.urandom(2).hex()}"
-        wrapped = f"{command}; printf '\\n{marker}\\n'\r\n"
+        """Send a command and return its stdout (excluding the echoed command and prompt).
+
+        Wraps the command between two unique sentinels so the captured payload
+        survives shell echo and trailing prompt rendering:
+
+            printf '\\n<START>\\n'; <command>; printf '\\n<END>\\n'
+        """
+        nonce = f"{int(time.time() * 1000)}_{os.urandom(2).hex()}"
+        start = f"__PRC_BEG_{nonce}__"
+        end = f"__PRC_END_{nonce}__"
+        wrapped = f"printf '\\n{start}\\n'; {command}; printf '\\n{end}\\n'\r\n"
         async with self._lock:
             await self._drain(settle_s=0.05)
             await self._write(wrapped.encode())
-            sentinel = re.compile(re.escape(marker))
+            sentinel = re.compile(re.escape(end))
             text = await self._read_until(sentinel, timeout_s=timeout_s)
-        return _extract_payload(text, command=command, marker=marker)
+        return _extract_payload_between(text, start=start, end=end)
 
     async def kill_pids(
         self,
@@ -328,15 +336,18 @@ class ProcmonConsole:
         await self._ensure_root_prompt()
 
 
-def _extract_payload(text: str, *, command: str, marker: str) -> str:
-    """Strip the echoed command and the trailing sentinel/prompt."""
-    sentinel_idx = text.find(marker)
-    if sentinel_idx == -1:
+def _extract_payload_between(text: str, *, start: str, end: str) -> str:
+    """Return the text between the LAST start sentinel and the LAST end sentinel.
+
+    The shell echoes the whole wrapped line first, so the start/end tokens each
+    appear twice (once in the echoed command, once printed by ``printf``). We
+    want the SECOND occurrence of each — that's the actual delimited payload.
+    """
+    starts = [m.end() for m in re.finditer(re.escape(start), text)]
+    ends = [m.start() for m in re.finditer(re.escape(end), text)]
+    if not starts or not ends:
         return text.strip()
-    body = text[:sentinel_idx]
-    echo_idx = body.find(command)
-    if echo_idx != -1:
-        body = body[echo_idx + len(command):]
-    body = body.lstrip("\r\n")
-    body = body.rstrip()
-    return body
+    start_idx = starts[-1]
+    end_idx = next((e for e in ends if e > start_idx), ends[-1])
+    payload = text[start_idx:end_idx]
+    return payload.strip("\r\n").rstrip()
