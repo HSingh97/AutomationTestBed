@@ -65,9 +65,8 @@ _SHELL_JOB_NOISE = re.compile(r"^\[\d+\]\+|^Done\(")
 RECOVERY_REBOOT_DELAY_S = 60
 RECOVERY_REBOOT_HELLO = "PROC_MON_HELLO"
 RECOVERY_REBOOT_HEARTBEAT_S = 10
-_RECOVERY_DEADLINE = "/tmp/procmon_recovery_deadline"
 _RECOVERY_CANCEL = "/tmp/procmon_recovery_cancel"
-_RECOVERY_WATCH_PID = "/tmp/procmon_recovery_watch.pid"
+_RECOVERY_ARM_PID = "/tmp/procmon_recovery_arm.pid"
 _RECOVERY_REBOOT_ENABLED = True
 
 
@@ -164,30 +163,15 @@ def _recovery_reboot_delay_for(service_name: str, recovery_timeout_s: int) -> in
     return max(RECOVERY_REBOOT_DELAY_S, recovery_timeout_s + slack)
 
 
-async def _ensure_recovery_reboot_watcher(ssh: AsyncGenericDriver) -> None:
-    """Start a single background watcher on the DUT (idempotent)."""
-    script = f"""
-PROC_DL={_RECOVERY_DEADLINE}
-PROC_CANCEL={_RECOVERY_CANCEL}
-PROC_WATCH={_RECOVERY_WATCH_PID}
-if [ -f "$PROC_WATCH" ] && kill -0 "$(cat "$PROC_WATCH" 2>/dev/null)" 2>/dev/null; then
-  exit 0
-fi
-(
-  while true; do
-    [ -f "$PROC_CANCEL" ] && exit 0
-    now=$(date +%s)
-    dl=$(cat "$PROC_DL" 2>/dev/null || echo 0)
-    if [ "$dl" -gt 0 ] && [ "$now" -ge "$dl" ]; then
-      logger -t procmon_recovery "no {RECOVERY_REBOOT_HELLO} — rebooting"
-      reboot
-    fi
-    sleep 5
-  done
-) &
-echo $! > "$PROC_WATCH"
-"""
-    await _ssh_run(ssh, script.strip(), timeout_ops=15)
+def _recovery_arm_shell(delay_s: int) -> str:
+    """One-liner: (re)start a delayed reboot job unless cancel file exists."""
+    return (
+        f"kill $(cat {_RECOVERY_ARM_PID} 2>/dev/null) 2>/dev/null || true; "
+        f"rm -f {_RECOVERY_CANCEL}; "
+        f"( sleep {int(delay_s)}; [ -f {_RECOVERY_CANCEL} ] || "
+        f"( logger -t procmon_recovery 'no {RECOVERY_REBOOT_HELLO} — rebooting'; reboot ) ) & "
+        f"echo $! > {_RECOVERY_ARM_PID}"
+    )
 
 
 async def _arm_recovery_reboot(
@@ -196,15 +180,10 @@ async def _arm_recovery_reboot(
     case_id: str,
     delay_s: int = RECOVERY_REBOOT_DELAY_S,
 ) -> None:
-    """Arm recovery reboot unless automation slides the deadline with hello."""
+    """Arm recovery reboot unless automation disarms with hello."""
     if not _RECOVERY_REBOOT_ENABLED:
         return
-    await _ensure_recovery_reboot_watcher(ssh)
-    await _ssh_run(
-        ssh,
-        f"rm -f {_RECOVERY_CANCEL}; echo $(( $(date +%s) + {int(delay_s)} )) > {_RECOVERY_DEADLINE}",
-        timeout_ops=10,
-    )
+    await _ssh_run(ssh, _recovery_arm_shell(delay_s), timeout_ops=15)
     _log(
         case_id,
         f"Recovery reboot armed ({delay_s}s without {RECOVERY_REBOOT_HELLO})",
@@ -217,16 +196,12 @@ async def _recovery_reboot_hello(
     case_id: str,
     delay_s: int = RECOVERY_REBOOT_DELAY_S,
 ) -> None:
-    """Slide recovery deadline — Jenkins/script still has SSH."""
+    """Slide recovery timer — restart sleep job while SSH is alive."""
     if not _RECOVERY_REBOOT_ENABLED:
         return
     try:
-        await _ssh_run(
-            ssh,
-            f"echo $(( $(date +%s) + {int(delay_s)} )) > {_RECOVERY_DEADLINE}",
-            timeout_ops=10,
-        )
-        _log(case_id, f"Recovery hello ({RECOVERY_REBOOT_HELLO}) — reboot cancelled/slid")
+        await _ssh_run(ssh, _recovery_arm_shell(delay_s), timeout_ops=15)
+        _log(case_id, f"Recovery hello ({RECOVERY_REBOOT_HELLO}) — timer reset")
     except Exception as exc:
         _log(
             case_id,
@@ -242,9 +217,9 @@ async def _disarm_recovery_reboot(ssh: AsyncGenericDriver, *, case_id: str) -> N
         await _ssh_run(
             ssh,
             f"touch {_RECOVERY_CANCEL}; "
-            f"kill $(cat {_RECOVERY_WATCH_PID} 2>/dev/null) 2>/dev/null || true; "
-            f"rm -f {_RECOVERY_DEADLINE} {_RECOVERY_WATCH_PID}",
-            timeout_ops=10,
+            f"kill $(cat {_RECOVERY_ARM_PID} 2>/dev/null) 2>/dev/null || true; "
+            f"rm -f {_RECOVERY_ARM_PID} {_RECOVERY_CANCEL}",
+            timeout_ops=15,
         )
         _log(case_id, f"Recovery reboot disarmed ({RECOVERY_REBOOT_HELLO})")
     except Exception as exc:
