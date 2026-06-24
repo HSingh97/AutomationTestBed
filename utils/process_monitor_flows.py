@@ -179,7 +179,7 @@ fi
     now=$(date +%s)
     dl=$(cat "$PROC_DL" 2>/dev/null || echo 0)
     if [ "$dl" -gt 0 ] && [ "$now" -ge "$dl" ]; then
-      logger -t procmon_recovery "no {_RECOVERY_REBOOT_HELLO} — rebooting"
+      logger -t procmon_recovery "no {RECOVERY_REBOOT_HELLO} — rebooting"
       reboot
     fi
     sleep 5
