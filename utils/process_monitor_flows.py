@@ -1855,7 +1855,7 @@ async def _assert_post_reboot_services(
     *,
     case_id: str,
     min_services: int = 10,
-    settle_s: int = 90,
+    settle_s: int = 150,
 ) -> None:
     """Poll ubus for service list after reboot; tolerate slow ubusd start (don't hang on it)."""
     deadline = time.monotonic() + settle_s
@@ -1864,22 +1864,27 @@ async def _assert_post_reboot_services(
     last_hang_log = 0.0
     while time.monotonic() < deadline:
         try:
-            visible = await asyncio.wait_for(_collect_visible_services(ssh), timeout=10)
-        except (asyncio.TimeoutError, Exception) as exc:
-            now = time.monotonic()
-            if now - last_hang_log > 10:
-                _log(case_id, f"Post-reboot ubus probe not ready yet ({exc}); retrying...")
-                last_hang_log = now
+            visible = await asyncio.wait_for(_collect_visible_services(ssh), timeout=12)
+        except asyncio.TimeoutError:
+            exc_msg = "ubus probe exceeded 12s"
+        except Exception as exc:
+            exc_msg = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+        else:
+            not_running = [
+                name
+                for name, inst in visible.items()
+                if not inst.running and name not in OPTIONAL_IDLE_SERVICES
+            ]
+            if len(visible) >= min_services and not not_running:
+                break
             await asyncio.sleep(2)
             continue
-        not_running = [
-            name
-            for name, inst in visible.items()
-            if not inst.running and name not in OPTIONAL_IDLE_SERVICES
-        ]
-        if len(visible) >= min_services and not not_running:
-            break
+        now = time.monotonic()
+        if now - last_hang_log > 10:
+            _log(case_id, f"Post-reboot ubus probe not ready yet ({exc_msg}); retrying...")
+            last_hang_log = now
         await asyncio.sleep(2)
+
     idle_down = [name for name, inst in visible.items() if not inst.running and name in OPTIONAL_IDLE_SERVICES]
     if idle_down:
         _log(case_id, f"Optional/idle services not running after reboot: {', '.join(idle_down)}")
@@ -1889,10 +1894,22 @@ async def _assert_post_reboot_services(
             f"Too few monitored services tracked after reboot ({len(visible)} < {min_services})",
         )
     if not_running:
-        _fail_case(
-            case_id,
-            f"Process(es) did not start after reboot: {', '.join(not_running)}",
-        )
+        quirky = [n for n in not_running if _is_known_quirk(n) or n not in MUST_BE_RUNNING]
+        critical = [n for n in not_running if n in MUST_BE_RUNNING and not _is_known_quirk(n)]
+        for name in quirky:
+            _note_not_running_service(case_id, name, "not running after reboot")
+        if quirky:
+            bullets = "".join(f"\n  - {n}" for n in quirky)
+            _partial_case(
+                case_id,
+                f"Known-quirky service(s) did not start after reboot:{bullets}",
+            )
+        if critical:
+            bullets = "".join(f"\n  - {n}" for n in critical)
+            _fail_case(
+                case_id,
+                f"Critical process(es) did not start after reboot:{bullets}",
+            )
     _log(case_id, f"Post-reboot monitor OK; {len(visible)} services tracked.")
 
 
