@@ -1343,13 +1343,23 @@ async def _crash_services_batch(
 async def _classify_service_for_crash(
     ssh: AsyncGenericDriver,
     service_name: str,
+    *,
+    bypass_session_skip: bool = False,
 ) -> tuple[Literal["test", "skip", "fail"], str]:
-    if service_name in _NON_RESPAWNING_SERVICES:
-        return "skip", f"session: does not respawn ({_NON_RESPAWNING_SERVICES[service_name]})"
-    if service_name in _COUNTER_QUIRK_SERVICES:
-        return "skip", f"session: counter quirk ({_COUNTER_QUIRK_SERVICES[service_name]})"
-    if service_name in _NOT_RUNNING_SERVICES:
-        return "skip", f"session: not running ({_NOT_RUNNING_SERVICES[service_name]})"
+    """Decide what to do with a candidate service.
+
+    When ``bypass_session_skip`` is False (default), services that earned a session
+    quirk earlier in the run are skipped to keep sweep cases fast. The KILL cases
+    (PROCESS_16-19) pass ``bypass_session_skip=True`` so they still exercise every
+    service in their scope, regardless of what SEGV runs observed earlier.
+    """
+    if not bypass_session_skip:
+        if service_name in _NON_RESPAWNING_SERVICES:
+            return "skip", f"session: does not respawn ({_NON_RESPAWNING_SERVICES[service_name]})"
+        if service_name in _COUNTER_QUIRK_SERVICES:
+            return "skip", f"session: counter quirk ({_COUNTER_QUIRK_SERVICES[service_name]})"
+        if service_name in _NOT_RUNNING_SERVICES:
+            return "skip", f"session: not running ({_NOT_RUNNING_SERVICES[service_name]})"
     inst = await get_service_instance(ssh, service_name)
     if inst is None:
         return "skip", "not registered in ubus on this firmware"
@@ -1675,6 +1685,246 @@ async def _run_all_services_crash_case(
         case_id,
         f"All-services {signal} complete: {len(tested)} services, "
         f"{len(results)} crash(es), {len(skipped)} skipped"
+        + (f"; stress={stress_mode}" if stress_mode else "")
+        + f"; skipped=[{'; '.join(f'{n} ({r})' for n, r in skipped) or 'none'}]",
+    )
+    ssh = await _ensure_live_ssh(ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S)
+    await _disarm_recovery_reboot(ssh, case_id=case_id)
+    return await _publish_ssh(ssh)
+
+
+# ---------------------------------------------------------------------------
+# Kill-case helpers (PROCESS_16 / 17 / 18 / 19)
+#
+# These cases test the KILL signal specifically and must NOT pre-skip services
+# just because earlier SEGV cases (PROCESS_05-08) parked them on the session
+# quirk list. They classify services freshly:
+#   - 16 Single   : pick ONE random running service and kill it
+#   - 17 Multiple : batch-kill ALL running services at once
+#   - 18 Critical : batch-kill all critical (MUST_BE_RUNNING / critical=True)
+#   - 19 Stress   : batch-kill ALL while CPU stress is loaded
+# Session quirks observed earlier are still surfaced in the result reason; they
+# just don't gate which services we attempt.
+# ---------------------------------------------------------------------------
+
+
+CRITICAL_SERVICE_NAMES: frozenset[str] = frozenset(
+    name
+    for name, meta in MONITORED_SERVICES.items()
+    if meta.get("critical")
+) | MUST_BE_RUNNING
+
+
+async def _select_kill_candidates(
+    ssh: AsyncGenericDriver,
+    *,
+    case_id: str,
+    scope: frozenset[str] | tuple[str, ...],
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Classify every service in scope, bypassing session-quirk skips.
+
+    Returns (candidates_to_kill, skipped_with_reason). Only firmware-level
+    skips (not in ubus, procd retry=0, optional/idle down, not running)
+    filter services out; session quirks are noted but the service is still
+    a kill candidate.
+    """
+    scope_set = set(scope)
+    candidates: list[str] = []
+    skipped: list[tuple[str, str]] = []
+    for service_name in SERVICE_SWEEP_ORDER:
+        if service_name not in scope_set:
+            continue
+        action, reason = await _classify_service_for_crash(
+            ssh, service_name, bypass_session_skip=True
+        )
+        if action == "skip":
+            skipped.append((service_name, reason))
+            _log(case_id, f"Skipping {service_name}: {reason}")
+            continue
+        if action == "fail":
+            skipped.append((service_name, reason))
+            _log(case_id, f"Skipping {service_name}: {reason}")
+            if service_name in MUST_BE_RUNNING:
+                _note_not_running_service(case_id, service_name, reason)
+            continue
+        candidates.append(service_name)
+    return candidates, skipped
+
+
+async def _run_kill_single_random_case(
+    ssh: AsyncGenericDriver,
+    *,
+    host: str,
+    password: str,
+    case_id: str,
+) -> AsyncGenericDriver:
+    """PROCESS_16 — pick one random running service and KILL it."""
+    import random
+
+    ssh = await prepare_procmon_case(ssh, host=host, password=password, case_id=case_id)
+    await _require_procmon_ready(ssh, case_id=case_id)
+
+    candidates, skipped = await _select_kill_candidates(
+        ssh, case_id=case_id, scope=MONITORED_SERVICE_NAMES
+    )
+    if not candidates:
+        _partial_case(case_id, "No killable services available on this firmware")
+        return await _publish_ssh(ssh)
+
+    target = random.choice(candidates)
+    _log(case_id, f"Single KILL target (random): {target} (of {len(candidates)} candidates)")
+
+    results: list[CrashResult] = []
+    with _sweep_failure_policy(case_id):
+        timeout_s = _recovery_timeout_for(target)
+        try:
+            result, ssh = await _crash_and_verify_restart_maybe_reconnect(
+                ssh,
+                target,
+                host=host,
+                password=password,
+                case_id=case_id,
+                signal="KILL",
+                recovery_timeout_s=timeout_s,
+            )
+            results.append(result)
+            _log(
+                case_id,
+                f"Single KILL on {target}: respawned ok; "
+                f"total_crashes={result.after.total_crashes}, pid={result.after.pid}",
+            )
+        except _ServiceCrashSkipped as exc:
+            skipped.append((exc.service_name, "did not respawn after KILL"))
+        except ServiceCrashFailure as exc:
+            skipped.append((exc.service_name, exc.reason))
+
+    ssh = await _ensure_live_ssh(ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S)
+    await _disarm_recovery_reboot(ssh, case_id=case_id)
+    _log(
+        case_id,
+        f"Kill-single complete: target={target}, "
+        f"result={'respawned' if results else 'skipped'}, "
+        f"other-candidates-not-killed={len(candidates) - 1}",
+    )
+    return await _publish_ssh(ssh)
+
+
+async def _run_kill_batch_case(
+    ssh: AsyncGenericDriver,
+    *,
+    host: str,
+    password: str,
+    case_id: str,
+    scope: frozenset[str] | tuple[str, ...],
+    scope_label: str,
+    under_stress: bool = False,
+) -> AsyncGenericDriver:
+    """PROCESS_17 / 18 / 19 — batch-KILL every running service in scope at once."""
+    ssh = await prepare_procmon_case(ssh, host=host, password=password, case_id=case_id)
+    await _require_procmon_ready(ssh, case_id=case_id)
+
+    stress_mode: str | None = None
+    if under_stress:
+        stress_mode = await _start_cpu_stress(ssh)
+        await asyncio.sleep(2)
+        if not await _collect_visible_services(ssh):
+            _fail_case(case_id, "ubus service list empty under CPU stress")
+
+    case_completed = False
+    results: list[CrashResult] = []
+    skipped: list[tuple[str, str]] = []
+
+    with _sweep_failure_policy(case_id):
+        try:
+            candidates, classify_skipped = await _select_kill_candidates(
+                ssh, case_id=case_id, scope=scope
+            )
+            skipped.extend(classify_skipped)
+
+            if not candidates:
+                _partial_case(
+                    case_id,
+                    f"No killable services available in scope '{scope_label}'",
+                )
+            else:
+                batch_targets = [n for n in candidates if n not in SSH_RECONNECT_SERVICES]
+                serial_targets = [n for n in candidates if n in SSH_RECONNECT_SERVICES]
+
+                _log(
+                    case_id,
+                    f"Batch KILL ({scope_label}): {len(batch_targets)} parallel + "
+                    f"{len(serial_targets)} serial (SSH-affecting)",
+                )
+
+                if batch_targets:
+                    batch_results, batch_skipped = await _crash_services_batch(
+                        ssh,
+                        batch_targets,
+                        host=host,
+                        password=password,
+                        case_id=case_id,
+                        signal="KILL",
+                    )
+                    results.extend(batch_results)
+                    skipped.extend(batch_skipped)
+
+                for service_name in serial_targets:
+                    timeout_s = _recovery_timeout_for(service_name)
+                    _log(case_id, f"KILL on {service_name} (SSH-affecting)")
+                    try:
+                        result, ssh = await _crash_and_verify_restart_maybe_reconnect(
+                            ssh,
+                            service_name,
+                            host=host,
+                            password=password,
+                            case_id=case_id,
+                            signal="KILL",
+                            recovery_timeout_s=timeout_s,
+                        )
+                    except _ServiceCrashSkipped as exc:
+                        skipped.append((exc.service_name, "did not respawn after KILL"))
+                        try:
+                            ssh = await _publish_ssh(
+                                await _ensure_live_ssh(
+                                    ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S
+                                )
+                            )
+                            await _disarm_recovery_reboot(ssh, case_id=case_id)
+                        except Exception:
+                            pass
+                        continue
+                    except ServiceCrashFailure as exc:
+                        skipped.append((exc.service_name, exc.reason))
+                        ssh = await _publish_ssh(
+                            await _ensure_live_ssh(
+                                ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S
+                            )
+                        )
+                        continue
+                    results.append(result)
+                    _log(
+                        case_id,
+                        f"{service_name} recovered; total_crashes={result.after.total_crashes}, "
+                        f"pid={result.after.pid}",
+                    )
+            case_completed = True
+        finally:
+            if under_stress:
+                try:
+                    ssh = await _ensure_live_ssh(
+                        ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S
+                    )
+                    await _stop_cpu_stress(ssh)
+                except Exception:
+                    pass
+
+    if not case_completed:
+        return await _publish_ssh(ssh)
+
+    _log(
+        case_id,
+        f"Batch KILL ({scope_label}) complete: {len(results)} respawned, "
+        f"{len(skipped)} skipped"
         + (f"; stress={stress_mode}" if stress_mode else "")
         + f"; skipped=[{'; '.join(f'{n} ({r})' for n, r in skipped) or 'none'}]",
     )
@@ -2394,8 +2644,9 @@ async def assert_process_16_kill_single(
     password: str,
     case_id: str = "PROCESS_16",
 ) -> AsyncGenericDriver:
-    return await _run_all_services_crash_case(
-        ssh, host=host, password=password, case_id=case_id, signal="KILL", crashes_per_service=1
+    """Kill one randomly-chosen running service and confirm it respawns."""
+    return await _run_kill_single_random_case(
+        ssh, host=host, password=password, case_id=case_id
     )
 
 
@@ -2406,8 +2657,14 @@ async def assert_process_17_kill_multiple(
     password: str,
     case_id: str = "PROCESS_17",
 ) -> AsyncGenericDriver:
-    return await _run_all_services_crash_case(
-        ssh, host=host, password=password, case_id=case_id, signal="KILL", crashes_per_service=2
+    """Batch-kill every running monitored service at once and verify recovery."""
+    return await _run_kill_batch_case(
+        ssh,
+        host=host,
+        password=password,
+        case_id=case_id,
+        scope=MONITORED_SERVICE_NAMES,
+        scope_label="all monitored",
     )
 
 
@@ -2418,8 +2675,14 @@ async def assert_process_18_kill_critical(
     password: str,
     case_id: str = "PROCESS_18",
 ) -> AsyncGenericDriver:
-    return await _run_all_services_crash_case(
-        ssh, host=host, password=password, case_id=case_id, signal="KILL", crashes_per_service=1
+    """Batch-kill every critical service at once and verify recovery."""
+    return await _run_kill_batch_case(
+        ssh,
+        host=host,
+        password=password,
+        case_id=case_id,
+        scope=CRITICAL_SERVICE_NAMES,
+        scope_label="critical",
     )
 
 
@@ -2430,13 +2693,14 @@ async def assert_process_19_kill_under_load(
     password: str,
     case_id: str = "PROCESS_19",
 ) -> AsyncGenericDriver:
-    return await _run_all_services_crash_case(
+    """Batch-kill every running monitored service under CPU stress."""
+    return await _run_kill_batch_case(
         ssh,
         host=host,
         password=password,
         case_id=case_id,
-        signal="KILL",
-        crashes_per_service=1,
+        scope=MONITORED_SERVICE_NAMES,
+        scope_label="all monitored",
         under_stress=True,
     )
 
