@@ -49,36 +49,44 @@ def _require_destructive_process(request):
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_01
 @pytest.mark.ProcessMonitor
-async def test_process_01_visibility(request, root_ssh):
+async def test_process_01_visibility(request, root_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_01_visibility(root_ssh)
+    await assert_process_01_visibility(
+        root_ssh, host=bsu_ip, password=device_creds["pass"]
+    )
 
 
 @pytest.mark.order(2)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_02
 @pytest.mark.ProcessMonitor
-async def test_process_02_uptime(request, root_ssh):
+async def test_process_02_uptime(request, root_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_02_uptime(root_ssh)
+    await assert_process_02_uptime(
+        root_ssh, host=bsu_ip, password=device_creds["pass"]
+    )
 
 
 @pytest.mark.order(3)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_03
 @pytest.mark.ProcessMonitor
-async def test_process_03_restart_count(request, root_ssh):
+async def test_process_03_restart_count(request, root_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_03_restart_count(root_ssh)
+    await assert_process_03_restart_count(
+        root_ssh, host=bsu_ip, password=device_creds["pass"]
+    )
 
 
 @pytest.mark.order(4)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_04
 @pytest.mark.ProcessMonitor
-async def test_process_04_timestamp(request, root_ssh):
+async def test_process_04_timestamp(request, root_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_04_timestamp(root_ssh)
+    await assert_process_04_timestamp(
+        root_ssh, host=bsu_ip, password=device_creds["pass"]
+    )
 
 
 @pytest.mark.order(5)
@@ -148,9 +156,11 @@ async def test_process_12_log_integrity(request, root_ssh, bsu_ip, device_creds)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_13
 @pytest.mark.ProcessMonitor
-async def test_process_13_unauthorized_kill(request, root_ssh):
+async def test_process_13_unauthorized_kill(request, root_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_13_unauthorized_kill_bts(root_ssh)
+    await assert_process_13_unauthorized_kill_bts(
+        root_ssh, host=bsu_ip, password=device_creds["pass"]
+    )
 
 
 @pytest.mark.order(14)
