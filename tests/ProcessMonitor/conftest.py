@@ -5,6 +5,7 @@ import pytest
 from utils.process_monitor_flows import (
     assert_process_monitor_preflight,
     _disarm_recovery_reboot,
+    non_respawning_services_summary,
     recovery_reboot_may_be_armed,
 )
 
@@ -17,6 +18,9 @@ async def process_monitor_preflight(request, root_ssh, gui_page):
         return
     await assert_process_monitor_preflight(root_ssh, gui_page)
     yield
+    summary = non_respawning_services_summary()
+    if summary != "none":
+        print(f"[PROC][PROC_SESSION] Non-respawning this session (skipped in later cases): {summary}")
     if request.config.getoption("--no-procmon-recovery-reboot"):
         return
     if recovery_reboot_may_be_armed():
