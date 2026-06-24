@@ -173,38 +173,48 @@ def _format_proc_reason_html(reason: str) -> str:
     return f"{head_html}<ul class='proc-bullet-list'>{items}</ul>"
 
 
-def _process_monitor_pass_summary(test: dict, case_id: str) -> str:
-    """Pick the most informative trailing [PROC][CASE_ID] log line(s) for the report."""
-    stdout = str((test.get("call") or {}).get("stdout") or "")
-    if not stdout:
-        return ""
+_PROC_PASS_SUMMARY_NOISE = (
+    "Recovery reboot",
+    "Recovery hello",
+    "Recovery disarm",
+    "Reconnecting SSH",
+    "SSH restored",
+    "Waiting up to",
+    "Skipping ",
+    "SEGV on ",
+    "KILL on ",
+    "BATCH ",
+    "Batch ",
+    "Core dump",
+    "Post-reboot ubus probe",
+    "Optional/idle services",
+    "SESSION",
+    " recovered;",
+    "logs quiet",
+    "restart evidence",
+)
+
+
+def _iter_proc_messages(test: dict, case_id: str):
+    """Yield every [PROC][CASE_ID] log line captured for this test, oldest first."""
     prefix = f"[PROC][{case_id}] "
-    noise = (
-        "Recovery reboot",
-        "Recovery hello",
-        "Recovery disarm",
-        "Reconnecting SSH",
-        "SSH restored",
-        "Waiting up to",
-        "Skipping ",
-        "SEGV on ",
-        "KILL on ",
-        "BATCH ",
-        "Batch ",
-        "Core dump",
-        "Post-reboot ubus probe",
-        "Optional/idle services",
-        "SESSION",
-        " recovered;",
-        "logs quiet",
-        "restart evidence",
-    )
+    call = test.get("call") or {}
+    stdout = str(call.get("stdout") or "")
+    if stdout:
+        for raw in stdout.splitlines():
+            if raw.startswith(prefix):
+                yield raw[len(prefix):].strip()
+    for record in call.get("log") or []:
+        msg = str(record.get("msg") or "")
+        if msg.startswith(prefix):
+            yield msg[len(prefix):].strip()
+
+
+def _process_monitor_pass_summary(test: dict, case_id: str) -> str:
+    """Pick the most informative trailing [PROC][CASE_ID] log line for the report."""
     candidates: list[str] = []
-    for line in stdout.splitlines():
-        if not line.startswith(prefix):
-            continue
-        msg = line[len(prefix):].strip()
-        if not msg or any(skip in msg for skip in noise):
+    for msg in _iter_proc_messages(test, case_id):
+        if not msg or any(skip in msg for skip in _PROC_PASS_SUMMARY_NOISE):
             continue
         candidates.append(msg)
     if not candidates:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass
@@ -596,8 +597,10 @@ def _report_core_gaps(case_id: str, results: CrashResult | list[CrashResult]) ->
     """After crash recovery succeeds, flag missing core dumps as PARTIAL (not FAILED)."""
     items = [results] if isinstance(results, CrashResult) else list(results)
     missing: list[str] = []
+    seen: set[str] = set()
     for item in items:
-        if item.core_expected and not item.core_saved:
+        if item.core_expected and not item.core_saved and item.service_name not in seen:
+            seen.add(item.service_name)
             missing.append(item.service_name)
     if not missing:
         return
@@ -609,8 +612,13 @@ def _report_core_gaps(case_id: str, results: CrashResult | list[CrashResult]) ->
     )
 
 
+_PROC_LOGGER = logging.getLogger("procmon")
+
+
 def _log(case_id: str, message: str) -> None:
-    print(f"[PROC][{case_id}] {message}")
+    line = f"[PROC][{case_id}] {message}"
+    print(line)
+    _PROC_LOGGER.info(line)
 
 
 def set_recovery_reboot_enabled(enabled: bool) -> None:
