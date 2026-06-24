@@ -27,7 +27,7 @@ async def process_monitor_preflight(request, procmon_ssh, gui_page):
     yield
     summary = non_respawning_services_summary()
     if summary != "none":
-        print(f"[PROC][PROC_SESSION] Non-respawning this session (skipped in later cases): {summary}")
+        print(f"[PROC][PROC_SESSION] Session quirks (auto-skipped): {summary}")
     if request.config.getoption("--no-procmon-recovery-reboot"):
         return
     if recovery_reboot_may_be_armed():

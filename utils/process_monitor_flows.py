@@ -76,8 +76,16 @@ _RECOVERY_LEFT_ARMED = False
 _LAST_RECOVERY_TRIGGER = ""
 # Services observed once not to respawn after crash/kill — skip in all later cases this session.
 _NON_RESPAWNING_SERVICES: dict[str, str] = {}
+# Services whose ubus total_crashes counter does not increment after crash (e.g. sshd on some builds).
+_COUNTER_QUIRK_SERVICES: dict[str, str] = {}
+# Services observed not running before crash — skip in later cases instead of failing repeatedly.
+_NOT_RUNNING_SERVICES: dict[str, str] = {}
 _KNOWN_RESPAWN_QUIRK_SERVICES = frozenset({"ntpd", "rpcd"})
 _PREPARE_SSH_TIMEOUT_S = 25
+# Batch sweep tuning — parallel crash + single polling loop instead of per-service serial work.
+_BATCH_SWEEP_ENABLED = True
+_BATCH_POLL_INTERVAL_S = 0.4
+_BATCH_RESPAWN_TIMEOUT_S = 15
 
 
 @dataclass
@@ -213,9 +221,26 @@ def _sweep_failure_policy(case_id: str):
 
 
 def _non_respawning_summary() -> str:
-    if not _NON_RESPAWNING_SERVICES:
-        return "none"
-    return "; ".join(f"{name} ({reason})" for name, reason in sorted(_NON_RESPAWNING_SERVICES.items()))
+    parts: list[str] = []
+    if _NON_RESPAWNING_SERVICES:
+        parts.append(
+            "no-respawn=["
+            + ", ".join(f"{n} ({r})" for n, r in sorted(_NON_RESPAWNING_SERVICES.items()))
+            + "]"
+        )
+    if _COUNTER_QUIRK_SERVICES:
+        parts.append(
+            "no-counter=["
+            + ", ".join(f"{n} ({r})" for n, r in sorted(_COUNTER_QUIRK_SERVICES.items()))
+            + "]"
+        )
+    if _NOT_RUNNING_SERVICES:
+        parts.append(
+            "not-running=["
+            + ", ".join(f"{n} ({r})" for n, r in sorted(_NOT_RUNNING_SERVICES.items()))
+            + "]"
+        )
+    return "; ".join(parts) if parts else "none"
 
 
 def _note_non_respawning_service(case_id: str, service_name: str, reason: str) -> None:
@@ -227,6 +252,38 @@ def _note_non_respawning_service(case_id: str, service_name: str, reason: str) -
         case_id,
         f"SESSION: {service_name} does not respawn on this DUT — "
         f"skipping in all further cases ({reason})",
+    )
+
+
+def _note_counter_quirk_service(case_id: str, service_name: str, reason: str) -> None:
+    """Remember a service whose total_crashes counter does not increment."""
+    if service_name in _COUNTER_QUIRK_SERVICES:
+        return
+    _COUNTER_QUIRK_SERVICES[service_name] = reason
+    _log(
+        case_id,
+        f"SESSION: {service_name} crash counter does not increment on this DUT — "
+        f"skipping in all further cases ({reason})",
+    )
+
+
+def _note_not_running_service(case_id: str, service_name: str, reason: str) -> None:
+    """Remember a service that was not running before crash so we don't keep retrying."""
+    if service_name in _NOT_RUNNING_SERVICES:
+        return
+    _NOT_RUNNING_SERVICES[service_name] = reason
+    _log(
+        case_id,
+        f"SESSION: {service_name} was not running on this DUT — "
+        f"skipping crash attempts in all further cases ({reason})",
+    )
+
+
+def _is_known_quirk(service_name: str) -> bool:
+    return (
+        service_name in _NON_RESPAWNING_SERVICES
+        or service_name in _COUNTER_QUIRK_SERVICES
+        or service_name in _NOT_RUNNING_SERVICES
     )
 
 
@@ -457,19 +514,21 @@ async def _fail_crash_case(
         f"ssh={'UP' if ssh_ok else 'down'}",
     )
     _LAST_RECOVERY_TRIGGER = reason
-    if service_name and (
-        "did not respawn" in reason
-        or "no crash recorded" in reason
-        or "not running" in reason.lower()
-    ):
-        _note_non_respawning_service(case_id, service_name, reason)
+    if service_name:
+        lowered = reason.lower()
+        if "did not respawn" in lowered or "no crash recorded" in lowered:
+            _note_non_respawning_service(case_id, service_name, reason)
+        elif "crash counter did not increment" in lowered:
+            _note_counter_quirk_service(case_id, service_name, reason)
+        elif "not running" in lowered or "no pid" in lowered:
+            _note_not_running_service(case_id, service_name, reason)
 
-    # Do not reboot the whole DUT for a known per-service respawn issue while link is up.
+    # Do not reboot the whole DUT for a known per-service quirk while link is up.
     skip_dut_reboot = (
         ping_ok
         and ssh_ok
         and service_name
-        and service_name in _NON_RESPAWNING_SERVICES
+        and _is_known_quirk(service_name)
     )
     if skip_dut_reboot:
         _log(
@@ -516,7 +575,7 @@ async def _fail_crash_case(
             _SWEEP_CRITICAL_ONLY_FAIL
             and service_name
             and _service_is_critical(service_name)
-            and service_name not in _NON_RESPAWNING_SERVICES
+            and not _is_known_quirk(service_name)
         )
         if not hard_fail:
             _partial_case(case_id, reason)
@@ -1119,12 +1178,147 @@ def _recovery_timeout_for(service_name: str) -> int:
     return RESPAWN_WAIT_S
 
 
+async def _crash_services_batch(
+    ssh: AsyncGenericDriver,
+    service_names: list[str],
+    *,
+    host: str,
+    password: str,
+    case_id: str,
+    signal: KillSignal,
+    check_logs: bool = False,
+) -> tuple[list[CrashResult], list[tuple[str, str]]]:
+    """Batch-crash multiple non-SSH services and verify all respawn in a single polling loop.
+
+    Returns (results, skipped) — each per-service entry tagged so the case can summarize.
+    """
+    services_before = await fetch_service_list(ssh)
+    cores_before = await _list_core_files(ssh) if signal == "SEGV" else set()
+
+    pre: dict[str, tuple[int, int, ServiceInstance]] = {}
+    skipped: list[tuple[str, str]] = []
+    for name in service_names:
+        inst = _first_instance(services_before, name)
+        if inst is None or not inst.running or not inst.pid:
+            skipped.append((name, "not running before batch crash"))
+            if name in MUST_BE_RUNNING:
+                _note_not_running_service(case_id, name, "no PID before crash")
+            continue
+        pre[name] = (inst.pid, inst.total_crashes, inst)
+
+    if not pre:
+        return [], skipped
+
+    timeout_s = max(_recovery_timeout_for(n) for n in pre) + 2
+    reboot_delay = max(_recovery_reboot_delay_for(n, timeout_s) for n in pre)
+    await _arm_recovery_reboot(ssh, case_id=case_id, delay_s=reboot_delay)
+
+    pids_csv = " ".join(str(pid) for pid, _, _ in pre.values())
+    sig = "-SEGV" if signal == "SEGV" else "-9"
+    _log(
+        case_id,
+        f"BATCH {signal} on {len(pre)} services: "
+        + ", ".join(f"{n}(pid={pid})" for n, (pid, _, _) in pre.items()),
+    )
+    await _ssh_run(ssh, f"kill {sig} {pids_csv} 2>/dev/null || true", timeout_ops=15)
+
+    if signal == "SEGV":
+        await asyncio.sleep(0.5)
+        services_check = await fetch_service_list(ssh)
+        retry_pids: list[int] = []
+        for name, (old_pid, crashes_before, _) in pre.items():
+            inst = _first_instance(services_check, name)
+            if inst and inst.pid == old_pid and inst.total_crashes <= crashes_before:
+                retry_pids.append(old_pid)
+        if retry_pids:
+            _log(case_id, f"SEGV had no effect on {len(retry_pids)} pids; retrying with KILL")
+            await _ssh_run(
+                ssh,
+                f"kill -9 {' '.join(str(p) for p in retry_pids)} 2>/dev/null || true",
+                timeout_ops=10,
+            )
+
+    deadline = time.monotonic() + timeout_s
+    pending = set(pre)
+    after_by_name: dict[str, ServiceInstance] = {}
+    next_heartbeat = time.monotonic() + RECOVERY_REBOOT_HEARTBEAT_S
+    while pending and time.monotonic() < deadline:
+        if time.monotonic() >= next_heartbeat:
+            await _recovery_reboot_hello(ssh, case_id=case_id, delay_s=reboot_delay)
+            next_heartbeat = time.monotonic() + RECOVERY_REBOOT_HEARTBEAT_S
+        services_after = await fetch_service_list(ssh)
+        for name in list(pending):
+            old_pid, _crashes_before, _ = pre[name]
+            inst = _first_instance(services_after, name)
+            if inst and inst.running and inst.pid and inst.pid != old_pid:
+                after_by_name[name] = inst
+                pending.discard(name)
+        if pending:
+            await asyncio.sleep(_BATCH_POLL_INTERVAL_S)
+
+    for name in pending:
+        reason = f"{name} did not respawn within {timeout_s}s after batch crash"
+        _note_non_respawning_service(case_id, name, reason)
+        skipped.append((name, reason))
+
+    cores_after: set[str] = set()
+    if signal == "SEGV":
+        cores_after = await _list_core_files(ssh)
+    new_cores = cores_after - cores_before
+
+    results: list[CrashResult] = []
+    for name, inst in after_by_name.items():
+        old_pid, crashes_before, _ = pre[name]
+        if inst.total_crashes < crashes_before + 1:
+            reason = (
+                f"{name} crash counter did not increment "
+                f"({crashes_before} -> {inst.total_crashes})"
+            )
+            _note_counter_quirk_service(case_id, name, reason)
+            skipped.append((name, reason))
+            continue
+        core_path = None
+        if signal == "SEGV":
+            prefix = f"core.{_core_name(name)}.{old_pid}."
+            matches = sorted(c for c in new_cores if c.startswith(prefix))
+            if matches:
+                core_path = f"{PROC_CORE_DIR}/{matches[0]}"
+                _log(case_id, f"Core dump present: {core_path}")
+            else:
+                _log(
+                    case_id,
+                    f"Core dump not found for {name} "
+                    f"(expected {prefix}* under {PROC_CORE_DIR})",
+                )
+        results.append(CrashResult(service_name=name, after=inst, signal=signal, core_path=core_path))
+        _log(case_id, f"{name} recovered; total_crashes={inst.total_crashes}, pid={inst.pid}")
+
+    if check_logs and results:
+        names_csv = "|".join(re.escape(r.service_name) for r in results)
+        logs = await _ssh_run(
+            ssh,
+            f"logread 2>/dev/null | grep -iE '{names_csv}' | tail -n 60",
+            timeout_ops=30,
+        )
+        if logs.strip():
+            _log(case_id, "Batch restart log evidence present.")
+        else:
+            _log(case_id, "Batch restart logs quiet; relying on ubus counters.")
+
+    await _disarm_recovery_reboot(ssh, case_id=case_id)
+    return results, skipped
+
+
 async def _classify_service_for_crash(
     ssh: AsyncGenericDriver,
     service_name: str,
 ) -> tuple[Literal["test", "skip", "fail"], str]:
     if service_name in _NON_RESPAWNING_SERVICES:
         return "skip", f"session: does not respawn ({_NON_RESPAWNING_SERVICES[service_name]})"
+    if service_name in _COUNTER_QUIRK_SERVICES:
+        return "skip", f"session: counter quirk ({_COUNTER_QUIRK_SERVICES[service_name]})"
+    if service_name in _NOT_RUNNING_SERVICES:
+        return "skip", f"session: not running ({_NOT_RUNNING_SERVICES[service_name]})"
     inst = await get_service_instance(ssh, service_name)
     if inst is None:
         return "skip", "not registered in ubus on this firmware"
@@ -1320,6 +1514,8 @@ async def _run_all_services_crash_case(
     case_completed = False
     with _sweep_failure_policy(case_id):
         try:
+            batch_targets: list[str] = []
+            serial_targets: list[str] = []
             for service_name in SERVICE_SWEEP_ORDER:
                 action, reason = await _classify_service_for_crash(ssh, service_name)
                 if action == "skip":
@@ -1327,17 +1523,47 @@ async def _run_all_services_crash_case(
                     skipped.append((service_name, reason))
                     continue
                 if action == "fail":
+                    if service_name in MUST_BE_RUNNING:
+                        _note_not_running_service(case_id, service_name, reason)
                     _partial_case(case_id, f"{service_name}: {reason}")
                     skipped.append((service_name, reason))
                     continue
+                if service_name in SSH_RECONNECT_SERVICES:
+                    serial_targets.append(service_name)
+                else:
+                    batch_targets.append(service_name)
 
-                timeout_s = _recovery_timeout_for(service_name)
-                for attempt in range(1, crashes_per_service + 1):
-                    label = f"{attempt}/{crashes_per_service}" if crashes_per_service > 1 else ""
-                    _log(
-                        case_id,
-                        f"{signal} on {service_name}{f' ({label})' if label else ''}",
+            for attempt in range(1, crashes_per_service + 1):
+                attempt_label = (
+                    f" attempt {attempt}/{crashes_per_service}" if crashes_per_service > 1 else ""
+                )
+                if batch_targets and _BATCH_SWEEP_ENABLED:
+                    _log(case_id, f"Batch {signal} sweep starting{attempt_label}")
+                    batch_results, batch_skipped = await _crash_services_batch(
+                        ssh,
+                        batch_targets,
+                        host=host,
+                        password=password,
+                        case_id=case_id,
+                        signal=signal,
+                        check_logs=check_logs,
                     )
+                    results.extend(batch_results)
+                    skipped.extend(batch_skipped)
+                    batch_targets = [
+                        name for name in batch_targets if not _is_known_quirk(name)
+                    ]
+
+                for service_name in list(serial_targets):
+                    if _is_known_quirk(service_name):
+                        _log(
+                            case_id,
+                            f"Skipping {service_name}: session quirk (already noted)",
+                        )
+                        skipped.append((service_name, "session quirk"))
+                        continue
+                    timeout_s = _recovery_timeout_for(service_name)
+                    _log(case_id, f"{signal} on {service_name}{attempt_label}")
                     try:
                         result, ssh = await _crash_and_verify_restart_maybe_reconnect(
                             ssh,
@@ -1359,7 +1585,7 @@ async def _run_all_services_crash_case(
                             await _disarm_recovery_reboot(ssh, case_id=case_id)
                         except Exception:
                             pass
-                        break
+                        continue
                     except ServiceCrashFailure as exc:
                         skipped.append((exc.service_name, exc.reason))
                         ssh = await _publish_ssh(
@@ -1367,7 +1593,7 @@ async def _run_all_services_crash_case(
                                 ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S
                             )
                         )
-                        break
+                        continue
                     results.append(result)
                     if check_logs:
                         before_crashes = result.after.total_crashes - 1
