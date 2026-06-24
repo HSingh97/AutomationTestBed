@@ -54,20 +54,33 @@ MUST_BE_RUNNING = frozenset(
 
 PROC_CORE_DIR = "/overlay/data/procmon/cores"
 PROCESS_MONITOR_GUI_PATH = "/monitor/system_stats/process_monitoring"
-RESPAWN_WAIT_S = 8
-CORE_FILE_WAIT_S = 20
-NETIFD_RECOVERY_S = 45
-SSH_RECONNECT_WAIT_S = 90
+RESPAWN_WAIT_S = 5
+CORE_FILE_WAIT_S = 6
+NETIFD_RECOVERY_S = 25
+SSH_RECONNECT_WAIT_S = 60
+POLL_INTERVAL_S = 0.35
 KillSignal = Literal["SEGV", "KILL"]
 _SHELL_JOB_NOISE = re.compile(r"^\[\d+\]\+|^Done\(")
 
-# Dead-man recovery: reboot if automation does not send PROC_MON_HELLO within the deadline.
-RECOVERY_REBOOT_DELAY_S = 60
+# Dead-man backup only — unreachable DUT gets an immediate reboot from automation.
+RECOVERY_REBOOT_DELAY_S = 35
 RECOVERY_REBOOT_HELLO = "PROC_MON_HELLO"
-RECOVERY_REBOOT_HEARTBEAT_S = 10
+RECOVERY_REBOOT_HEARTBEAT_S = 3
+PROC_REBOOT_UP_TIMEOUT_S = 90
+PROC_REBOOT_DOWN_POLL_S = 10
 _RECOVERY_CANCEL = "/tmp/procmon_recovery_cancel"
 _RECOVERY_ARM_PID = "/tmp/procmon_recovery_arm.pid"
 _RECOVERY_REBOOT_ENABLED = True
+_RECOVERY_LEFT_ARMED = False
+_LAST_RECOVERY_TRIGGER = ""
+
+
+class _ServiceCrashSkipped(Exception):
+    """Optional/idle service did not respawn — skip remaining checks for this service."""
+
+    def __init__(self, service_name: str) -> None:
+        self.service_name = service_name
+        super().__init__(service_name)
 
 
 @dataclass
@@ -125,6 +138,221 @@ def _fail_case(case_id: str, reason: str) -> None:
     pytest.fail(f"{PROC_FAILED_MARKER} {case_id} FAILED: {reason}")
 
 
+def recovery_reboot_may_be_armed() -> bool:
+    """True when a crash/kill case failed with recovery reboot still armed on the DUT."""
+    return _RECOVERY_LEFT_ARMED
+
+
+async def _local_ping_host(host: str, *, count: int = 1, timeout_s: int = 1) -> tuple[bool, str]:
+    """Ping DUT from the lab host (not via SSH)."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ping",
+            "-c",
+            str(count),
+            "-W",
+            str(timeout_s),
+            host,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s * count + 5)
+        text = (stdout or b"").decode(errors="replace")
+        ok = proc.returncode == 0 and "100% packet loss" not in text.lower()
+        return ok, text.strip()[:200] or f"exit {proc.returncode}"
+    except Exception as exc:
+        return False, str(exc)[:200]
+
+
+async def _ssh_alive_quick(ssh: AsyncGenericDriver | None) -> bool:
+    if ssh is None:
+        return False
+    try:
+        await ssh.send_command("echo ok", timeout_ops=5)
+        return True
+    except Exception:
+        return False
+
+
+def _format_recovery_reboot_context(
+    failure_reason: str,
+    *,
+    host: str,
+    ping_ok: bool,
+    ping_detail: str,
+    ssh_ok: bool,
+) -> str:
+    """Human-readable explanation for why the DUT is being rebooted."""
+    reachability: list[str] = []
+    if ping_ok:
+        reachability.append(f"lab ping to {host} reachable")
+    else:
+        reachability.append(f"lab ping to {host} not reachable ({ping_detail})")
+    if ssh_ok:
+        reachability.append("SSH up")
+    else:
+        reachability.append("SSH down")
+    return f"{failure_reason}; {'; '.join(reachability)}"
+
+
+async def _instant_reboot_and_wait(
+    ssh: AsyncGenericDriver | None,
+    host: str,
+    password: str,
+    *,
+    case_id: str,
+    recovery_reason: str,
+) -> AsyncGenericDriver | None:
+    """Reboot DUT immediately and poll until lab ping + SSH are back."""
+    global _RECOVERY_LEFT_ARMED
+    _log(
+        case_id,
+        f"Recovery reboot: rebooting {host} because {recovery_reason}",
+    )
+    if ssh and await _ssh_alive_quick(ssh):
+        try:
+            await _ssh_run(ssh, "sync; reboot", timeout_ops=8)
+            _log(case_id, f"Recovery reboot: reboot command sent to {host} over SSH.")
+        except Exception as exc:
+            _log(case_id, f"Recovery reboot: SSH reboot command failed ({exc}); waiting for device.")
+        try:
+            await _close_ssh(ssh)
+        except Exception:
+            pass
+    else:
+        _log(
+            case_id,
+            f"Recovery reboot: SSH unavailable on {host} — waiting for device to go down and come back.",
+        )
+
+    down_deadline = time.monotonic() + PROC_REBOOT_DOWN_POLL_S
+    while time.monotonic() < down_deadline:
+        ping_ok, _ = await _local_ping_host(host)
+        if not ping_ok:
+            _log(case_id, f"Recovery reboot: lab ping to {host} is down (device rebooting).")
+            break
+        await asyncio.sleep(POLL_INTERVAL_S)
+
+    deadline = time.monotonic() + PROC_REBOOT_UP_TIMEOUT_S
+    last_err = ""
+    while time.monotonic() < deadline:
+        ping_ok, ping_detail = await _local_ping_host(host)
+        if ping_ok:
+            try:
+                conn = await _wait_for_ssh(host, password, timeout_s=10, interval_s=1)
+                await _disarm_recovery_reboot(conn, case_id=case_id)
+                _RECOVERY_LEFT_ARMED = False
+                _log(
+                    case_id,
+                    f"Recovery reboot: device {host} back online (ping up, SSH restored) "
+                    f"after reboot triggered because {recovery_reason}",
+                )
+                return conn
+            except Exception as exc:
+                last_err = str(exc)
+        else:
+            last_err = f"ping down ({ping_detail})"
+        await asyncio.sleep(POLL_INTERVAL_S)
+    _log(
+        case_id,
+        f"Recovery reboot: timed out after {PROC_REBOOT_UP_TIMEOUT_S}s waiting for {host} "
+        f"({last_err}); originally rebooted because {recovery_reason}",
+    )
+    return None
+
+
+async def instant_recover_dut_if_armed(
+    host: str,
+    password: str,
+    *,
+    case_id: str = "PROC_RECOVER",
+) -> None:
+    """Between tests: reboot only when ping or SSH is down; otherwise disarm dead-man."""
+    if not _RECOVERY_REBOOT_ENABLED or not _RECOVERY_LEFT_ARMED:
+        return
+    ping_ok, ping_detail = await _local_ping_host(host)
+    ssh: AsyncGenericDriver | None = None
+    ssh_ok = False
+    if ping_ok:
+        try:
+            ssh = await _wait_for_ssh(host, password, timeout_s=15, interval_s=1)
+            ssh_ok = await _ssh_alive_quick(ssh)
+        except Exception:
+            ssh = None
+    if ping_ok and ssh_ok and ssh is not None:
+        trigger = _LAST_RECOVERY_TRIGGER or "prior test left recovery reboot armed"
+        _log(
+            case_id,
+            f"No recovery reboot: {host} reachable (ping up, SSH up) after {trigger} — disarming dead-man only.",
+        )
+        await _disarm_recovery_reboot(ssh, case_id=case_id)
+        return
+    trigger = _LAST_RECOVERY_TRIGGER or "prior test left recovery reboot armed"
+    recovery_reason = _format_recovery_reboot_context(
+        trigger,
+        host=host,
+        ping_ok=ping_ok,
+        ping_detail=ping_detail,
+        ssh_ok=ssh_ok,
+    )
+    await _instant_reboot_and_wait(
+        ssh,
+        host,
+        password,
+        case_id=case_id,
+        recovery_reason=recovery_reason,
+    )
+
+
+async def _fail_crash_case(
+    ssh: AsyncGenericDriver | None,
+    host: str,
+    password: str,
+    case_id: str,
+    reason: str,
+) -> None:
+    """Fail a crash/kill step; reboot only when lab ping or SSH is down."""
+    global _RECOVERY_LEFT_ARMED, _LAST_RECOVERY_TRIGGER
+    ping_ok, ping_detail = await _local_ping_host(host)
+    ssh_ok = await _ssh_alive_quick(ssh)
+    _log(case_id, f"FAILED: {reason}")
+    _log(
+        case_id,
+        f"Reachability at failure: lab ping={'UP' if ping_ok else 'DOWN'} ({ping_detail}); "
+        f"ssh={'UP' if ssh_ok else 'down'}",
+    )
+    _LAST_RECOVERY_TRIGGER = reason
+    if not ping_ok or not ssh_ok:
+        _RECOVERY_LEFT_ARMED = True
+        recovery_reason = _format_recovery_reboot_context(
+            reason,
+            host=host,
+            ping_ok=ping_ok,
+            ping_detail=ping_detail,
+            ssh_ok=ssh_ok,
+        )
+        await _instant_reboot_and_wait(
+            ssh,
+            host,
+            password,
+            case_id=case_id,
+            recovery_reason=recovery_reason,
+        )
+    else:
+        _RECOVERY_LEFT_ARMED = True
+        _log(
+            case_id,
+            f"No recovery reboot: {host} still reachable (ping up, SSH up) despite "
+            f"{reason} — firmware/service issue; disarming dead-man and continuing.",
+        )
+        if ssh is not None:
+            try:
+                await _disarm_recovery_reboot(ssh, case_id=case_id)
+            except Exception:
+                pass
+    pytest.fail(f"{PROC_FAILED_MARKER} {case_id} FAILED: {reason}")
+
+
 def _partial_case(case_id: str, reason: str) -> None:
     """Soft discrepancy — case PARTIAL; suite continues."""
     _log(case_id, f"PARTIAL: {reason}")
@@ -158,8 +386,8 @@ def set_recovery_reboot_enabled(enabled: bool) -> None:
 
 
 def _recovery_reboot_delay_for(service_name: str, recovery_timeout_s: int) -> int:
-    """Allow enough time for SSH reconnect + service respawn before recovery reboot."""
-    slack = SSH_RECONNECT_WAIT_S + 20 if service_name in SSH_RECONNECT_SERVICES else 20
+    """Backup dead-man delay (automation reboots instantly on failure)."""
+    slack = 25 if service_name in SSH_RECONNECT_SERVICES else 12
     return max(RECOVERY_REBOOT_DELAY_S, recovery_timeout_s + slack)
 
 
@@ -211,6 +439,7 @@ async def _recovery_reboot_hello(
 
 async def _disarm_recovery_reboot(ssh: AsyncGenericDriver, *, case_id: str) -> None:
     """Permanently disarm recovery reboot (case success or intentional destructive reboot)."""
+    global _RECOVERY_LEFT_ARMED
     if not _RECOVERY_REBOOT_ENABLED:
         return
     try:
@@ -221,6 +450,8 @@ async def _disarm_recovery_reboot(ssh: AsyncGenericDriver, *, case_id: str) -> N
             f"rm -f {_RECOVERY_ARM_PID} {_RECOVERY_CANCEL}",
             timeout_ops=15,
         )
+        _RECOVERY_LEFT_ARMED = False
+        _LAST_RECOVERY_TRIGGER = ""
         _log(case_id, f"Recovery reboot disarmed ({RECOVERY_REBOOT_HELLO})")
     except Exception as exc:
         _log(case_id, f"Recovery disarm skipped: {exc}")
@@ -322,7 +553,7 @@ async def _find_core_file(
             path = f"{PROC_CORE_DIR}/{matches[0]}"
             _log(case_id, f"Core dump present: {path}")
             return path
-        await asyncio.sleep(1)
+        await asyncio.sleep(POLL_INTERVAL_S)
     _log(
         case_id,
         f"Core dump not found for {service_name} (expected {core_prefix}* under {PROC_CORE_DIR})",
@@ -421,7 +652,7 @@ async def _wait_for_running(
     while time.monotonic() < deadline:
         if await _process_running(ssh, service_name) == expect_running:
             return True
-        await asyncio.sleep(1)
+        await asyncio.sleep(POLL_INTERVAL_S)
     return await _process_running(ssh, service_name) == expect_running
 
 
@@ -531,6 +762,8 @@ async def _wait_for_service_restart(
     ssh: AsyncGenericDriver,
     service_name: str,
     *,
+    host: str,
+    password: str,
     old_pid: int | None,
     crashes_before: int,
     case_id: str,
@@ -545,11 +778,11 @@ async def _wait_for_service_restart(
             next_heartbeat = time.monotonic() + RECOVERY_REBOOT_HEARTBEAT_S
         pids = await _pgrep_pids(ssh, meta["pgrep"])
         if not pids:
-            await asyncio.sleep(1)
+            await asyncio.sleep(POLL_INTERVAL_S)
             continue
         new_pid = pids[0]
         if old_pid and new_pid == old_pid:
-            await asyncio.sleep(1)
+            await asyncio.sleep(POLL_INTERVAL_S)
             continue
         inst = await get_service_instance(ssh, service_name)
         if inst is not None and inst.running and inst.pid == new_pid:
@@ -565,16 +798,21 @@ async def _wait_for_service_restart(
             last_exit=inst.last_exit if inst else 0,
             respawn_retry=inst.respawn_retry if inst else None,
         )
-    _fail_case(
-        case_id,
-        f"{service_name} did not respawn within {timeout_s}s after crash (process did not restart)",
+    reason = (
+        f"{service_name} did not respawn within {timeout_s}s after crash (process did not restart)"
     )
+    if service_name in OPTIONAL_IDLE_SERVICES:
+        _log(case_id, f"{reason} — optional/idle service, skipping")
+        raise _ServiceCrashSkipped(service_name)
+    await _fail_crash_case(ssh, host, password, case_id, reason)
 
 
 async def _crash_and_verify_restart(
     ssh: AsyncGenericDriver,
     service_name: str,
     *,
+    host: str,
+    password: str,
     case_id: str,
     signal: KillSignal = "SEGV",
     recovery_timeout_s: int = RESPAWN_WAIT_S,
@@ -583,7 +821,13 @@ async def _crash_and_verify_restart(
     before = await _ensure_service_present(ssh, service_name)
     old_pid = before.pid
     if not old_pid:
-        _fail_case(case_id, f"{service_name} has no PID before crash (process not running)")
+        await _fail_crash_case(
+            ssh,
+            host,
+            password,
+            case_id,
+            f"{service_name} has no PID before crash (process not running)",
+        )
     crashes_before = before.total_crashes
     cores_before = await _list_core_files(ssh) if signal == "SEGV" else set()
 
@@ -591,33 +835,44 @@ async def _crash_and_verify_restart(
     await _arm_recovery_reboot(ssh, case_id=case_id, delay_s=reboot_delay)
     await _induce_signal(ssh, service_name, signal, case_id=case_id)
 
-    await asyncio.sleep(1)
+    await asyncio.sleep(0.5)
     if signal == "SEGV":
         still_running = await _process_running(ssh, service_name)
         if still_running:
             quick = await get_service_instance(ssh, service_name)
             if quick and quick.pid == old_pid and quick.total_crashes <= crashes_before:
-                _fail_case(
-                    case_id,
+                reason = (
                     f"{service_name} still running with no crash recorded after SEGV "
-                    f"(pid {old_pid} unchanged)",
+                    f"(pid {old_pid} unchanged)"
                 )
+                if service_name in OPTIONAL_IDLE_SERVICES:
+                    _log(case_id, f"{reason} — optional/idle service, skipping")
+                    raise _ServiceCrashSkipped(service_name)
+                await _fail_crash_case(ssh, host, password, case_id, reason)
 
     after = await _wait_for_service_restart(
         ssh,
         service_name,
+        host=host,
+        password=password,
         old_pid=old_pid,
         crashes_before=crashes_before,
         case_id=case_id,
         timeout_s=recovery_timeout_s,
     )
     if not after.pid or after.pid == old_pid:
-        _fail_case(
+        await _fail_crash_case(
+            ssh,
+            host,
+            password,
             case_id,
             f"{service_name} PID did not change after crash ({old_pid} -> {after.pid})",
         )
     if after.total_crashes < crashes_before + 1:
-        _fail_case(
+        await _fail_crash_case(
+            ssh,
+            host,
+            password,
             case_id,
             f"{service_name} crash counter did not increment "
             f"({crashes_before} -> {after.total_crashes})",
@@ -647,7 +902,7 @@ def _recovery_timeout_for(service_name: str) -> int:
     if service_name == "network":
         return NETIFD_RECOVERY_S
     if service_name == "log":
-        return 20
+        return 12
     return RESPAWN_WAIT_S
 
 
@@ -680,7 +935,7 @@ async def _crashable_services_on_dut(ssh: AsyncGenericDriver) -> set[str]:
 
 async def _reconnect_ssh(host: str, password: str, *, case_id: str, service_name: str) -> AsyncGenericDriver:
     _log(case_id, f"Reconnecting SSH after {service_name} crash...")
-    return await _wait_for_ssh(host, password, timeout_s=SSH_RECONNECT_WAIT_S, interval_s=2)
+    return await _wait_for_ssh(host, password, timeout_s=SSH_RECONNECT_WAIT_S, interval_s=1)
 
 
 async def _crash_and_verify_restart_maybe_reconnect(
@@ -697,6 +952,8 @@ async def _crash_and_verify_restart_maybe_reconnect(
         result = await _crash_and_verify_restart(
             ssh,
             service_name,
+            host=host,
+            password=password,
             case_id=case_id,
             signal=signal,
             recovery_timeout_s=recovery_timeout_s,
@@ -707,7 +964,13 @@ async def _crash_and_verify_restart_maybe_reconnect(
     before = await _ensure_service_present(ssh, service_name)
     old_pid = before.pid
     if not old_pid:
-        _fail_case(case_id, f"{service_name} has no PID before crash (process not running)")
+        await _fail_crash_case(
+            ssh,
+            host,
+            password,
+            case_id,
+            f"{service_name} has no PID before crash (process not running)",
+        )
     crashes_before = before.total_crashes
     cores_before = await _list_core_files(ssh) if signal == "SEGV" else set()
 
@@ -728,18 +991,26 @@ async def _crash_and_verify_restart_maybe_reconnect(
     after = await _wait_for_service_restart(
         ssh,
         service_name,
+        host=host,
+        password=password,
         old_pid=old_pid,
         crashes_before=crashes_before,
         case_id=case_id,
         timeout_s=recovery_timeout_s,
     )
     if not after.pid or after.pid == old_pid:
-        _fail_case(
+        await _fail_crash_case(
+            ssh,
+            host,
+            password,
             case_id,
             f"{service_name} PID did not change after crash ({old_pid} -> {after.pid})",
         )
     if after.total_crashes < crashes_before + 1:
-        _fail_case(
+        await _fail_crash_case(
+            ssh,
+            host,
+            password,
             case_id,
             f"{service_name} crash counter did not increment "
             f"({crashes_before} -> {after.total_crashes})",
@@ -789,10 +1060,11 @@ async def _run_all_services_crash_case(
 
     if under_stress:
         stress_mode = await _start_cpu_stress(ssh)
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
         if not await _collect_visible_services(ssh):
             _fail_case(case_id, "ubus service list empty under CPU stress")
 
+    case_completed = False
     try:
         for service_name in SERVICE_SWEEP_ORDER:
             action, reason = await _classify_service_for_crash(ssh, service_name)
@@ -801,7 +1073,7 @@ async def _run_all_services_crash_case(
                 skipped.append((service_name, reason))
                 continue
             if action == "fail":
-                _fail_case(case_id, f"{service_name}: {reason}")
+                await _fail_crash_case(ssh, host, password, case_id, f"{service_name}: {reason}")
 
             timeout_s = _recovery_timeout_for(service_name)
             for attempt in range(1, crashes_per_service + 1):
@@ -810,15 +1082,24 @@ async def _run_all_services_crash_case(
                     case_id,
                     f"{signal} on {service_name}{f' ({label})' if label else ''}",
                 )
-                result, ssh = await _crash_and_verify_restart_maybe_reconnect(
-                    ssh,
-                    service_name,
-                    host=host,
-                    password=password,
-                    case_id=case_id,
-                    signal=signal,
-                    recovery_timeout_s=timeout_s,
-                )
+                try:
+                    result, ssh = await _crash_and_verify_restart_maybe_reconnect(
+                        ssh,
+                        service_name,
+                        host=host,
+                        password=password,
+                        case_id=case_id,
+                        signal=signal,
+                        recovery_timeout_s=timeout_s,
+                    )
+                except _ServiceCrashSkipped as exc:
+                    skipped.append((exc.service_name, "did not respawn after crash"))
+                    try:
+                        ssh = await _ensure_live_ssh(ssh, host, password)
+                        await _disarm_recovery_reboot(ssh, case_id=case_id)
+                    except Exception:
+                        pass
+                    break
                 results.append(result)
                 if check_logs:
                     before_crashes = result.after.total_crashes - 1
@@ -835,19 +1116,21 @@ async def _run_all_services_crash_case(
                     case_id,
                     f"{service_name} recovered; total_crashes={result.after.total_crashes}, pid={result.after.pid}",
                 )
+        case_completed = True
     finally:
         if under_stress:
             await _stop_cpu_stress(ssh)
-        try:
-            ssh = await _ensure_live_ssh(ssh, host, password)
-            await _disarm_recovery_reboot(ssh, case_id=case_id)
-        except Exception:
-            pass
+
+    if not case_completed:
+        return await _ensure_live_ssh(ssh, host, password)
 
     tested = {result.service_name for result in results}
     missed = sorted(crashable_before - tested)
     if missed:
-        _fail_case(
+        await _fail_crash_case(
+            ssh,
+            host,
+            password,
             case_id,
             f"Did not run {signal} on crashable services: {', '.join(missed)}",
         )
@@ -862,7 +1145,9 @@ async def _run_all_services_crash_case(
         + (f"; stress={stress_mode}" if stress_mode else "")
         + f"; skipped=[{'; '.join(f'{n} ({r})' for n, r in skipped) or 'none'}]",
     )
-    return await _ensure_live_ssh(ssh, host, password)
+    ssh = await _ensure_live_ssh(ssh, host, password)
+    await _disarm_recovery_reboot(ssh, case_id=case_id)
+    return ssh
 
 
 async def _assert_unauthorized_kill_all_services(
@@ -894,6 +1179,8 @@ async def _run_sequential_crashes(
     ssh: AsyncGenericDriver,
     targets: list[str],
     *,
+    host: str,
+    password: str,
     case_id: str,
     signal: KillSignal,
     recovery_timeout_s: int = RESPAWN_WAIT_S,
@@ -904,6 +1191,8 @@ async def _run_sequential_crashes(
             await _crash_and_verify_restart(
                 ssh,
                 target,
+                host=host,
+                password=password,
                 case_id=case_id,
                 signal=signal,
                 recovery_timeout_s=recovery_timeout_s,
@@ -923,7 +1212,7 @@ async def _ensure_live_ssh(
         return ssh
     except Exception:
         await _close_ssh(ssh)
-        return await _wait_for_ssh(host, password, timeout_s=120, interval_s=5)
+        return await _wait_for_ssh(host, password, timeout_s=60, interval_s=2)
 
 
 async def _wait_for_reboot_and_ssh(
@@ -931,12 +1220,17 @@ async def _wait_for_reboot_and_ssh(
     password: str,
     *,
     case_id: str,
-    down_grace_s: int = 20,
-    up_timeout_s: int = 240,
+    down_poll_s: int = PROC_REBOOT_DOWN_POLL_S,
+    up_timeout_s: int = PROC_REBOOT_UP_TIMEOUT_S,
 ) -> AsyncGenericDriver:
-    _log(case_id, f"Waiting up to {down_grace_s}s for device to go down...")
-    await asyncio.sleep(down_grace_s)
-    conn = await _wait_for_ssh(host, password, timeout_s=up_timeout_s, interval_s=5)
+    _log(case_id, f"Waiting up to {down_poll_s}s for device to go down...")
+    down_deadline = time.monotonic() + down_poll_s
+    while time.monotonic() < down_deadline:
+        ping_ok, _ = await _local_ping_host(host)
+        if not ping_ok:
+            break
+        await asyncio.sleep(POLL_INTERVAL_S)
+    conn = await _wait_for_ssh(host, password, timeout_s=up_timeout_s, interval_s=2)
     _log(case_id, f"SSH restored on {host} after watchdog reboot.")
     return conn
 
@@ -1245,7 +1539,7 @@ async def assert_process_02_uptime(ssh: AsyncGenericDriver, *, case_id: str = "P
 
 async def assert_process_03_restart_count(ssh: AsyncGenericDriver, *, case_id: str = "PROCESS_03") -> None:
     before = await _collect_visible_services(ssh)
-    await asyncio.sleep(5)
+    await asyncio.sleep(3)
     after = await _collect_visible_services(ssh)
     changed = [
         name
@@ -1263,7 +1557,7 @@ async def assert_process_03_restart_count(ssh: AsyncGenericDriver, *, case_id: s
 
 async def assert_process_04_timestamp(ssh: AsyncGenericDriver, *, case_id: str = "PROCESS_04") -> None:
     before = await _collect_visible_services(ssh)
-    await asyncio.sleep(10)
+    await asyncio.sleep(5)
     after = await _collect_visible_services(ssh)
     drift: list[str] = []
     for name, inst_before in before.items():
@@ -1408,12 +1702,20 @@ async def assert_process_13_unauthorized_kill_bts(
     await _assert_unauthorized_kill_all_services(ssh, case_id=case_id)
 
 
-async def assert_process_14_dependency_handling(ssh: AsyncGenericDriver, *, case_id: str = "PROCESS_14") -> None:
+async def assert_process_14_dependency_handling(
+    ssh: AsyncGenericDriver,
+    *,
+    host: str,
+    password: str,
+    case_id: str = "PROCESS_14",
+) -> None:
     child_before = await _ensure_service_present(ssh, DEPENDENCY_CHILD)
     parent_before = await _ensure_service_present(ssh, DEPENDENCY_PARENT)
     parent_result = await _crash_and_verify_restart(
         ssh,
         DEPENDENCY_PARENT,
+        host=host,
+        password=password,
         case_id=case_id,
         signal="SEGV",
         recovery_timeout_s=NETIFD_RECOVERY_S,

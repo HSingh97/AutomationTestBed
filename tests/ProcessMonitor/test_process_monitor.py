@@ -157,9 +157,11 @@ async def test_process_13_unauthorized_kill(request, root_ssh):
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_14
 @pytest.mark.ProcessMonitor
-async def test_process_14_dependency_handling(request, root_ssh):
+async def test_process_14_dependency_handling(request, root_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    await assert_process_14_dependency_handling(root_ssh)
+    await assert_process_14_dependency_handling(
+        root_ssh, host=bsu_ip, password=device_creds["pass"]
+    )
 
 
 @pytest.mark.order(15)
