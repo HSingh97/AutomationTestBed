@@ -295,6 +295,16 @@ EXTENDED_PROCESS_TEST_CASES: tuple[ProcessTestCase, ...] = (
         "EXT-SW-PROC-08",
         official=False,
     ),
+    ProcessTestCase(
+        "PROCESS_29",
+        "SSH-Loss Recovery Reboot (automation)",
+        "Before each crash/kill: arm reboot unless PROC_MON_HELLO within 60s; hello slides deadline while SSH up",
+        "If automation loses SSH or hangs, DUT reboots; if hello received, no recovery reboot",
+        "Extended",
+        "BTS",
+        "EXT-SW-PROC-09",
+        official=False,
+    ),
 )
 
 PROCESS_TEST_CASES: tuple[ProcessTestCase, ...] = OFFICIAL_PROCESS_TEST_CASES + EXTENDED_PROCESS_TEST_CASES

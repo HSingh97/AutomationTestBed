@@ -61,6 +61,15 @@ SSH_RECONNECT_WAIT_S = 90
 KillSignal = Literal["SEGV", "KILL"]
 _SHELL_JOB_NOISE = re.compile(r"^\[\d+\]\+|^Done\(")
 
+# Dead-man recovery: reboot if automation does not send PROC_MON_HELLO within the deadline.
+RECOVERY_REBOOT_DELAY_S = 60
+RECOVERY_REBOOT_HELLO = "PROC_MON_HELLO"
+RECOVERY_REBOOT_HEARTBEAT_S = 10
+_RECOVERY_DEADLINE = "/tmp/procmon_recovery_deadline"
+_RECOVERY_CANCEL = "/tmp/procmon_recovery_cancel"
+_RECOVERY_WATCH_PID = "/tmp/procmon_recovery_watch.pid"
+_RECOVERY_REBOOT_ENABLED = True
+
 
 @dataclass
 class ServiceInstance:
@@ -141,6 +150,105 @@ def _report_core_gaps(case_id: str, results: CrashResult | list[CrashResult]) ->
 
 def _log(case_id: str, message: str) -> None:
     print(f"[PROC][{case_id}] {message}")
+
+
+def set_recovery_reboot_enabled(enabled: bool) -> None:
+    """Toggle SSH-loss recovery reboot (armed before each crash/kill)."""
+    global _RECOVERY_REBOOT_ENABLED
+    _RECOVERY_REBOOT_ENABLED = enabled
+
+
+def _recovery_reboot_delay_for(service_name: str, recovery_timeout_s: int) -> int:
+    """Allow enough time for SSH reconnect + service respawn before recovery reboot."""
+    slack = SSH_RECONNECT_WAIT_S + 20 if service_name in SSH_RECONNECT_SERVICES else 20
+    return max(RECOVERY_REBOOT_DELAY_S, recovery_timeout_s + slack)
+
+
+async def _ensure_recovery_reboot_watcher(ssh: AsyncGenericDriver) -> None:
+    """Start a single background watcher on the DUT (idempotent)."""
+    script = f"""
+PROC_DL={_RECOVERY_DEADLINE}
+PROC_CANCEL={_RECOVERY_CANCEL}
+PROC_WATCH={_RECOVERY_WATCH_PID}
+if [ -f "$PROC_WATCH" ] && kill -0 "$(cat "$PROC_WATCH" 2>/dev/null)" 2>/dev/null; then
+  exit 0
+fi
+(
+  while true; do
+    [ -f "$PROC_CANCEL" ] && exit 0
+    now=$(date +%s)
+    dl=$(cat "$PROC_DL" 2>/dev/null || echo 0)
+    if [ "$dl" -gt 0 ] && [ "$now" -ge "$dl" ]; then
+      logger -t procmon_recovery "no {_RECOVERY_REBOOT_HELLO} — rebooting"
+      reboot
+    fi
+    sleep 5
+  done
+) &
+echo $! > "$PROC_WATCH"
+"""
+    await _ssh_run(ssh, script.strip(), timeout_ops=15)
+
+
+async def _arm_recovery_reboot(
+    ssh: AsyncGenericDriver,
+    *,
+    case_id: str,
+    delay_s: int = RECOVERY_REBOOT_DELAY_S,
+) -> None:
+    """Arm recovery reboot unless automation slides the deadline with hello."""
+    if not _RECOVERY_REBOOT_ENABLED:
+        return
+    await _ensure_recovery_reboot_watcher(ssh)
+    await _ssh_run(
+        ssh,
+        f"rm -f {_RECOVERY_CANCEL}; echo $(( $(date +%s) + {int(delay_s)} )) > {_RECOVERY_DEADLINE}",
+        timeout_ops=10,
+    )
+    _log(
+        case_id,
+        f"Recovery reboot armed ({delay_s}s without {RECOVERY_REBOOT_HELLO})",
+    )
+
+
+async def _recovery_reboot_hello(
+    ssh: AsyncGenericDriver,
+    *,
+    case_id: str,
+    delay_s: int = RECOVERY_REBOOT_DELAY_S,
+) -> None:
+    """Slide recovery deadline — Jenkins/script still has SSH."""
+    if not _RECOVERY_REBOOT_ENABLED:
+        return
+    try:
+        await _ssh_run(
+            ssh,
+            f"echo $(( $(date +%s) + {int(delay_s)} )) > {_RECOVERY_DEADLINE}",
+            timeout_ops=10,
+        )
+        _log(case_id, f"Recovery hello ({RECOVERY_REBOOT_HELLO}) — reboot cancelled/slid")
+    except Exception as exc:
+        _log(
+            case_id,
+            f"Recovery hello failed (SSH down — recovery reboot may follow): {exc}",
+        )
+
+
+async def _disarm_recovery_reboot(ssh: AsyncGenericDriver, *, case_id: str) -> None:
+    """Permanently disarm recovery reboot (case success or intentional destructive reboot)."""
+    if not _RECOVERY_REBOOT_ENABLED:
+        return
+    try:
+        await _ssh_run(
+            ssh,
+            f"touch {_RECOVERY_CANCEL}; "
+            f"kill $(cat {_RECOVERY_WATCH_PID} 2>/dev/null) 2>/dev/null || true; "
+            f"rm -f {_RECOVERY_DEADLINE} {_RECOVERY_WATCH_PID}",
+            timeout_ops=10,
+        )
+        _log(case_id, f"Recovery reboot disarmed ({RECOVERY_REBOOT_HELLO})")
+    except Exception as exc:
+        _log(case_id, f"Recovery disarm skipped: {exc}")
 
 
 def _core_name(service_name: str) -> str:
@@ -455,7 +563,11 @@ async def _wait_for_service_restart(
 ) -> ServiceInstance:
     meta = MONITORED_SERVICES[service_name]
     deadline = time.monotonic() + timeout_s
+    next_heartbeat = time.monotonic()
     while time.monotonic() < deadline:
+        if time.monotonic() >= next_heartbeat:
+            await _recovery_reboot_hello(ssh, case_id=case_id)
+            next_heartbeat = time.monotonic() + RECOVERY_REBOOT_HEARTBEAT_S
         pids = await _pgrep_pids(ssh, meta["pgrep"])
         if not pids:
             await asyncio.sleep(1)
@@ -500,6 +612,8 @@ async def _crash_and_verify_restart(
     crashes_before = before.total_crashes
     cores_before = await _list_core_files(ssh) if signal == "SEGV" else set()
 
+    reboot_delay = _recovery_reboot_delay_for(service_name, recovery_timeout_s)
+    await _arm_recovery_reboot(ssh, case_id=case_id, delay_s=reboot_delay)
     await _induce_signal(ssh, service_name, signal, case_id=case_id)
 
     await asyncio.sleep(1)
@@ -545,6 +659,7 @@ async def _crash_and_verify_restart(
             case_id=case_id,
         )
 
+    await _disarm_recovery_reboot(ssh, case_id=case_id)
     return CrashResult(
         service_name=service_name,
         after=after,
@@ -621,6 +736,8 @@ async def _crash_and_verify_restart_maybe_reconnect(
     crashes_before = before.total_crashes
     cores_before = await _list_core_files(ssh) if signal == "SEGV" else set()
 
+    reboot_delay = _recovery_reboot_delay_for(service_name, recovery_timeout_s)
+    await _arm_recovery_reboot(ssh, case_id=case_id, delay_s=reboot_delay)
     await _induce_signal(ssh, service_name, signal, case_id=case_id)
     try:
         await ssh.send_command("echo ok", timeout_ops=3)
@@ -632,6 +749,7 @@ async def _crash_and_verify_restart_maybe_reconnect(
         pass
 
     ssh = await _reconnect_ssh(host, password, case_id=case_id, service_name=service_name)
+    await _recovery_reboot_hello(ssh, case_id=case_id, delay_s=reboot_delay)
     after = await _wait_for_service_restart(
         ssh,
         service_name,
@@ -663,6 +781,7 @@ async def _crash_and_verify_restart_maybe_reconnect(
             case_id=case_id,
         )
 
+    await _disarm_recovery_reboot(ssh, case_id=case_id)
     return (
         CrashResult(
             service_name=service_name,
@@ -744,6 +863,11 @@ async def _run_all_services_crash_case(
     finally:
         if under_stress:
             await _stop_cpu_stress(ssh)
+        try:
+            ssh = await _ensure_live_ssh(ssh, host, password)
+            await _disarm_recovery_reboot(ssh, case_id=case_id)
+        except Exception:
+            pass
 
     tested = {result.service_name for result in results}
     missed = sorted(crashable_before - tested)
@@ -1236,6 +1360,7 @@ async def assert_process_09_watchdog_reboot(
     case_id: str = "PROCESS_09",
 ) -> None:
     ssh = await _ensure_live_ssh(ssh, host, password)
+    await _disarm_recovery_reboot(ssh, case_id=case_id)
     await _ssh_run(ssh, """ubus call system watchdog '{"stop":true}'""", timeout_ops=15)
     new_ssh = await _wait_for_reboot_and_ssh(host, password, case_id=case_id)
     try:
@@ -1353,6 +1478,7 @@ async def assert_process_15_monitor_recovery(
     case_id: str = "PROCESS_15",
 ) -> None:
     ssh = await _ensure_live_ssh(ssh, host, password)
+    await _disarm_recovery_reboot(ssh, case_id=case_id)
     await _ssh_run(ssh, "kill -11 1", timeout_ops=10)
     new_ssh = await _wait_for_reboot_and_ssh(host, password, case_id=case_id, up_timeout_s=300)
     try:

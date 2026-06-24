@@ -2,7 +2,10 @@
 
 import pytest
 
-from utils.process_monitor_flows import assert_process_monitor_preflight
+from utils.process_monitor_flows import (
+    assert_process_monitor_preflight,
+    _disarm_recovery_reboot,
+)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -13,3 +16,9 @@ async def process_monitor_preflight(request, root_ssh, gui_page):
         return
     await assert_process_monitor_preflight(root_ssh, gui_page)
     yield
+    if request.config.getoption("--no-procmon-recovery-reboot"):
+        return
+    try:
+        await _disarm_recovery_reboot(root_ssh, case_id="PROC_SESSION")
+    except Exception:
+        pass

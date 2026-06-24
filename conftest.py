@@ -188,6 +188,12 @@ def pytest_addoption(parser):
         help="Enable PROCESS_09/PROCESS_15 (watchdog/procd reboot validation).",
     )
     group.addoption(
+        "--no-procmon-recovery-reboot",
+        action="store_true",
+        default=False,
+        help="Disable ProcessMonitor SSH-loss recovery reboot (armed before each crash/kill).",
+    )
+    group.addoption(
         "--skip-testbed-bootstrap",
         action="store_true",
         default=False,
@@ -783,6 +789,12 @@ def pytest_configure(config):
 
     for case in OFFICIAL_PROCESS_TEST_CASES:
         config.addinivalue_line("markers", f"{case.case_id}: {case.title} ({case.category})")
+    from utils.process_monitor_flows import set_recovery_reboot_enabled
+
+    set_recovery_reboot_enabled(
+        bool(config.getoption("--allow-process-monitor"))
+        and not bool(config.getoption("--no-procmon-recovery-reboot"))
+    )
     config.addinivalue_line(
         "markers",
         "ProcessMonitor: Process monitor suite (tests/ProcessMonitor/)",
