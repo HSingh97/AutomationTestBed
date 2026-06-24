@@ -94,19 +94,30 @@ class ProcmonConsole:
         open_timeout_s: float = 5.0,
         response_timeout_s: float = 10.0,
     ) -> "ProcmonConsole":
-        """Open the serial port and ensure we're at a root shell prompt."""
+        """Open the serial port (or socket://host:port URI) and ensure we're at a shell prompt.
+
+        Accepts:
+          * Local devices: ``/dev/ttyUSB0`` (single owner; nothing else may hold the port).
+          * pyserial URIs: ``socket://host:port`` (recommended — works with ser2net /
+            tio --socket so minicom and the automation can share the line).
+        """
         if _pyserial is None:
             raise ProcmonConsoleError(
                 "pyserial is not installed. Add 'pyserial' to requirements.txt."
             )
-        if not os.path.exists(device):
-            raise ProcmonConsoleError(f"Serial device not found: {device}")
-        if not os.access(device, os.R_OK | os.W_OK):
-            raise ProcmonConsoleError(
-                f"No read/write permission on {device}. "
-                f"Add the user to the 'dialout' group "
-                f"(`sudo usermod -aG dialout $USER` then log out/in)."
-            )
+
+        is_url = "://" in device
+        if not is_url:
+            if not os.path.exists(device):
+                raise ProcmonConsoleError(f"Serial device not found: {device}")
+            if not os.access(device, os.R_OK | os.W_OK):
+                raise ProcmonConsoleError(
+                    f"No read/write permission on {device}. "
+                    f"Add the user to the 'dialout' group "
+                    f"(`sudo usermod -aG dialout $USER` then log out/in), "
+                    f"or front the port with ser2net/tio so it's reachable via "
+                    f"socket://host:port instead."
+                )
 
         cfg = ProcmonConsoleConfig(
             device=device,
@@ -119,6 +130,17 @@ class ProcmonConsole:
         )
 
         def _blocking_open():
+            if is_url:
+                # Shared-access mode (ser2net / tio --socket / pyserial URI).
+                port = _pyserial.serial_for_url(device, do_not_open=True)
+                port.baudrate = baudrate
+                port.bytesize = 8
+                port.parity = "N"
+                port.stopbits = 1
+                port.timeout = 0.2
+                port.write_timeout = 2.0
+                port.open()
+                return port
             return _pyserial.Serial(
                 port=device,
                 baudrate=baudrate,
@@ -137,7 +159,7 @@ class ProcmonConsole:
         except _pyserial.SerialException as exc:  # type: ignore[union-attr]
             raise ProcmonConsoleError(
                 f"Could not open {device}: {exc}. "
-                f"Is `minicom`/`tio`/`picocom` still holding the port?"
+                f"{'Is ser2net/tio running on the configured port?' if is_url else 'Is minicom/tio/picocom still holding the port?'}"
             ) from exc
         except asyncio.TimeoutError as exc:
             raise ProcmonConsoleError(
