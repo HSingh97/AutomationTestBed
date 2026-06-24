@@ -601,10 +601,11 @@ def _report_core_gaps(case_id: str, results: CrashResult | list[CrashResult]) ->
             missing.append(item.service_name)
     if not missing:
         return
-    numbered = ", ".join(f"{idx}. {name}" for idx, name in enumerate(missing, start=1))
+    bullets = "".join(f"\n  - {name}" for name in missing)
     _partial_case(
         case_id,
-        f"Crash recovery verified; core dump not saved under {PROC_CORE_DIR} for: {numbered}",
+        f"Crash recovery verified; core dump not saved under {PROC_CORE_DIR} for "
+        f"{len(missing)} service(s):{bullets}",
     )
 
 
@@ -1856,11 +1857,21 @@ async def _assert_post_reboot_services(
     min_services: int = 10,
     settle_s: int = 90,
 ) -> None:
+    """Poll ubus for service list after reboot; tolerate slow ubusd start (don't hang on it)."""
     deadline = time.monotonic() + settle_s
     visible: dict = {}
     not_running: list[str] = []
+    last_hang_log = 0.0
     while time.monotonic() < deadline:
-        visible = await _collect_visible_services(ssh)
+        try:
+            visible = await asyncio.wait_for(_collect_visible_services(ssh), timeout=10)
+        except (asyncio.TimeoutError, Exception) as exc:
+            now = time.monotonic()
+            if now - last_hang_log > 10:
+                _log(case_id, f"Post-reboot ubus probe not ready yet ({exc}); retrying...")
+                last_hang_log = now
+            await asyncio.sleep(2)
+            continue
         not_running = [
             name
             for name, inst in visible.items()
@@ -2212,11 +2223,10 @@ async def assert_process_09_watchdog_reboot(
     new_ssh = await _wait_for_reboot_and_ssh(host, password, case_id=case_id)
     try:
         await _assert_post_reboot_services(new_ssh, case_id=case_id)
-    finally:
+        return await _publish_ssh(new_ssh)
+    except Exception:
         await _close_ssh(new_ssh)
-    return await _publish_ssh(
-        await _wait_for_ssh(host, password, timeout_s=PROC_REBOOT_UP_TIMEOUT_S, interval_s=2)
-    )
+        raise
 
 
 async def assert_process_10_restart_logging(
@@ -2345,11 +2355,10 @@ async def assert_process_15_monitor_recovery(
     new_ssh = await _wait_for_reboot_and_ssh(host, password, case_id=case_id, up_timeout_s=300)
     try:
         await _assert_post_reboot_services(new_ssh, case_id=case_id)
-    finally:
+        return await _publish_ssh(new_ssh)
+    except Exception:
         await _close_ssh(new_ssh)
-    return await _publish_ssh(
-        await _wait_for_ssh(host, password, timeout_s=PROC_REBOOT_UP_TIMEOUT_S, interval_s=2)
-    )
+        raise
 
 
 async def assert_process_16_kill_single(
