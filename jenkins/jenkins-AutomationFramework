@@ -257,10 +257,20 @@ pipeline {
                     def remoteIP = (params['Remote IPv6 Address'] ?: '').trim()
                     def profileName = env.PROFILE_NAME ?: 'default'
                     def recoveryProfileName = params.RECOVERY_PROFILE_NAME
-                    def fallbackIp = (params.FALLBACK_IP ?: '10.0.0.1').trim()
+                    def markers = parseMarkerList(params.TEST_MARKERS)
+                    // ProcessMonitor talks to the BTS on its LAN-side mgmt IP only;
+                    // the WAN/factory 10.0.0.1 path is irrelevant for this suite.
+                    def procMonOnly = markers.contains('ProcessMonitor') &&
+                                      !markers.contains('GUI') &&
+                                      !markersIncludeIpSuite(markers) &&
+                                      !markers.contains('REGRESSION') &&
+                                      !markers.contains('JUMBOFRAMES')
+                    def fallbackIp = procMonOnly ? '192.168.2.1' : (params.FALLBACK_IP ?: '10.0.0.1').trim()
+                    if (procMonOnly && (params.FALLBACK_IP ?: '').trim() && (params.FALLBACK_IP ?: '').trim() != '192.168.2.1') {
+                        echo "[procmon] FALLBACK_IP=${params.FALLBACK_IP} overridden — ProcessMonitor always uses 192.168.2.1"
+                    }
                     def ipv6Local = localIP ? "--local-ipv6 \"${localIP}\"" : ''
                     def ipv6Remote = remoteIP ? "--remote-ipv6 \"${remoteIP}\"" : ''
-                    def markers = parseMarkerList(params.TEST_MARKERS)
                     def localIpArg = markers.contains('ProcessMonitor') ? "--local-ip \"${fallbackIp}\"" : ''
 
                     sh '''
