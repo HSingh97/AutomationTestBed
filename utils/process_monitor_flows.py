@@ -418,20 +418,34 @@ async def _instant_reboot_and_wait(
         case_id,
         f"Recovery reboot: rebooting {host} because {recovery_reason}",
     )
+    reboot_issued_via = ""
     if ssh and await _ssh_alive_quick(ssh):
         try:
             await _ssh_run(ssh, "sync; reboot", timeout_ops=8)
+            reboot_issued_via = "ssh"
             _log(case_id, f"Recovery reboot: reboot command sent to {host} over SSH.")
         except Exception as exc:
-            _log(case_id, f"Recovery reboot: SSH reboot command failed ({exc}); waiting for device.")
+            _log(case_id, f"Recovery reboot: SSH reboot command failed ({exc}); will try console.")
         try:
             await _close_ssh(ssh)
         except Exception:
             pass
-    else:
+
+    if not reboot_issued_via:
+        console = _get_procmon_console()
+        if console is not None and await _console_alive(timeout_s=5.0):
+            try:
+                await console.run("sync; reboot", timeout_s=10)
+                reboot_issued_via = "console"
+                _log(case_id, f"Recovery reboot: reboot command sent to {host} over serial console.")
+            except Exception as exc:
+                _log(case_id, f"Recovery reboot: console reboot command failed ({exc}); falling back to on-device watchdog.")
+
+    if not reboot_issued_via:
         _log(
             case_id,
-            f"Recovery reboot: SSH unavailable on {host} — waiting for device to go down and come back.",
+            f"Recovery reboot: no live control channel to {host} — relying on on-device watchdog "
+            f"to fire ({RECOVERY_REBOOT_DELAY_S}s after last hello) and waiting for device to come back.",
         )
 
     down_deadline = time.monotonic() + PROC_REBOOT_DOWN_POLL_S
@@ -677,16 +691,14 @@ async def _arm_recovery_reboot(
     case_id: str,
     delay_s: int = RECOVERY_REBOOT_DELAY_S,
 ) -> None:
-    """Arm recovery reboot unless automation disarms with hello.
+    """Arm on-device dead-man reboot unless automation disarms with hello.
 
-    When a serial console is bound the dead-man timer is unnecessary — if SSH
-    drops we recover via console instead — so we skip the on-device arm and
-    just record that the console will handle it.
+    The on-device watchdog (``sleep N && reboot``) is our most reliable
+    recovery trigger because it works even after SSH dies. The serial console
+    is a secondary recovery path (see :func:`_instant_reboot_and_wait`); it
+    augments the watchdog rather than replacing it.
     """
     if not _RECOVERY_REBOOT_ENABLED:
-        return
-    if _get_procmon_console() is not None:
-        _log(case_id, "Recovery reboot skipped (serial console available)")
         return
     await _ssh_run(ssh, _recovery_arm_shell(delay_s), timeout_ops=15)
     _log(
@@ -702,7 +714,7 @@ async def _recovery_reboot_hello(
     delay_s: int = RECOVERY_REBOOT_DELAY_S,
 ) -> None:
     """Slide recovery timer — restart sleep job while SSH is alive."""
-    if not _RECOVERY_REBOOT_ENABLED or _get_procmon_console() is not None:
+    if not _RECOVERY_REBOOT_ENABLED:
         return
     try:
         await _ssh_run(ssh, _recovery_arm_shell(delay_s), timeout_ops=15)
@@ -1436,26 +1448,6 @@ async def _reconnect_ssh(host: str, password: str, *, case_id: str, service_name
         except Exception as exc:
             last_error = str(exc)
             await asyncio.sleep(1)
-
-    console = _get_procmon_console()
-    if console is not None and await _console_alive(timeout_s=5.0):
-        _log(
-            case_id,
-            f"SSH still down after {service_name} crash but console responds — "
-            f"restarting network via console instead of full reboot",
-        )
-        try:
-            await console.run(
-                "/etc/init.d/network restart 2>/dev/null || /etc/init.d/sshd restart 2>/dev/null; "
-                "sleep 2; ifup wan 2>/dev/null; ifconfig br-lan up 2>/dev/null; true",
-                timeout_s=30,
-            )
-        except Exception as exc:
-            _log(case_id, f"Console-driven network restart failed: {exc}")
-        try:
-            return await _wait_for_ssh(host, password, timeout_s=30, interval_s=2)
-        except Exception as exc:
-            last_error = f"console restart ok but SSH still refused: {exc}"
 
     _log(
         case_id,
