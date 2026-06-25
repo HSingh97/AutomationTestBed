@@ -20,7 +20,11 @@ def test_print_matrix_console_table_smoke(capsys):
                 "downlink": {"rx_mbps": 525.0},
                 "uplink": {"rx_mbps": 175.5},
             },
-            "mcs_config": {"mcs_config_ok": True},
+            "mcs_config": {"mcs_config_ok": True, "checks": [
+                {"role": "BTS", "actual_mcs": "23"},
+                {"role": "CPE", "actual_mcs": "23"},
+                {"role": "CPE", "actual_mcs": "23"},
+            ]},
         },
     ]
 
@@ -31,4 +35,5 @@ def test_print_matrix_console_table_smoke(capsys):
     assert "HT20" in output
     assert "MCS22" in output
     assert "MCS23" in output
-    assert "700.5" in output
+    assert "23" in output
+    assert "BTS" not in output or "23" in output

@@ -110,6 +110,8 @@ def _apply_profile_run_defaults(args, profile_bundle) -> None:
         args.link_wait_s = float(perf_section["link_wait_s"])
     if perf_section.get("radio_settle_s") is not None:
         args.radio_settle_s = float(perf_section["radio_settle_s"])
+    if perf_section.get("operating_mcs_wait_s") is not None:
+        args.operating_mcs_wait_s = float(perf_section["operating_mcs_wait_s"])
     if perf_section.get("bandwidth_apply_wait_s") is not None:
         args.bandwidth_apply_wait_s = float(perf_section["bandwidth_apply_wait_s"])
     if perf_section.get("su_link_wait_s") is not None:
@@ -481,6 +483,19 @@ def _check_bandwidth_before_trex(
     return True, "", validation
 
 
+def _mcs_status_summary(mcs_config: dict[str, object]) -> tuple[str, str]:
+    """Return (bts_uci_mcs, su_operating_mcs_csv) from verify checks."""
+    checks = mcs_config.get("checks") or []
+    bts_mcs = "—"
+    su_values: list[str] = []
+    for row in checks:
+        if row.get("role") == "BTS":
+            bts_mcs = str(row.get("actual_mcs") or "—")
+        elif row.get("role") == "CPE":
+            su_values.append(str(row.get("actual_mcs") or "?"))
+    return bts_mcs, ",".join(su_values) if su_values else "—"
+
+
 def _print_matrix_console_table(
     records: list[dict[str, object]],
     *,
@@ -496,8 +511,8 @@ def _print_matrix_console_table(
     print("PERFORMANCE MATRIX — CONSOLE SUMMARY")
     print("=" * 96)
     header = (
-        f"{'Bandwidth':<10} | {'MCS':<6} | {'Config':<8} | {'TRex':<8} | "
-        f"{'RX Mbps':<10} | {'DL Mbps':<10} | {'UL Mbps':<10} | Notes"
+        f"{'Bandwidth':<10} | {'MCS':<6} | {'BTS':<4} | {'SU rx_mcs':<18} | "
+        f"{'Config':<8} | {'TRex':<8} | {'RX Mbps':<10} | Notes"
     )
     print(header)
     print("-" * len(header))
@@ -506,6 +521,7 @@ def _print_matrix_console_table(
         for mcs in mcs_rates:
             record = by_key.get((bandwidth, mcs), {})
             mcs_config = record.get("mcs_config") or {}
+            bts_mcs, su_mcs = _mcs_status_summary(mcs_config)
             if record.get("skipped_trex"):
                 config_status = "FAIL" if mcs_config.get("mcs_config_ok") is False else "SKIP"
                 trex_status = "SKIP"
@@ -521,11 +537,7 @@ def _print_matrix_console_table(
 
             stats = record.get("stats") or {}
             combined = stats.get("combined") or {}
-            downlink = stats.get("downlink") or {}
-            uplink = stats.get("uplink") or {}
             rx_mbps = combined.get("rx_mbps")
-            dl_mbps = downlink.get("rx_mbps")
-            ul_mbps = uplink.get("rx_mbps")
 
             def _fmt_mbps(value: object) -> str:
                 if value is None or value == "":
@@ -536,14 +548,15 @@ def _print_matrix_console_table(
                     return str(value)
 
             notes = str(record.get("error") or "").strip()
-            if len(notes) > 40:
-                notes = notes[:37] + "..."
+            if len(notes) > 32:
+                notes = notes[:29] + "..."
             if not notes and record.get("throughput_grade") == "warn":
                 notes = "throughput warn"
 
+            su_display = su_mcs if len(su_mcs) <= 18 else su_mcs[:15] + "..."
             print(
-                f"{bandwidth:<10} | {mcs:<6} | {config_status:<8} | {trex_status:<8} | "
-                f"{_fmt_mbps(rx_mbps):<10} | {_fmt_mbps(dl_mbps):<10} | {_fmt_mbps(ul_mbps):<10} | {notes}"
+                f"{bandwidth:<10} | {mcs:<6} | {bts_mcs:<4} | {su_display:<18} | "
+                f"{config_status:<8} | {trex_status:<8} | {_fmt_mbps(rx_mbps):<10} | {notes}"
             )
 
     print("=" * 96)
@@ -829,6 +842,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 su_count=args.su_count,
                                 prefer_cpe_via_bts=args.cpe_via_bts,
                                 settle_s=args.radio_settle_s,
+                                operating_mcs_wait_s=args.operating_mcs_wait_s,
                                 snmp_community=args.snmp_community,
                                 snmp_radio_idx=args.snmp_radio_index,
                                 skip_if_unchanged=args.skip_config_if_unchanged,
@@ -1366,8 +1380,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--packet-size", type=int, default=perf["packet_size"])
     parser.add_argument("--expected-min-mbps", type=float, default=0.0)
     parser.add_argument("--pause-s", type=float, default=2.0, help="Pause between iterations")
-    parser.add_argument("--radio-settle-s", type=float, default=6.0,
-                        help="Wait after DUT radio apply (HT80 uses at least 8s)")
+    parser.add_argument("--radio-settle-s", type=float, default=perf["radio_settle_s"],
+                        help="Seconds to wait after MCS apply before operating-MCS verify")
+    parser.add_argument(
+        "--operating-mcs-wait-s",
+        type=float,
+        default=perf["operating_mcs_wait_s"],
+        help="Poll BTS sysfs rx_rate_mcs until all SUs match target (seconds)",
+    )
     parser.add_argument(
         "--bandwidth-apply-wait-s",
         type=float,

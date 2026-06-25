@@ -920,28 +920,94 @@ def _read_cpe_mcs(
     raise RuntimeError(f"could not read MCS from CPE {cpe_ip}")
 
 
-def verify_mcs_all_devices(
+def print_mcs_device_matrix(
+    checks: list[dict[str, object]],
+    *,
+    mcs_rate: str,
+    phase: str = "",
+) -> None:
+    """Jenkins-friendly table: BTS UCI MCS + per-SU operating rx_rate_mcs."""
+    expected = str(mcs_number(mcs_rate))
+    title = f"[MCS] DEVICE MCS STATUS — target {mcs_rate} (index {expected})"
+    if phase:
+        title += f" [{phase}]"
+    print(title)
+    header = f"{'Device':<8} | {'BTS UCI':<8} | {'SU rx_mcs':<10} | {'rx_rate':<10} | {'Status':<8}"
+    print(header)
+    print("-" * len(header))
+    for row in checks:
+        label = str(row.get("label") or "")
+        if row.get("role") == "BTS":
+            uci = str(row.get("actual_mcs") or "?")
+            print(
+                f"{label:<8} | {uci:<8} | {'—':<10} | {'—':<10} | "
+                f"{'OK' if row.get('ok') else 'MISMATCH':<8}"
+            )
+            continue
+        rx_mcs = str(row.get("actual_mcs") or "?")
+        rx_rate = str(row.get("rx_rate_mbps") or "—")
+        status = "OK" if row.get("ok") else "MISMATCH"
+        print(f"{label:<8} | {'—':<8} | {rx_mcs:<10} | {rx_rate:<10} | {status:<8}")
+    print("")
+
+
+def wait_for_operating_mcs_on_sus(
+    bts_ip: str,
+    user: str,
+    password: str,
+    *,
+    expected_mcs: str,
+    su_count: int,
+    timeout_s: float = 60.0,
+    poll_s: float = 3.0,
+) -> bool:
+    """Poll BTS sysfs until sua1..sua{su_count} report rx_rate_mcs == expected."""
+    if timeout_s <= 0 or su_count <= 0:
+        return False
+    print(
+        f"[MCS] Waiting for operating rx_rate_mcs={expected_mcs} on "
+        f"sua1..sua{su_count} (timeout {timeout_s:.0f}s)"
+    )
+    deadline = time.time() + timeout_s
+    attempt = 0
+    while time.time() < deadline:
+        attempt += 1
+        slots = read_operating_mcs_by_sua_slot(
+            bts_ip,
+            ssh_user=user,
+            ssh_password=password,
+            max_sua=su_count,
+        )
+        pending: list[str] = []
+        for su_index in range(1, su_count + 1):
+            slot = slots.get(su_index, {})
+            if not is_sua_associated(slot):
+                pending.append(f"SU{su_index}:not-associated")
+                continue
+            actual = str(slot.get("rx_rate_mcs") or "").strip()
+            if actual != expected_mcs:
+                pending.append(f"SU{su_index}:{actual or '?'}")
+        if not pending:
+            print(f"[MCS] Operating MCS {expected_mcs} on all {su_count} SU(s) (attempt {attempt})")
+            return True
+        if attempt == 1 or attempt % 5 == 0:
+            print(f"[MCS] Operating MCS pending (attempt {attempt}): {', '.join(pending)}")
+        time.sleep(poll_s)
+    print(f"[MCS] Operating MCS wait timed out after {timeout_s:.0f}s")
+    return False
+
+
+def _collect_mcs_checks(
     bts_ip: str,
     user: str,
     password: str,
     bts_radio_idx: int,
-    cpe_radio_idx: int,
-    mcs_rate: str,
-    spatial_stream: str,
     *,
+    expected_mcs: str,
+    spatial_stream: str,
     su_count: int,
-    cpe_hosts: list[str] | None = None,
-    prefer_cpe_via_bts: bool = False,
-    ssh_timeout_s: int = 60,
-    snmp_community: str | None = None,
-    snmp_radio_idx: int = 2,
-    bandwidth: str = "HT80",
-) -> dict[str, object]:
-    """Confirm BTS UCI MCS and every SU operating MCS via BTS sysfs ``rx_rate_mcs``."""
-    del cpe_radio_idx, prefer_cpe_via_bts, snmp_community, snmp_radio_idx, bandwidth, cpe_hosts
-    expected_mcs = str(mcs_number(mcs_rate))
+) -> list[dict[str, object]]:
     checks: list[dict[str, object]] = []
-
     bts_mcs = _read_uci(bts_ip, user, password, f"uci get txparam.ath{bts_radio_idx}.ddrsrate")
     bts_spatial = _read_uci(
         bts_ip, user, password, f"uci get txparam.ath{bts_radio_idx}.spatialstream"
@@ -958,18 +1024,12 @@ def verify_mcs_all_devices(
             "ok": bts_mcs == expected_mcs and bts_spatial == spatial_stream,
         }
     )
-
-    print(
-        f"[MCS] SU verify: BTS sysfs rx_rate_mcs on "
-        f"sua1..sua{su_count} (/sys/class/kwn/sua{{N}}/statistics/)"
-    )
     sua_slots = read_operating_mcs_by_sua_slot(
         bts_ip,
         ssh_user=user,
         ssh_password=password,
         max_sua=su_count,
     )
-
     for su_index in range(1, su_count + 1):
         slot = sua_slots.get(su_index, {})
         if not slot or not is_sua_associated(slot):
@@ -987,7 +1047,6 @@ def verify_mcs_all_devices(
                 }
             )
             continue
-
         actual_mcs = str(slot.get("rx_rate_mcs") or "").strip()
         rx_rate = str(slot.get("rx_rate") or "").strip()
         if not actual_mcs or actual_mcs in {"-", "0"}:
@@ -1005,7 +1064,6 @@ def verify_mcs_all_devices(
                 }
             )
             continue
-
         checks.append(
             {
                 "role": "CPE",
@@ -1019,6 +1077,52 @@ def verify_mcs_all_devices(
                 "ok": actual_mcs == expected_mcs,
             }
         )
+    return checks
+
+
+def verify_mcs_all_devices(
+    bts_ip: str,
+    user: str,
+    password: str,
+    bts_radio_idx: int,
+    cpe_radio_idx: int,
+    mcs_rate: str,
+    spatial_stream: str,
+    *,
+    su_count: int,
+    cpe_hosts: list[str] | None = None,
+    prefer_cpe_via_bts: bool = False,
+    ssh_timeout_s: int = 60,
+    snmp_community: str | None = None,
+    snmp_radio_idx: int = 2,
+    bandwidth: str = "HT80",
+    wait_for_operating_s: float = 0.0,
+    phase: str = "",
+) -> dict[str, object]:
+    """Confirm BTS UCI MCS and every SU operating MCS via BTS sysfs ``rx_rate_mcs``."""
+    del cpe_radio_idx, prefer_cpe_via_bts, snmp_community, snmp_radio_idx, bandwidth, cpe_hosts
+    expected_mcs = str(mcs_number(mcs_rate))
+
+    if wait_for_operating_s > 0:
+        wait_for_operating_mcs_on_sus(
+            bts_ip,
+            user,
+            password,
+            expected_mcs=expected_mcs,
+            su_count=su_count,
+            timeout_s=wait_for_operating_s,
+        )
+
+    checks = _collect_mcs_checks(
+        bts_ip,
+        user,
+        password,
+        bts_radio_idx,
+        expected_mcs=expected_mcs,
+        spatial_stream=spatial_stream,
+        su_count=su_count,
+    )
+    print_mcs_device_matrix(checks, mcs_rate=mcs_rate, phase=phase or "verify")
 
     all_ok = all(bool(row.get("ok")) for row in checks)
     for row in checks:
@@ -1438,6 +1542,7 @@ def radio_profile_already_matches(
         snmp_community=snmp_community,
         snmp_radio_idx=snmp_radio_idx,
         bandwidth=expected_bw,
+        phase="skip-check",
     )
     if not mcs_report.get("mcs_config_ok"):
         return False, mcs_report
@@ -1603,6 +1708,7 @@ def configure_mcs_profile(
     su_count: int = 1,
     prefer_cpe_via_bts: bool = False,
     settle_s: float = 4.0,
+    operating_mcs_wait_s: float = 45.0,
     ssh_timeout_s: int = 60,
     verify: bool = True,
     snmp_community: str | None = None,
@@ -1682,6 +1788,7 @@ def configure_mcs_profile(
             verify=verify,
         )
 
+    time.sleep(effective_settle)
     print("[CONFIG] Verify MCS on all devices")
     mcs_report = verify_mcs_all_devices(
         bts_ip,
@@ -1698,6 +1805,8 @@ def configure_mcs_profile(
         snmp_community=snmp_community,
         snmp_radio_idx=snmp_radio_idx,
         bandwidth=bandwidth,
+        wait_for_operating_s=operating_mcs_wait_s,
+        phase="post-apply",
     )
     if verify and not mcs_report.get("mcs_config_ok"):
         bad = [
@@ -1711,7 +1820,6 @@ def configure_mcs_profile(
         print(f"[ERROR] {mcs_report['error']}")
         return mcs_report
 
-    time.sleep(effective_settle)
     mcs_report["bandwidth_skipped"] = False
     return mcs_report
 
@@ -1732,6 +1840,7 @@ def configure_radio_profile(
     su_count: int = 1,
     prefer_cpe_via_bts: bool = False,
     settle_s: float = 4.0,
+    operating_mcs_wait_s: float = 45.0,
     bandwidth_apply_wait_s: float = 60.0,
     su_link_wait_s: float = 120.0,
     bandwidth_running_wait_s: float = 120.0,
@@ -1913,6 +2022,8 @@ def configure_radio_profile(
         snmp_community=snmp_community,
         snmp_radio_idx=snmp_radio_idx,
         bandwidth=bandwidth,
+        wait_for_operating_s=operating_mcs_wait_s,
+        phase="post-apply",
     )
     if verify and not mcs_report.get("mcs_config_ok"):
         bad = [
