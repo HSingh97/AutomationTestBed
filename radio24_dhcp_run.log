@@ -1,0 +1,593 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.1.1, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-124-generic-x86_64-with-glibc2.35', 'Packages': {'pytest': '8.1.1', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.13.0', 'order': '1.2.0', 'check': '2.8.0', 'asyncio': '0.23.5', 'xdist': '3.5.0', 'json-report': '1.5.0', 'html': '4.1.1', 'metadata': '3.1.1'}}
+rootdir: /home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed
+configfile: pytest.ini
+plugins: anyio-4.13.0, order-1.2.0, check-2.8.0, asyncio-0.23.5, xdist-3.5.0, json-report-1.5.0, html-4.1.1, metadata-3.1.1
+asyncio: mode=auto
+collecting ... collected 9 items / 5 deselected / 4 selected
+
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_17_dhcp_server_down_no_ip 
+========================================================================
+2_4G_RADIO_17: Disable CPE 2.4 GHz DHCP — connect scan PC — no IP assigned
+========================================================================
+Field                   GUI                     Backend/CLI             Result  
+----------------------  ----------------------  ----------------------  --------
+CPE lan24 DHCP          disabled (ignore=1)     ignore=1                PASS    
+Wi‑Fi association       connected               30 (disconnected)       PASS    
+wlp3s0 IPv4             none on mgmt subnet     (none)                  PASS    
+nmcli connect           profile up              ok                      PASS    
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_18_dhcp_recovery_after_reboot 
+========================================================================
+2_4G_RADIO_18: Reboot CPE — connect scan PC — DHCP IP 169.254.254.100
+========================================================================
+Field                   GUI                     Backend/CLI             Result  
+----------------------  ----------------------  ----------------------  --------
+CPE mgmt + DHCP         ready                   ready                   PASS    
+BTS↔CPE link            stable                  stable                  PASS    
+wlp3s0 DHCP IP          169.254.254.100         (none)                  FAIL    
+nmcli connect           ok                      exit 4                  FAIL    
+
+FAILED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_19_dhcp_stress_connect_disconnect 
+========================================================================
+2_4G_RADIO_19: 5 rapid connect/disconnect cycles — DHCP IP each time
+========================================================================
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.1.1, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-124-generic-x86_64-with-glibc2.35', 'Packages': {'pytest': '8.1.1', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.13.0', 'order': '1.2.0', 'check': '2.8.0', 'asyncio': '0.23.5', 'xdist': '3.5.0', 'json-report': '1.5.0', 'html': '4.1.1', 'metadata': '3.1.1'}}
+rootdir: /home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed
+configfile: pytest.ini
+plugins: anyio-4.13.0, order-1.2.0, check-2.8.0, asyncio-0.23.5, xdist-3.5.0, json-report-1.5.0, html-4.1.1, metadata-3.1.1
+asyncio: mode=auto
+collecting ... collected 9 items / 6 deselected / 3 selected
+
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_18_dhcp_recovery_after_reboot 
+========================================================================
+2_4G_RADIO_18: Reboot CPE — connect scan PC — DHCP IP 169.254.254.100
+========================================================================
+Field                   GUI                     Backend/CLI             Result  
+----------------------  ----------------------  ----------------------  --------
+CPE mgmt + DHCP         ready                   ready                   PASS    
+BTS↔CPE link            stable                  stable                  PASS    
+wlp3s0 DHCP IP          169.254.254.100         (none)                  FAIL    
+nmcli connect           ok                      exit 4                  FAIL    
+
+FAILED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_19_dhcp_stress_connect_disconnect 
+========================================================================
+2_4G_RADIO_19: 5 rapid connect/disconnect cycles — DHCP IP each time
+========================================================================
+========== DHCP run attempt 1/5 2026-06-23T15:12:07+05:30 ==========
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.1.1, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-124-generic-x86_64-with-glibc2.35', 'Packages': {'pytest': '8.1.1', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.13.0', 'order': '1.2.0', 'check': '2.8.0', 'asyncio': '0.23.5', 'xdist': '3.5.0', 'json-report': '1.5.0', 'html': '4.1.1', 'metadata': '3.1.1'}}
+rootdir: /home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed
+configfile: pytest.ini
+plugins: anyio-4.13.0, order-1.2.0, check-2.8.0, asyncio-0.23.5, xdist-3.5.0, json-report-1.5.0, html-4.1.1, metadata-3.1.1
+asyncio: mode=auto
+collecting ... collected 0 items / 1 error
+
+==================================== ERRORS ====================================
+____________ ERROR collecting tests/Radio24Scan/test_2_4g_radio.py _____________
+/home/senao/.local/lib/python3.10/site-packages/_pytest/python.py:520: in importtestmodule
+    mod = import_path(
+/home/senao/.local/lib/python3.10/site-packages/_pytest/pathlib.py:584: in import_path
+    importlib.import_module(module_name)
+/usr/lib/python3.10/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+<frozen importlib._bootstrap>:1050: in _gcd_import
+    ???
+<frozen importlib._bootstrap>:1027: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1006: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:688: in _load_unlocked
+    ???
+/home/senao/.local/lib/python3.10/site-packages/_pytest/assertion/rewrite.py:178: in exec_module
+    exec(co, module.__dict__)
+tests/Radio24Scan/test_2_4g_radio.py:3: in <module>
+    from utils.radio24_scan_flows import (
+E     File "/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/utils/radio24_scan_flows.py", line 85
+E       (print $2; exit)
+E              ^
+E   SyntaxError: f-string: invalid syntax
+=========================== short test summary info ============================
+ERROR tests/Radio24Scan/test_2_4g_radio.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+=============================== 1 error in 0.10s ===============================
+========== attempt 1 failed (exit 2) — retry in 45s ==========
+========== DHCP run attempt 1/5 2026-06-23T15:12:22+05:30 ==========
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.1.1, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-124-generic-x86_64-with-glibc2.35', 'Packages': {'pytest': '8.1.1', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.13.0', 'order': '1.2.0', 'check': '2.8.0', 'asyncio': '0.23.5', 'xdist': '3.5.0', 'json-report': '1.5.0', 'html': '4.1.1', 'metadata': '3.1.1'}}
+rootdir: /home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed
+configfile: pytest.ini
+plugins: anyio-4.13.0, order-1.2.0, check-2.8.0, asyncio-0.23.5, xdist-3.5.0, json-report-1.5.0, html-4.1.1, metadata-3.1.1
+asyncio: mode=auto
+collecting ... collected 9 items / 5 deselected / 4 selected
+
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_17_dhcp_server_down_no_ip 
+========================================================================
+2_4G_RADIO_17: Disable CPE 2.4 GHz DHCP server — scan PC must not connect on mgmt Wi‑Fi
+========================================================================
+Field                   GUI                     Backend/CLI                                                         Result  
+----------------------  ----------------------  ------------------------------------------------------------------  --------
+CPE lan24 DHCP          disabled (ignore=1)     ignore=1                                                            PASS    
+Mgmt Wi‑Fi link         not connected           state='70 (connecting (getting IP configuration))' ssid='KWDEJPOQ'  PASS    
+wlp3s0 IPv4             none on mgmt subnet     (none)                                                              PASS    
+Ping CPE mgmt           unreachable             fail                                                                PASS    
+nmcli join attempt      no usable link          ok                                                                  PASS    
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_18_dhcp_recovery_after_reboot 
+========================================================================
+2_4G_RADIO_18: Reboot CPE (DHCP on) — link up — connect mgmt Wi‑Fi — IP 169.254.254.100
+========================================================================
+Field                   GUI                     Backend/CLI             Result  
+----------------------  ----------------------  ----------------------  --------
+CPE mgmt + DHCP         ready                   ready                   PASS    
+BTS↔CPE link            stable                  stable                  PASS    
+wlp3s0 DHCP IP          169.254.254.100         169.254.254.100         PASS    
+nmcli connect           ok                      ok                      PASS    
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_19_dhcp_stress_connect_disconnect 
+========================================================================
+2_4G_RADIO_19: Toggle WAN 25x — mgmt SSID auto-connect — DHCP IP 169.254.254.100
+========================================================================
+Field                     GUI                     Backend/CLI             Result  
+------------------------  ----------------------  ----------------------  --------
+WAN port toggles          25                      25                      PASS    
+Wi‑Fi auto-connect        KWDEJPOQ                not connected           FAIL    
+DHCP IP                   169.254.254.100         (none)                  FAIL    
+Ping CPE mgmt             169.254.254.1           fail                    FAIL    
+CPE reachable (BTS ping)  ok                      ok                      PASS    
+
+FAILED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_20_dhcp_logs_lease_assignment 
+========================================================================
+2_4G_RADIO_20: Verify scan PC on CPE 2.4 SSID — CPE Leases tab entry for 169.254.254.100
+========================================================================
+Field                   GUI                     Backend/CLI             Result  
+----------------------  ----------------------  ----------------------  --------
+Scan PC SSID            KWDEJPOQ                connected               PASS    
+Client DHCP IP          169.254.254.100         169.254.254.100         PASS    
+Client MAC (Wi‑Fi)      3c:64:cf:8d:83:75       3c:64:cf:8d:83:75       PASS    
+CPE lease hostname      senao                   senao                   PASS    
+CPE dhcp.leases         169.254.254.100 + MAC   found                   PASS    
+
+PASSED
+
+=================================== FAILURES ===================================
+_______________ test_radio_24_19_dhcp_stress_connect_disconnect ________________
+
+FAILURE: check bool(False): 2_4G_RADIO_19: must auto-connect to 'KWDEJPOQ' after WAN stress
+tests/Radio24Scan/test_2_4g_radio.py:87 in test_radio_24_19_dhcp_stress_connect_disconnect() -> await assert_radio_24_19_dhcp_stress_connect_disconnect(profile_bundle)
+utils/radio24_scan_flows.py:2417 in assert_radio_24_19_dhcp_stress_connect_disconnect() -> check.is_true(on_ssid, f"{case_id}: must auto-connect to {target_ssid!r} after WAN stress")
+
+FAILURE: check bool(False): 2_4G_RADIO_19: must get DHCP IP 169.254.254.100 after auto-connect
+FAILURE: check bool(False): 2_4G_RADIO_19: must ping CPE mgmt 169.254.254.1 via Wi‑Fi
+------------------------------------------------------------
+Failed Checks: 3
+=========================== short test summary info ============================
+FAILED tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_19_dhcp_stress_connect_disconnect
+============ 1 failed, 3 passed, 5 deselected in 636.40s (0:10:36) =============
+========== attempt 1 failed (exit 1) — retry in 45s ==========
+========== DHCP run attempt 2/5 2026-06-23T15:23:43+05:30 ==========
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.1.1, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-124-generic-x86_64-with-glibc2.35', 'Packages': {'pytest': '8.1.1', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.13.0', 'order': '1.2.0', 'check': '2.8.0', 'asyncio': '0.23.5', 'xdist': '3.5.0', 'json-report': '1.5.0', 'html': '4.1.1', 'metadata': '3.1.1'}}
+rootdir: /home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed
+configfile: pytest.ini
+plugins: anyio-4.13.0, order-1.2.0, check-2.8.0, asyncio-0.23.5, xdist-3.5.0, json-report-1.5.0, html-4.1.1, metadata-3.1.1
+asyncio: mode=auto
+collecting ... collected 9 items / 5 deselected / 4 selected
+
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_17_dhcp_server_down_no_ip 
+========================================================================
+2_4G_RADIO_17: Disable CPE 2.4 GHz DHCP server — scan PC must not connect on mgmt Wi‑Fi
+========================================================================
+Field                   GUI                     Backend/CLI                              Result  
+----------------------  ----------------------  ---------------------------------------  --------
+CPE lan24 DHCP          disabled (ignore=1)     ignore=1                                 PASS    
+Mgmt Wi‑Fi link         not connected           state='100 (connected)' ssid='KWDEJPOQ'  FAIL    
+wlp3s0 IPv4             none on mgmt subnet     169.254.254.100                          FAIL    
+Ping CPE mgmt           unreachable             ok                                       FAIL    
+nmcli join attempt      no usable link          ok                                       FAIL    
+
+FAILED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_18_dhcp_recovery_after_reboot 
+========================================================================
+2_4G_RADIO_18: Reboot CPE (DHCP on) — link up — connect mgmt Wi‑Fi — IP 169.254.254.100
+========================================================================
+[RADIO_24_SCAN] lan24 DHCP set ignore=0 failed: [Errno 101] Network is unreachable
+[RADIO_24_SCAN] lan24 DHCP set ignore=0 failed: [Errno 101] Network is unreachable
+FAILED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_19_dhcp_stress_connect_disconnect 
+========================================================================
+2_4G_RADIO_19: Toggle WAN 25x — mgmt SSID auto-connect — DHCP IP 169.254.254.100
+========================================================================
+[RADIO_24_SCAN] lan24 DHCP set ignore=0 failed: [Errno 101] Network is unreachable
+FAILED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_20_dhcp_logs_lease_assignment 
+========================================================================
+2_4G_RADIO_20: Verify scan PC on CPE 2.4 SSID — CPE Leases tab entry for 169.254.254.100
+========================================================================
+[RADIO_24_SCAN] lan24 DHCP set ignore=0 failed: [Errno 101] Network is unreachable
+FAILED
+
+=================================== FAILURES ===================================
+___________________ test_radio_24_17_dhcp_server_down_no_ip ____________________
+
+FAILURE: check bool(False): 2_4G_RADIO_17: no 169.254.x IP when DHCP disabled
+tests/Radio24Scan/test_2_4g_radio.py:69 in test_radio_24_17_dhcp_server_down_no_ip() -> await assert_radio_24_17_dhcp_server_down_no_ip(profile_bundle)
+utils/radio24_scan_flows.py:2184 in assert_radio_24_17_dhcp_server_down_no_ip() -> (
+
+FAILURE: check not bool(169.254.254.100): 2_4G_RADIO_17: must not connect on mgmt Wi‑Fi when DHCP disabled (connect_out=Connection successfully activated (D-Bus active path: /org/freedesktop/NetworkManager/ActiveConnection/13)
+)
+------------------------------------------------------------
+Failed Checks: 2
+_________________ test_radio_24_18_dhcp_recovery_after_reboot __________________
+
+FAILURE: check bool(False): 2_4G_RADIO_18: must enable lan24 DHCP before reboot
+tests/Radio24Scan/test_2_4g_radio.py:78 in test_radio_24_18_dhcp_recovery_after_reboot() -> await assert_radio_24_18_dhcp_recovery_after_reboot(profile_bundle)
+utils/radio24_scan_flows.py:2218 in assert_radio_24_18_dhcp_recovery_after_reboot() -> profile_bundle=None,
+
+FAILURE: check bool(False): 2_4G_RADIO_18: CPE reboot command must be sent
+------------------------------------------------------------
+Failed Checks: 2
+------------------------------------------------------------
+profile_bundle = ProfileBundle(active_name='default', recovery_name='link_formation', active={'name': 'default', 'description': 'Baseli...ir': '/tmp/ubr_jumbo_captures', 'bts_host': '', 'cpe_host': '', 'bts_interface': 'enp3s0', 'cpe_interface': 'enp3s0'}})
+
+    @pytest.mark.order(18)
+    @pytest.mark.asyncio(scope="session")
+    @pytest.mark.RADIO_24_18
+    @pytest.mark.Radio24Scan
+    async def test_radio_24_18_dhcp_recovery_after_reboot(profile_bundle):
+        """2.4G_RADIO_18 — reboot CPE with DHCP on; after link up get 169.254.254.100."""
+>       await assert_radio_24_18_dhcp_recovery_after_reboot(profile_bundle)
+
+tests/Radio24Scan/test_2_4g_radio.py:78: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+utils/radio24_scan_flows.py:2232: in assert_radio_24_18_dhcp_recovery_after_reboot
+    defaults = RADIO_24_SCAN_DEFAULTS
+/home/senao/.local/lib/python3.10/site-packages/asyncssh/misc.py:274: in __aenter__
+    self._coro_result = await self._coro
+/home/senao/.local/lib/python3.10/site-packages/asyncssh/connection.py:8269: in connect
+    return await asyncio.wait_for(
+/usr/lib/python3.10/asyncio/tasks.py:445: in wait_for
+    return fut.result()
+/home/senao/.local/lib/python3.10/site-packages/asyncssh/connection.py:426: in _connect
+    _, session = await loop.create_connection(
+/usr/lib/python3.10/asyncio/base_events.py:1076: in create_connection
+    raise exceptions[0]
+/usr/lib/python3.10/asyncio/base_events.py:1060: in create_connection
+    sock = await self._connect_sock(
+/usr/lib/python3.10/asyncio/base_events.py:969: in _connect_sock
+    await self.sock_connect(sock, address)
+/usr/lib/python3.10/asyncio/selector_events.py:501: in sock_connect
+    return await fut
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <_UnixSelectorEventLoop running=False closed=False debug=False>
+fut = None
+sock = <socket.socket [closed] fd=-1, family=AddressFamily.AF_INET, type=SocketKind.SOCK_STREAM, proto=6>
+address = ('10.0.150.7', 22)
+
+    def _sock_connect(self, fut, sock, address):
+        fd = sock.fileno()
+        try:
+>           sock.connect(address)
+E           OSError: [Errno 101] Network is unreachable
+
+/usr/lib/python3.10/asyncio/selector_events.py:509: OSError
+_______________ test_radio_24_19_dhcp_stress_connect_disconnect ________________
+
+profile_bundle = ProfileBundle(active_name='default', recovery_name='link_formation', active={'name': 'default', 'description': 'Baseli...ir': '/tmp/ubr_jumbo_captures', 'bts_host': '', 'cpe_host': '', 'bts_interface': 'enp3s0', 'cpe_interface': 'enp3s0'}})
+
+    @pytest.mark.order(19)
+    @pytest.mark.asyncio(scope="session")
+    @pytest.mark.RADIO_24_19
+    @pytest.mark.Radio24Scan
+    async def test_radio_24_19_dhcp_stress_connect_disconnect(profile_bundle):
+        """2.4G_RADIO_19 — toggle WAN port 25x; Wi‑Fi auto-reconnects with DHCP IP."""
+>       await assert_radio_24_19_dhcp_stress_connect_disconnect(profile_bundle)
+
+tests/Radio24Scan/test_2_4g_radio.py:87: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+utils/radio24_scan_flows.py:2319: in assert_radio_24_19_dhcp_stress_connect_disconnect
+    check.is_true(
+/home/senao/.local/lib/python3.10/site-packages/asyncssh/misc.py:274: in __aenter__
+    self._coro_result = await self._coro
+/home/senao/.local/lib/python3.10/site-packages/asyncssh/connection.py:8269: in connect
+    return await asyncio.wait_for(
+/usr/lib/python3.10/asyncio/tasks.py:445: in wait_for
+    return fut.result()
+/home/senao/.local/lib/python3.10/site-packages/asyncssh/connection.py:426: in _connect
+    _, session = await loop.create_connection(
+/usr/lib/python3.10/asyncio/base_events.py:1076: in create_connection
+    raise exceptions[0]
+/usr/lib/python3.10/asyncio/base_events.py:1060: in create_connection
+    sock = await self._connect_sock(
+/usr/lib/python3.10/asyncio/base_events.py:969: in _connect_sock
+    await self.sock_connect(sock, address)
+/usr/lib/python3.10/asyncio/selector_events.py:501: in sock_connect
+    return await fut
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <_UnixSelectorEventLoop running=False closed=False debug=False>
+fut = None
+sock = <socket.socket [closed] fd=-1, family=AddressFamily.AF_INET, type=SocketKind.SOCK_STREAM, proto=6>
+address = ('10.0.150.7', 22)
+
+    def _sock_connect(self, fut, sock, address):
+        fd = sock.fileno()
+        try:
+>           sock.connect(address)
+E           OSError: [Errno 101] Network is unreachable
+
+/usr/lib/python3.10/asyncio/selector_events.py:509: OSError
+_________________ test_radio_24_20_dhcp_logs_lease_assignment __________________
+
+profile_bundle = ProfileBundle(active_name='default', recovery_name='link_formation', active={'name': 'default', 'description': 'Baseli...ir': '/tmp/ubr_jumbo_captures', 'bts_host': '', 'cpe_host': '', 'bts_interface': 'enp3s0', 'cpe_interface': 'enp3s0'}})
+
+    @pytest.mark.order(20)
+    @pytest.mark.asyncio(scope="session")
+    @pytest.mark.RADIO_24_20
+    @pytest.mark.Radio24Scan
+    async def test_radio_24_20_dhcp_logs_lease_assignment(profile_bundle):
+        """2.4G_RADIO_20 — verify scan PC on CPE 2.4 SSID; CPE Leases tab entry."""
+>       await assert_radio_24_20_dhcp_logs_lease_assignment(profile_bundle)
+
+tests/Radio24Scan/test_2_4g_radio.py:96: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+utils/radio24_scan_flows.py:2449: in assert_radio_24_20_dhcp_logs_lease_assignment
+    "ok" if cpe_ping_ok else "down",
+/home/senao/.local/lib/python3.10/site-packages/asyncssh/misc.py:274: in __aenter__
+    self._coro_result = await self._coro
+/home/senao/.local/lib/python3.10/site-packages/asyncssh/connection.py:8269: in connect
+    return await asyncio.wait_for(
+/usr/lib/python3.10/asyncio/tasks.py:445: in wait_for
+    return fut.result()
+/home/senao/.local/lib/python3.10/site-packages/asyncssh/connection.py:426: in _connect
+    _, session = await loop.create_connection(
+/usr/lib/python3.10/asyncio/base_events.py:1076: in create_connection
+    raise exceptions[0]
+/usr/lib/python3.10/asyncio/base_events.py:1060: in create_connection
+    sock = await self._connect_sock(
+/usr/lib/python3.10/asyncio/base_events.py:969: in _connect_sock
+    await self.sock_connect(sock, address)
+/usr/lib/python3.10/asyncio/selector_events.py:501: in sock_connect
+    return await fut
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <_UnixSelectorEventLoop running=False closed=False debug=False>
+fut = None
+sock = <socket.socket [closed] fd=-1, family=AddressFamily.AF_INET, type=SocketKind.SOCK_STREAM, proto=6>
+address = ('10.0.150.7', 22)
+
+    def _sock_connect(self, fut, sock, address):
+        fd = sock.fileno()
+        try:
+>           sock.connect(address)
+E           OSError: [Errno 101] Network is unreachable
+
+/usr/lib/python3.10/asyncio/selector_events.py:509: OSError
+=========================== short test summary info ============================
+FAILED tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_17_dhcp_server_down_no_ip
+FAILED tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_18_dhcp_recovery_after_reboot
+FAILED tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_19_dhcp_stress_connect_disconnect
+FAILED tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_20_dhcp_logs_lease_assignment
+================= 4 failed, 5 deselected in 434.18s (0:07:14) ==================
+========== DHCP run attempt 1/5 2026-06-23T15:54:11+05:30 ==========
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.1.1, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-124-generic-x86_64-with-glibc2.35', 'Packages': {'pytest': '8.1.1', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.13.0', 'order': '1.2.0', 'check': '2.8.0', 'asyncio': '0.23.5', 'xdist': '3.5.0', 'json-report': '1.5.0', 'html': '4.1.1', 'metadata': '3.1.1'}}
+rootdir: /home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed
+configfile: pytest.ini
+plugins: anyio-4.13.0, order-1.2.0, check-2.8.0, asyncio-0.23.5, xdist-3.5.0, json-report-1.5.0, html-4.1.1, metadata-3.1.1
+asyncio: mode=auto
+collecting ... collected 9 items / 5 deselected / 4 selected
+
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_17_dhcp_server_down_no_ip 
+========================================================================
+2_4G_RADIO_17: Disable CPE 2.4 GHz DHCP server — scan PC must not connect on mgmt Wi‑Fi
+========================================================================
+[RADIO_24_SCAN] lan24 DHCP set ignore=0 failed: [Errno 101] Network is unreachable
+[RADIO_24_SCAN] lan24 DHCP set ignore=1 failed: [Errno 101] Network is unreachable
+Field                   GUI                     Backend/CLI                                Result  
+----------------------  ----------------------  -----------------------------------------  --------
+CPE lan24 DHCP          disabled (ignore=1)     ignore=[Errno 101] Network is unreachable  FAIL    
+Mgmt Wi‑Fi link         not connected           state='100 (connected)' ssid='KWDEJPOQ'    FAIL    
+wlp3s0 IPv4             none on mgmt subnet     169.254.254.100                            FAIL    
+Ping CPE mgmt           unreachable             ok                                         FAIL    
+nmcli join attempt      no usable link          ok                                         FAIL    
+
+FAILED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_18_dhcp_recovery_after_reboot 
+========================================================================
+2_4G_RADIO_18: Reboot CPE (DHCP on) — link up — connect mgmt Wi‑Fi — IP 169.254.254.100
+========================================================================
+Field                   GUI                     Backend/CLI             Result  
+----------------------  ----------------------  ----------------------  --------
+CPE mgmt + DHCP         ready                   ready                   PASS    
+BTS↔CPE link            stable                  stable                  PASS    
+wlp3s0 DHCP IP          169.254.254.100         169.254.254.100         PASS    
+nmcli connect           ok                      ok                      PASS    
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_19_dhcp_stress_connect_disconnect 
+========================================================================
+2_4G_RADIO_19: Toggle Wi‑Fi 25x (LAN up) — auto-connect — DHCP IP 169.254.254.100
+========================================================================
+FAILED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_20_dhcp_logs_lease_assignment 
+========================================================================
+2_4G_RADIO_20: Verify scan PC on CPE 2.4 SSID — CPE Leases tab entry for 169.254.254.100
+========================================================================
+Field                   GUI                     Backend/CLI             Result  
+----------------------  ----------------------  ----------------------  --------
+Scan PC SSID            KWDEJPOQ                connected               PASS    
+Client DHCP IP          169.254.254.100         169.254.254.100         PASS    
+Client MAC (Wi‑Fi)      3c:64:cf:8d:83:75       3c:64:cf:8d:83:75       PASS    
+CPE lease hostname      senao                   senao                   PASS    
+CPE dhcp.leases         169.254.254.100 + MAC   found                   PASS    
+
+PASSED
+
+=================================== FAILURES ===================================
+___________________ test_radio_24_17_dhcp_server_down_no_ip ____________________
+
+FAILURE: check bool(False): 2_4G_RADIO_17: must disable dhcp.lan24 on CPE
+tests/Radio24Scan/test_2_4g_radio.py:69 in test_radio_24_17_dhcp_server_down_no_ip() -> await assert_radio_24_17_dhcp_server_down_no_ip(profile_bundle)
+utils/radio24_scan_flows.py:2232 in assert_radio_24_17_dhcp_server_down_no_ip() -> check.is_true(dhcp_disabled, f"{case_id}: must disable dhcp.lan24 on CPE")
+
+FAILURE: check bool(False): 2_4G_RADIO_17: dhcp.lan24.ignore must be 1, got '[Errno 101] Network is unreachable'
+FAILURE: check bool(False): 2_4G_RADIO_17: no 169.254.x IP when DHCP disabled
+FAILURE: check not bool(169.254.254.100): 2_4G_RADIO_17: must not connect on mgmt Wi‑Fi when DHCP disabled (connect_out=Connection successfully activated (D-Bus active path: /org/freedesktop/NetworkManager/ActiveConnection/43)
+)
+------------------------------------------------------------
+Failed Checks: 4
+_______________ test_radio_24_19_dhcp_stress_connect_disconnect ________________
+
+profile_bundle = ProfileBundle(active_name='default', recovery_name='link_formation', active={'name': 'default', 'description': 'Baseli...ir': '/tmp/ubr_jumbo_captures', 'bts_host': '', 'cpe_host': '', 'bts_interface': 'enp3s0', 'cpe_interface': 'enp3s0'}})
+
+    @pytest.mark.order(19)
+    @pytest.mark.asyncio(scope="session")
+    @pytest.mark.RADIO_24_19
+    @pytest.mark.Radio24Scan
+    async def test_radio_24_19_dhcp_stress_connect_disconnect(profile_bundle):
+        """2.4G_RADIO_19 — toggle Wi‑Fi radio 25x; LAN ports stay up; auto-reconnect with DHCP IP."""
+>       await assert_radio_24_19_dhcp_stress_connect_disconnect(profile_bundle)
+
+tests/Radio24Scan/test_2_4g_radio.py:87: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+profile_bundle = ProfileBundle(active_name='default', recovery_name='link_formation', active={'name': 'default', 'description': 'Baseli...ir': '/tmp/ubr_jumbo_captures', 'bts_host': '', 'cpe_host': '', 'bts_interface': 'enp3s0', 'cpe_interface': 'enp3s0'}})
+
+    async def assert_radio_24_19_dhcp_stress_connect_disconnect(
+        profile_bundle=None,
+    ):
+        """2.4G_RADIO_19 — rapid Wi‑Fi radio toggle; LAN ports stay up; auto-reconnect with DHCP IP."""
+        case_id = "2_4G_RADIO_19"
+        defaults = RADIO_24_SCAN_DEFAULTS
+        scan_ip, scan_password, target_ssid, target_password, _, _ = _resolve_scan_pc_config(
+            profile_bundle, case_id=case_id
+        )
+        connect_settle_s = int(defaults.get("CONNECT_SETTLE_S", 10))
+        connect_retries = int(defaults.get("CONNECT_RETRY_ATTEMPTS", 3))
+        expected_ip = str(defaults.get("DHCP_EXPECTED_CLIENT_IP", "169.254.254.100"))
+        toggle_cycles = int(defaults.get("WIFI_TOGGLE_CYCLES", 25))
+        toggle_gap_s = float(defaults.get("WIFI_TOGGLE_GAP_S", 0.15))
+        autoconnect_wait_s = int(defaults.get("WIFI_AUTORECONNECT_WAIT_S", 120))
+        cpe_mgmt_ip = str(defaults.get("CPE_MGMT_IP", "169.254.254.1"))
+    
+        print_section(
+            f"{case_id}: Toggle Wi‑Fi {toggle_cycles}x (LAN up) — auto-connect — DHCP IP {expected_ip}"
+        )
+    
+        await _prep_cpe_mgmt_dhcp_for_connect(profile_bundle, target_ssid=target_ssid)
+    
+        async with asyncssh.connect(
+            scan_ip,
+            username="root",
+            password=scan_password,
+            known_hosts=None,
+            connect_timeout=15.0,
+        ) as conn:
+            lan_ifaces = await _ensure_scan_pc_lan_ports_up(conn, case_id=case_id)
+            wifi_iface = await _detect_wifi_interface(conn, case_id=case_id)
+    
+>           _, _, profile_ok = await _ensure_scan_pc_on_cpe_24g_ssid(
+                profile_bundle,
+                conn,
+                wifi_iface,
+                target_ssid=target_ssid,
+                target_password=target_password,
+                expected_ip=expected_ip,
+                connect_settle_s=connect_settle_s,
+                connect_retries=connect_retries,
+            )
+E           ValueError: too many values to unpack (expected 3)
+
+utils/radio24_scan_flows.py:2381: ValueError
+=========================== short test summary info ============================
+FAILED tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_17_dhcp_server_down_no_ip
+FAILED tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_19_dhcp_stress_connect_disconnect
+============ 2 failed, 2 passed, 5 deselected in 411.85s (0:06:51) =============
+========== attempt 1 failed (exit 1) — retry in 45s ==========
+========== DHCP run attempt 2/5 2026-06-23T16:01:48+05:30 ==========
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.1.1, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-124-generic-x86_64-with-glibc2.35', 'Packages': {'pytest': '8.1.1', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.13.0', 'order': '1.2.0', 'check': '2.8.0', 'asyncio': '0.23.5', 'xdist': '3.5.0', 'json-report': '1.5.0', 'html': '4.1.1', 'metadata': '3.1.1'}}
+rootdir: /home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed
+configfile: pytest.ini
+plugins: anyio-4.13.0, order-1.2.0, check-2.8.0, asyncio-0.23.5, xdist-3.5.0, json-report-1.5.0, html-4.1.1, metadata-3.1.1
+asyncio: mode=auto
+collecting ... collected 9 items / 5 deselected / 4 selected
+
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_17_dhcp_server_down_no_ip 
+========================================================================
+2_4G_RADIO_17: Disable CPE 2.4 GHz DHCP server — scan PC must not connect on mgmt Wi‑Fi
+========================================================================
+Field                   GUI                     Backend/CLI                                                         Result  
+----------------------  ----------------------  ------------------------------------------------------------------  --------
+CPE lan24 DHCP          disabled (ignore=1)     ignore=1                                                            PASS    
+Mgmt Wi‑Fi link         not connected           state='70 (connecting (getting IP configuration))' ssid='KWDEJPOQ'  PASS    
+wlp3s0 IPv4             none on mgmt subnet     (none)                                                              PASS    
+Ping CPE mgmt           unreachable             fail                                                                PASS    
+nmcli join attempt      no usable link          exit 1                                                              PASS    
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_18_dhcp_recovery_after_reboot 
+========================================================================
+2_4G_RADIO_18: Reboot CPE (DHCP on) — link up — connect mgmt Wi‑Fi — IP 169.254.254.100
+========================================================================
+Field                   GUI                     Backend/CLI             Result  
+----------------------  ----------------------  ----------------------  --------
+CPE mgmt + DHCP         ready                   ready                   PASS    
+BTS↔CPE link            stable                  stable                  PASS    
+wlp3s0 DHCP IP          169.254.254.100         169.254.254.100         PASS    
+nmcli connect           ok                      ok                      PASS    
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_19_dhcp_stress_connect_disconnect 
+========================================================================
+2_4G_RADIO_19: Toggle Wi‑Fi 25x (LAN up) — auto-connect — DHCP IP 169.254.254.100
+========================================================================
+Field                     GUI                     Backend/CLI             Result  
+------------------------  ----------------------  ----------------------  --------
+LAN ports                 up                      enp4s0, enp1s0          PASS    
+Wi‑Fi radio toggles       25                      25                      PASS    
+Wi‑Fi auto-connect        KWDEJPOQ                connected               PASS    
+DHCP IP                   169.254.254.100         169.254.254.100         PASS    
+Ping CPE mgmt             169.254.254.1           ok                      PASS    
+CPE reachable (BTS ping)  ok                      ok                      PASS    
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_20_dhcp_logs_lease_assignment 
+========================================================================
+2_4G_RADIO_20: Verify scan PC on CPE 2.4 SSID — CPE Leases tab entry for 169.254.254.100
+========================================================================
+Field                   GUI                     Backend/CLI             Result  
+----------------------  ----------------------  ----------------------  --------
+Scan PC SSID            KWDEJPOQ                connected               PASS    
+Client DHCP IP          169.254.254.100         169.254.254.100         PASS    
+Client MAC (Wi‑Fi)      3c:64:cf:8d:83:75       3c:64:cf:8d:83:75       PASS    
+CPE lease hostname      senao                   senao                   PASS    
+CPE dhcp.leases         169.254.254.100 + MAC   found                   PASS    
+
+PASSED
+
+================= 4 passed, 5 deselected in 487.74s (0:08:07) ==================
+========== ALL DHCP CASES PASSED 2026-06-23T16:09:56+05:30 ==========
