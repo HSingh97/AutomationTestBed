@@ -32,12 +32,12 @@ pipeline {
         )
         string(
             name: 'Bandwidth',
-            defaultValue: 'HT80',
+            defaultValue: 'HT20,HT40,HT80',
             description: 'Comma-separated htmode values (e.g. HT20,HT40,HT80)'
         )
         string(
             name: 'MCS',
-            defaultValue: 'MCS23',
+            defaultValue: 'MCS22,MCS23',
             description: 'Comma-separated MCS values (e.g. MCS19,MCS23)'
         )
         string(
@@ -72,8 +72,8 @@ pipeline {
         )
         string(
             name: 'SU Count',
-            defaultValue: '',
-            description: 'TRex SU count (empty = profile default; qa_lab_02 uses 4)'
+            defaultValue: '6',
+            description: 'TRex SU count (empty = profile default; qa_lab_02 uses 6)'
         )
         booleanParam(
             name: 'VLAN_DEBUG_CAMPAIGN',

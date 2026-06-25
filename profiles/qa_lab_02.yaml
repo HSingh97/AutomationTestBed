@@ -1,7 +1,7 @@
 name: qa_lab_02
 description: >
-  qa-lab-02 (root@10.0.150.102) — PTMP bench with 4 CPEs for throughput testing.
-  Update dut.local_ipv6 and dut.remote_ipv6s to match your deployed mgmt addresses.
+  qa-lab-02 (root@10.0.150.102) — PTMP bench with 6 CPEs for throughput testing.
+  SU mgmt IPv6 is discovered live from BTS KWN sysfs when more than profile list.
 
 dut:
   ip_mode: ipv6
@@ -144,28 +144,28 @@ traffic:
   benchmark_backend: ixia
   stats_backend: trex
   trex:
-    # Two-server PTMP (4 CPE total):
+    # Two-server PTMP (6 CPE total):
     #   Server 1 (192.168.1.1): port 0 = BTS, ports 1-3 = CPE 1-3
-    #   Server 2 (192.168.1.2): port 0 = CPE 4
+    #   Server 2 (192.168.1.2): ports 0-2 = CPE 4-6
     host: "192.168.1.1"
     user: root
     password: ubuntu
     su_servers:
       - "192.168.1.2"
-    # BSU-server port allowlist: 0=BTS, 1-3=CPE (4th CPE from su_servers[0])
+    # BSU-server port allowlist: 0=BTS, 1-3=CPE (CPE 4-6 from su_servers[0])
     ports: "0,1,2,3"
     server_cores: 1
     server_startup_s: 15
 
 performance:
-  su_count: 4
+  su_count: 6
   cpe_su_index: 1
   snmp_radio_index: 2
   link_wifi_idx: 2
   duration_s: 30
   packet_size: 1500
   # HT80 MCS23 operating rate 1201 Mbps × ~70% efficiency → cap at 800 Mbps total.
-  # 75:25 → 600 Mbps DL + 200 Mbps UL; master_script divides across 4 CPE (150/50 each).
+  # 75:25 → split across 6 CPE via master_script_extended_16SU.py.
   use_dynamic_target: true
   target_mbps: 800
   efficiency_factor: 0.70

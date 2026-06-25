@@ -15,13 +15,13 @@ JENKINS_USER="${JENKINS_USER:-harman}"
 JOB_PATH="job/Automation%20Framework/job/Throughput%20Test%20-%20Trex"
 
 TARGET_STAND="${TARGET_STAND:-test-qa-lab-02}"
-BANDWIDTH="${BANDWIDTH:-HT80}"
-MCS="${MCS:-MCS22}"
+BANDWIDTH="${BANDWIDTH:-HT20,HT40,HT80}"
+MCS="${MCS:-MCS22,MCS23}"
 RATIO="${RATIO:-75:25}"
 DURATION="${DURATION:-30}"
 PACKET_SIZE="${PACKET_SIZE:-1500}"
 PROFILE="${PROFILE:-}"
-SU_COUNT="${SU_COUNT:-}"
+SU_COUNT="${SU_COUNT:-6}"
 TREX_SERVER="${TREX_SERVER:-}"
 TREX_SU_SERVER="${TREX_SU_SERVER:-}"
 BTS_IP="${BTS_IP:-}"
@@ -113,7 +113,7 @@ POST_DATA=(
   --data-urlencode "BW Running Wait (s)=${BW_RUNNING_WAIT}"
 )
 [[ -n "$PROFILE" ]] && POST_DATA+=(--data-urlencode "PROFILE=${PROFILE}")
-[[ -n "$SU_COUNT" ]] && POST_DATA+=(--data-urlencode "SU Count=${SU_COUNT}")
+POST_DATA+=(--data-urlencode "SU Count=${SU_COUNT}")
 [[ -n "$TREX_SERVER" ]] && POST_DATA+=(--data-urlencode "TRex Server=${TREX_SERVER}")
 [[ -n "$TREX_SU_SERVER" ]] && POST_DATA+=(--data-urlencode "TRex SU Server=${TREX_SU_SERVER}")
 [[ -n "$BTS_IP" ]] && POST_DATA+=(--data-urlencode "BTS IP=${BTS_IP}")

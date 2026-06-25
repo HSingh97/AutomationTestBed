@@ -343,6 +343,28 @@ def _check_trex_ports_via_api(
     return states, output
 
 
+def _bsu_cpe_port_count(trex_ports: str) -> int:
+    ports = [int(item.strip()) for item in trex_ports.split(",") if item.strip()]
+    return len([port for port in ports if port != 0])
+
+
+def _su_server_port_allowlists(trex_ports: str, su_count: int, su_server_count: int) -> list[str]:
+    """TRex port allowlists per remote SU server (link-up wait)."""
+    if su_server_count <= 0:
+        return []
+    remote_cpe = max(0, int(su_count) - _bsu_cpe_port_count(trex_ports))
+    if remote_cpe <= 0:
+        return ["0"] * su_server_count
+    per_server = max(1, (remote_cpe + su_server_count - 1) // su_server_count)
+    specs: list[str] = []
+    remaining = remote_cpe
+    for index in range(su_server_count):
+        count = min(per_server, remaining) if index < su_server_count - 1 else remaining
+        specs.append(",".join(str(port) for port in range(max(count, 1))))
+        remaining -= count
+    return specs
+
+
 def wait_for_trex_ports_link_up(
     *,
     trex_server: str,
@@ -1068,6 +1090,9 @@ def run_trex_stats_check(
         trex_server_su3,
         trex_server_su4,
     )
+    su_server_port_specs = _su_server_port_allowlists(
+        trex_ports, trex_su_count, len(su_hosts)
+    )
     all_server_hosts = _unique_trex_hosts(trex_server, *su_hosts)
     qinq_host = trex_qinq_host or dut_host
 
@@ -1140,13 +1165,13 @@ def run_trex_stats_check(
                 server_output="",
                 timeout_s=60.0,
             )
-            for su_host in su_hosts:
+            for idx, su_host in enumerate(su_hosts):
                 wait_for_trex_ports_link_up(
                     trex_server=su_host,
                     trex_user=trex_user,
                     trex_password=trex_password,
                     trex_pythonpath=trex_pythonpath,
-                    trex_ports="0",
+                    trex_ports=su_server_port_specs[idx] if idx < len(su_server_port_specs) else "0",
                     server_output="",
                     timeout_s=60.0,
                 )
@@ -1201,13 +1226,13 @@ def run_trex_stats_check(
                 server_output_getter=server_collector.text,
                 timeout_s=max(90.0, float(trex_server_startup_s) + 60.0),
             )
-            for su_host in su_hosts:
+            for idx, su_host in enumerate(su_hosts):
                 wait_for_trex_ports_link_up(
                     trex_server=su_host,
                     trex_user=trex_user,
                     trex_password=trex_password,
                     trex_pythonpath=trex_pythonpath,
-                    trex_ports="0",
+                    trex_ports=su_server_port_specs[idx] if idx < len(su_server_port_specs) else "0",
                     server_output="",
                     timeout_s=max(60.0, float(trex_server_startup_s) + 30.0),
                 )

@@ -13,8 +13,8 @@ benches:
 
   test-qa-lab-02:
     description: >
-      PTMP 4-CPE throughput — TRex 192.168.1.1 (1 BTS + 3 CPE on ports 0-3),
-      TRex 192.168.1.2 (1 CPE). Jenkins agent label: test-qa-lab-02
+      PTMP 6-CPE throughput — TRex 192.168.1.1 (1 BTS + 3 CPE on ports 1-3),
+      TRex 192.168.1.2 (3 CPE on ports 0-2). Jenkins agent label: test-qa-lab-02
     ssh: root@10.0.150.102
     profile: qa_lab_02
     recovery_profile: link_formation
