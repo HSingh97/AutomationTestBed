@@ -1505,6 +1505,7 @@ def configure_bandwidth_profile(
     """Apply BTS htmode + DL:UL ratio once per bandwidth group (no MCS change)."""
     from traffic.su_link_ping import wait_for_su_links
 
+    cpe_hosts = _cap_cpe_hosts(cpe_hosts, su_count)
     require_all_su = (
         require_all_su_for_bandwidth
         if require_all_su_for_bandwidth is not None
@@ -1572,6 +1573,21 @@ def configure_bandwidth_profile(
     return {"bandwidth_ok": True, "bandwidth_skipped": False}
 
 
+def _cap_cpe_hosts(cpe_hosts: list[str] | None, su_count: int) -> list[str]:
+    """Dedupe and limit CPE host list to the configured SU count."""
+    capped: list[str] = []
+    for host in cpe_hosts or []:
+        clean = str(host).strip()
+        if not clean:
+            continue
+        normalized = normalize_ip(clean)
+        if normalized not in capped:
+            capped.append(normalized)
+        if len(capped) >= su_count:
+            break
+    return capped
+
+
 def configure_mcs_profile(
     bts_ip: str,
     user: str,
@@ -1597,7 +1613,7 @@ def configure_mcs_profile(
     effective_settle = _settle_seconds(bandwidth, settle_s)
     cpe_radio = cpe_radio_idx if cpe_radio_idx is not None else radio_idx
     spec = lookup_spec(mcs_rate, bandwidth, spatial_streams=int(spatial_stream))
-    effective_su_count = max(su_count, len([h for h in (cpe_hosts or []) if h.strip()]), 1)
+    cpe_hosts = _cap_cpe_hosts(cpe_hosts, su_count)
 
     if skip_if_unchanged:
         matches, mcs_report = radio_profile_already_matches(
@@ -1610,7 +1626,7 @@ def configure_mcs_profile(
             ratio,
             spatial_stream,
             cpe_radio_idx=cpe_radio,
-            su_count=effective_su_count,
+            su_count=su_count,
             cpe_hosts=cpe_hosts,
             prefer_cpe_via_bts=prefer_cpe_via_bts,
             ssh_timeout_s=ssh_timeout_s,
@@ -1620,7 +1636,7 @@ def configure_mcs_profile(
         if matches:
             print(
                 f"[CONFIG] Already configured: {mcs_rate}, {bandwidth}, ratio={ratio} "
-                f"on BTS + {effective_su_count} CPE(s) — skipping MCS apply"
+                f"on BTS + {su_count} CPE(s) — skipping MCS apply"
             )
             mcs_report["bandwidth_skipped"] = False
             return mcs_report
@@ -1629,7 +1645,7 @@ def configure_mcs_profile(
         f"[CONFIG] Target MCS {spec['mcs']} ({spec['modulation']}); "
         f"operating rate ~{spec['operating_rate_mbps']:.0f} Mbps checked after config"
     )
-    print(f"[CONFIG] MCS={mcs_rate} on BTS + {effective_su_count} CPE(s)")
+    print(f"[CONFIG] MCS={mcs_rate} on BTS + {su_count} CPE(s)")
     if prefer_cpe_via_bts:
         configure_mcs_broadcast_bts_and_all_cpes(
             bts_ip,
@@ -1660,7 +1676,7 @@ def configure_mcs_profile(
             mcs_rate,
             spatial_stream,
             cpe_hosts=cpe_hosts,
-            su_count=effective_su_count,
+            su_count=su_count,
             prefer_cpe_via_bts=prefer_cpe_via_bts,
             ssh_timeout_s=ssh_timeout_s,
             verify=verify,
@@ -1675,7 +1691,7 @@ def configure_mcs_profile(
         cpe_radio,
         mcs_rate,
         spatial_stream,
-        su_count=effective_su_count,
+        su_count=su_count,
         cpe_hosts=cpe_hosts,
         prefer_cpe_via_bts=prefer_cpe_via_bts,
         ssh_timeout_s=ssh_timeout_s,
@@ -1741,7 +1757,7 @@ def configure_radio_profile(
     effective_settle = _settle_seconds(bandwidth, settle_s)
     cpe_radio = cpe_radio_idx if cpe_radio_idx is not None else radio_idx
     spec = lookup_spec(mcs_rate, bandwidth, spatial_streams=int(spatial_stream))
-    effective_su_count = max(su_count, len([h for h in (cpe_hosts or []) if h.strip()]), 1)
+    cpe_hosts = _cap_cpe_hosts(cpe_hosts, su_count)
     require_all_su = (
         require_all_su_for_bandwidth
         if require_all_su_for_bandwidth is not None
@@ -1758,7 +1774,7 @@ def configure_radio_profile(
             ratio,
             spatial_stream,
             cpe_radio_idx=cpe_radio,
-            su_count=effective_su_count,
+            su_count=su_count,
             cpe_hosts=cpe_hosts,
             prefer_cpe_via_bts=prefer_cpe_via_bts,
             ssh_timeout_s=ssh_timeout_s,
@@ -1768,7 +1784,7 @@ def configure_radio_profile(
         if matches:
             print(
                 f"[CONFIG] Already configured: {mcs_rate}, {bandwidth}, ratio={ratio} "
-                f"on BTS + {effective_su_count} CPE(s) — skipping apply"
+                f"on BTS + {su_count} CPE(s) — skipping apply"
             )
             mcs_report["bandwidth_skipped"] = False
             return mcs_report
@@ -1778,7 +1794,7 @@ def configure_radio_profile(
         f"operating rate ~{spec['operating_rate_mbps']:.0f} Mbps checked after config"
     )
 
-    print(f"[CONFIG] Step 1/4: MCS={mcs_rate} on BTS + {effective_su_count} CPE(s)")
+    print(f"[CONFIG] Step 1/4: MCS={mcs_rate} on BTS + {su_count} CPE(s)")
     if prefer_cpe_via_bts:
         configure_mcs_broadcast_bts_and_all_cpes(
             bts_ip,
@@ -1809,7 +1825,7 @@ def configure_radio_profile(
             mcs_rate,
             spatial_stream,
             cpe_hosts=cpe_hosts,
-            su_count=effective_su_count,
+            su_count=su_count,
             prefer_cpe_via_bts=prefer_cpe_via_bts,
             ssh_timeout_s=ssh_timeout_s,
             verify=verify,
@@ -1868,7 +1884,7 @@ def configure_radio_profile(
             check_running=True,
         )
 
-    print(f"[CONFIG] Step 3/4: Re-sync MCS on BTS + SU1–SU{effective_su_count}")
+    print(f"[CONFIG] Step 3/4: Re-sync MCS on BTS + SU1–SU{su_count}")
     _reapply_mcs_all_devices(
         bts_ip,
         user,
@@ -1877,7 +1893,7 @@ def configure_radio_profile(
         cpe_radio,
         mcs_rate,
         spatial_stream,
-        su_count=effective_su_count,
+        su_count=su_count,
         ssh_timeout_s=ssh_timeout_s,
     )
 
@@ -1890,7 +1906,7 @@ def configure_radio_profile(
         cpe_radio,
         mcs_rate,
         spatial_stream,
-        su_count=effective_su_count,
+        su_count=su_count,
         cpe_hosts=cpe_hosts,
         prefer_cpe_via_bts=prefer_cpe_via_bts,
         ssh_timeout_s=ssh_timeout_s,

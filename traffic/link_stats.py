@@ -13,6 +13,44 @@ from utils.net_utils import is_ipv6_literal, normalize_ip
 
 DEFAULT_SSH_USER = "root"
 
+
+def resolve_cpe_hosts_for_run(
+    profile_hosts: list[str],
+    detected_clients: list[dict[str, Any]],
+    *,
+    su_count: int,
+) -> list[str]:
+    """Associated SU mgmt IPs only, ordered by sua slot, capped at ``su_count``."""
+    hosts: list[str] = []
+    ordered = sorted(
+        detected_clients,
+        key=lambda client: int(client.get("su_index") or client.get("sua_index") or 0),
+    )
+    for client in ordered:
+        if len(hosts) >= su_count:
+            break
+        ip = str(client.get("ip") or "").strip()
+        if not ip or ip == "-":
+            ip = resolve_sua_display_ip(
+                ipv4=str(client.get("ip") or ""),
+                ipv6=str(client.get("ipv6") or ""),
+            )
+        if ip and ip != "-":
+            normalized = normalize_ip(ip)
+            if normalized not in hosts:
+                hosts.append(normalized)
+    for ip in profile_hosts:
+        if len(hosts) >= su_count:
+            break
+        clean = str(ip).strip()
+        if not clean:
+            continue
+        normalized = normalize_ip(clean)
+        if normalized not in hosts:
+            hosts.append(normalized)
+    return hosts[:su_count]
+
+
 SUA_STAT_FIELDS = (
     "name",
     "ip",

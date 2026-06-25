@@ -273,7 +273,12 @@ def wait_for_su_links(
     Prefers lab PC QinQ interface with a global IPv6 in that /120; falls back to BTS SSH ping.
     """
     tb = profile_tb or {}
-    discovered = discover_su_hosts_from_bts(bts_ip, bts_user, bts_password)
+    discovered = discover_su_hosts_from_bts(
+        bts_ip,
+        bts_user,
+        bts_password,
+        max_sua=min_responding if min_responding is not None else 16,
+    )
     if discovered:
         targets = discovered
         print(f"[LINK] SU targets from BTS sysfs: {', '.join(targets)}")
@@ -281,6 +286,9 @@ def wait_for_su_links(
         targets = [normalize_ip(h) for h in cpe_hosts if str(h).strip()]
         if targets:
             print(f"[LINK] SU targets from profile (BTS sysfs empty): {', '.join(targets)}")
+
+    if min_responding is not None and len(targets) > min_responding:
+        targets = targets[:min_responding]
 
     if not targets:
         if strict and min_responding:

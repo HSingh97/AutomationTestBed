@@ -36,8 +36,7 @@ from traffic.dut_radio_config import (
     configure_mcs_profile,
     read_running_bandwidth,
 )
-from traffic.link_stats import fetch_link_clients, validate_operating_rates
-from traffic.kwn_sua_statistics import resolve_sua_display_ip
+from traffic.link_stats import fetch_link_clients, resolve_cpe_hosts_for_run, validate_operating_rates
 from traffic.operating_rate_table import normalize_bandwidth, operating_rate_mbps
 from traffic.operating_rate_table import lookup_spec
 from traffic.phy_rate_targets import compute_traffic_targets
@@ -482,6 +481,74 @@ def _check_bandwidth_before_trex(
     return True, "", validation
 
 
+def _print_matrix_console_table(
+    records: list[dict[str, object]],
+    *,
+    bandwidths: list[str],
+    mcs_rates: list[str],
+) -> None:
+    """ASCII matrix for Jenkins console: config + TRex result per BW/MCS cell."""
+    by_key: dict[tuple[str, str], dict[str, object]] = {}
+    for record in records:
+        by_key[(str(record.get("bandwidth") or ""), str(record.get("mcs") or ""))] = record
+
+    print("\n" + "=" * 96)
+    print("PERFORMANCE MATRIX — CONSOLE SUMMARY")
+    print("=" * 96)
+    header = (
+        f"{'Bandwidth':<10} | {'MCS':<6} | {'Config':<8} | {'TRex':<8} | "
+        f"{'RX Mbps':<10} | {'DL Mbps':<10} | {'UL Mbps':<10} | Notes"
+    )
+    print(header)
+    print("-" * len(header))
+
+    for bandwidth in bandwidths:
+        for mcs in mcs_rates:
+            record = by_key.get((bandwidth, mcs), {})
+            mcs_config = record.get("mcs_config") or {}
+            if record.get("skipped_trex"):
+                config_status = "FAIL" if mcs_config.get("mcs_config_ok") is False else "SKIP"
+                trex_status = "SKIP"
+            elif record.get("passed"):
+                config_status = "OK"
+                trex_status = "PASS"
+            elif record:
+                config_status = "OK" if mcs_config.get("mcs_config_ok") is not False else "FAIL"
+                trex_status = "FAIL"
+            else:
+                config_status = "—"
+                trex_status = "—"
+
+            stats = record.get("stats") or {}
+            combined = stats.get("combined") or {}
+            downlink = stats.get("downlink") or {}
+            uplink = stats.get("uplink") or {}
+            rx_mbps = combined.get("rx_mbps")
+            dl_mbps = downlink.get("rx_mbps")
+            ul_mbps = uplink.get("rx_mbps")
+
+            def _fmt_mbps(value: object) -> str:
+                if value is None or value == "":
+                    return "—"
+                try:
+                    return f"{float(value):.1f}"
+                except (TypeError, ValueError):
+                    return str(value)
+
+            notes = str(record.get("error") or "").strip()
+            if len(notes) > 40:
+                notes = notes[:37] + "..."
+            if not notes and record.get("throughput_grade") == "warn":
+                notes = "throughput warn"
+
+            print(
+                f"{bandwidth:<10} | {mcs:<6} | {config_status:<8} | {trex_status:<8} | "
+                f"{_fmt_mbps(rx_mbps):<10} | {_fmt_mbps(dl_mbps):<10} | {_fmt_mbps(ul_mbps):<10} | {notes}"
+            )
+
+    print("=" * 96)
+
+
 def _append_skipped_iteration(
     records: list[dict[str, object]],
     *,
@@ -624,37 +691,31 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
             "html_report": str(html_path),
         }
 
-    cpe_hosts = [str(ip) for ip in (dut.get("remote_ipv6s") or dut.get("remote_ips") or [])]
+    profile_hosts = [str(ip) for ip in (dut.get("remote_ipv6s") or dut.get("remote_ips") or [])]
+    configured_su = args.su_count
     detected_clients = fetch_link_clients(
         dut_ssh_ip,
         radio_idx=args.link_wifi_idx,
         source=args.link_stats_source,
         ssh_user=dut_user,
         ssh_password=dut_password,
-        cpe_hosts=cpe_hosts,
-        max_sua=max(args.su_count, 16),
+        cpe_hosts=profile_hosts,
+        max_sua=configured_su,
     )
-    configured_su = args.su_count
     detected_count = len(detected_clients)
-    if detected_clients:
-        for client in detected_clients:
-            ip = str(client.get("ip") or "").strip()
-            if not ip or ip == "-":
-                ip = resolve_sua_display_ip(
-                    ipv4=str(client.get("ip") or ""),
-                    ipv6=str(client.get("ipv6") or ""),
-                )
-            if ip and ip != "-" and ip not in cpe_hosts:
-                cpe_hosts.append(ip)
-        if len(cpe_hosts) > len(dut.get("remote_ipv6s") or []):
-            print(f"[DUT] Expanded CPE host list from BTS sysfs: {', '.join(cpe_hosts)}")
+    cpe_hosts = resolve_cpe_hosts_for_run(
+        profile_hosts,
+        detected_clients,
+        su_count=configured_su,
+    )
+    if cpe_hosts:
+        print(f"[DUT] CPE targets for run ({len(cpe_hosts)}/{configured_su}): {', '.join(cpe_hosts)}")
     if detected_count > 0:
         if detected_count > configured_su:
             print(
-                f"[DUT] Connected CPE detected: {detected_count} "
-                f"(override su_count={configured_su} -> {detected_count})"
+                f"[DUT] BTS reports {detected_count} associated SUA slot(s); "
+                f"using configured su_count={configured_su}"
             )
-            args.su_count = detected_count
         elif detected_count < configured_su:
             print(
                 f"[DUT] Connected CPE detected: {detected_count}/{configured_su} — "
@@ -663,7 +724,10 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         else:
             print(f"[DUT] Connected CPE detected: {detected_count}")
     else:
-        print(f"[WARN] Could not detect connected CPE count via {args.link_stats_source}; using su_count={args.su_count}")
+        print(
+            f"[WARN] Could not detect connected CPE count via {args.link_stats_source}; "
+            f"using su_count={args.su_count}"
+        )
     if not args.skip_dut_config:
         try:
             testbed_summary = asyncio.run(
@@ -1191,6 +1255,11 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     )
 
     print("\n" + "=" * 72)
+    _print_matrix_console_table(
+        records,
+        bandwidths=bandwidths,
+        mcs_rates=mcs_rates,
+    )
     print(f"Matrix complete: {passed_count}/{len(records)} passed")
     print(f"Summary JSON: {summary_path}")
     print(f"Summary CSV:  {csv_path}")
