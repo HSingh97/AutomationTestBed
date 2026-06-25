@@ -180,13 +180,7 @@ async def test_process_14_dependency_handling(request, procmon_ssh, bsu_ip, devi
 @pytest.mark.ProcessMonitor
 async def test_process_16_kill_single(request, procmon_ssh, bsu_ip, device_creds):
     _require_process_monitor(request)
-    clean_reboot = bool(request.config.getoption("--procmon-clean-reboot-before-kill"))
-    await assert_process_16_kill_single(
-        procmon_ssh.conn,
-        host=bsu_ip,
-        password=device_creds["pass"],
-        clean_reboot=clean_reboot,
-    )
+    await assert_process_16_kill_single(procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"])
 
 
 @pytest.mark.order(16)

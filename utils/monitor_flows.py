@@ -123,24 +123,9 @@ async def _send_command_with_retry(root_ssh, command: str, *, attempts: int = 2)
 
 
 async def _goto_admin_path(gui_page, path_fragment: str):
-    current_url = gui_page.url or ""
-    match = re.search(r"(https?://[^/]+/cgi-bin/luci/;stok=[^/]+)", current_url)
+    match = re.search(r"(https?://[^/]+/cgi-bin/luci/;stok=[^/]+)", gui_page.url or "")
     if not match:
-        host_match = re.match(r"(https?://[^/]+)", current_url)
-        if host_match:
-            try:
-                await gui_page.goto(
-                    f"{host_match.group(1)}/cgi-bin/luci/",
-                    timeout=UITimeouts.PAGE_LOAD_MS,
-                )
-                await gui_page.wait_for_load_state("networkidle")
-            except Exception:
-                return False
-            match = re.search(
-                r"(https?://[^/]+/cgi-bin/luci/;stok=[^/]+)", gui_page.url or ""
-            )
-        if not match:
-            return False
+        return False
     base = match.group(1)
     target = f"{base}/admin{path_fragment}"
     await gui_page.goto(target, timeout=UITimeouts.PAGE_LOAD_MS)

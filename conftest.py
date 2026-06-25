@@ -194,32 +194,6 @@ def pytest_addoption(parser):
         help="Disable ProcessMonitor SSH-loss recovery reboot (armed before each crash/kill).",
     )
     group.addoption(
-        "--procmon-serial-device",
-        action="store",
-        default="",
-        help=(
-            "USB/UART path for the BTS serial console used by the Process Monitor "
-            "suite (e.g. /dev/ttyUSB0). When set, ProcessMonitor uses the console "
-            "as a side-channel for kill/ubus/reboot so it doesn't depend on SSH."
-        ),
-    )
-    group.addoption(
-        "--procmon-serial-baud",
-        action="store",
-        type=int,
-        default=115200,
-        help="Baud rate for --procmon-serial-device (default 115200).",
-    )
-    group.addoption(
-        "--procmon-clean-reboot-before-kill",
-        action="store_true",
-        default=False,
-        help=(
-            "Console-only: reboot the DUT between the SEGV sweep cases (PROCESS_05-08) "
-            "and the KILL sweep cases (PROCESS_16-19) so the latter see a clean device."
-        ),
-    )
-    group.addoption(
         "--skip-testbed-bootstrap",
         action="store_true",
         default=False,
