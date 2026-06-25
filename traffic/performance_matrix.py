@@ -37,6 +37,7 @@ from traffic.dut_radio_config import (
     read_running_bandwidth,
 )
 from traffic.link_stats import fetch_link_clients, validate_operating_rates
+from traffic.kwn_sua_statistics import resolve_sua_display_ip
 from traffic.operating_rate_table import normalize_bandwidth, operating_rate_mbps
 from traffic.operating_rate_table import lookup_spec
 from traffic.phy_rate_targets import compute_traffic_targets
@@ -631,9 +632,22 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         ssh_user=dut_user,
         ssh_password=dut_password,
         cpe_hosts=cpe_hosts,
+        max_sua=max(args.su_count, 16),
     )
     configured_su = args.su_count
     detected_count = len(detected_clients)
+    if detected_clients:
+        for client in detected_clients:
+            ip = str(client.get("ip") or "").strip()
+            if not ip or ip == "-":
+                ip = resolve_sua_display_ip(
+                    ipv4=str(client.get("ip") or ""),
+                    ipv6=str(client.get("ipv6") or ""),
+                )
+            if ip and ip != "-" and ip not in cpe_hosts:
+                cpe_hosts.append(ip)
+        if len(cpe_hosts) > len(dut.get("remote_ipv6s") or []):
+            print(f"[DUT] Expanded CPE host list from BTS sysfs: {', '.join(cpe_hosts)}")
     if detected_count > 0:
         if detected_count > configured_su:
             print(

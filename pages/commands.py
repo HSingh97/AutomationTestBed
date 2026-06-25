@@ -256,6 +256,7 @@ class RootCommands:
 
     @staticmethod
     def remote_exec_command(su_index: int, command: str) -> str:
+        """SET/apply on CPE via BTS RF path — do not use for UCI get / verification."""
         safe = str(command).replace('"', '\\"')
         return f'/usr/sbin/remote_exec.sh {su_index} "{safe}"'
 

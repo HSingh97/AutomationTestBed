@@ -10,6 +10,7 @@ import re
 
 from pages.commands import RootCommands
 from traffic.operating_rate_table import lookup_spec, mcs_number, normalize_bandwidth, uci_htmode_matches, uci_htmode_value
+from traffic.kwn_sua_statistics import is_sua_associated, read_operating_mcs_by_sua_slot
 from utils.net_utils import format_ssh_host, is_ipv6_literal, normalize_ip
 
 
@@ -276,6 +277,22 @@ def run_ssh_via_bts(
     return run_ssh_command(bts_ip, user, password, relay, timeout_s=ssh_timeout_s)
 
 
+def _read_cpe_uci_direct(
+    cpe_ip: str,
+    user: str,
+    password: str,
+    cmd: str,
+    *,
+    ssh_timeout_s: int = 60,
+) -> str:
+    """Read CPE UCI from the automation host (lab PC → CPE mgmt IPv6)."""
+    raw = run_ssh_command(cpe_ip, user, password, cmd, timeout_s=ssh_timeout_s)
+    value = _parse_uci_get_output(raw)
+    if not value:
+        raise RuntimeError(f"empty UCI response from CPE {cpe_ip}: {raw[:160]!r}")
+    return value
+
+
 def _read_cpe_uci_via_bts(
     bts_ip: str,
     cpe_ip: str,
@@ -306,6 +323,8 @@ def _read_cpe_uci_via_remote_exec(
     uci_key: str,
     ssh_timeout_s: int = 60,
 ) -> str:
+    """Deprecated for verification — remote_exec.sh is SET-only on PTMP BTS."""
+    del radio_idx
     cmd = _remote_exec_bts_command(su_index, f"uci get {uci_key}")
     raw = run_ssh_command(bts_ip, user, password, cmd, timeout_s=ssh_timeout_s)
     value = _parse_uci_get_output(raw)
@@ -335,65 +354,86 @@ def _read_cpe_configured_mcs(
     ddrs_key = f"txparam.ath{cpe_radio_idx}.ddrsrate"
     spatial_key = f"txparam.ath{cpe_radio_idx}.spatialstream"
 
-    if cpe_ip:
-        try:
-            mcs = _read_cpe_uci_via_bts(
-                bts_ip,
-                cpe_ip,
-                password,
-                f"uci get {ddrs_key}",
-                ssh_timeout_s=ssh_timeout_s,
-            )
-            spatial = _read_cpe_uci_via_bts(
-                bts_ip,
-                cpe_ip,
-                password,
-                f"uci get {spatial_key}",
-                ssh_timeout_s=ssh_timeout_s,
-            )
-            if mcs.isdigit():
-                return mcs, spatial, "bts_ssh", ""
-            errors.append(f"bts_ssh: non-numeric ddrsrate {mcs!r}")
-        except RuntimeError as exc:
-            errors.append(f"bts_ssh: {exc}")
+    if not cpe_ip:
+        return "", "", "", "no CPE management IP"
 
-    exec_idx = _resolve_remote_exec_index_for_cpe(
-        bts_ip,
-        user,
-        password,
-        cpe_ip,
-        link_wifi_idx,
-        ssh_timeout_s=ssh_timeout_s,
-    )
-    for idx in [exec_idx, su_index]:
-        if idx is None:
-            continue
-        try:
-            mcs = _read_cpe_uci_via_remote_exec(
-                bts_ip,
-                user,
-                password,
-                cpe_radio_idx,
-                su_index=idx,
-                uci_key=ddrs_key,
-                ssh_timeout_s=ssh_timeout_s,
-            )
-            spatial = _read_cpe_uci_via_remote_exec(
-                bts_ip,
-                user,
-                password,
-                cpe_radio_idx,
-                su_index=idx,
-                uci_key=spatial_key,
-                ssh_timeout_s=ssh_timeout_s,
-            )
-            if mcs.isdigit():
-                return mcs, spatial, f"remote_exec:{idx}", ""
-            errors.append(f"remote_exec SU{idx}: non-numeric ddrsrate {mcs!r}")
-        except RuntimeError as exc:
-            errors.append(f"remote_exec SU{idx}: {exc}")
+    try:
+        mcs = _read_cpe_uci_direct(
+            cpe_ip,
+            user,
+            password,
+            f"uci get {ddrs_key}",
+            ssh_timeout_s=ssh_timeout_s,
+        )
+        spatial = _read_cpe_uci_direct(
+            cpe_ip,
+            user,
+            password,
+            f"uci get {spatial_key}",
+            ssh_timeout_s=ssh_timeout_s,
+        )
+        if mcs.isdigit():
+            return mcs, spatial, "direct_ssh", ""
+        errors.append(f"direct_ssh: non-numeric ddrsrate {mcs!r}")
+    except RuntimeError as exc:
+        errors.append(f"direct_ssh: {exc}")
+
+    try:
+        mcs = _read_cpe_uci_via_bts(
+            bts_ip,
+            cpe_ip,
+            password,
+            f"uci get {ddrs_key}",
+            ssh_timeout_s=ssh_timeout_s,
+        )
+        spatial = _read_cpe_uci_via_bts(
+            bts_ip,
+            cpe_ip,
+            password,
+            f"uci get {spatial_key}",
+            ssh_timeout_s=ssh_timeout_s,
+        )
+        if mcs.isdigit():
+            return mcs, spatial, "bts_ssh", ""
+        errors.append(f"bts_ssh: non-numeric ddrsrate {mcs!r}")
+    except RuntimeError as exc:
+        errors.append(f"bts_ssh: {exc}")
 
     return "", "", "", "; ".join(errors) or "could not read CPE UCI"
+
+
+def _extend_cpe_hosts_from_bts_sysfs(
+    bts_ip: str,
+    user: str,
+    password: str,
+    *,
+    su_count: int,
+    cpe_hosts: list[str],
+) -> list[str]:
+    """Merge profile CPE IPs with live associated SU IPv6 from BTS KWN sysfs."""
+    from traffic.kwn_sua_statistics import fetch_kwn_sua_statistics, resolve_sua_display_ip
+
+    extended = [host.strip() for host in cpe_hosts if host.strip()]
+    try:
+        clients = fetch_kwn_sua_statistics(
+            bts_ip,
+            ssh_user=user,
+            ssh_password=password,
+            max_sua=max(su_count, len(extended) or 1),
+            cpe_hosts=extended or None,
+        )
+        for client in clients:
+            ip = str(client.get("ip") or "").strip()
+            if not ip or ip == "-":
+                ip = resolve_sua_display_ip(
+                    ipv4=str(client.get("ip") or ""),
+                    ipv6=str(client.get("ipv6") or ""),
+                )
+            if ip and ip != "-" and ip not in extended:
+                extended.append(ip)
+    except Exception:
+        pass
+    return extended
 
 
 def _verify_bts_mcs(
@@ -839,44 +879,45 @@ def _read_cpe_mcs(
     prefer_bts_relay: bool,
     ssh_timeout_s: int,
 ) -> tuple[str, str]:
-    """Read CPE ddrsrate/spatialstream via BTS relay or remote_exec."""
-    if cpe_ip and prefer_bts_relay:
-        try:
-            mcs = _read_cpe_uci_via_bts(
-                bts_ip,
-                cpe_ip,
-                password,
-                f"uci get txparam.ath{radio_idx}.ddrsrate",
-                ssh_timeout_s=ssh_timeout_s,
-            )
-            spatial = _read_cpe_uci_via_bts(
-                bts_ip,
-                cpe_ip,
-                password,
-                f"uci get txparam.ath{radio_idx}.spatialstream",
-                ssh_timeout_s=ssh_timeout_s,
-            )
-            return mcs, spatial
-        except RuntimeError:
-            pass
-    mcs = _read_cpe_mcs_via_remote_exec(
-        bts_ip,
-        user,
-        password,
-        radio_idx,
-        su_index=su_index,
-        ssh_timeout_s=ssh_timeout_s,
-    )
-    spatial = _read_cpe_uci_via_remote_exec(
-        bts_ip,
-        user,
-        password,
-        radio_idx,
-        su_index=su_index,
-        uci_key=f"txparam.ath{radio_idx}.spatialstream",
-        ssh_timeout_s=ssh_timeout_s,
-    )
-    return mcs, spatial
+    """Read CPE ddrsrate/spatialstream via lab-PC→CPE SSH or BTS relay."""
+    del su_index
+    if not cpe_ip:
+        raise RuntimeError("no CPE management IP for MCS read")
+    try:
+        mcs = _read_cpe_uci_direct(
+            cpe_ip,
+            "root",
+            password,
+            f"uci get txparam.ath{radio_idx}.ddrsrate",
+            ssh_timeout_s=ssh_timeout_s,
+        )
+        spatial = _read_cpe_uci_direct(
+            cpe_ip,
+            "root",
+            password,
+            f"uci get txparam.ath{radio_idx}.spatialstream",
+            ssh_timeout_s=ssh_timeout_s,
+        )
+        return mcs, spatial
+    except RuntimeError:
+        pass
+    if prefer_bts_relay:
+        mcs = _read_cpe_uci_via_bts(
+            bts_ip,
+            cpe_ip,
+            password,
+            f"uci get txparam.ath{radio_idx}.ddrsrate",
+            ssh_timeout_s=ssh_timeout_s,
+        )
+        spatial = _read_cpe_uci_via_bts(
+            bts_ip,
+            cpe_ip,
+            password,
+            f"uci get txparam.ath{radio_idx}.spatialstream",
+            ssh_timeout_s=ssh_timeout_s,
+        )
+        return mcs, spatial
+    raise RuntimeError(f"could not read MCS from CPE {cpe_ip}")
 
 
 def verify_mcs_all_devices(
@@ -896,9 +937,9 @@ def verify_mcs_all_devices(
     snmp_radio_idx: int = 2,
     bandwidth: str = "HT80",
 ) -> dict[str, object]:
-    """Confirm BTS and every CPE/SU have the same configured MCS (UCI ddrsrate)."""
+    """Confirm BTS UCI MCS and every SU operating MCS via BTS sysfs ``rx_rate_mcs``."""
+    del cpe_radio_idx, prefer_cpe_via_bts, snmp_community, snmp_radio_idx, bandwidth, cpe_hosts
     expected_mcs = str(mcs_number(mcs_rate))
-    cpe_list = [host.strip() for host in (cpe_hosts or []) if host.strip()]
     checks: list[dict[str, object]] = []
 
     bts_mcs = _read_uci(bts_ip, user, password, f"uci get txparam.ath{bts_radio_idx}.ddrsrate")
@@ -918,54 +959,49 @@ def verify_mcs_all_devices(
         }
     )
 
-    link_wifi_idx = bts_radio_idx
-    has_sshpass = _bts_has_sshpass(bts_ip, user, password, ssh_timeout_s=min(ssh_timeout_s, 30))
-    if has_sshpass:
-        print("[MCS] CPE verify: BTS→CPE SSH relay (sshpass on BTS)")
-    else:
-        print("[MCS] CPE verify: sshpass not on BTS — will use remote_exec by link-table index")
+    print(
+        f"[MCS] SU verify: BTS sysfs rx_rate_mcs on "
+        f"sua1..sua{su_count} (/sys/class/kwn/sua{{N}}/statistics/)"
+    )
+    sua_slots = read_operating_mcs_by_sua_slot(
+        bts_ip,
+        ssh_user=user,
+        ssh_password=password,
+        max_sua=su_count,
+    )
 
     for su_index in range(1, su_count + 1):
-        cpe_ip = cpe_list[su_index - 1] if su_index <= len(cpe_list) else None
-        if not cpe_ip:
+        slot = sua_slots.get(su_index, {})
+        if not slot or not is_sua_associated(slot):
             checks.append(
                 {
                     "role": "CPE",
                     "label": f"SU{su_index}",
                     "su_index": su_index,
-                    "ip": "",
+                    "sua_slot": su_index,
                     "expected_mcs": expected_mcs,
                     "actual_mcs": "?",
-                    "spatial_stream": "",
+                    "rx_rate_mbps": "",
                     "ok": False,
-                    "error": "no CPE management IP in profile",
+                    "error": f"sua{su_index} not associated on BTS",
                 }
             )
             continue
 
-        actual_mcs, actual_spatial, source, error = _read_cpe_configured_mcs(
-            bts_ip,
-            user,
-            password,
-            cpe_ip,
-            cpe_radio_idx,
-            link_wifi_idx,
-            su_index=su_index,
-            ssh_timeout_s=ssh_timeout_s,
-        )
-
-        if not actual_mcs:
+        actual_mcs = str(slot.get("rx_rate_mcs") or "").strip()
+        rx_rate = str(slot.get("rx_rate") or "").strip()
+        if not actual_mcs or actual_mcs in {"-", "0"}:
             checks.append(
                 {
                     "role": "CPE",
                     "label": f"SU{su_index}",
                     "su_index": su_index,
-                    "ip": cpe_ip or "",
+                    "sua_slot": su_index,
                     "expected_mcs": expected_mcs,
                     "actual_mcs": "?",
-                    "spatial_stream": "",
+                    "rx_rate_mbps": rx_rate if rx_rate not in {"", "-"} else "",
                     "ok": False,
-                    "error": error or f"could not read UCI MCS for SU{su_index}",
+                    "error": f"sua{su_index} rx_rate_mcs empty in BTS sysfs",
                 }
             )
             continue
@@ -975,13 +1011,12 @@ def verify_mcs_all_devices(
                 "role": "CPE",
                 "label": f"SU{su_index}",
                 "su_index": su_index,
-                "ip": cpe_ip or "",
+                "sua_slot": su_index,
                 "expected_mcs": expected_mcs,
                 "actual_mcs": actual_mcs,
-                "spatial_stream": actual_spatial,
-                "source": source,
-                "ok": actual_mcs == expected_mcs
-                and (not actual_spatial or actual_spatial == spatial_stream),
+                "rx_rate_mbps": rx_rate if rx_rate not in {"", "-"} else "",
+                "source": "bts_sysfs:rx_rate_mcs",
+                "ok": actual_mcs == expected_mcs,
             }
         )
 
@@ -989,6 +1024,9 @@ def verify_mcs_all_devices(
     for row in checks:
         status = "OK" if row.get("ok") else "MISMATCH"
         detail = f" [{row.get('source')}]" if row.get("source") else ""
+        rate = row.get("rx_rate_mbps")
+        if rate:
+            detail += f" rx_rate={rate} Mbps"
         err = row.get("error")
         if err and not row.get("ok"):
             detail += f" — {err}"
@@ -997,7 +1035,10 @@ def verify_mcs_all_devices(
             f"actual={row.get('actual_mcs')}{detail} ({status})"
         )
     if all_ok:
-        print(f"[MCS] All {len(checks)} device(s) configured with {mcs_rate} (uci={expected_mcs})")
+        print(
+            f"[MCS] All {len(checks)} device(s) at operating {mcs_rate} "
+            f"(MCS index {expected_mcs})"
+        )
     else:
         bad = [str(row["label"]) for row in checks if not row.get("ok")]
         print(f"[MCS] MISMATCH on: {', '.join(bad)}")
@@ -1039,32 +1080,10 @@ def configure_cpe_mcs_via_bts_remote_exec(
         )
         if not verify:
             return
-        actual_mcs = _read_cpe_mcs_via_remote_exec(
-            bts_ip,
-            user,
-            password,
-            radio_idx,
-            su_index=su_index,
-            ssh_timeout_s=ssh_timeout_s,
+        print(
+            "[MCS] Skipping per-SU verify after remote_exec broadcast "
+            "(final verify uses BTS sysfs rx_rate_mcs on sua1..suaN)"
         )
-        if _remote_exec_is_cpe_target(bts_ip, user, password, su_index, ssh_timeout_s=ssh_timeout_s):
-            try:
-                _verify_cpe_mcs_on_device(
-                    label=f"remote_exec SU{su_index}",
-                    read_mcs=actual_mcs,
-                    read_spatial=spatial_stream,
-                    mcs_rate=mcs_rate,
-                    spatial_stream=spatial_stream,
-                )
-            except RuntimeError as exc:
-                if verify_strict:
-                    raise
-                print(f"[WARN] {exc} — continuing; final MCS verify will confirm")
-        else:
-            print(
-                f"[WARN] remote_exec SU{su_index} is BTS-local — "
-                f"skipping per-SU verify (final MCS verify uses CPE indices)"
-            )
         return
 
     uci_mcs = str(mcs_number(mcs_rate))
@@ -1078,29 +1097,11 @@ def configure_cpe_mcs_via_bts_remote_exec(
         run_ssh_command(bts_ip, user, password, remote, timeout_s=ssh_timeout_s)
     run_ssh_command(bts_ip, user, password, RootCommands.remote_apply_all_su(), timeout_s=ssh_timeout_s)
     time.sleep(2.0)
-    if verify and _remote_exec_is_cpe_target(
-        bts_ip, user, password, su_index, ssh_timeout_s=ssh_timeout_s
-    ):
-        actual_mcs = _read_cpe_mcs_via_remote_exec(
-            bts_ip,
-            user,
-            password,
-            radio_idx,
-            su_index=su_index,
-            ssh_timeout_s=ssh_timeout_s,
+    if verify:
+        print(
+            f"[MCS] Skipping post-apply verify on remote_exec SU{su_index} "
+            "(final verify uses BTS sysfs rx_rate_mcs on sua1..suaN)"
         )
-        try:
-            _verify_cpe_mcs_on_device(
-                label=f"remote_exec SU{su_index}",
-                read_mcs=actual_mcs,
-                read_spatial=spatial_stream,
-                mcs_rate=mcs_rate,
-                spatial_stream=spatial_stream,
-            )
-        except RuntimeError as exc:
-            if verify_strict:
-                raise
-            print(f"[WARN] {exc} — continuing; final MCS verify will confirm")
 
 
 DEFAULT_REMOTE_EXEC_BROADCAST_SU = 1

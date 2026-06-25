@@ -108,7 +108,7 @@ link:
   bts_serial: ""
   ssid: ""
   expected_mode: linked
-  min_connected_clients: 4
+  min_connected_clients: 6
   health_check_timeout_s: 90
 
 recovery:

@@ -63,7 +63,7 @@ pipeline {
         string(
             name: 'TRex SU Server',
             defaultValue: '',
-            description: 'TRex SU server IP (empty = profile default; qa_lab_02 uses 192.168.1.2 for 4-SU PTMP)'
+            description: 'TRex SU server IP (empty = profile default; qa_lab_02 uses 192.168.1.2 for CPE 4-6)'
         )
         string(
             name: 'PROFILE',

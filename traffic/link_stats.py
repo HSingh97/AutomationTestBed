@@ -7,7 +7,7 @@ import shlex
 import subprocess
 from typing import Any
 
-from traffic.kwn_sua_statistics import fetch_kwn_sua_statistics, normalize_kwn_sua_client
+from traffic.kwn_sua_statistics import fetch_kwn_sua_statistics, resolve_sua_display_ip
 from traffic.operating_rate_table import lookup_spec, operating_rate_mbps
 from utils.net_utils import is_ipv6_literal, normalize_ip
 

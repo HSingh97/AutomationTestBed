@@ -381,3 +381,53 @@ def fetch_kwn_sua_statistics(
             )
         )
     return clients
+
+
+_OPERATING_MCS_FIELDS: tuple[str, ...] = (
+    "rx_rate_mcs",
+    "rx_rate",
+    "tx_rate_mcs",
+    "tx_rate",
+    "ip",
+    "ipv6",
+    "mac",
+)
+
+
+def read_operating_mcs_by_sua_slot(
+    dut_ip: str,
+    *,
+    ssh_user: str = DEFAULT_SSH_USER,
+    ssh_password: str = "",
+    max_sua: int = 16,
+) -> dict[int, dict[str, str]]:
+    """
+    Operating MCS and PHY rate per BTS SUA slot from sysfs
+    ``/sys/class/kwn/sua{N}/statistics/`` (``rx_rate_mcs`` is the CPE DL MCS index).
+    """
+    bulk: dict[int, dict[str, str]] = {}
+    if ssh_password:
+        bulk = ssh_read_kwn_sysfs_bulk(
+            host=dut_ip,
+            ssh_user=ssh_user,
+            ssh_password=ssh_password,
+            max_sua=max_sua,
+        )
+
+    slots: dict[int, dict[str, str]] = {}
+    for sua_idx in range(1, max_sua + 1):
+        base = f"/sys/class/kwn/sua{sua_idx}/statistics"
+        row: dict[str, str] = {"sua_index": str(sua_idx)}
+        if bulk and sua_idx in bulk:
+            for key in _OPERATING_MCS_FIELDS:
+                row[key] = str(bulk[sua_idx].get(key, "-"))
+        else:
+            for key in _OPERATING_MCS_FIELDS:
+                row[key] = ssh_read_sysfs_field(
+                    host=dut_ip,
+                    path=f"{base}/{key}",
+                    ssh_user=ssh_user,
+                    ssh_password=ssh_password,
+                )
+        slots[sua_idx] = row
+    return slots
