@@ -31,8 +31,30 @@ class RecoveryManager:
     def _repo_root() -> Path:
         return Path(__file__).resolve().parent.parent
 
-    def _resolve_restore_bundle(self, role: str = "BTS") -> Path:
-        recovery = self.profile_bundle.active.get("recovery", {})
+    def _resolve_restore_bundle(
+        self,
+        role: str = "BTS",
+        *,
+        bundle_path: Path | None = None,
+    ) -> Path:
+        if bundle_path is not None and bundle_path.is_file():
+            return bundle_path.resolve()
+        from utils.device_backup import get_session_backup_path, resolve_restore_archive_path
+
+        cached = get_session_backup_path(role)
+        if cached is not None:
+            return cached
+        profile = self.profile_bundle.active
+        ip_cfg = profile.get("ip_tests", {}) or {}
+        resolved = resolve_restore_archive_path(
+            profile,
+            role=role,
+            cfg=ip_cfg,
+            repo_root=self._repo_root(),
+        )
+        if resolved is not None:
+            return resolved.resolve()
+        recovery = profile.get("recovery", {})
         role_upper = str(role).upper()
         if role_upper == "CPE":
             rel = recovery.get("cpe_restore_archive", "config/CPE.tar.gz")
@@ -164,14 +186,19 @@ class RecoveryManager:
         device_creds,
         role: str = "BTS",
         post_restore_ip: str | None = None,
+        bundle_path: Path | None = None,
+        restore_gui_ip: str | None = None,
     ) -> bool:
         """
         Restore saved profile via GUI:
-        default IP (192.168.2.1) -> Management -> Upgrade/Reset -> Restore.
+        factory/default IP -> Management -> Upgrade/Reset -> Restore.
+        Uses session temp backup when available (not stale config/BTS.tar.gz).
         """
         recovery = self.profile_bundle.active.get("recovery", {})
-        restore_ip = str(recovery.get("restore_default_ip", "192.168.2.1")).strip()
-        bundle_path = self._resolve_restore_bundle(role=role)
+        restore_ip = str(
+            restore_gui_ip or recovery.get("restore_default_ip", "192.168.2.1")
+        ).strip()
+        bundle_path = self._resolve_restore_bundle(role=role, bundle_path=bundle_path)
         if not bundle_path.exists():
             self.metrics.last_error = f"Restore archive not found: {bundle_path}"
             return False

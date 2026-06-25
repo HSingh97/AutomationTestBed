@@ -28,6 +28,7 @@ from utils.parsers import (
 # Summary LAN metrics are validated against eth0 only until dual-LAN DUTs are supported.
 _MAX_SUMMARY_LAN_PORTS = 1
 from utils.validators import (
+    validate_active_channel,
     validate_cpu_mem,
     validate_network_address,
     validate_param,
@@ -205,7 +206,6 @@ async def assert_summary_wireless(root_ssh, gui_page):
         wifi_idx = radio_num
         ssh_status = parse_radio_status((await root_ssh.send_command(RootCommands.get_radio_status(wifi_idx))).result.strip())
         ssh_mac = parse_ifconfig_mac((await root_ssh.send_command(RootCommands.get_mac_wireless(wifi_idx))).result.strip())
-        ssh_act_ch = parse_iwconfig_active_channel((await root_ssh.send_command(RootCommands.get_active_channel(wifi_idx))).result.strip())
         ssh_link = parse_link_type((await root_ssh.send_command(RootCommands.get_link_type(wifi_idx))).result.strip())
         ssh_mode = parse_radio_mode((await root_ssh.send_command(RootCommands.get_radio_mode(wifi_idx))).result.strip(), radio_num)
         ssh_band = parse_bandwidth((await root_ssh.send_command(RootCommands.get_bandwidth(wifi_idx))).result.strip())
@@ -224,6 +224,9 @@ async def assert_summary_wireless(root_ssh, gui_page):
         gui_ssid = await gui_page.locator(SummaryWirelessLocators.SSID.format(radio_num)).inner_text()
         gui_conf_ch = await gui_page.locator(SummaryWirelessLocators.CONFIGURED_CHANNEL.format(radio_num)).inner_text()
         gui_act_ch = await gui_page.locator(SummaryWirelessLocators.ACTIVE_CHANNEL.format(radio_num)).inner_text()
+        ssh_act_ch = parse_iwconfig_active_channel(
+            (await root_ssh.send_command(RootCommands.get_active_channel(wifi_idx))).result.strip()
+        )
         gui_sec = await gui_page.locator(SummaryWirelessLocators.SECURITY.format(radio_num)).inner_text()
         gui_rtx = await gui_page.locator(SummaryWirelessLocators.RTX_PERCENTAGE.format(radio_num)).inner_text()
         gui_parts = await gui_page.locator(SummaryWirelessLocators.REMOTE_PARTNERS.format(radio_num)).inner_text()
@@ -244,7 +247,7 @@ async def assert_summary_wireless(root_ssh, gui_page):
                 gui_conf_ch = ssh_conf_ch
             validate_param(f"R{radio_num} CONFIGURED CHANNEL", ssh_conf_ch, gui_conf_ch)
             if not is_unlinked_su:
-                validate_param(f"R{radio_num} ACTIVE CHANNEL", ssh_act_ch, gui_act_ch)
+                validate_active_channel(f"R{radio_num} ACTIVE CHANNEL", ssh_act_ch, gui_act_ch)
             validate_param(f"R{radio_num} SECURITY", ssh_sec, gui_sec)
             if gui_rtx.strip() in ["-", "- -", ""]:
                 gui_rtx = "0"

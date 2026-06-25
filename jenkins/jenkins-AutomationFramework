@@ -1,38 +1,114 @@
-// UBR GUI test cases — runs on TARGET_STAND.
-// Report: Senao_GUI_<build>_Report_<date>.html + CSV (hero + testbed summary + test results).
+// UBR validation — single pipeline on TARGET_STAND.
+// Select suites via TEST_MARKERS (GUI, IP, Regression, JumboFrames).
+// Optional TEST_FILTER (-k). Report: Senao_UBR_<build>_Report_<date>.html + CSV.
 
-def archiveArtifacts(pattern) {
-    step([$class: 'ArtifactArchiver', artifacts: pattern, fingerprint: true, onlyIfSuccessful: false])
+def archiveBuildArtifacts(pattern, allowEmpty = false) {
+    step([
+        $class: 'ArtifactArchiver',
+        artifacts: pattern,
+        fingerprint: true,
+        onlyIfSuccessful: false,
+        allowEmptyArchive: allowEmpty,
+    ])
+}
+
+def parseMarkerList(String raw) {
+    return (raw ?: '')
+        .split(',')
+        .collect { it.trim() }
+        .findAll { it }
+        .collect { token ->
+            def u = token.toUpperCase()
+            if (u == 'IPV4') {
+                return 'IPv4'
+            }
+            if (u == 'IPV6') {
+                return 'IPv6'
+            }
+            return u
+        }
+}
+
+/** True when marker list selects any IP suite path (full IP or stack-specific). */
+def markersIncludeIpSuite(List markers) {
+    return markers.contains('IP') || markers.contains('IPv4') || markers.contains('IPv6')
+}
+
+/** True when -k token looks like an IPv4-only IP case (IP_01–IP_17). */
+def isIpv4OnlyIpFilterToken(String token) {
+    def t = (token ?: '').trim().toUpperCase()
+    def m = (t =~ /^IP_?0*(\d+)$/)
+    if (!m.matches()) {
+        return false
+    }
+    def n = m[0][1] as int
+    return n >= 1 && n <= 17
+}
+
+/** Pick profiles/<name>.yaml from markers and optional -k filter (no manual profile pick). */
+def resolveProfileName(List markers, List kParts) {
+    if (!markersIncludeIpSuite(markers)) {
+        return 'default'
+    }
+    if (markers.contains('IPv4') && !markers.contains('IPv6') && !markers.contains('IP')) {
+        return 'ipv4_quickrun'
+    }
+    if (markers.contains('IPv6') && !markers.contains('IPv4') && !markers.contains('IP')) {
+        return 'ipv6_quickrun'
+    }
+    if (kParts && kParts.every { isIpv4OnlyIpFilterToken(it) }) {
+        return 'ipv4_quickrun'
+    }
+    return 'ipv6_quickrun'
 }
 
 pipeline {
     agent { node { label "${TARGET_STAND}" } }
 
+    options {
+        disableConcurrentBuilds()
+    }
+
     parameters {
+        string(
+            name: 'TEST_MARKERS',
+            defaultValue: 'GUI',
+            description: 'Comma-separated pytest suites: GUI, IP, IPv4, IPv6, Regression, JumboFrames (e.g. IPv4 or IP or GUI,IP)'
+        )
         string(
             name: 'TEST_FILTER',
             defaultValue: 'Summary, TopPanel, WirelessProperties',
-            description: 'Pytest -k filter (comma-separated keywords, e.g. GUI_05, WirelessProperties)'
-        )
-        string(
-            name: 'Local IPv6 Address',
-            defaultValue: '',
-            description: 'BTS IPv6. Leave empty to use profiles/<PROFILE_NAME>.yaml default'
-        )
-        string(
-            name: 'PROFILE_NAME',
-            defaultValue: 'default',
-            description: 'Primary profile: profiles/<name>.yaml'
+            description: 'Optional pytest -k filter (comma = OR). GUI-only when TEST_MARKERS includes GUI+IP (all IP cases still run). Examples: Summary, TopPanel, WirelessProperties, IP_18. Leave empty to run everything in selected paths.'
         )
         string(
             name: 'RECOVERY_PROFILE_NAME',
             defaultValue: 'link_formation',
-            description: 'Recovery profile: profiles/<name>.yaml'
+            description: 'Recovery profile: profiles/<name>.yaml (used for bootstrap/link recovery)'
+        )
+        string(
+            name: 'Local IPv6 Address',
+            defaultValue: '',
+            description: 'BTS IPv6 override. Leave empty for profile default'
+        )
+        string(
+            name: 'Remote IPv6 Address',
+            defaultValue: '',
+            description: 'CPE IPv6 override (IP suite). Leave empty for profile default'
+        )
+        string(
+            name: 'FALLBACK_IP',
+            defaultValue: '10.0.0.1',
+            description: 'BTS factory/fallback SSH IPv4 (auto-used for IP marker runs)'
         )
         booleanParam(
-            name: 'ENABLE_DESTRUCTIVE_JUMBO',
+            name: 'SKIP_TESTBED_BOOTSTRAP',
             defaultValue: false,
-            description: 'Allow destructive jumbo tests (JMB_07/JMB_10) when filter includes JumboFrames'
+            description: 'Skip session bootstrap (use when BTS/CPE mgmt link and RF are already up)'
+        )
+        booleanParam(
+            name: 'RUN_IP_CPE',
+            defaultValue: false,
+            description: 'IP suite: also run CPE-side cases (default BTS only). Or put cpe in TEST_FILTER / -k IP_18_cpe locally.'
         )
     }
 
@@ -40,12 +116,105 @@ pipeline {
         stage('Prepare tests') {
             steps {
                 script {
+                    def markers = parseMarkerList(params.TEST_MARKERS)
+                    if (markers.isEmpty()) {
+                        error('TEST_MARKERS is empty. Use at least one of: GUI, IP, IPv4, IPv6, Regression, JumboFrames')
+                    }
+
+                    def paths = []
+                    def mParts = []
+                    def extraFlags = [] as Set
+
+                    if (markers.contains('GUI')) {
+                        paths << 'tests/GUI/'
+                    }
+                    if (params.SKIP_TESTBED_BOOTSTRAP) {
+                        extraFlags << '--skip-testbed-bootstrap'
+                    }
+                    if (markersIncludeIpSuite(markers)) {
+                        paths << 'tests/IP/'
+                        extraFlags << '--allow-ip-suite'
+                        extraFlags << '--allow-ip-destructive'
+                        extraFlags << '--no-ip-stop-on-first-fail'
+                    }
+                    if (markers.contains('IP')) {
+                        mParts << 'IP'
+                    }
+                    if (markers.contains('IPv4')) {
+                        mParts << 'IPv4'
+                    }
+                    if (markers.contains('IPv6')) {
+                        mParts << 'IPv6'
+                    }
+                    if (markers.contains('REGRESSION')) {
+                        paths << 'tests/Regression/'
+                        mParts << 'Regression'
+                        extraFlags << '--allow-regression'
+                        extraFlags << '--regression-fresh'
+                    }
+                    if (markers.contains('JUMBOFRAMES')) {
+                        paths << 'tests/JumboFrames/'
+                        mParts << 'JumboFrames'
+                        extraFlags << '--allow-destructive-jumbo'
+                    }
+
+                    def unknown = markers.findAll { m ->
+                        !['GUI', 'IP', 'IPv4', 'IPv6', 'REGRESSION', 'JUMBOFRAMES'].contains(m)
+                    }
+                    if (!unknown.isEmpty()) {
+                        error("Unknown TEST_MARKERS: ${unknown.join(', ')}. Use GUI, IP, IPv4, IPv6, Regression, JumboFrames")
+                    }
+
+                    def kParts = (params.TEST_FILTER ?: '').split(',')
+                        .collect { it.trim() }
+                        .findAll { it }
+                    def runIpCpe = params.RUN_IP_CPE ||
+                        kParts.any { (it ?: '').trim().equalsIgnoreCase('cpe') }
+                    def ipScope = runIpCpe ? 'IP_' : '(IP_ and bts)'
+                    def guiOnlyFilter = markers.contains('GUI') && markers.contains('IP') && kParts &&
+                        !kParts.any { (it ?: '').trim().toUpperCase() =~ /^IP_/ }
+                    def kExpr = ''
+                    if (kParts) {
+                        kExpr = kParts.join(' or ')
+                        if (guiOnlyFilter) {
+                            kExpr = "(${kExpr}) or ${ipScope}"
+                        }
+                    } else if (markersIncludeIpSuite(markers) && !runIpCpe) {
+                        kExpr = ipScope
+                    }
+                    env.TEST_PATHS = paths.join(' ')
+                    def legacyGuiIp = markers.contains('GUI') && markers.contains('IP') &&
+                        !markers.contains('IPv4') && !markers.contains('IPv6')
+                    if (legacyGuiIp) {
+                        env.TEST_M_EXPR = ''
+                    } else if (mParts.size() == 1) {
+                        env.TEST_M_EXPR = "-m \"${mParts[0]}\""
+                    } else if (mParts.size() > 1) {
+                        env.TEST_M_EXPR = "-m \"${mParts.join(' or ')}\""
+                    } else {
+                        env.TEST_M_EXPR = ''
+                    }
+                    env.TEST_EXTRA_FLAGS = extraFlags.join(' ')
+                    env.PROFILE_NAME = resolveProfileName(markers, kParts)
+                    env.TEST_K_FILTER = kExpr ? "-k \"${kExpr}\"" : ''
+
                     echo '----------------------------------------'
-                    echo 'UBR GUI Test Cases (pytest)'
+                    echo 'UBR Validation (pytest, marker-driven)'
                     echo "--- TARGET STAND: ${TARGET_STAND}"
-                    echo "--- TEST FILTER:  ${params.TEST_FILTER}"
+                    echo "Markers:        ${markers.join(', ')}"
+                    echo "Test paths:     ${env.TEST_PATHS}"
+                    echo "pytest -m:      ${env.TEST_M_EXPR ?: '(paths only)'}"
+                    echo "pytest -k:      ${kExpr ?: '(none — all tests in paths)'}"
+                    if (guiOnlyFilter) {
+                        echo "IP scope:       ${runIpCpe ? 'BTS + CPE' : 'BTS only (enable RUN_IP_CPE for CPE)'}"
+                        echo "GUI filter:     applies to tests/GUI/ only; IP suite via ${ipScope}"
+                    } else if (markersIncludeIpSuite(markers) && !runIpCpe) {
+                        echo 'IP scope:       BTS only (enable RUN_IP_CPE or -k cpe for CPE cases)'
+                    }
+                    echo "Extra flags:    ${env.TEST_EXTRA_FLAGS ?: '(none)'}"
+                    echo "Profile:        ${env.PROFILE_NAME} (auto from markers/filter)"
+                    echo "Recovery:       ${params.RECOVERY_PROFILE_NAME}"
                     echo "Local IPv6:     ${params['Local IPv6 Address'] ?: '(profile default)'}"
-                    echo "Profile:        ${params.PROFILE_NAME}"
                     echo '----------------------------------------'
                 }
             }
@@ -66,26 +235,35 @@ pipeline {
             steps {
                 script {
                     def localIP = (params['Local IPv6 Address'] ?: '').trim()
-                    def profileName = params.PROFILE_NAME
+                    def remoteIP = (params['Remote IPv6 Address'] ?: '').trim()
+                    def profileName = env.PROFILE_NAME ?: 'default'
                     def recoveryProfileName = params.RECOVERY_PROFILE_NAME
-                    def destructiveFlag = params.ENABLE_DESTRUCTIVE_JUMBO ? '--allow-destructive-jumbo' : ''
-                    def formattedFilter = params.TEST_FILTER.split(',')
-                        .collect { it.trim() }
-                        .findAll { it }
-                        .join(' or ')
-                    def ipv6Arg = localIP ? "--local-ipv6 \"${localIP}\"" : ''
+                    def fallbackIp = (params.FALLBACK_IP ?: '10.0.0.1').trim()
+                    def ipv6Local = localIP ? "--local-ipv6 \"${localIP}\"" : ''
+                    def ipv6Remote = remoteIP ? "--remote-ipv6 \"${remoteIP}\"" : ''
 
-                    echo "Testing with filter: [ ${formattedFilter} ]"
-                    sh 'rm -f report.json testbed_summary.json Senao_GUI_*.html Senao_GUI_*.csv || true'
+                    sh '''
+                        rm -f reports/artifacts/report.json reports/artifacts/ip_suite_progress.json \
+                              reports/artifacts/testbed_summary.json \
+                              reports/artifacts/Senao_UBR_*.html reports/artifacts/Senao_UBR_*.csv \
+                              reports/artifacts/Senao_GUI_*.html reports/artifacts/Senao_GUI_*.csv \
+                              Senao_UBR_*.html Senao_GUI_*.html || true
+                    '''
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                         sh """
-                            PYTHONPATH=. venv/bin/python -m pytest tests/GUI/ -v -k "${formattedFilter}" \
+                            export PYTHONUNBUFFERED=1
+                            export PYTHONPATH=.
+                            stdbuf -oL -eL venv/bin/python -u -m pytest ${env.TEST_PATHS} -v \
+                            ${env.TEST_M_EXPR} \
+                            ${env.TEST_K_FILTER} \
                             --profile "${profileName}" \
                             --recovery-profile "${recoveryProfileName}" \
-                            ${ipv6Arg} \
-                            ${destructiveFlag} \
-                            --json-report --json-report-file=report.json
+                            --fallback-ip "${fallbackIp}" \
+                            ${ipv6Local} \
+                            ${ipv6Remote} \
+                            ${env.TEST_EXTRA_FLAGS} \
+                            --json-report --json-report-file=reports/artifacts/report.json
                         """
                     }
                 }
@@ -97,34 +275,47 @@ pipeline {
                 script {
                     def senao = load 'jenkins/jenkins-common.groovy'
                     def localIP = (params['Local IPv6 Address'] ?: 'profile-default').trim()
-                    def basename = senao.standardReportBasename('Senao_GUI')
-                    def htmlFile = "${basename}.html"
-                    def csvFile = "${basename}.csv"
+                    def basename = senao.standardReportBasename('Senao_UBR')
+                    def htmlFile = "reports/artifacts/${basename}.html"
+                    def csvFile = "reports/artifacts/${basename}.csv"
 
-                    if (!fileExists('report.json')) {
-                        unstable('report.json missing — skipping report generation')
-                        return
+                    if (!fileExists('reports/artifacts/report.json')) {
+                        echo 'report.json missing — attempting recovery from IP suite progress checkpoint...'
+                        def recoverRc = sh(
+                            script: 'PYTHONPATH=. venv/bin/python -m utils.json_report_checkpoint --recover',
+                            returnStatus: true
+                        )
+                        if (recoverRc != 0 || !fileExists('reports/artifacts/report.json')) {
+                            unstable('reports/artifacts/report.json missing — no recoverable partial results')
+                            return
+                        }
+                        echo 'Recovered partial report.json from completed test checkpoints'
                     }
 
-                    echo 'Building Senao GUI HTML & CSV (report_generator.py)...'
-                    sh "PYTHONPATH=. venv/bin/python utils/report_generator.py ${env.BUILD_ID} ${localIP} ${new Date().format('yyyyMMdd')} --profile ${params.PROFILE_NAME} --output-prefix Senao_GUI"
+                    echo 'Building Senao UBR HTML & CSV (report_generator.py)...'
+                    sh "PYTHONPATH=. venv/bin/python utils/report_generator.py ${env.BUILD_ID} ${localIP} ${new Date().format('yyyyMMdd')} --profile ${env.PROFILE_NAME ?: 'default'} --output-prefix Senao_UBR"
 
                     if (!fileExists(htmlFile)) {
                         error("Customer report not created: ${htmlFile}")
                     }
                     env.CUSTOMER_REPORT = htmlFile
                     env.CUSTOMER_REPORT_CSV = csvFile
-                    echo "GUI report: ${htmlFile}"
+                    echo "Report: ${htmlFile}"
                 }
             }
         }
 
         stage('Archive Report') {
             steps {
-                archiveArtifacts 'Senao_GUI_*.html'
-                archiveArtifacts 'Senao_GUI_*.csv,allowEmptyArchive:true'
-                archiveArtifacts 'report.json,allowEmptyArchive:true'
-                archiveArtifacts 'testbed_summary.json,allowEmptyArchive:true'
+                script {
+                    archiveBuildArtifacts('reports/artifacts/Senao_UBR_*.html')
+                    archiveBuildArtifacts('reports/artifacts/Senao_UBR_*.csv', true)
+                    archiveBuildArtifacts('reports/artifacts/report.json', true)
+                    archiveBuildArtifacts('reports/artifacts/ip_suite_progress.json', true)
+                    archiveBuildArtifacts('reports/artifacts/testbed_summary.json', true)
+                    archiveBuildArtifacts('reports/artifacts/jumbo_captures/**/*', true)
+                    archiveBuildArtifacts('reports/artifacts/jumbo_captures_index.json', true)
+                }
             }
         }
     }
@@ -133,28 +324,31 @@ pipeline {
         always {
             script {
                 def senao = load 'jenkins/jenkins-common.groovy'
-                def basename = senao.standardReportBasename('Senao_GUI')
-                def htmlFile = env.CUSTOMER_REPORT ?: "${basename}.html"
-                def csvFile = env.CUSTOMER_REPORT_CSV ?: "${basename}.csv"
+                def basename = senao.standardReportBasename('Senao_UBR')
+                def htmlFile = env.CUSTOMER_REPORT ?: "reports/artifacts/${basename}.html"
+                def csvFile = env.CUSTOMER_REPORT_CSV ?: "reports/artifacts/${basename}.csv"
                 def hasReport = fileExists(htmlFile)
 
                 if (hasReport) {
-                    senao.publishSenaoHtmlReport(htmlFile, "Senao GUI Test Report - Build ${env.BUILD_NUMBER}")
+                    senao.publishSenaoHtmlReport(htmlFile, "Senao UBR Test Report - Build ${env.BUILD_NUMBER}")
                 }
 
                 def detailsHtml = """\
-                    <p><strong>Test filter:</strong> ${params.TEST_FILTER}</p>
+                    <p><strong>Markers:</strong> ${params.TEST_MARKERS}</p>
+                    <p><strong>Filter (-k):</strong> ${params.TEST_FILTER ?: '(none)'}</p>
+                    <p><strong>Paths:</strong> ${env.TEST_PATHS ?: '(not set)'}</p>
                     <p><strong>Target IPv6:</strong> ${params['Local IPv6 Address'] ?: '(profile default)'}</p>
-                    <p><strong>Profile:</strong> ${params.PROFILE_NAME}</p>
+                    <p><strong>Remote IPv6:</strong> ${params['Remote IPv6 Address'] ?: '(profile default)'}</p>
+                    <p><strong>Profile:</strong> ${env.PROFILE_NAME ?: 'default'} (auto)</p>
                     <p><strong>Recovery profile:</strong> ${params.RECOVERY_PROFILE_NAME}</p>
-                    <p><strong>Destructive jumbo:</strong> ${params.ENABLE_DESTRUCTIVE_JUMBO}</p>
+                    <p><strong>Destructive cases:</strong> enabled when IP / JumboFrames markers are selected</p>
                 """
 
                 try {
                     senao.sendSenaoPipelineEmail([
-                        subjectPrefix: 'UBR GUI Test Cases',
+                        subjectPrefix: 'UBR Validation',
                         reportTitle: 'Senao UBR Validation Execution Report',
-                        footerNote: 'GUI vs SSH validation with BTS/CPE testbed summary',
+                        footerNote: 'Marker-driven GUI / IP / Regression / Jumbo suites',
                         reportFile: hasReport ? htmlFile : '',
                         csvFile: fileExists(csvFile) ? csvFile : '',
                         detailsHtml: detailsHtml

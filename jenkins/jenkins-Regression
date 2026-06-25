@@ -1,14 +1,30 @@
 // UBR stability regression — runs on TARGET_STAND.
 // Select tests via checkboxes; per-test iteration counts; one merged HTML report.
 
-def archiveArtifacts(pattern) {
-    step([$class: 'ArtifactArchiver', artifacts: pattern, fingerprint: true, onlyIfSuccessful: false])
+def archiveBuildArtifacts(pattern, allowEmpty = false) {
+    step([
+        $class: 'ArtifactArchiver',
+        artifacts: pattern,
+        fingerprint: true,
+        onlyIfSuccessful: false,
+        allowEmptyArchive: allowEmpty,
+    ])
 }
 
 pipeline {
     agent { node { label "${TARGET_STAND}" } }
 
     parameters {
+        string(
+            name: 'PROFILE_NAME',
+            defaultValue: 'default',
+            description: 'Primary profile: profiles/<name>.yaml'
+        )
+        string(
+            name: 'RECOVERY_PROFILE_NAME',
+            defaultValue: 'link_formation',
+            description: 'Recovery profile: profiles/<name>.yaml'
+        )
         booleanParam(
             name: 'RUN_SOFT_REBOOT',
             defaultValue: true,
@@ -105,9 +121,11 @@ pipeline {
                     echo 'UBR Stability Regression (pytest)'
                     echo "--- TARGET STAND: ${TARGET_STAND}"
                     echo "--- TESTS:        ${env.REGRESSION_SELECTED_SUMMARY}"
+                    echo "Profile:        ${params.PROFILE_NAME}"
+                    echo "Recovery:       ${params.RECOVERY_PROFILE_NAME}"
                     echo "Local IPv6:     ${params['Local IPv6 Address'] ?: '(profile default)'}"
                     echo "Firmware:       ${params.RUN_FIRMWARE_UPGRADE ? 'uploaded image -> uploads/firmware_upload.bin' : '(not used)'}"
-                    echo 'Report:         single merged reports/Regression_Report.html'
+                    echo 'Report:         single merged reports/artifacts/Regression_Report.html'
                     echo '----------------------------------------'
                 }
             }
@@ -128,23 +146,27 @@ pipeline {
             steps {
                 script {
                     def localIP = (params['Local IPv6 Address'] ?: '').trim()
+                    def profileName = params.PROFILE_NAME
+                    def recoveryProfileName = params.RECOVERY_PROFILE_NAME
                     def ipv6Arg = localIP ? "--local-ipv6 \"${localIP}\"" : ''
 
                     sh '''
-                        rm -f reports/regression_collector_state.json \
-                              reports/Regression_Report.html \
-                              reports/regression_pytest.html \
+                        rm -f reports/artifacts/regression_collector_state.json \
+                              reports/artifacts/Regression_Report.html \
+                              reports/artifacts/regression_pytest.html \
                               Senao_Regression_*.html || true
                     '''
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                         sh """
-                            venv/bin/python -m pytest tests/Regression/ -v \
+                            export PYTHONUNBUFFERED=1
+                            export PYTHONPATH=.
+                            stdbuf -oL -eL venv/bin/python -u -m pytest tests/Regression/ -v \
                             -k "${env.REGRESSION_K_FILTER}" \
                             --allow-regression \
                             --regression-fresh \
-                            --profile default \
-                            --recovery-profile link_formation \
+                            --profile "${profileName}" \
+                            --recovery-profile "${recoveryProfileName}" \
                             ${ipv6Arg} \
                             ${env.REGRESSION_ITER_ARGS} \
                             ${env.FIRMWARE_IMAGE_ARG}
@@ -171,9 +193,11 @@ pipeline {
 
         stage('Archive Report') {
             steps {
-                archiveArtifacts 'Senao_Regression_*.html,allowEmptyArchive:true'
-                archiveArtifacts 'reports/Regression_Report.html,allowEmptyArchive:true'
-                archiveArtifacts 'reports/regression_pytest.html,allowEmptyArchive:true'
+                script {
+                    archiveBuildArtifacts('Senao_Regression_*.html', true)
+                    archiveBuildArtifacts('reports/artifacts/Regression_Report.html', true)
+                    archiveBuildArtifacts('reports/artifacts/regression_pytest.html', true)
+                }
             }
         }
     }
@@ -191,6 +215,8 @@ pipeline {
 
                 def detailsHtml = """\
                     <p><strong>Tests run:</strong> ${env.REGRESSION_SELECTED_SUMMARY ?: '—'}</p>
+                    <p><strong>Profile:</strong> ${params.PROFILE_NAME}</p>
+                    <p><strong>Recovery profile:</strong> ${params.RECOVERY_PROFILE_NAME}</p>
                     <p><strong>Target IPv6:</strong> ${params['Local IPv6 Address'] ?: '(profile default)'}</p>
                     <p><strong>Firmware:</strong> ${params.RUN_FIRMWARE_UPGRADE ? 'uploaded in build' : '(not used)'}</p>
                     <p><strong>Report:</strong> one merged HTML (per test: Total Executed / Passed / Failed)</p>

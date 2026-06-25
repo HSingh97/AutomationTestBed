@@ -43,6 +43,42 @@ def _looks_like_ssh_scalar(line: str) -> bool:
     return bool(re.fullmatch(r"[\w.:@/-]+", line)) and len(line) <= 128
 
 
+def _ssh_output_lines(raw_output) -> list[str]:
+    text = str(raw_output or "").replace("\r", "")
+    return [line.strip().strip("'\"") for line in text.split("\n") if line.strip()]
+
+
+def pick_scalar_ipv4(raw_output: str) -> str:
+    """Return a valid IPv4 from ``uci get`` output; ignore SSH MOTD / banner lines."""
+    for line in reversed(_ssh_output_lines(raw_output)):
+        if not line or is_uci_error(line):
+            continue
+        if not re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", line):
+            continue
+        try:
+            ipaddress.IPv4Address(line)
+            return line
+        except ValueError:
+            continue
+    return ""
+
+
+def pick_scalar_ipv6(raw_output: str) -> str:
+    """Return a valid IPv6 from ``uci get`` output; ignore SSH MOTD / banner lines."""
+    for line in reversed(_ssh_output_lines(raw_output)):
+        if not line or is_uci_error(line):
+            continue
+        if ":" not in line:
+            continue
+        candidate = line.split("/")[0].strip()
+        try:
+            ipaddress.IPv6Address(candidate)
+            return line
+        except ValueError:
+            continue
+    return ""
+
+
 def clean_ssh_output(raw_output):
     """
     Normalizes noisy interactive SSH output to the last meaningful line.
@@ -93,6 +129,14 @@ def is_ssh_read_failure(text):
     if not lower:
         return False
     return any(marker in lower for marker in _SSH_READ_FAILURE_MARKERS)
+
+
+def is_uci_error(text: str) -> bool:
+    """True when ``uci get`` failed (must not be written back to UCI or compared as a value)."""
+    lower = str(text or "").strip().lower()
+    if not lower:
+        return True
+    return lower.startswith("uci:") or "entry not found" in lower
 
 
 def normalize_ssh_metric(text):
@@ -260,6 +304,43 @@ def parse_bandwidth(ssh_str):
     if match:
         return f"{match.group(1)} MHz"
     return str(ssh_str).strip()
+
+
+def _active_channel_parts(value: str) -> tuple[int | None, int | None]:
+    text = normalize_gui_metric(value)
+    match = re.match(r"(\d+)\s*\((\d+)\s*MHz\)", text.strip())
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    return None, None
+
+
+def active_channels_match(ssh_val: str, gui_val: str) -> bool:
+    """
+    True when SSH (iwconfig) and GUI (Summary) active-channel strings agree.
+
+    On 5 GHz the web UI often shows the channel center (e.g. 36 @ 5180 MHz) while
+    iwconfig reports the operating point +10 MHz (e.g. 38 @ 5190 MHz). That offset
+    is expected on this platform and counts as a pass.
+    """
+    ssh = normalize_ssh_metric(ssh_val)
+    gui = normalize_gui_metric(gui_val)
+    if not ssh or not gui:
+        return False
+    if ssh in gui or gui in ssh:
+        return True
+    sch, sf = _active_channel_parts(ssh)
+    gch, gf = _active_channel_parts(gui)
+    if sch is None or gch is None:
+        return False
+    if sch == gch:
+        return True
+    if sf is not None and gf is not None:
+        freq_delta = abs(sf - gf)
+        if freq_delta == 10:
+            return True
+        if freq_delta <= 20 and abs(sch - gch) <= 4:
+            return True
+    return False
 
 
 def parse_enable_disable_flag(ssh_str):

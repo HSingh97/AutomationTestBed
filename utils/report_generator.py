@@ -11,11 +11,30 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from utils.jumbo_capture_report import (
+    JUMBO_CAPTURE_REPORT_CSS,
+    load_jumbo_capture_index,
+    parse_jmb_case_id,
+    render_jumbo_capture_evidence_html,
+)
 from utils.regression_report import _render_testbed_summary_table
 
 SENAO_LOGO_URL = (
     "https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png"
 )
+ARTIFACTS_DIR = Path("reports/artifacts")
+
+
+def _humanize_module_name(nodeid: str, test_id: str) -> str:
+    """Human-readable module name without repeating the Module ID prefix (e.g. JMB_01)."""
+    fn = nodeid.split("::")[-1]
+    raw = re.sub(r"^test_", "", fn, flags=re.I)
+
+    if re.match(r"JMB_\d+", test_id, re.I):
+        raw = re.sub(r"^jmb_\d+_?", "", raw, flags=re.I)
+        return raw.replace("_", " ").strip().title()
+
+    return raw.replace("_", " ").strip().title()
 
 
 def get_group_marker(keywords):
@@ -31,9 +50,33 @@ def get_group_marker(keywords):
 
     for kw in kw_list:
         if kw not in ignore_list and not kw.startswith('GUI_') and not kw.startswith('test_') and '.py' not in kw:
+            if re.match(r"IP_\d+", kw, re.I):
+                return "IP"
+            if re.match(r"JMB_\d+", kw, re.I):
+                return "JumboFrames"
+            if kw.lower() in ("jumboframes", "jumbo"):
+                return "JumboFrames"
             return kw.capitalize()
 
     return "Ungrouped"
+
+
+def _effective_outcome_for_report(test: dict) -> str:
+    """
+    Map pytest-json-report outcome for customer reports.
+
+    When call (and setup) passed but teardown failed, pytest records overall
+  outcome as 'error'. Treat that as passed in the Senao report.
+    """
+    raw = str(test.get("outcome", "unknown")).lower()
+    if raw == "skipped":
+        return "skipped"
+    call = str(test.get("call", {}).get("outcome", "")).lower()
+    setup = str(test.get("setup", {}).get("outcome", "passed")).lower()
+    if call == "passed" and setup in ("passed", ""):
+        if raw in ("passed", "error"):
+            return "passed"
+    return raw
 
 
 def extract_validated_parameters(test_data):
@@ -77,7 +120,7 @@ def clean_failure_message(raw_failure):
 
 
 def _load_testbed_summary(profile_name: str | None, local_ip: str) -> dict:
-    summary_path = Path("testbed_summary.json")
+    summary_path = ARTIFACTS_DIR / "testbed_summary.json"
     if summary_path.is_file():
         try:
             with summary_path.open(encoding="utf-8") as handle:
@@ -117,7 +160,7 @@ def generate():
     parser.add_argument(
         "--profile",
         default="",
-        help="Profile name (profiles/<name>.yaml) used to collect BTS/CPE info if testbed_summary.json is missing",
+        help="Profile name (profiles/<name>.yaml) used to collect BTS/CPE info if artifacts summary is missing",
     )
     parser.add_argument(
         "--output-prefix",
@@ -133,34 +176,60 @@ def generate():
     output_prefix = (args.output_prefix or "Senao_GUI").strip()
 
     try:
-        with open('report.json', 'r') as f:
+        report_path = ARTIFACTS_DIR / "report.json"
+        with report_path.open('r', encoding='utf-8') as f:
             data = json.load(f)
     except FileNotFoundError:
-        print("report.json not found! Tests may not have executed properly.")
+        print("reports/artifacts/report.json not found! Tests may not have executed properly.")
         sys.exit(1)
 
     groups = {}
     stats = {'total': 0, 'passed': 0, 'partial': 0, 'failed': 0}
+    jumbo_capture_index = load_jumbo_capture_index()
 
     for test in data.get('tests', []):
         stats['total'] += 1
         nodeid = test.get('nodeid', '')
 
-        match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
-        if match:
-            test_id = match.group(1).upper()
-            raw_name = match.group(2)
-            parts = raw_name.split('_')
-            if len(parts) >= 2 and parts[0] == 'summary':
-                test_name = '-'.join(p.capitalize() for p in parts[::-1])
+        parsed_ip = False
+        ip_param = re.search(
+            r"test_ip_extended_case\[(IP_\d+)-(\w+)\]", nodeid, re.I
+        )
+        if ip_param:
+            test_id = ip_param.group(1).upper()
+            test_name = ip_param.group(2).upper()
+            parsed_ip = True
+        elif "test_ip_" in nodeid:
+            fn = nodeid.split("::")[-1]
+            id_m = re.search(r"(?:IP_(\d+)|test_ip_(\d+)_)", fn, re.I)
+            target_m = re.search(r"_(bts|cpe)(?:\[|$)", fn, re.I)
+            if id_m and target_m:
+                num = id_m.group(1) or id_m.group(2)
+                test_id = f"IP_{int(num):02d}"
+                test_name = target_m.group(1).upper()
+                parsed_ip = True
+
+        if not parsed_ip:
+            jmb_id = parse_jmb_case_id(nodeid)
+            if jmb_id:
+                test_id = jmb_id
+                test_name = _humanize_module_name(nodeid, test_id)
             else:
-                test_name = '-'.join(p.capitalize() for p in parts)
-        else:
-            test_id = "N/A"
-            test_name = nodeid.split('::')[-1]
+                match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
+                if match:
+                    test_id = match.group(1).upper()
+                    raw_name = match.group(2)
+                    parts = raw_name.split('_')
+                    if len(parts) >= 2 and parts[0] == 'summary':
+                        test_name = '-'.join(p.capitalize() for p in parts[::-1])
+                    else:
+                        test_name = '-'.join(p.capitalize() for p in parts)
+                else:
+                    test_id = "N/A"
+                    test_name = nodeid.split('::')[-1]
 
         group_name = get_group_marker(test.get('keywords', []))
-        outcome = test.get('outcome', 'unknown').upper()
+        outcome = _effective_outcome_for_report(test).upper()
         reason_html = ""
         reason_csv = ""
 
@@ -209,12 +278,31 @@ def generate():
                 reason_csv = f"Critical Execution Error:\n- {err}"
                 color = "#ef4444"
                 bg = "#fef2f2"
-        else:
+        elif outcome == "SKIPPED":
             status = "SKIPPED"
             reason_html = "Test execution was bypassed."
             reason_csv = reason_html
             color = "#64748b"
             bg = "#f8fafc"
+        else:
+            stats['failed'] += 1
+            status = "FAILED"
+            teardown = test.get("teardown", {})
+            err = str(teardown.get("longrepr") or test.get("setup", {}).get("longrepr") or "Unknown error")
+            lines = err.strip().split("\n")
+            err_line = lines[-1] if lines else "Unknown error"
+            reason_html = (
+                f"<div class='reason-title' style='color:#991b1b;'>Critical Execution Error:</div>"
+                f"<div class='failure-list'><div class='failure-item'>{err_line}</div></div>"
+            )
+            reason_csv = f"Critical Execution Error:\n- {err_line}"
+            color = "#ef4444"
+            bg = "#fef2f2"
+
+        capture_html, capture_csv = render_jumbo_capture_evidence_html(test_id, jumbo_capture_index)
+        if capture_html:
+            reason_html = f"{reason_html}{capture_html}"
+            reason_csv = f"{reason_csv}\n{capture_csv}".strip()
 
         record = {
             'id': test_id,
@@ -230,11 +318,12 @@ def generate():
             groups[group_name] = []
         groups[group_name].append(record)
 
-    html_filename = f"{output_prefix}_{build_no}_Report_{date_str}.html"
-    csv_filename = f"{output_prefix}_{build_no}_Report_{date_str}.csv"
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    html_filename = ARTIFACTS_DIR / f"{output_prefix}_{build_no}_Report_{date_str}.html"
+    csv_filename = ARTIFACTS_DIR / f"{output_prefix}_{build_no}_Report_{date_str}.csv"
 
     # Generate CSV
-    with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
+    with csv_filename.open('w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(['Test Group', 'Module ID', 'Module Name', 'Status', 'Execution Details'])
         for group_name, records in groups.items():
@@ -249,6 +338,18 @@ def generate():
     report_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     testbed_summary = _load_testbed_summary(profile_name, ip_addr)
     testbed_table = _render_testbed_summary_table(testbed_summary)
+    is_partial_run = bool(data.get("partial") or (data.get("summary") or {}).get("partial"))
+    partial_banner = ""
+    if is_partial_run:
+        source = data.get("recovered_from") or (data.get("summary") or {}).get("recovered_from") or "checkpoint"
+        partial_banner = (
+            '<div style="max-width:min(1600px,96vw);margin:0 auto 14px;padding:12px 16px;'
+            'background:#fff7ed;border:1px solid #fdba74;border-radius:10px;color:#9a3412;'
+            'font-size:14px;font-weight:500;">'
+            f"Partial run — this report includes {stats['total']} completed test(s) only "
+            f"(run aborted or interrupted; recovered from {source})."
+            "</div>"
+        )
 
     # Generate Professional HTML
     html = f"""
@@ -259,7 +360,7 @@ def generate():
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
             body {{ font-family: 'Inter', sans-serif; background-color: #eef2f7; color: #334155; margin: 0; padding: 28px 18px; }}
-            .wrap {{ max-width: 1100px; margin: 0 auto; }}
+            .wrap {{ max-width: min(1600px, 96vw); margin: 0 auto; }}
             .hero {{
               background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #2563eb 100%);
               color: #fff; border-radius: 14px; padding: 22px 26px; margin-bottom: 18px;
@@ -329,6 +430,7 @@ def generate():
             .failure-item {{ position: relative; padding-left: 14px; margin-bottom: 8px; }}
             .failure-item::before {{ content: "•"; position: absolute; left: 0; color: #ef4444; font-weight: bold; }}
             .failure-item b {{ color: #0f172a; }}
+            {JUMBO_CAPTURE_REPORT_CSS}
         </style>
         <script>
             let currentStatus = 'ALL';
@@ -388,6 +490,7 @@ def generate():
                     <img src="{SENAO_LOGO_URL}" alt="Senao Networks"/>
                 </div>
             </header>
+            {partial_banner}
 
             <div class="container">
             <section class="panel-top">
@@ -464,7 +567,7 @@ def generate():
     </html>
     """
 
-    with open(html_filename, 'w', encoding='utf-8') as f:
+    with html_filename.open('w', encoding='utf-8') as f:
         f.write(html)
 
     print(f"✅ Generated Professional Reports: {html_filename} & {csv_filename}")

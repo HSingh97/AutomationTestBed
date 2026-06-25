@@ -33,11 +33,11 @@ def standardReportBasename(String prefix) {
 def copyRegressionReport(String destFile) {
     sh """
         set -e
-        src='reports/Regression_Report.html'
+        src='reports/artifacts/Regression_Report.html'
         if [ ! -f "\$src" ]; then
-          latest=\$(ls -t reports/Regression_Report_*.html 2>/dev/null | head -1 || true)
+          latest=\$(ls -t reports/artifacts/Regression_Report_*.html 2>/dev/null | head -1 || true)
           if [ -z "\$latest" ]; then
-            echo "No reports/Regression_Report.html (or legacy timestamped copy) found"
+            echo "No reports/artifacts/Regression_Report.html (or legacy timestamped copy) found"
             exit 1
           fi
           src="\$latest"
@@ -50,9 +50,9 @@ def copyRegressionReport(String destFile) {
 def copyLatestPerformanceReport(String destFile) {
     sh """
         set -e
-        latest=\$(ls -t logs/Performance_Report_*.html 2>/dev/null | head -1 || true)
+        latest=\$(ls -t reports/artifacts/Performance_Report_*.html 2>/dev/null | head -1 || true)
         if [ -z "\$latest" ]; then
-          echo "No logs/Performance_Report_*.html found"
+          echo "No reports/artifacts/Performance_Report_*.html found"
           exit 1
         fi
         cp "\$latest" "${destFile}"

@@ -1,0 +1,143 @@
+/* PPT export — widescreen 16:9 slide frames (1280×720 px) */
+body.ppt-export-mode {
+    margin: 0;
+    background: #eef2f6;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+body.ppt-export-mode .master-wrap {
+    display: none !important;
+}
+
+#ppt-export-root {
+    position: relative;
+    width: 1280px;
+    margin: 0 auto;
+}
+
+.ppt-export-slide {
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    background: white;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 24px;
+    border: 1px solid #e2e8f0;
+}
+
+/* Cover & index fill the slide */
+.ppt-export-slide--cover,
+.ppt-export-slide--index {
+    justify-content: center;
+    align-items: center;
+    padding: 48px;
+}
+.ppt-export-slide--cover .cover-page {
+    margin: 0;
+    min-height: auto;
+    width: 100%;
+    page-break-after: auto;
+}
+.ppt-export-slide--index {
+    padding: 40px 56px;
+    align-items: stretch;
+}
+.ppt-export-slide--index .index-page {
+    margin: 0;
+    min-height: auto;
+    width: 100%;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+}
+
+/* Chapter slides */
+.ppt-slide-chrome {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 20px;
+    background: white;
+    border-bottom: 2px solid #bfdbfe;
+    flex-shrink: 0;
+}
+.ppt-slide-logo {
+    height: 36px;
+    width: auto;
+    max-width: 140px;
+    object-fit: contain;
+}
+.ppt-slide-doc {
+    font-family: Inter, sans-serif;
+    font-size: 14px;
+    font-weight: 800;
+    color: #0f172a;
+}
+.ppt-slide-section {
+    margin-left: auto;
+    font-family: Inter, sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    color: #1d4ed8;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.ppt-slide-body {
+    flex: 1;
+    overflow: hidden;
+    padding: 12px 18px 16px;
+    box-sizing: border-box;
+}
+
+.ppt-slide-body-inner {
+    width: 100%;
+}
+
+/* Compact diagram/page content for slide fit */
+.ppt-slide-body .diagram-container,
+.ppt-slide-body .page {
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    max-width: 100% !important;
+    background: white !important;
+}
+.ppt-slide-body .header h1,
+.ppt-slide-body .hero h1 { font-size: 22px !important; }
+.ppt-slide-body .header .subtitle,
+.ppt-slide-body .hero p { font-size: 12px !important; }
+.ppt-slide-body .layer { padding: 10px !important; margin-bottom: 8px !important; }
+.ppt-slide-body .mega-section { padding: 10px !important; margin-bottom: 8px !important; }
+.ppt-slide-body .mega-title,
+.ppt-slide-body .mega-head { font-size: 13px !important; }
+.ppt-slide-body .tools-grid { gap: 8px !important; }
+.ppt-slide-body .tool-card { break-inside: avoid; }
+.ppt-slide-body .phy-body { gap: 8px !important; }
+.ppt-slide-body .cov-table { font-size: 10px !important; }
+.ppt-slide-body .cov-table td,
+.ppt-slide-body .cov-table th { padding: 6px 8px !important; }
+.ppt-slide-body .figure-wrap img { max-height: 520px; width: auto; max-width: 100%; object-fit: contain; }
+.ppt-slide-body .svg-topology { max-height: 420px; width: 100%; height: auto; }
+.ppt-slide-body .phase-grid { gap: 10px !important; }
+.ppt-slide-body .block { margin-bottom: 0 !important; }
+.ppt-slide-body .block-head { font-size: 13px !important; padding: 8px 12px !important; }
+.ppt-slide-body .disclaimer { font-size: 11px !important; padding: 8px 12px !important; }
+.ppt-slide-body .legend { margin-bottom: 8px !important; font-size: 11px !important; }
+.ppt-slide-body .workflow-box,
+.ppt-slide-body .suite-card,
+.ppt-slide-body .module-card,
+.ppt-slide-body .traffic-card,
+.ppt-slide-body .val-card,
+.ppt-slide-body .flow-step { font-size: 11px !important; }
+.ppt-slide-body .header h1,
+.ppt-slide-body .hero h1 { font-size: 22px !important; }
+.ppt-slide-body .header .subtitle,
+.ppt-slide-body .header p { font-size: 12px !important; }
+.ppt-slide-body .val-grid { gap: 8px !important; }
+.ppt-slide-body .flow-grid { gap: 8px !important; }
+.ppt-slide-body .traffic-grid { gap: 8px !important; }
+.ppt-slide-body .footer { font-size: 10px !important; margin-top: 8px !important; color: #64748b !important; }

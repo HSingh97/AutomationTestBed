@@ -14,7 +14,12 @@ dut:
   password: Sen@0ubRNwk$
 
 link:
-  ssid: ATUMNAWJ
+  auto_credentials: true
+  radio_type: "5G"
+  auth_mode: "32"
+  encryption_mode: "8"
+  radio_idx: 1
+  cpe_radio_idx: 1
   expected_mode: bootstrap
   target_bandwidth: HT80
   target_mcs_rate: MCS7
@@ -33,6 +38,35 @@ recovery:
   reboot_wait_seconds: 150
   restore_default_ip: "192.168.2.1"
   bts_restore_archive: config/BTS.tar.gz
+  cpe_restore_archive: config/CPE.tar.gz
+
+testbed:
+  enabled: true
+  bootstrap_on_start: true
+  factory_defaults:
+    bts_vlan_mode: qinq
+    cpe_vlan_mode: transparent
+  qinq:
+    svlan: 100
+    cvlan: 101
+  mgmt_vlan:
+    uci_key: vlan.ath1.mgmtvlan
+    uci_value: 101
+    prefix_len: 120
+    ipv6_bts: "2401:4900:d0:40d4:0:17b8:0:330"
+    ipv6_cpe: "2401:4900:d0:40d4::17b8:0:331"
+    ipv6_bts_pc: "2401:4900:d0:40d4::17b8:0:301"
+    ipv6_cpe_pc: "2401:4900:d0:40d4::17b8:0:302"
+  vlan_uci:
+    bts:
+      mode_value: qinq
+    cpe:
+      mode_value: transparent
+  link_recovery:
+    restore_bts: true
+    restore_cpe: true
+    bts_archive: config/BTS.tar.gz
+    cpe_archive: config/CPE.tar.gz
 
 regression:
   iterations: 3
@@ -60,9 +94,11 @@ capture:
   username: root
   password: ""
   tool: tcpdump
-  artifact_dir: logs/jumbo_captures
+  artifact_dir: reports/artifacts/jumbo_captures
   remote_tmp_dir: /tmp/ubr_jumbo_captures
   bts_host: ""
   cpe_host: ""
   bts_interface: enp3s0
   cpe_interface: enp3s0
+  ping_target_v6: "2401:4900:d0:40d4::17b8:0:302"
+  ping_source_v6: "2401:4900:d0:40d4::17b8:0:301"

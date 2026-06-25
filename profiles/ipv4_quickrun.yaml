@@ -1,0 +1,193 @@
+name: ipv4_quickrun
+description: Temporary IPv4-friendly profile for one-pass IP_01-IP_37 execution.
+
+dut:
+  ip_mode: ipv4
+  strict_ipv6: false
+  local_ip: "10.0.0.1"
+  remote_ips:
+    - "10.0.0.1"
+  username: root
+  password: Sen@0ubRNwk$
+
+testbed:
+  enabled: true
+  bootstrap_on_start: true
+  configure_vlan_modes: true
+  strict_ipv6: false
+  link_recovery:
+    restore_bts: false
+    restore_cpe: false
+    bts_archive: config/BTS.tar.gz
+    cpe_archive: config/CPE.tar.gz
+  recovery:
+    bts_fallback_ipv4: "10.0.0.1"
+  factory_defaults:
+    bts_vlan_mode: transparent
+    cpe_vlan_mode: transparent
+  qinq:
+    svlan: 100
+    cvlan: 101
+  mgmt_vlan:
+    prefix_len: 120
+    uci_key: vlan.ath1.mgmtvlan
+    uci_value: 101
+    lab_pc_vlan_id: 101
+    ipv6_bts: "2401:4900:d0:40d4:0:17b8:0:330"
+    ipv6_cpe: "2401:4900:d0:40d4::17b8:0:331"
+    ipv6_bts_pc: "2401:4900:d0:40d4::17b8:0:301"
+    ipv6_cpe_pc: "2401:4900:d0:40d4::17b8:0:302"
+    set_on_cpe: false
+  lab_pc_tagging:
+    bts:
+      mode: single
+      vlan_id: 101
+    cpe:
+      mode: untagged
+  primary_pc:
+    local: true
+    mgmt_interface: enp3s0
+    fallback_ipv4: "10.0.0.10"
+    fallback_prefix_len: 8
+    internet_ssh: ""
+  secondary_pc:
+    enabled: true
+    ssh: "root@10.0.150.187"
+    password: "senao1234#"
+    mgmt_interface: enp3s0
+    fallback_ipv4: "10.0.0.11"
+    fallback_prefix_len: 8
+    cpe_factory_ipv4: "10.0.0.1"
+    # enp3s0.101 = 192.168.2.11 (mgmt); parent enp3s0 off 192.168.2.0/24 (moved to 192.168.3.x)
+    use_tagged_mgmt_vlan: true
+    clear_parent_ipv4: true
+    parent_relocate_ipv4: "192.168.3.20"
+    parent_relocate_netmask: "255.255.255.0"
+    mgmt_vlan_ipv4: "192.168.2.11"
+    mgmt_vlan_netmask: "255.255.255.0"
+
+link:
+  auto_credentials: true
+  ssid: ""
+  tx_power_default: "1"
+  min_connected_clients: 1
+  health_check_timeout_s: 90
+  expected_mode: linked
+
+recovery:
+  max_retries: 1
+  retry_backoff_seconds:
+    - 1
+  restore_default_ip: "10.0.0.1"
+  reboot_wait_seconds: 150
+  bts_restore_archive: config/BTS.tar.gz
+
+traffic:
+  benchmark_backend: ixia
+  stats_backend: trex
+
+ip_tests:
+  enabled: true
+  configure_static_ip: false
+  ipv4_address: "192.168.2.1"
+  ipv4_default_address: "192.168.2.1"
+  # IP_12 retain test: must be non-default (not 192.168.2.1) so retain is verifiable
+  ipv4_test_address: "192.168.2.230"
+  ipv4_test_address_alt: "192.168.2.240"
+  ipv4_test_address_alt2: "192.168.2.220"
+  ipv4_test_address_candidates: "192.168.2.230,192.168.2.240,192.168.2.220"
+  ipv4_test_netmask: "255.255.255.0"
+  ipv4_test_gateway: "192.168.2.254"
+  ipv4_netmask: "255.255.255.0"
+  ipv4_gateway: "192.168.2.254"
+  ip01_apply_wait_s: 40
+  ip01_apply_ping_interval_s: 3
+  ip01_restore_baseline_after_case: false
+  ip_skip_preflight_when_chain_ok: true
+  # CPE ping poll: probe every 5s, stop on first success (90s max ceiling only)
+  ip03_remote_wait_s: 90
+  ip03_remote_wait_max_s: 90
+  ip03_remote_retry_interval_s: 5
+  link_wait_s: 120
+  ip03_verify_ipv4_address: "192.168.2.1"
+  ip04_gateway: "192.168.2.254"
+  cpe_ipv4_default_address: ""
+  cpe_ipv4_candidates: "192.168.2.231,192.168.2.241,192.168.2.221"
+  ipv6_prefix_len: 120
+  ipv6_address_bts: "2401:4900:d0:40d4:0:17b8:0:330/120"
+  ipv6_address_cpe: "2401:4900:d0:40d4::17b8:0:331/120"
+  ipv6_address: "2401:4900:d0:40d4:0:17b8:0:330/120"
+  ipv6_gateway_bts: "2401:4900:d0:40d4::17b8:0:1"
+  ipv6_gateway_cpe: "2401:4900:d0:40d4::17b8:0:1"
+  ipv6_gateway: "2401:4900:d0:40d4::17b8:0:1"
+  # Recovery-only; primary access uses dut.local_ip / dut.remote_ips
+  fallback_ipv4: ""
+  fallback_ipv6: ""
+  reachability_use_device_fallback: true
+  ping_count_short: 4
+  ping_count_long: 10
+  max_ping_loss_pct: 2.0
+  mtu_test_value: 1400
+  reboot_timeout_s: 200
+  reboot_max_downtime_s: 200
+  network_reload_wait_s: 30
+  network_reload_max_wait_s: 120
+  # Factory reset via SSH: ucidyn set tftp.retip.retainip + /usr/sbin/factory_reset.sh
+  # retainip=7 retain all (IP_12); retainip=0 reset all (IP_15)
+  factory_reset_retainip_all: 7
+  factory_reset_retainip_none: 0
+  factory_reset_ucidyn_key: tftp.retip.retainip
+  factory_reset_script: /usr/sbin/factory_reset.sh
+  reset_retain_command: ""
+  # IP_15: factory reset WITHOUT retain, then restore. UCI can match while lab mgmt-VLAN
+  # ping to BTS still fails until a cold reboot (observed on bench); ip15_reboot_after_restore.
+  enable_ip15_factory_restore: true
+  ip15_reboot_after_restore: true
+  enable_ip_post_case_recovery: true
+  enable_link_recovery: true
+  link_recovery_before_precheck: true
+  link_recovery_after_case: true
+  link_recovery_timeout_s: 90
+  link_recovery_poll_s: 3
+  link_recovery_tx_power: "1"
+  ip15_require_fresh_backup: true
+  allow_stale_backup_archive: false
+  backup_via_gui: true
+  take_session_backup: true
+  backup_min_bytes: 1024
+  # Stop IP batch on first failure — later cases depend on link/config from earlier ones
+  stop_on_first_failure: true
+  require_testbed_baseline: true
+  baseline_network_reload_wait_s: 30
+  preflight_enabled: true
+  # After every case / reboot / reset: mgmt baseline → tx=1 link formation → ping
+  post_event_recovery_enabled: true
+  # Leave empty to use testbed.secondary_pc.mgmt_vlan_ipv4 after remote mgmt VLAN setup
+  iperf_server_v4: ""
+  lab_pc_remote_mgmt_ipv4: "192.168.2.11"
+  iperf_server_v6: ""
+  iperf_expected_tcp_mbps: 50
+  iperf_expected_udp_mbps: 40
+  iperf_min_throughput_ratio: 0.70
+  iperf_port: 5201
+  iperf_udp_bandwidth: "50M"
+  iperf_session_count: 1
+  ip13_iperf_duration_s: 30
+  ip13_reboot_delay_s: 5
+  ip13_recovery_iperf_s: 5
+  iface_up_wait_s: 45
+  iface_flap_down_s: 3
+  bts_precheck_ping_wait_s: 20
+  # IP_17: leave cidr empty to auto-use <CPE>/32 (never replace connected 192.168.2.0/24 on br-lan)
+  static_route_cidr: ""
+  static_route_gateway: ""
+  static_route_ping_target: ""
+  backup_archive_path: ""
+  firmware_image_path: ""
+  use_cpe_peer: false
+  verify_lan_bridge: "br-lan"
+  lab_pc_mgmt_ipv4: "192.168.2.10"
+  lab_pc_mgmt_netmask: "255.255.255.0"
+  require_gui_for_static_ip: true
+  # IP_03 remote ping from lab PC (CPE / peer on 192.168.2.0/24)
+  remote_ping_host: ""

@@ -201,7 +201,8 @@ class RadioPropertiesLocators:
     LINK_TYPE_DROPDOWN = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[3]/div/select"
 
     RADIO_MODE_DROPDOWN = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[4]/div/select"
-    SSID_INPUT = "//*[@id='edit_ssid']//input"
+    # BTS/CPE radio1 SSID field
+    SSID_INPUT = "//*[@id='edit_ssid']/div/input | //*[@id='edit_ssid']//input"
     BANDWIDTH_DROPDOWN = "//select[@name='wireless.wifi1.htmode']"
 
     CONFIGURED_CHANNEL_DROPDOWN = "//*[@id='maincontent']/div/div[1]/fieldset/form/div[5]/div/select"

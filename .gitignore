@@ -1,5 +1,6 @@
 .venv/
 venv
+.playwright-browsers/
 logs
 report.json
 .pytest_cache
