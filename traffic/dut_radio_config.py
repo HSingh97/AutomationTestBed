@@ -1002,6 +1002,104 @@ def wait_for_operating_mcs_on_sus(
     return False
 
 
+def _normalize_kick_mac(mac: str) -> str:
+    """Normalize sysfs MAC to colon-separated lowercase for wlanconfig kickmac."""
+    text = str(mac or "").strip().lower()
+    if not text or text == "-":
+        return ""
+    if ":" in text:
+        return text
+    hex_only = re.sub(r"[^0-9a-f]", "", text)
+    if len(hex_only) != 12:
+        return text
+    return ":".join(hex_only[i : i + 2] for i in range(0, 12, 2))
+
+
+def kick_su_at_sua_slot(
+    bts_ip: str,
+    user: str,
+    password: str,
+    sua_index: int,
+    *,
+    radio_idx: int = 1,
+    ssh_timeout_s: int = 60,
+) -> str:
+    """Disconnect one SU via BTS ``wlanconfig athN kickmac`` (MAC from sua sysfs)."""
+    slots = read_operating_mcs_by_sua_slot(
+        bts_ip,
+        ssh_user=user,
+        ssh_password=password,
+        max_sua=sua_index,
+    )
+    slot = slots.get(sua_index, {})
+    mac = _normalize_kick_mac(str(slot.get("mac") or ""))
+    if not mac:
+        raise RuntimeError(f"no MAC in sysfs for sua{sua_index}")
+    cmd = RootCommands.kickmac_command(radio_idx, mac)
+    try:
+        run_ssh_command(bts_ip, user, password, cmd, timeout_s=ssh_timeout_s)
+    except RuntimeError:
+        run_ssh_command(bts_ip, user, password, f"kickmac {mac}", timeout_s=ssh_timeout_s)
+    return mac
+
+
+def _recover_su_mcs_mismatch_via_kickmac(
+    bts_ip: str,
+    user: str,
+    password: str,
+    bts_radio_idx: int,
+    *,
+    checks: list[dict[str, object]],
+    expected_mcs: str,
+    spatial_stream: str,
+    su_count: int,
+    kick_wait_s: float = 18.0,
+    ssh_timeout_s: int = 60,
+) -> list[dict[str, object]]:
+    """On SU operating MCS mismatch: kickmac, wait, then re-read sysfs."""
+    mismatched = [
+        row
+        for row in checks
+        if row.get("role") == "CPE" and not row.get("ok") and row.get("su_index")
+    ]
+    if not mismatched:
+        return checks
+
+    print(
+        f"[MCS] {len(mismatched)} SU(s) off-target (expected MCS index {expected_mcs}) — "
+        f"kickmac disconnect, wait {kick_wait_s:.0f}s, re-check"
+    )
+    for row in mismatched:
+        su_index = int(row["su_index"])
+        prior_mcs = str(row.get("actual_mcs") or "?")
+        try:
+            mac = kick_su_at_sua_slot(
+                bts_ip,
+                user,
+                password,
+                su_index,
+                radio_idx=bts_radio_idx,
+                ssh_timeout_s=ssh_timeout_s,
+            )
+            print(
+                f"[MCS] kickmac SU{su_index} mac={mac} "
+                f"(was rx_rate_mcs={prior_mcs}, target={expected_mcs})"
+            )
+        except RuntimeError as exc:
+            print(f"[MCS] WARN kickmac SU{su_index} failed: {exc}")
+
+    time.sleep(max(kick_wait_s, 0.0))
+    return _collect_mcs_checks(
+        bts_ip,
+        user,
+        password,
+        bts_radio_idx,
+        expected_mcs=expected_mcs,
+        spatial_stream=spatial_stream,
+        su_count=su_count,
+    )
+
+
 def _collect_mcs_checks(
     bts_ip: str,
     user: str,
@@ -1102,13 +1200,16 @@ def verify_mcs_all_devices(
     snmp_radio_idx: int = 2,
     bandwidth: str = "HT80",
     wait_for_operating_s: float = 0.0,
+    kickmac_on_mismatch: bool = True,
+    kickmac_wait_s: float = 18.0,
     phase: str = "",
 ) -> dict[str, object]:
     """Confirm BTS UCI MCS and every SU operating MCS via BTS sysfs ``rx_rate_mcs``."""
     del cpe_radio_idx, prefer_cpe_via_bts, snmp_community, snmp_radio_idx, bandwidth, cpe_hosts
     expected_mcs = str(mcs_number(mcs_rate))
+    before_apply = phase in {"skip-check", "before-apply", "pre-apply"}
 
-    if wait_for_operating_s > 0:
+    if wait_for_operating_s > 0 and not before_apply:
         wait_for_operating_mcs_on_sus(
             bts_ip,
             user,
@@ -1127,10 +1228,24 @@ def verify_mcs_all_devices(
         spatial_stream=spatial_stream,
         su_count=su_count,
     )
+
+    if phase == "post-apply" and kickmac_on_mismatch:
+        checks = _recover_su_mcs_mismatch_via_kickmac(
+            bts_ip,
+            user,
+            password,
+            bts_radio_idx,
+            checks=checks,
+            expected_mcs=expected_mcs,
+            spatial_stream=spatial_stream,
+            su_count=su_count,
+            kick_wait_s=kickmac_wait_s,
+            ssh_timeout_s=ssh_timeout_s,
+        )
+
     print_mcs_device_matrix(checks, mcs_rate=mcs_rate, phase=phase or "verify")
 
     all_ok = all(bool(row.get("ok")) for row in checks)
-    before_apply = phase in {"skip-check", "before-apply", "pre-apply"}
     if before_apply:
         if all_ok:
             print(f"[MCS] Already at target {mcs_rate} (index {expected_mcs}) — MCS apply can be skipped")
@@ -1724,6 +1839,7 @@ def configure_mcs_profile(
     prefer_cpe_via_bts: bool = False,
     settle_s: float = 4.0,
     operating_mcs_wait_s: float = 45.0,
+    mcs_kickmac_wait_s: float = 18.0,
     ssh_timeout_s: int = 60,
     verify: bool = True,
     snmp_community: str | None = None,
@@ -1823,6 +1939,7 @@ def configure_mcs_profile(
         snmp_radio_idx=snmp_radio_idx,
         bandwidth=bandwidth,
         wait_for_operating_s=operating_mcs_wait_s,
+        kickmac_wait_s=mcs_kickmac_wait_s,
         phase="post-apply",
     )
     if verify and not mcs_report.get("mcs_config_ok"):
@@ -1858,6 +1975,7 @@ def configure_radio_profile(
     prefer_cpe_via_bts: bool = False,
     settle_s: float = 4.0,
     operating_mcs_wait_s: float = 45.0,
+    mcs_kickmac_wait_s: float = 18.0,
     bandwidth_apply_wait_s: float = 60.0,
     su_link_wait_s: float = 120.0,
     bandwidth_running_wait_s: float = 120.0,
@@ -2040,6 +2158,7 @@ def configure_radio_profile(
         snmp_radio_idx=snmp_radio_idx,
         bandwidth=bandwidth,
         wait_for_operating_s=operating_mcs_wait_s,
+        kickmac_wait_s=mcs_kickmac_wait_s,
         phase="post-apply",
     )
     if verify and not mcs_report.get("mcs_config_ok"):

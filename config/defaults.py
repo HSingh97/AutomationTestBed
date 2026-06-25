@@ -107,6 +107,7 @@ PERFORMANCE_DEFAULTS = {
     "link_wait_s": 10,
     "radio_settle_s": 4.0,
     "operating_mcs_wait_s": 45.0,
+    "mcs_kickmac_wait_s": 18.0,
     "bandwidth_apply_wait_s": 60,
     "su_link_wait_s": 120,
     "bandwidth_running_wait_s": 120,

@@ -265,6 +265,12 @@ class RootCommands:
         return RootCommands.remote_exec_command(1, "ucidyn apply")
 
     @staticmethod
+    def kickmac_command(radio_idx: int, mac: str) -> str:
+        """Disconnect one SU station from the BTS VAP (Atheros wlanconfig kickmac)."""
+        safe_mac = str(mac).strip().lower()
+        return f"wlanconfig ath{radio_idx} kickmac {safe_mac}"
+
+    @staticmethod
     def emit_system_log_marker(marker: str):
         safe_marker = str(marker).replace("'", "'\"'\"'")
         return f"logger -t cursor_monitor '{safe_marker}'"

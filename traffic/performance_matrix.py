@@ -112,6 +112,8 @@ def _apply_profile_run_defaults(args, profile_bundle) -> None:
         args.radio_settle_s = float(perf_section["radio_settle_s"])
     if perf_section.get("operating_mcs_wait_s") is not None:
         args.operating_mcs_wait_s = float(perf_section["operating_mcs_wait_s"])
+    if perf_section.get("mcs_kickmac_wait_s") is not None:
+        args.mcs_kickmac_wait_s = float(perf_section["mcs_kickmac_wait_s"])
     if perf_section.get("bandwidth_apply_wait_s") is not None:
         args.bandwidth_apply_wait_s = float(perf_section["bandwidth_apply_wait_s"])
     if perf_section.get("su_link_wait_s") is not None:
@@ -843,6 +845,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 prefer_cpe_via_bts=args.cpe_via_bts,
                                 settle_s=args.radio_settle_s,
                                 operating_mcs_wait_s=args.operating_mcs_wait_s,
+                                mcs_kickmac_wait_s=args.mcs_kickmac_wait_s,
                                 snmp_community=args.snmp_community,
                                 snmp_radio_idx=args.snmp_radio_index,
                                 skip_if_unchanged=args.skip_config_if_unchanged,
@@ -1387,6 +1390,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=perf["operating_mcs_wait_s"],
         help="Poll BTS sysfs rx_rate_mcs until all SUs match target (seconds)",
+    )
+    parser.add_argument(
+        "--mcs-kickmac-wait-s",
+        type=float,
+        default=perf["mcs_kickmac_wait_s"],
+        help="After kickmac on MCS mismatch, wait this long before re-check (seconds)",
     )
     parser.add_argument(
         "--bandwidth-apply-wait-s",
