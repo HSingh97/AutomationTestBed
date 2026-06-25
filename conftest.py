@@ -1,4 +1,3 @@
-import builtins
 import logging
 import re
 import pytest
@@ -10,28 +9,9 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 
+from utils.console_output import enable_live_console_output
 
-def _enable_live_console_output() -> None:
-    """Line-buffer stdout/stderr and default flush=True on print (Jenkins is not a TTY)."""
-    if getattr(builtins, "_ubr_flush_print_installed", False):
-        return
-    _orig_print = builtins.print
-
-    def print(*args, **kwargs):  # noqa: A001
-        kwargs.setdefault("flush", True)
-        return _orig_print(*args, **kwargs)
-
-    builtins.print = print
-    builtins._ubr_flush_print_installed = True
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            try:
-                stream.reconfigure(line_buffering=True)
-            except Exception:
-                pass
-
-
-_enable_live_console_output()
+enable_live_console_output()
 import httpx
 from playwright.async_api import async_playwright
 from pages.locators import LoginPageLocators
@@ -207,6 +187,24 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Include CPE-side IP tests (default: BTS only). Also enabled when -k contains 'cpe'.",
+    )
+    group.addoption(
+        "--allow-process-monitor",
+        action="store_true",
+        default=False,
+        help="Enable PROCESS_01–PROCESS_19 process monitor tests (crashes/kills on local DUT).",
+    )
+    group.addoption(
+        "--allow-destructive-process",
+        action="store_true",
+        default=False,
+        help="Enable PROCESS_09/PROCESS_15 (watchdog/procd reboot validation).",
+    )
+    group.addoption(
+        "--no-procmon-recovery-reboot",
+        action="store_true",
+        default=False,
+        help="Disable ProcessMonitor SSH-loss recovery reboot (armed before each crash/kill).",
     )
     group.addoption(
         "--skip-testbed-bootstrap",
@@ -800,6 +798,20 @@ def pytest_configure(config):
 
     for case in IP_TEST_CASES:
         config.addinivalue_line("markers", f"{case.case_id}: {case.title} ({case.category})")
+    from config.process_test_cases import OFFICIAL_PROCESS_TEST_CASES
+
+    for case in OFFICIAL_PROCESS_TEST_CASES:
+        config.addinivalue_line("markers", f"{case.case_id}: {case.title} ({case.category})")
+    from utils.process_monitor_flows import set_recovery_reboot_enabled
+
+    set_recovery_reboot_enabled(
+        bool(config.getoption("--allow-process-monitor"))
+        and not bool(config.getoption("--no-procmon-recovery-reboot"))
+    )
+    config.addinivalue_line(
+        "markers",
+        "ProcessMonitor: Process monitor suite (tests/ProcessMonitor/)",
+    )
     config.addinivalue_line(
         "markers",
         "IPv4: IP suite — IPv4 stack cases (pytest -m IPv4)",

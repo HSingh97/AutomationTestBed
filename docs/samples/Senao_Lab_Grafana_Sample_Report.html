@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>UBR Lab — Grafana Sample Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0b0c0e;
+      --panel: #181b1f;
+      --border: #2a2e33;
+      --text: #d8d9da;
+      --muted: #8e8e8e;
+      --accent: #5794f2;
+      --ok: #73bf69;
+      --warn: #ff9830;
+      --bad: #f2495c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border);
+      background: #111217;
+    }
+    .top h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    .top .meta { color: var(--muted); font-size: 12px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px;
+      padding: 16px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 12px 14px;
+      min-height: 120px;
+    }
+    .panel h2 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .span-3 { grid-column: span 3; }
+    .span-4 { grid-column: span 4; }
+    .span-6 { grid-column: span 6; }
+    .span-8 { grid-column: span 8; }
+    .span-12 { grid-column: span 12; }
+    .stat {
+      font-size: 42px;
+      font-weight: 600;
+      line-height: 1;
+    }
+    .stat small { font-size: 14px; color: var(--muted); font-weight: 400; }
+    .stat.ok { color: var(--ok); }
+    .stat.warn { color: var(--warn); }
+    .stat.bad { color: var(--bad); }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+    th { color: var(--muted); font-weight: 500; }
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .pill.ok { background: rgba(115,191,105,.15); color: var(--ok); }
+    .pill.warn { background: rgba(255,152,48,.15); color: var(--warn); }
+    .pill.bad { background: rgba(242,73,92,.15); color: var(--bad); }
+    .legend { font-size: 11px; color: var(--muted); margin-top: 8px; }
+    canvas { max-height: 260px; }
+    @media (max-width: 1100px) {
+      .span-3, .span-4, .span-6, .span-8 { grid-column: span 12; }
+    }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>UBR Lab Performance · Grafana Sample</h1>
+      <div class="meta">test-qa-lab-02 · qa_lab_02 · 2026-06-22 06:17 UTC</div>
+    </div>
+    <div class="meta">Sample report — import <code>docs/samples/grafana/ubr-lab-dashboard.json</code> for live Grafana</div>
+  </header>
+
+  <main class="grid">
+    <section class="panel span-3">
+      <h2>Connected SUs</h2>
+      <div class="stat warn">3<small> / 4</small></div>
+      <div class="legend">From KWN sysfs / ping matrix (sample snapshot)</div>
+    </section>
+    <section class="panel span-3">
+      <h2>Latest throughput</h2>
+      <div class="stat ok">72.2<small> Mbps</small></div>
+      <div class="legend">Peak combined RX across sample runs</div>
+    </section>
+    <section class="panel span-3">
+      <h2>MCS target (best)</h2>
+      <div class="stat ok">101<small> %</small></div>
+      <div class="legend">Pass ≥65% · Warn 40–65% · Fail &lt;40%</div>
+    </section>
+    <section class="panel span-3">
+      <h2>Matrix pass rate</h2>
+      <div class="stat warn">3<small> / 9</small></div>
+      <div class="legend">Iterations in sample dataset</div>
+    </section>
+
+    <section class="panel span-8">
+      <h2>Combined RX vs MCS target (Mbps)</h2>
+      <canvas id="tputChart"></canvas>
+    </section>
+    <section class="panel span-4">
+      <h2>% of MCS target</h2>
+      <canvas id="pctChart"></canvas>
+    </section>
+
+    <section class="panel span-6">
+      <h2>SU link recovery time after BW apply</h2>
+      <canvas id="linkChart"></canvas>
+    </section>
+    <section class="panel span-6">
+      <h2>SUs linked per iteration</h2>
+      <canvas id="suChart"></canvas>
+    </section>
+
+    <section class="panel span-4">
+      <h2>Jenkins builds (sample)</h2>
+      <table>
+        <thead><tr><th>Build</th><th>VLAN</th><th>Wait</th><th>Pass</th></tr></thead>
+        <tbody><tr><td>#74</td><td>QinQ</td><td>120s</td><td>1/3</td></tr><tr><td>#75</td><td>transparent</td><td>120s</td><td>2/3</td></tr><tr><td>#76</td><td>QinQ</td><td>120s</td><td>1/3</td></tr><tr><td>#77</td><td>transparent</td><td>240s</td><td>0/3</td></tr></tbody>
+      </table>
+    </section>
+    <section class="panel span-8">
+      <h2>Per-SU RF health (sample)</h2>
+      <table>
+        <thead><tr><th>SU</th><th>IPv6</th><th>RSSI</th><th>SNR</th><th>Rate</th><th>Link</th></tr></thead>
+        <tbody><tr><td>SU1</td><td>…:11c9</td><td>-51 dBm</td><td>38 dB</td><td>51 Mbps</td><td><span class='pill ok'>UP</span></td></tr><tr><td>SU2</td><td>…:118b</td><td>-54 dBm</td><td>35 dB</td><td>51 Mbps</td><td><span class='pill ok'>UP</span></td></tr><tr><td>SU3</td><td>…:1178</td><td>-56 dBm</td><td>33 dB</td><td>51 Mbps</td><td><span class='pill ok'>UP</span></td></tr><tr><td>SU4</td><td>…:113d</td><td>-62 dBm</td><td>28 dB</td><td>0 Mbps</td><td><span class='pill bad'>DOWN</span></td></tr></tbody>
+      </table>
+    </section>
+
+    <section class="panel span-12">
+      <h2>Matrix iterations detail</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Build</th><th>BW</th><th>MCS</th><th>VLAN</th><th>SUs</th><th>Link wait</th>
+            <th>RX Mbps</th><th>Target</th><th>% target</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody><tr><td>#74</td><td>HT20</td><td>MCS14</td><td>QinQ</td><td>4/4</td><td>10s</td><td>33.0</td><td>35.7</td><td><span class='pill ok'>92%</span></td><td><span class='pill ok'>PASS</span></td></tr><tr><td>#74</td><td>HT40</td><td>MCS14</td><td>QinQ</td><td>3/4</td><td>120s</td><td>0.0</td><td>71.4</td><td><span class='pill bad'>0%</span></td><td><span class='pill bad'>FAIL</span></td></tr><tr><td>#74</td><td>HT80</td><td>MCS14</td><td>QinQ</td><td>3/4</td><td>120s</td><td>0.0</td><td>140.0</td><td><span class='pill bad'>0%</span></td><td><span class='pill bad'>FAIL</span></td></tr><tr><td>#75</td><td>HT20</td><td>MCS14</td><td>transparent</td><td>4/4</td><td>10s</td><td>36.1</td><td>35.7</td><td><span class='pill ok'>101%</span></td><td><span class='pill ok'>PASS</span></td></tr><tr><td>#75</td><td>HT40</td><td>MCS14</td><td>transparent</td><td>4/4</td><td>20s</td><td>72.2</td><td>71.4</td><td><span class='pill ok'>101%</span></td><td><span class='pill ok'>PASS</span></td></tr><tr><td>#75</td><td>HT80</td><td>MCS14</td><td>transparent</td><td>3/4</td><td>120s</td><td>0.0</td><td>140.0</td><td><span class='pill bad'>0%</span></td><td><span class='pill bad'>FAIL</span></td></tr><tr><td>#77</td><td>HT20</td><td>MCS14</td><td>transparent</td><td>0/4</td><td>240s</td><td>0.0</td><td>35.7</td><td><span class='pill bad'>0%</span></td><td><span class='pill bad'>FAIL</span></td></tr><tr><td>#77</td><td>HT40</td><td>MCS14</td><td>transparent</td><td>3/4</td><td>240s</td><td>0.0</td><td>71.4</td><td><span class='pill bad'>0%</span></td><td><span class='pill bad'>FAIL</span></td></tr><tr><td>#77</td><td>HT80</td><td>MCS14</td><td>transparent</td><td>3/4</td><td>240s</td><td>0.0</td><td>140.0</td><td><span class='pill bad'>0%</span></td><td><span class='pill bad'>FAIL</span></td></tr></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    const labels = ["#74 HT20", "#74 HT40", "#74 HT80", "#75 HT20", "#75 HT40", "#75 HT80", "#77 HT20", "#77 HT40", "#77 HT80"];
+    const gridColor = '#2a2e33';
+    const common = {
+      responsive: true,
+      plugins: { legend: { labels: { color: '#d8d9da' } } },
+      scales: {
+        x: { ticks: { color: '#8e8e8e', maxRotation: 45 }, grid: { color: gridColor } },
+        y: { ticks: { color: '#8e8e8e' }, grid: { color: gridColor } }
+      }
+    };
+
+    new Chart(document.getElementById('tputChart'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Combined RX', data: [32.96, 0.0, 0.0, 36.12, 72.25, 0.0, 0.0, 0.0, 0.0], backgroundColor: '#5794f2' },
+          { label: 'MCS target', data: [35.7, 71.4, 140.0, 35.7, 71.4, 140.0, 35.7, 71.4, 140.0], backgroundColor: '#444' }
+        ]
+      },
+      options: common
+    });
+
+    new Chart(document.getElementById('pctChart'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: '% of target',
+          data: [92.3, 0.0, 0.0, 101.2, 101.2, 0.0, 0.0, 0.0, 0.0],
+          borderColor: '#ff9830',
+          backgroundColor: 'rgba(255,152,48,.15)',
+          fill: true,
+          tension: 0.25
+        }]
+      },
+      options: {
+        ...common,
+        plugins: {
+          ...common.plugins,
+          annotation: {}
+        },
+        scales: {
+          ...common.scales,
+          y: { ...common.scales.y, suggestedMin: 0, suggestedMax: 120 }
+        }
+      }
+    });
+
+    new Chart(document.getElementById('linkChart'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Seconds to 4/4 (or timeout)',
+          data: [10.0, 120.0, 120.0, 10.0, 20.0, 120.0, 240.0, 240.0, 240.0],
+          backgroundColor: ["#73bf69", "#f2495c", "#f2495c", "#73bf69", "#73bf69", "#f2495c", "#f2495c", "#f2495c", "#f2495c"]
+        }]
+      },
+      options: common
+    });
+
+    new Chart(document.getElementById('suChart'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'SUs linked',
+          data: [4, 3, 3, 4, 4, 3, 0, 3, 3],
+          borderColor: '#73bf69',
+          stepped: true,
+          fill: false
+        }]
+      },
+      options: {
+        ...common,
+        scales: {
+          ...common.scales,
+          y: { ...common.scales.y, suggestedMin: 0, suggestedMax: 4, ticks: { stepSize: 1 } }
+        }
+      }
+    });
+  </script>
+</body>
+</html>

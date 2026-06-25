@@ -5,7 +5,8 @@
 #   ./jenkins/trigger-build.sh JMB_04
 #   ./jenkins/trigger-build.sh --filter JMB_04 --markers JumboFrames
 #   ./jenkins/trigger-build.sh --filter IP_18 --markers IP
-#   ./jenkins/trigger-build.sh --filter 'Summary, TopPanel' --markers GUI
+#   ./jenkins/trigger-build.sh --markers ProcessMonitor --filter ProcessMonitor
+#   ./jenkins/trigger-build.sh --markers ProcessMonitor --skip-bootstrap
 #
 # Auth (pick one):
 #   export JENKINS_USER=harman JENKINS_TOKEN=<api-token>
@@ -83,10 +84,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+is_process_monitor_markers() {
+  echo ",${TEST_MARKERS}," | grep -qi ',ProcessMonitor,'
+}
+
 if [[ -z "${TEST_FILTER}" ]]; then
-  echo "TEST_FILTER is required (e.g. JMB_04 or --filter JMB_04)." >&2
-  usage >&2
-  exit 1
+  if is_process_monitor_markers; then
+    TEST_FILTER=""
+  else
+    echo "TEST_FILTER is required (e.g. JMB_04 or --filter JMB_04). For ProcessMonitor use --markers ProcessMonitor." >&2
+    usage >&2
+    exit 1
+  fi
 fi
 
 # Infer marker from filter when caller did not override TEST_MARKERS env.
@@ -94,6 +103,8 @@ if [[ "${TEST_MARKERS}" == "JumboFrames" && "${TEST_FILTER}" =~ ^GUI ]]; then
   TEST_MARKERS="GUI"
 elif [[ "${TEST_MARKERS}" == "JumboFrames" && "${TEST_FILTER}" =~ ^IP_ ]]; then
   TEST_MARKERS="IP"
+elif [[ "${TEST_MARKERS}" == "JumboFrames" && "${TEST_FILTER}" =~ ^PROCESS ]]; then
+  TEST_MARKERS="ProcessMonitor"
 fi
 
 resolve_auth() {

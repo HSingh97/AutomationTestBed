@@ -8,7 +8,8 @@
 #   TEST_MARKERS=IPv4 ./jenkins/run-local.sh
 #   TEST_MARKERS=IPv6 ./jenkins/run-local.sh
 #   TEST_MARKERS=IP TEST_FILTER=IP_01 or IP_02 ./jenkins/run-local.sh
-#   TEST_MARKERS=GUI,IP TEST_FILTER='Summary, TopPanel' ./jenkins/run-local.sh
+#   TEST_MARKERS=ProcessMonitor ./jenkins/run-local.sh
+#   TEST_MARKERS=ProcessMonitor SKIP_TESTBED_BOOTSTRAP=true FALLBACK_IP=192.168.2.1 ./jenkins/run-local.sh
 
 set -euo pipefail
 
@@ -42,6 +43,7 @@ normalize_marker() {
   case "$u" in
     IPV4) echo "IPv4" ;;
     IPV6) echo "IPv6" ;;
+    PROCESSMONITOR) echo "ProcessMonitor" ;;
     *) echo "$u" ;;
   esac
 }
@@ -54,7 +56,7 @@ for m in "${MARKER_ARR[@]}"; do
   [[ -n "$m" ]] && MARKERS+=("$m")
 done
 if [[ ${#MARKERS[@]} -eq 0 ]]; then
-  echo "TEST_MARKERS is empty. Use GUI, IP, IPv4, IPv6, Regression, and/or JumboFrames." >&2
+  echo "TEST_MARKERS is empty. Use GUI, IP, IPv4, IPv6, Regression, JumboFrames, and/or ProcessMonitor." >&2
   exit 1
 fi
 
@@ -82,9 +84,18 @@ markers_include_ip_suite() {
   has_marker IP || has_marker IPv4 || has_marker IPv6
 }
 
+# ProcessMonitor-only runs must not inherit the GUI default -k filter.
+if has_marker ProcessMonitor && ! has_marker GUI && ! markers_include_ip_suite; then
+  if [[ -z "${TEST_FILTER+x}" ]] || [[ "${TEST_FILTER}" == "Summary, TopPanel, WirelessProperties" ]]; then
+    TEST_FILTER=""
+  fi
+fi
+
 # Profile resolution (mirrors resolveProfileName)
 PROFILE_NAME="default"
-if markers_include_ip_suite; then
+if has_marker ProcessMonitor && ! markers_include_ip_suite; then
+  PROFILE_NAME="ipv4_quickrun"
+elif markers_include_ip_suite; then
   if has_marker IPv4 && ! has_marker IPv6 && ! has_marker IP; then
     PROFILE_NAME="ipv4_quickrun"
   elif has_marker IPv6 && ! has_marker IPv4 && ! has_marker IP; then
@@ -145,10 +156,15 @@ if has_marker JUMBOFRAMES; then
   M_PARTS+=("JumboFrames")
   EXTRA_FLAGS+=("--allow-destructive-jumbo")
 fi
+if has_marker ProcessMonitor; then
+  TEST_PATHS+=("tests/ProcessMonitor/")
+  M_PARTS+=("ProcessMonitor")
+  EXTRA_FLAGS+=("--allow-process-monitor" "--allow-destructive-process")
+fi
 
 for m in "${MARKERS[@]}"; do
   case "$m" in
-    GUI|IP|IPv4|IPv6|REGRESSION|JUMBOFRAMES) ;;
+    GUI|IP|IPv4|IPv6|REGRESSION|JUMBOFRAMES|ProcessMonitor) ;;
     *) echo "Unknown TEST_MARKERS entry: $m" >&2; exit 1 ;;
   esac
 done
@@ -259,6 +275,10 @@ IPV6_LOCAL_ARGS=()
 [[ -n "${LOCAL_IPV6}" ]] && IPV6_LOCAL_ARGS=(--local-ipv6 "${LOCAL_IPV6}")
 IPV6_REMOTE_ARGS=()
 [[ -n "${REMOTE_IPV6}" ]] && IPV6_REMOTE_ARGS=(--remote-ipv6 "${REMOTE_IPV6}")
+LOCAL_IP_ARGS=()
+if has_marker ProcessMonitor; then
+  LOCAL_IP_ARGS=(--local-ip "${FALLBACK_IP}")
+fi
 
 echo "----------------------------------------"
 echo "UBR Validation (local — same as Jenkins)"
@@ -291,6 +311,7 @@ PYTEST_ARGS+=(
   --profile "${PROFILE_NAME}"
   --recovery-profile "${RECOVERY_PROFILE_NAME}"
   --fallback-ip "${FALLBACK_IP}"
+  "${LOCAL_IP_ARGS[@]}"
   "${IPV6_LOCAL_ARGS[@]}"
   "${IPV6_REMOTE_ARGS[@]}"
   "${EXTRA_FLAGS[@]}"

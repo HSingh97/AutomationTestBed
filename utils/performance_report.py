@@ -1,31 +1,21 @@
-"""Performance matrix HTML/CSV reports — same layout family as regression reports."""
+"""Performance matrix HTML/CSV reports."""
 
 from __future__ import annotations
 
 import csv
+import re
 from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import Any
 
-from traffic.operating_rate_table import lookup_spec
+from traffic.operating_rate_table import lookup_spec, modulation_scheme, operating_rate_mbps
+from traffic.throughput_validation import MCS_THROUGHPUT_FAIL_PCT, MCS_THROUGHPUT_WARN_PCT
 from utils.regression_report import _render_testbed_summary_table
 
 SENAO_LOGO_URL = (
     "https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png"
 )
-
-
-def _rate_actual_cell(actual: float | None, ok: bool | None) -> str:
-    """SNMP operating rate (Mbps) — green when matches spec data rate, red when not."""
-    if actual is None:
-        return "—"
-    text = f"{actual:.0f}"
-    if ok is True:
-        return f"<span class='mark pass'>{text}</span>"
-    if ok is False:
-        return f"<span class='mark fail'>{text}</span>"
-    return escape(text)
 
 
 def _parse_dl_ul_fractions(ratio: str) -> tuple[float, float]:
@@ -46,7 +36,6 @@ def _throughput_pct_of_rate(measured: float, target_mbps: float) -> float:
 
 
 def _direction_targets(data_rate_mbps: float, ratio: str) -> tuple[float, float, float]:
-    """Split spec data rate by DL:UL ratio for per-direction throughput coloring."""
     dl_frac, ul_frac = _parse_dl_ul_fractions(ratio)
     dl_target = data_rate_mbps * dl_frac
     ul_target = data_rate_mbps * ul_frac
@@ -57,7 +46,11 @@ def _resolve_row_spec(record: dict[str, Any]) -> tuple[dict[str, Any], float]:
     link = record.get("link_validation") or {}
     spec = link.get("spec") or {}
     expected = float(
-        link.get("expected_operating_rate_mbps") or spec.get("operating_rate_mbps") or 0
+        link.get("expected_operating_rate_mbps")
+        or record.get("operating_rate_mbps")
+        or record.get("effective_target_mbps")
+        or spec.get("operating_rate_mbps")
+        or 0
     )
     if expected > 0 and spec:
         return spec, expected
@@ -73,99 +66,602 @@ def _resolve_row_spec(record: dict[str, Any]) -> tuple[dict[str, Any], float]:
 
 
 def _throughput_cell(measured: float, target_mbps: float) -> str:
-    """Color throughput vs direction target (DL/UL share of data rate); zero is flagged."""
     if measured <= 0:
-        return "<span class='tput-zero'>0.0</span> <span class='muted'>(no traffic)</span>"
+        return "<span class='tput-zero'>0.0 Mbps</span>"
     pct = _throughput_pct_of_rate(measured, target_mbps)
-    if pct >= 70:
-        css = "tput-good"
-    elif pct >= 50:
-        css = "tput-warn"
-    else:
-        css = "tput-bad"
-    return f"<span class='{css}'>{measured:.1f}</span><span class='muted'> ({pct:.0f}%)</span>"
+    if pct >= MCS_THROUGHPUT_WARN_PCT:
+        return f"<span class='tput-good'>{measured:.1f} Mbps</span>"
+    if pct >= MCS_THROUGHPUT_FAIL_PCT:
+        return (
+            f"<span class='tput-mcs-warn' title='Getting less throughput as per MCS "
+            f"({pct:.0f}% of target)'>{measured:.1f} Mbps</span>"
+        )
+    return f"<span class='tput-bad'>{measured:.1f} Mbps</span>"
 
 
-def _render_result_row(record: dict[str, Any]) -> str:
+def _rate_cell(raw: str | None) -> str:
+    text = str(raw or "").strip()
+    if not text or text == "-":
+        return "—"
+    return escape(text)
+
+
+def _parse_rate_mbps_from_display(raw: str | None) -> float | None:
+    text = str(raw or "").strip()
+    if not text or text in {"-", "—"}:
+        return None
+    match = re.search(r"([\d.]+)", text.replace(",", ""))
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _rate_matches_expected(
+    actual_mbps: float | None,
+    expected_mbps: float,
+    *,
+    tolerance_mbps: float = 10.0,
+    tolerance_pct: float = 0.08,
+) -> bool:
+    if actual_mbps is None or expected_mbps <= 0:
+        return True
+    delta = abs(actual_mbps - expected_mbps)
+    return delta <= tolerance_mbps or delta <= expected_mbps * tolerance_pct
+
+
+def _configured_mcs_number(record: dict[str, Any]) -> int | None:
+    mcs = str(record.get("mcs") or "").strip().upper()
+    if not mcs.startswith("MCS"):
+        return None
+    try:
+        return int(mcs.replace("MCS", ""))
+    except ValueError:
+        return None
+
+
+def _parse_display_mcs(raw: str | None) -> int | None:
+    match = re.search(r"\((\d+)\)", str(raw or ""))
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _operating_rate_matches_config(
+    raw: str | None,
+    record: dict[str, Any],
+    *,
+    tolerance_mbps: float = 10.0,
+    tolerance_pct: float = 0.08,
+) -> bool:
+    """True when on-air MCS and Mbps match the configured MCS (single or dual stream)."""
+    actual = _parse_rate_mbps_from_display(raw)
+    if actual is None:
+        return True
+    configured = _configured_mcs_number(record)
+    displayed = _parse_display_mcs(raw)
+    if configured is not None and displayed is not None and displayed != configured:
+        return False
+    bandwidth = str(record.get("bandwidth") or "")
+    mcs = str(record.get("mcs") or "")
+    if not bandwidth or not mcs:
+        return True
+    try:
+        dual = operating_rate_mbps(bandwidth, mcs, spatial_streams=2)
+        single = operating_rate_mbps(bandwidth, mcs, spatial_streams=1)
+    except (TypeError, ValueError):
+        return True
+    return _rate_matches_expected(
+        actual, dual, tolerance_mbps=tolerance_mbps, tolerance_pct=tolerance_pct
+    ) or _rate_matches_expected(
+        actual, single, tolerance_mbps=tolerance_mbps, tolerance_pct=tolerance_pct
+    )
+
+
+def _operating_rate_cell(
+    raw: str | None,
+    record: dict[str, Any],
+    *,
+    tolerance_mbps: float = 10.0,
+    tolerance_pct: float = 0.08,
+) -> str:
+    text = str(raw or "").strip()
+    if not text or text == "-":
+        return "—"
+    inner = escape(text)
+    if not _operating_rate_matches_config(
+        text,
+        record,
+        tolerance_mbps=tolerance_mbps,
+        tolerance_pct=tolerance_pct,
+    ):
+        return f'<span class="rate-mismatch">{inner}</span>'
+    return inner
+
+
+def _result_badge(record: dict[str, Any]) -> str:
+    if record.get("skipped_trex"):
+        return "<span class='badge fail'>SKIP</span>"
+    if record.get("throughput_grade") == "warn" or record.get("throughput_warn"):
+        return "<span class='badge warn'>WARN</span>"
+    passed = record.get("throughput_passed")
+    if passed is True:
+        return "<span class='badge pass'>PASS</span>"
+    if passed is False:
+        return "<span class='badge fail'>FAIL</span>"
+    return "<span class='badge neutral'>—</span>"
+
+
+def _throughput_row_values(record: dict[str, Any]) -> dict[str, Any]:
     stats = record.get("stats") or {}
-    link = record.get("link_validation") or {}
-    spec, expected_rate = _resolve_row_spec(record)
-    clients = link.get("clients") or []
-    primary = clients[0] if clients else {}
+    spec, operating_rate = _resolve_row_spec(record)
     ratio = str(record.get("ratio") or "50:50")
-    dl_target, ul_target, bidi_target = _direction_targets(expected_rate, ratio)
-
+    dl_target, ul_target, bidi_target = _direction_targets(
+        float(record.get("effective_target_mbps") or operating_rate),
+        ratio,
+    )
     combined = stats.get("combined") or {}
     downlink = stats.get("downlink") or {}
     uplink = stats.get("uplink") or {}
-    ul_mbps = float(uplink.get("rx_mbps") or 0)
-    dl_mbps = float(downlink.get("rx_mbps") or 0)
-    bidi_mbps = float(combined.get("rx_mbps") or 0)
+    return {
+        "bandwidth": str(record.get("bandwidth") or "—"),
+        "mcs": str(record.get("mcs") or spec.get("mcs") or "—"),
+        "modulation": str(spec.get("modulation") or "—"),
+        "operating_rate": operating_rate,
+        "ratio": ratio,
+        "effective_target": float(record.get("effective_target_mbps") or bidi_target or 0),
+        "dl_mbps": float(downlink.get("rx_mbps") or 0),
+        "ul_mbps": float(uplink.get("rx_mbps") or 0),
+        "bidi_mbps": float(combined.get("rx_mbps") or 0),
+        "dl_target": dl_target,
+        "ul_target": ul_target,
+        "bidi_target": bidi_target,
+        "skipped": bool(record.get("skipped_trex")),
+        "error": str(record.get("error") or ""),
+    }
 
-    row_class = ""
-    if link.get("operating_rate_mismatch"):
-        row_class = "rate-mismatch"
-    if record.get("error"):
-        row_class = "rate-mismatch" if row_class else "run-error"
 
-    modulation = spec.get("modulation") or "—"
-    data_rate_cell = f"{expected_rate:.0f}" if expected_rate > 0 else "—"
+def _ratio_sheet_label(ratio: str) -> str:
+    return str(ratio).replace(":", "-")
+
+
+def _parse_tput_mbps(value: Any) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text in {"-", "—"}:
+        return None
+    try:
+        return float(text.replace(",", ""))
+    except ValueError:
+        match = re.search(r"([\d.]+)", text)
+        if not match:
+            return None
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return None
+
+
+def _trex_device_stats(stats: dict[str, Any], su_index: int) -> dict[str, Any]:
+    trex = stats.get("trex") or {}
+    by_device = trex.get("summary_by_device") or {}
+    row = dict(by_device.get(f"SU{su_index}") or {})
+    if row.get("avg_tx_mbps") is None:
+        tx_values: list[float] = []
+        for sample in trex.get("live_samples") or []:
+            device = (sample.get("devices") or {}).get(f"SU{su_index}") or {}
+            if isinstance(device, dict) and device.get("tx_mbps") is not None:
+                tx_values.append(float(device["tx_mbps"]))
+        if tx_values:
+            row["avg_tx_mbps"] = sum(tx_values) / len(tx_values)
+    return row
+
+
+def _unit_ip_cell(unit: str, ip: str) -> str:
+    name = escape(str(unit))
+    addr = escape(str(ip))
+    if not addr or addr in {"—", "-"}:
+        return f'<span class="unit-line">{name}</span>'
+    return (
+        f'<span class="unit-line">{name}</span>'
+        f'<span class="unit-ip">{addr}</span>'
+    )
+
+
+def _mcs_for_unit(record: dict[str, Any], *, su_index: int | None = None, label: str = "") -> str:
+    mcs_config = record.get("mcs_config") or {}
+    for check in mcs_config.get("checks") or []:
+        if su_index is not None and check.get("su_index") == su_index:
+            return str(check.get("actual_mcs") or "—")
+        if label and str(check.get("label")) == label:
+            return str(check.get("actual_mcs") or "—")
+    if su_index == 0 or label == "BTS":
+        return str(mcs_config.get("expected_uci_mcs") or record.get("mcs") or "—").replace("MCS", "")
+    return "—"
+
+
+def _mcs_display_cell(record: dict[str, Any], mcs_raw: str) -> str:
+    num = str(mcs_raw or "").strip().replace("MCS", "")
+    if not num or num in {"—", "?", "-"}:
+        return "—"
+    mcs_label = f"MCS{num}"
+    try:
+        modulation = modulation_scheme(f"MCS{num}")
+    except (TypeError, ValueError):
+        link = record.get("link_validation") or {}
+        modulation = str((link.get("spec") or {}).get("modulation") or "")
+    if modulation:
+        return (
+            f"<span class='mcs-label'>{escape(mcs_label)}</span>"
+            f"<br/><span class='modulation'>{escape(modulation)}</span>"
+        )
+    return f"<span class='mcs-label'>{escape(mcs_label)}</span>"
+
+
+def _record_mcs_group_cell(record: dict[str, Any], row: dict[str, Any]) -> str:
+    mcs = str(record.get("mcs") or row.get("mcs") or "").strip()
+    num = mcs.replace("MCS", "").strip()
+    return _mcs_display_cell(record, num)
+
+
+def _chain_pair(first: Any, second: Any) -> str:
+    a1 = str(first or "").strip()
+    a2 = str(second or "").strip()
+    if (not a1 or a1 == "-") and (not a2 or a2 == "-"):
+        return "—"
+    left = a1 if a1 and a1 != "-" else "—"
+    right = a2 if a2 and a2 != "-" else "—"
+    if right in {"—", "-"}:
+        return left
+    if left in {"—", "-"}:
+        return right
+    return f"{left}/{right}"
+
+
+def _link_clients_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
+    for key in ("link_validation_post", "link_validation"):
+        clients = (record.get(key) or {}).get("clients") or []
+        if clients:
+            return list(clients)
+    return []
+
+
+def _unit_rows_for_record(record: dict[str, Any]) -> list[dict[str, Any]]:
+    """One row per connected CPE (sheet-style grouping)."""
+    rows: list[dict[str, Any]] = []
+    stats = record.get("stats") or {}
+    clients = _link_clients_for_record(record)
+    for index, client in enumerate(clients, start=1):
+        name = str(client.get("system_name") or client.get("name") or f"cpe{index}").strip()
+        if name.upper().startswith("UBR630") or "BTS" in name.upper():
+            continue
+        trex_su = int(client.get("su_index") or client.get("sua_index") or index)
+        trex_dev = _trex_device_stats(stats, trex_su)
+        trex_dl = trex_dev.get("avg_rx_mbps")
+        trex_ul = trex_dev.get("avg_tx_mbps")
+        if trex_ul is None:
+            trex_ul = _parse_tput_mbps(
+                client.get("throughput_in_mbps") or client.get("rx_tput")
+            )
+        tx_raw = client.get("tx_rate") or client.get("out_rate")
+        rx_raw = client.get("rx_rate") or client.get("in_rate")
+        display_ip = str(client.get("ip") or "—")
+        rows.append(
+            {
+                "unit": name if name != "-" else f"cpe{index}",
+                "ip": display_ip if display_ip not in {"", "-"} else "—",
+                "unit_ip": _unit_ip_cell(
+                    name if name != "-" else f"cpe{index}",
+                    display_ip if display_ip not in {"", "-"} else "—",
+                ),
+                "snr_local": _chain_pair(client.get("l_snr1"), client.get("l_snr2")),
+                "snr_remote": _chain_pair(client.get("r_snr1"), client.get("r_snr2")),
+                "rssi_local": _chain_pair(client.get("l_rssi1"), client.get("l_rssi2")),
+                "rssi_remote": _chain_pair(client.get("r_rssi1"), client.get("r_rssi2")),
+                "tx_rate": _operating_rate_cell(tx_raw, record),
+                "rx_rate": _operating_rate_cell(rx_raw, record),
+                "tx_traffic": f"{float(trex_dl):.1f}" if trex_dl is not None else "—",
+                "rx_traffic": f"{float(trex_ul):.1f}" if trex_ul is not None else "—",
+            }
+        )
+    if not rows:
+        mcs_config = record.get("mcs_config") or {}
+        for check in mcs_config.get("checks") or []:
+            if str(check.get("role") or "").upper() != "CPE":
+                continue
+            index = int(check.get("su_index") or 0)
+            if index <= 0:
+                continue
+            trex_dev = _trex_device_stats(stats, index)
+            trex_dl = trex_dev.get("avg_rx_mbps")
+            trex_ul = trex_dev.get("avg_tx_mbps")
+            cpe_hosts = record.get("cpe_hosts") or []
+            fallback_ip = (
+                str(cpe_hosts[index - 1])
+                if isinstance(cpe_hosts, list) and 0 < index <= len(cpe_hosts)
+                else "—"
+            )
+            rows.append(
+                {
+                    "unit": f"cpe{index}",
+                    "ip": fallback_ip,
+                    "unit_ip": _unit_ip_cell(f"cpe{index}", fallback_ip),
+                    "snr_local": "—",
+                    "snr_remote": "—",
+                    "rssi_local": "—",
+                    "rssi_remote": "—",
+                    "tx_rate": "—",
+                    "rx_rate": "—",
+                    "tx_traffic": f"{float(trex_dl):.1f}" if trex_dl is not None else "—",
+                    "rx_traffic": f"{float(trex_ul):.1f}" if trex_ul is not None else "—",
+                }
+            )
+    if not rows:
+        rows.append(
+            {
+                "unit": "—",
+                "ip": "—",
+                "unit_ip": "—",
+                "snr_local": "—",
+                "snr_remote": "—",
+                "rssi_local": "—",
+                "rssi_remote": "—",
+                "tx_rate": "—",
+                "rx_rate": "—",
+                "tx_traffic": "—",
+                "rx_traffic": "—",
+            }
+        )
+    return rows
+
+
+def _unique_bandwidths(records: list[dict[str, Any]]) -> list[str]:
+    seen: list[str] = []
+    for record in records:
+        bw = str(record.get("bandwidth") or "").strip()
+        if bw and bw not in seen:
+            seen.append(bw)
+    return seen
+
+
+def _bw_card_accent(bandwidth: str) -> str:
+    accents = {
+        "HT20": "#059669",
+        "HT40": "#2563eb",
+        "HT80": "#7c3aed",
+        "HT160": "#db2777",
+    }
+    return accents.get(bandwidth.upper(), "#475569")
+
+
+def _max_throughput_per_bandwidth(
+    records: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Best combined throughput per htmode (highest MCS row wins on multi-MCS runs)."""
+    best: dict[str, dict[str, Any]] = {}
+    for record in records:
+        bw = str(record.get("bandwidth") or "").strip()
+        if not bw:
+            continue
+        row = _throughput_row_values(record)
+        if row["skipped"] or row["bidi_mbps"] <= 0:
+            continue
+        current = best.get(bw)
+        if current is None or row["bidi_mbps"] > float(current["bidi_mbps"]):
+            best[bw] = {
+                "bidi_mbps": row["bidi_mbps"],
+                "mcs": str(record.get("mcs") or "—"),
+            }
+    return best
+
+
+def _render_bandwidth_summary_cards(records: list[dict[str, Any]]) -> str:
+    peaks = _max_throughput_per_bandwidth(records)
+    if not peaks:
+        return ""
+    cards: list[str] = []
+    for bw, peak in peaks.items():
+        accent = _bw_card_accent(bw)
+        max_tput = float(peak["bidi_mbps"])
+        mcs = str(peak.get("mcs") or "")
+        mcs_hint = (
+            f'<span class="bw-card-mcs">{escape(mcs)}</span>'
+            if mcs and mcs != "—"
+            else ""
+        )
+        cards.append(
+            f"""
+        <button type="button" class="bw-card" data-bw-filter="{escape(bw)}"
+                style="--accent:{accent}">
+          <span class="bw-card-label">{escape(bw)}</span>
+          <span class="bw-card-tput">{max_tput:.0f} Mbps</span>
+          {mcs_hint}
+        </button>
+            """
+        )
+    return f'<div class="bw-cards">{"".join(cards)}</div>'
+
+
+def _render_bandwidth_toolbar(bandwidths: list[str]) -> str:
+    buttons = [
+        '<button type="button" class="bw-btn active" data-bw="all">All</button>',
+    ]
+    for bw in bandwidths:
+        accent = _bw_card_accent(bw)
+        buttons.append(
+            f'<button type="button" class="bw-btn" data-bw="{escape(bw)}" '
+            f'style="--accent:{accent}">{escape(bw)}</button>'
+        )
+    return f"""
+    <div class="bw-toolbar" id="bwToolbar">
+      <div class="bw-toolbar-left">
+        <span class="bw-toolbar-label">Show bandwidth</span>
+        <div class="bw-filters">{''.join(buttons)}</div>
+      </div>
+    </div>
+    """
+
+
+def _render_report_javascript() -> str:
+    return """
+    <script>
+    (function () {
+      const rows = Array.from(document.querySelectorAll('tr[data-bw]'));
+      const buttons = Array.from(document.querySelectorAll('.bw-btn'));
+      const cards = Array.from(document.querySelectorAll('.bw-card'));
+
+      function applyFilter(bw) {
+        rows.forEach((row) => {
+          const show = bw === 'all' || row.dataset.bw === bw;
+          row.style.display = show ? '' : 'none';
+        });
+        buttons.forEach((btn) => btn.classList.toggle('active', btn.dataset.bw === bw));
+        cards.forEach((card) => card.classList.toggle('active', card.dataset.bwFilter === bw));
+      }
+
+      buttons.forEach((btn) => btn.addEventListener('click', () => applyFilter(btn.dataset.bw || 'all')));
+      cards.forEach((card) => card.addEventListener('click', () => applyFilter(card.dataset.bwFilter || 'all')));
+      applyFilter('all');
+    })();
+    </script>
+    """
+
+
+def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
+    """Sheet-style matrix: CPE rows per MCS, shared columns rowspan."""
+    if not records:
+        return ""
+
+    col_count = 18
+    bandwidths = _unique_bandwidths(records)
+    body_rows: list[str] = []
+    for rec_idx, record in enumerate(records):
+        units = _unit_rows_for_record(record)
+        row_span = len(units)
+        row = _throughput_row_values(record)
+        bw_raw = str(row["bandwidth"])
+        bandwidth = escape(bw_raw)
+        iter_key = f"{rec_idx}"
+        passed_flag = "1" if record.get("passed") else "0"
+        row_attrs = (
+            f'data-bw="{escape(bw_raw)}" data-iter-key="{iter_key}" '
+            f'data-passed="{passed_flag}"'
+        )
+        mimo = "Dual" if int(record.get("spatial_stream") or 2) >= 2 else "Single"
+        packet = escape(str(record.get("packet_size") or "—"))
+        mcs_group = _record_mcs_group_cell(record, row)
+        ratio = escape(_ratio_sheet_label(row["ratio"]))
+        duration = escape(str(record.get("duration_s") or "—"))
+        noise = escape(str(record.get("noise_dbm") or "—"))
+
+        if row["skipped"]:
+            total_cell = "<span class='muted'>—</span>"
+            remarks = escape(row["error"][:120] if row["error"] else "Skipped")
+        else:
+            total_cell = _throughput_cell(row["bidi_mbps"], row["bidi_target"])
+            remarks = _result_badge(record)
+
+        for idx, unit in enumerate(units):
+            shared = ""
+            if idx == 0:
+                shared = f"""
+            <td rowspan="{row_span}">{bandwidth}</td>
+            <td rowspan="{row_span}">{escape(mimo)}</td>
+            <td rowspan="{row_span}">{packet}</td>
+            <td rowspan="{row_span}" class="mcs-group-cell">{mcs_group}</td>
+            <td rowspan="{row_span}">{ratio}</td>
+            <td rowspan="{row_span}">{noise}</td>
+            <td rowspan="{row_span}">{duration}</td>
+                """
+            trailing = ""
+            if idx == 0:
+                trailing = f"""
+            <td rowspan="{row_span}" class="total-cell">{total_cell}</td>
+            <td rowspan="{row_span}" class="remarks-cell">{remarks}</td>
+                """
+            body_rows.append(
+                f"""
+          <tr {row_attrs}>
+            {shared}
+            <td class="unit-cell">{unit['unit_ip']}</td>
+            <td>{escape(str(unit['snr_local']))}</td>
+            <td>{escape(str(unit['snr_remote']))}</td>
+            <td>{escape(str(unit['rssi_local']))}</td>
+            <td>{escape(str(unit['rssi_remote']))}</td>
+            <td>{unit['tx_rate']}</td>
+            <td>{unit['rx_rate']}</td>
+            <td>{escape(str(unit['tx_traffic']))}</td>
+            <td>{escape(str(unit['rx_traffic']))}</td>
+            {trailing}
+          </tr>
+                """
+            )
+        if rec_idx < len(records) - 1:
+            body_rows.append(
+                f'<tr class="mcs-spacer" data-bw="{escape(bw_raw)}"><td colspan="{col_count}"></td></tr>'
+            )
+
+    summary_cards = _render_bandwidth_summary_cards(records)
+    toolbar = _render_bandwidth_toolbar(bandwidths)
 
     return f"""
-        <tr class="{row_class}">
-          <td>{escape(str(record.get('bandwidth', '—')))}</td>
-          <td>{escape(str(record.get('mcs', '—')))}</td>
-          <td>{escape(str(record.get('ratio', '—')))}</td>
-          <td>{escape(str(modulation))}</td>
-          <td>{data_rate_cell}</td>
-          <td>{_rate_actual_cell(primary.get('tx_rate_mbps'), primary.get('tx_rate_ok'))}</td>
-          <td>{_rate_actual_cell(primary.get('rx_rate_mbps'), primary.get('rx_rate_ok'))}</td>
-          <td>{_throughput_cell(dl_mbps, dl_target)}</td>
-          <td>{_throughput_cell(ul_mbps, ul_target)}</td>
-          <td>{_throughput_cell(bidi_mbps, bidi_target)}</td>
-          <td>{escape(str(primary.get('l_snr1', '—')))}</td>
-          <td>{escape(str(primary.get('l_snr2', '—')))}</td>
-          <td>{escape(str(primary.get('r_snr1', '—')))}</td>
-          <td>{escape(str(primary.get('r_snr2', '—')))}</td>
-          <td>{escape(str(record.get('noise_dbm', '—')))}</td>
-        </tr>
-        """
+    <div class="table-block throughput-matrix-block">
+      {summary_cards}
+      {toolbar}
+      <div class="sheet-scroll">
+      <table class="matrix throughput-sheet" id="throughputMatrix">
+          <colgroup>
+            <col class="col-bw"/><col class="col-mimo"/><col class="col-pkt"/><col class="col-mcs-group"/>
+            <col class="col-ratio"/><col class="col-noise"/><col class="col-dur"/><col class="col-unit"/>
+            <col class="col-snr"/><col class="col-snr"/><col class="col-rssi"/><col class="col-rssi"/>
+            <col class="col-rate"/><col class="col-rate"/><col class="col-tput"/><col class="col-tput"/>
+            <col class="col-total"/><col class="col-remarks"/>
+          </colgroup>
+          <thead>
+            <tr>
+              <th rowspan="2">Bandwidth</th>
+              <th rowspan="2">MIMO</th>
+              <th rowspan="2">Packet<br/>Size</th>
+              <th rowspan="2">MCS</th>
+              <th rowspan="2">DL:UL<br/>Ratio</th>
+              <th rowspan="2">Noise Floor<br/><span class="muted">dBm</span></th>
+              <th rowspan="2">Duration<br/><span class="muted">s</span></th>
+              <th rowspan="2">Unit / IP</th>
+              <th colspan="2">SNR</th>
+              <th colspan="2">RSSI</th>
+              <th rowspan="2">Tx Data Rate<br/><span class="muted">Mb/s</span></th>
+              <th rowspan="2">Rx Data Rate<br/><span class="muted">Mb/s</span></th>
+              <th rowspan="2">Tx Traffic<br/><span class="muted">Mb/s</span></th>
+              <th rowspan="2">Rx Traffic<br/><span class="muted">Mb/s</span></th>
+              <th rowspan="2">Total Throughput<br/><span class="muted">Mb/s</span></th>
+              <th rowspan="2">Remarks</th>
+            </tr>
+            <tr>
+              <th>Local A1/A2</th>
+              <th>Remote A1/A2</th>
+              <th>Local A1/A2</th>
+              <th>Remote A1/A2</th>
+            </tr>
+          </thead>
+          <tbody>
+            {''.join(body_rows)}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    """
 
 
 def _render_results_table(records: list[dict[str, Any]]) -> str:
-    rows = [_render_result_row(record) for record in records]
-    if not rows:
-        rows = [
-            "<tr><td colspan='14'>No performance iterations recorded.</td></tr>",
-        ]
-    return f"""
-    <div class="sheet-scroll">
-    <table class="sheet">
-      <thead>
-        <tr>
-          <th rowspan="2">Bandwidth</th>
-          <th rowspan="2">MCS</th>
-          <th rowspan="2">DL:UL</th>
-          <th rowspan="2">Modulation</th>
-          <th rowspan="2">Data Rate<br/><span class="muted">(Mbps)</span></th>
-          <th colspan="2">Rate (Mbps)</th>
-          <th colspan="3">Throughput (Mbps)<br/><span class="muted">% of DL/UL share</span></th>
-          <th colspan="2">Local SNR (dB)</th>
-          <th colspan="2">Remote SNR (dB)</th>
-          <th rowspan="2">Noise<br/>(dBm)</th>
-        </tr>
-        <tr>
-          <th>Tx</th><th>Rx</th>
-          <th>DL</th><th>UL</th><th>Bi-Di</th>
-          <th>A1</th><th>A2</th><th>A1</th><th>A2</th>
-        </tr>
-      </thead>
-      <tbody>
-        {''.join(rows)}
-      </tbody>
-    </table>
-    </div>
-    """
+    if not records:
+        return "<p>No performance iterations recorded.</p>"
+    return _render_throughput_matrix(records)
 
 
 def write_summary_csv(records: list[dict[str, Any]], path: Path) -> None:
@@ -175,9 +671,10 @@ def write_summary_csv(records: list[dict[str, Any]], path: Path) -> None:
         "mcs",
         "mode",
         "ratio",
+        "connected_cpe_count",
         "expected_operating_rate_mbps",
-        "actual_tx_rate_mbps",
-        "actual_rx_rate_mbps",
+        "actual_out_rate_mbps",
+        "actual_in_rate_mbps",
         "operating_rate_ok",
         "combined_rx_mbps",
         "downlink_rx_mbps",
@@ -198,7 +695,10 @@ def write_summary_csv(records: list[dict[str, Any]], path: Path) -> None:
             link = record.get("link_validation") or {}
             primary = (link.get("clients") or [{}])[0]
             ratio = str(record.get("ratio") or "50:50")
-            dl_target, ul_target, bidi_target = _direction_targets(expected, ratio)
+            _, _, bidi_target = _direction_targets(
+                float(record.get("effective_target_mbps") or expected),
+                ratio,
+            )
             bidi = float(combined.get("rx_mbps") or 0)
             writer.writerow(
                 {
@@ -206,9 +706,10 @@ def write_summary_csv(records: list[dict[str, Any]], path: Path) -> None:
                     "mcs": record.get("mcs"),
                     "mode": record.get("mode"),
                     "ratio": record.get("ratio"),
+                    "connected_cpe_count": link.get("connected_cpe_count"),
                     "expected_operating_rate_mbps": expected,
-                    "actual_tx_rate_mbps": primary.get("tx_rate_mbps"),
-                    "actual_rx_rate_mbps": primary.get("rx_rate_mbps"),
+                    "actual_out_rate_mbps": primary.get("out_rate_mbps") or primary.get("tx_rate_mbps"),
+                    "actual_in_rate_mbps": primary.get("in_rate_mbps") or primary.get("rx_rate_mbps"),
                     "operating_rate_ok": link.get("operating_rate_ok"),
                     "combined_rx_mbps": bidi,
                     "downlink_rx_mbps": downlink.get("rx_mbps", 0),
@@ -224,6 +725,27 @@ def write_summary_csv(records: list[dict[str, Any]], path: Path) -> None:
             )
 
 
+def _render_run_outcome_banner(records: list[dict[str, Any]]) -> str:
+    total = len(records)
+    if total == 0:
+        return (
+            '<div class="run-outcome warn">'
+            "<strong>No iterations recorded.</strong>"
+            "</div>"
+        )
+    passed = sum(1 for row in records if row.get("passed"))
+    if passed == total:
+        css = "pass"
+        headline = f"<strong>{passed}/{total} passed</strong>"
+    elif passed == 0:
+        css = "fail"
+        headline = f"<strong>0/{total} passed</strong>"
+    else:
+        css = "warn"
+        headline = f"<strong>{passed}/{total} passed</strong>"
+    return f'<div class="run-outcome {css}">{headline}</div>'
+
+
 def write_html_report(
     *,
     records: list[dict[str, Any]],
@@ -234,21 +756,13 @@ def write_html_report(
     path.parent.mkdir(parents=True, exist_ok=True)
     executed_at = escape(str(run_meta.get("executed_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     testbed_table = _render_testbed_summary_table(testbed_summary or {})
+    outcome_banner = _render_run_outcome_banner(records)
     results_table = _render_results_table(records)
 
     meta_lines = []
-    for key in (
-        "TRex Server",
-        "Profile",
-        "Bandwidths",
-        "MCS Rates",
-        "Ratios",
-        "Target Mode",
-        "Efficiency Factor",
-        "Duration (s)",
-    ):
+    for key in ("Bandwidths", "MCS Rates", "Ratios", "Duration (s)"):
         if key in run_meta:
-            meta_lines.append(f"<span><strong>{escape(key)}:</strong> {escape(run_meta[key])}</span>")
+            meta_lines.append(f"<span><strong>{escape(key)}:</strong> {escape(str(run_meta[key]))}</span>")
 
     html_doc = f"""<!DOCTYPE html>
 <html lang="en">
@@ -263,101 +777,287 @@ def write_html_report(
       --border: #cbd5e1; --pass: #16a34a; --fail: #dc2626; --warn: #ea580c; --head: #1e3a8a;
     }}
     * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0; padding: 28px 18px; font-family: 'Inter', sans-serif;
-      background: var(--bg); color: var(--text);
-    }}
-    .wrap {{ width: min(1600px, 98vw); max-width: 100%; margin: 0 auto; }}
+    body {{ margin: 0; padding: 20px 10px; font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); }}
+    .wrap {{ width: 100%; max-width: none; margin: 0 auto; }}
     .hero {{
       background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #2563eb 100%);
       color: #fff; border-radius: 14px; padding: 22px 26px; margin-bottom: 18px;
       display: flex; justify-content: space-between; align-items: center; gap: 20px;
     }}
-    .hero-main {{ flex: 1; min-width: 0; }}
     .hero h1 {{ margin: 0 0 8px; font-size: 24px; }}
-    .hero-date {{ margin: 0; font-size: 14px; opacity: 0.92; font-weight: 500; }}
-    .hero-logo {{
-      flex-shrink: 0; background: #fff; border-radius: 10px; padding: 10px 14px;
-      box-shadow: 0 2px 8px rgba(15,23,42,0.15);
-    }}
-    .hero-logo img {{ display: block; height: 42px; width: auto; }}
-    .panel-top {{
+    .hero-date {{ margin: 0; font-size: 14px; opacity: 0.92; }}
+    .hero-logo {{ background: #fff; border-radius: 10px; padding: 10px 14px; }}
+    .hero-logo img {{ display: block; height: 42px; }}
+    .panel-top, .panel {{
       background: var(--card); border: 1px solid var(--border); border-radius: 14px;
       padding: 20px 22px; margin-bottom: 16px;
     }}
-    .panel-top h2 {{ margin: 0 0 14px; font-size: 17px; color: var(--title); }}
-    .run-meta {{
-      display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px;
-      font-size: 13px; color: #475569;
+    .panel-top h2, .panel > h2 {{ margin: 0 0 14px; font-size: 17px; color: var(--title); }}
+    table.data-table {{ width: 100%; border-collapse: collapse; }}
+    table.data-table th, table.data-table td {{
+      border: 1px solid var(--border); padding: 10px 14px; text-align: center;
     }}
-    .panel {{
-      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
-      padding: 20px 22px;
+    table.data-table th.row-label {{ text-align: left; background: #f8fafc; }}
+    .testbed-chips {{
+      display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;
     }}
-    .panel > h2 {{ margin: 0 0 16px; font-size: 17px; color: var(--title); }}
-    table.summary-top {{ max-width: 100%; margin-bottom: 0; }}
-    .ip-cell {{ white-space: nowrap; font-family: Consolas, Monaco, monospace; font-size: 12px; }}
-    table.matrix {{
-      width: 100%; max-width: 100%; border-collapse: collapse; background: #fff;
-      border: 2px solid var(--border); border-radius: 8px; overflow: hidden;
-      box-shadow: 0 1px 3px rgba(15,23,42,0.06);
+    .testbed-chip {{
+      padding: 8px 12px; background: #f8fafc; border: 1px solid var(--border);
+      border-radius: 999px; font-size: 12px;
     }}
-    table.matrix th, table.matrix td {{
-      border: 1px solid var(--border); padding: 12px 16px; text-align: center;
+    .testbed-scroll {{
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #fff;
     }}
-    table.matrix thead th {{
-      background: #f8fafc; color: var(--head); font-size: 13px; font-weight: 700;
-      text-transform: uppercase; letter-spacing: 0.5px;
+    table.summary-multi th.device-head {{
+      min-width: 150px;
+      vertical-align: bottom;
+      line-height: 1.25;
     }}
-    table.matrix th.corner {{ background: #f1f5f9; width: 100px; }}
-    table.matrix th.row-label {{
-      text-align: left; background: #f8fafc; color: var(--title);
-      font-size: 13px; font-weight: 600; padding-left: 14px;
+    table.summary-multi .device-name {{
+      display: block;
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--head);
     }}
-    .sheet-scroll {{ width: 100%; overflow-x: auto; }}
-    table.sheet {{
-      width: 100%; min-width: 100%; table-layout: auto; border-collapse: collapse;
-      font-size: 13px; border: 2px solid var(--border); border-radius: 8px;
+    table.summary-multi .device-ip {{
+      display: block;
+      margin-top: 4px;
+      font-family: Consolas, Monaco, monospace;
+      font-size: 10px;
+      font-weight: 500;
+      color: #64748b;
+      word-break: break-all;
+      white-space: normal;
     }}
-    table.sheet th, table.sheet td {{
-      border: 1px solid var(--border); padding: 12px 10px; text-align: center;
-      vertical-align: middle; word-wrap: break-word;
+    table.summary-multi td,
+    table.summary-multi th.row-label {{
+      font-size: 12px;
     }}
-    table.sheet thead th {{
-      background: #f8fafc; color: var(--head); font-weight: 700; font-size: 12px;
+    table.summary-multi thead th {{
+      background: #eff6ff;
+      color: var(--head);
     }}
-    table.sheet tbody tr:nth-child(even) td {{ background: #fafcff; }}
-    table.sheet tbody tr.rate-mismatch td {{ background: #fff8f8; }}
-    table.sheet tbody tr.run-error td {{ background: #fff5f5; }}
-    .muted {{ color: #64748b; font-size: 11px; }}
-    .tput-good {{
-      color: #166534; font-weight: 700; background: #dcfce7;
-      padding: 2px 8px; border-radius: 4px;
+    .testbed-layout-note {{
+      margin: 0 0 10px;
+      font-size: 12px;
+      color: #64748b;
     }}
-    .tput-warn {{
-      color: #9a3412; font-weight: 700; background: #ffedd5;
-      padding: 2px 8px; border-radius: 4px;
+    .testbed-scroll-vertical {{
+      max-height: 420px;
+      overflow: auto;
     }}
-    .tput-bad {{
+    table.summary-vertical {{
+      width: 100%;
+      table-layout: auto;
+    }}
+    table.summary-vertical thead th {{
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #eff6ff;
+      color: var(--head);
+      font-size: 12px;
+    }}
+    table.summary-vertical td,
+    table.summary-vertical th {{
+      font-size: 12px;
+      vertical-align: top;
+    }}
+    table.summary-vertical .unit-label-cell {{
+      min-width: 120px;
+      background: #f8fafc;
+      font-weight: 700;
+    }}
+    table.summary-vertical .unit-label-cell.bts-row {{
+      background: #eff6ff;
+    }}
+    table.summary-vertical tbody tr:nth-child(even) td {{
+      background: #fcfdff;
+    }}
+    table.summary-vertical tbody tr:hover td {{
+      background: #eff6ff;
+    }}
+    .run-meta {{ display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; font-size: 13px; }}
+    .run-meta span {{ padding: 8px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid var(--border); }}
+    .run-outcome {{ margin-bottom: 16px; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); }}
+    .run-outcome.pass {{ background: #f0fdf4; border-color: #bbf7d0; color: #166534; }}
+    .run-outcome.fail {{ background: #fff5f5; border-color: #fecaca; color: #991b1b; }}
+    .run-outcome.warn {{ background: #fffbeb; border-color: #fde68a; color: #92400e; }}
+    .iteration-block {{ margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }}
+    .iteration-block:last-child {{ border-bottom: none; }}
+    .iteration-title {{ margin: 0 0 12px; font-size: 15px; color: var(--head); }}
+    .table-block {{ margin-bottom: 18px; }}
+    .table-title {{ font-size: 13px; font-weight: 700; color: var(--head); margin: 0 0 8px; text-transform: uppercase; }}
+    table.matrix {{ width: 100%; border-collapse: collapse; background: #fff; border: 2px solid var(--border); }}
+    table.matrix th, table.matrix td {{ border: 1px solid var(--border); padding: 11px 12px; text-align: center; }}
+    table.matrix thead th {{ background: #f8fafc; color: var(--head); font-size: 12px; font-weight: 700; }}
+    table.matrix th.row-label {{ text-align: left; background: #f8fafc; width: 18%; }}
+    table.summary-table td {{ text-align: left; }}
+    table.throughput-sheet {{
+      width: 100%;
+      table-layout: fixed;
+    }}
+    table.throughput-sheet col.col-bw {{ width: 6%; }}
+    table.throughput-sheet col.col-mimo {{ width: 4%; }}
+    table.throughput-sheet col.col-pkt {{ width: 4%; }}
+    table.throughput-sheet col.col-mcs-group {{ width: 8%; }}
+    table.throughput-sheet col.col-ratio {{ width: 5%; }}
+    table.throughput-sheet col.col-noise {{ width: 5%; }}
+    table.throughput-sheet col.col-dur {{ width: 4%; }}
+    table.throughput-sheet col.col-unit {{ width: 18%; }}
+    table.throughput-sheet col.col-snr {{ width: 5%; }}
+    table.throughput-sheet col.col-rssi {{ width: 5%; }}
+    table.throughput-sheet col.col-rate {{ width: 7%; }}
+    table.throughput-sheet col.col-tput {{ width: 5%; }}
+    table.throughput-sheet col.col-total {{ width: 9%; }}
+    table.throughput-sheet col.col-remarks {{ width: 6%; }}
+    table.throughput-sheet th,
+    table.throughput-sheet td {{
+      padding: 6px 5px;
+      font-size: 12px;
+      white-space: normal;
+      line-height: 1.3;
+      word-break: break-word;
+    }}
+    table.throughput-sheet thead th {{
+      background: #f4a261; color: #1a1a1a; font-size: 11px; font-weight: 700;
+    }}
+    table.throughput-sheet td[rowspan] {{ background: #fffbeb; font-weight: 600; vertical-align: middle; }}
+    table.throughput-sheet .unit-line {{
+      display: block;
+      font-weight: 600;
+      text-align: left;
+      font-size: 10px;
+      line-height: 1.25;
+    }}
+    table.throughput-sheet .unit-ip {{
+      display: block;
+      font-family: Consolas, Monaco, monospace;
+      font-weight: 400;
+      font-size: 9px;
+      line-height: 1.35;
+      word-break: break-all;
+      white-space: normal;
+      color: #334155;
+      margin-top: 2px;
+    }}
+    table.throughput-sheet .mcs-group-cell {{ line-height: 1.2; vertical-align: middle; }}
+    table.throughput-sheet .mcs-label {{ font-weight: 700; }}
+    table.throughput-sheet .modulation {{ color: #64748b; font-size: 10px; }}
+    table.throughput-sheet .rate-mismatch {{
       color: #991b1b; font-weight: 700; background: #fee2e2;
-      padding: 2px 8px; border-radius: 4px;
+      padding: 1px 5px; border-radius: 3px; display: inline-block;
     }}
-    .tput-zero {{
-      color: #991b1b; font-weight: 700; background: #fecaca;
-      padding: 2px 8px; border-radius: 4px;
+    table.throughput-sheet .total-cell {{ font-size: 11px; }}
+    table.throughput-sheet .remarks-cell {{ font-size: 11px; }}
+    table.throughput-sheet tr.mcs-spacer td {{
+      height: 14px; padding: 0; border: none; background: var(--bg);
     }}
-    .mark.pass {{ color: var(--pass); font-weight: 700; }}
-    .mark.fail {{
-      color: var(--fail); font-weight: 700; background: #fee2e2;
-      padding: 2px 6px; border-radius: 4px;
+    .throughput-matrix-block {{ overflow: visible; }}
+    .ip-cell {{ font-family: Consolas, Monaco, monospace; font-size: 11px; white-space: nowrap; }}
+    .muted {{ color: #64748b; font-size: 11px; }}
+    .tput-good {{ color: #166534; font-weight: 700; background: #dcfce7; padding: 2px 8px; border-radius: 4px; }}
+    .tput-mcs-warn {{ color: #9a3412; font-weight: 700; background: #ffedd5; padding: 2px 8px; border-radius: 4px; }}
+    .tput-bad {{ color: #991b1b; font-weight: 700; background: #fee2e2; padding: 2px 8px; border-radius: 4px; }}
+    .tput-zero {{ color: #991b1b; font-weight: 700; background: #fecaca; padding: 2px 8px; border-radius: 4px; }}
+    .badge {{ display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }}
+    .badge.pass {{ background: #dcfce7; color: #166534; }}
+    .badge.warn {{ background: #ffedd5; color: #9a3412; }}
+    .badge.fail {{ background: #fee2e2; color: #991b1b; }}
+    .badge.neutral {{ background: #e2e8f0; color: #475569; }}
+    .skip-note {{ color: #991b1b; font-size: 13px; }}
+    .bw-cards {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
     }}
-    .footnote {{ margin-top: 14px; font-size: 12px; color: #64748b; line-height: 1.6; }}
+    .bw-card {{
+      text-align: left;
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent, #475569);
+      border-radius: 12px;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      padding: 14px 16px;
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+    }}
+    .bw-card:hover {{ transform: translateY(-1px); box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08); }}
+    .bw-card.active {{
+      border-color: var(--accent, #2563eb);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #2563eb) 18%, transparent);
+    }}
+    .bw-card-label {{ display: block; font-size: 13px; font-weight: 800; color: var(--title); }}
+    .bw-card-tput {{ display: block; margin-top: 10px; font-size: 24px; font-weight: 800; color: var(--title); }}
+    .bw-card-mcs {{ display: block; margin-top: 6px; font-size: 11px; font-weight: 600; color: #64748b; }}
+    .bw-toolbar {{
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      background: rgba(255,255,255,0.96);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+    }}
+    .bw-toolbar-left {{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }}
+    .bw-toolbar-label {{
+      font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #64748b;
+    }}
+    .bw-filters {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+    .bw-btn {{
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--title);
+      border-radius: 999px;
+      padding: 8px 14px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }}
+    .bw-btn:hover {{ border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }}
+    .bw-btn.active {{
+      background: var(--accent, #2563eb);
+      border-color: var(--accent, #2563eb);
+      color: #fff;
+      box-shadow: 0 4px 12px color-mix(in srgb, var(--accent, #2563eb) 28%, transparent);
+    }}
+    .sheet-scroll {{
+      overflow: auto;
+      max-height: 72vh;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
+    }}
+    table.throughput-sheet thead th {{
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }}
+    table.throughput-sheet tbody tr:nth-child(even):not(.mcs-spacer) td {{
+      background: #fcfdff;
+    }}
+    table.throughput-sheet tbody tr:hover:not(.mcs-spacer) td {{
+      background: #eff6ff;
+    }}
   </style>
 </head>
 <body>
   <div class="wrap">
     <header class="hero">
-      <div class="hero-main">
+      <div>
         <h1>UBR Performance Report</h1>
         <p class="hero-date">{executed_at}</p>
       </div>
@@ -369,26 +1069,16 @@ def write_html_report(
     <section class="panel-top">
       <h2>Testbed Summary</h2>
       {testbed_table}
-      <div class="run-meta">
-        {''.join(meta_lines)}
-      </div>
+      <div class="run-meta">{''.join(meta_lines)}</div>
     </section>
 
     <section class="panel">
       <h2>Performance Results</h2>
+      {outcome_banner}
       {results_table}
-      <p class="footnote">
-        <strong>Throughput</strong> % uses each direction&apos;s share of spec data rate
-        (e.g. 75:25 → DL vs 75%, UL vs 25%; Bi-Di vs 100%):
-        <span class="tput-good">green ≥70%</span>,
-        <span class="tput-warn">orange 50–70%</span>,
-        <span class="tput-bad">red &lt;50%</span>,
-        <span class="tput-zero">zero = no traffic</span>.
-        <strong>Data rate</strong> is from the spec sheet; <strong>Tx/Rx</strong> are SNMP operating rates (green = match).
-        Pink rows: operating-rate mismatch or run error (no TRex result).
-      </p>
     </section>
   </div>
+  {_render_report_javascript()}
 </body>
 </html>
 """

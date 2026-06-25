@@ -1,8 +1,8 @@
 # Lab bench registry — maps Jenkins TARGET_STAND / agent label to automation profile.
 #
 # Usage:
-#   TARGET_STAND=qa-lab-02 ./jenkins/trigger-throughput.sh
-#   PYTHONPATH=. python3 traffic/performance_matrix.py --stand qa-lab-02 ...
+#   TARGET_STAND=test-qa-lab-02 ./jenkins/trigger-throughput.sh
+#   PYTHONPATH=. python3 traffic/performance_matrix.py --stand test-qa-lab-02 ...
 
 benches:
   test-harman2:
@@ -11,10 +11,17 @@ benches:
     profile: default
     recovery_profile: link_formation
 
-  qa-lab-02:
+  test-qa-lab-02:
     description: >
-      PTMP 4-CPE throughput — TRex .1.1 (1 BTS + 3 CPE on ports 0-3),
-      TRex .1.2 (1 CPE)
+      PTMP 6-CPE throughput — TRex 192.168.1.1 (1 BTS + 3 CPE on ports 1-3),
+      TRex 192.168.1.2 (3 CPE on ports 0-2). Jenkins agent label: test-qa-lab-02
+    ssh: root@10.0.150.102
+    profile: qa_lab_02
+    recovery_profile: link_formation
+
+  # Alias for docs/scripts (same bench as test-qa-lab-02)
+  qa-lab-02:
+    description: Alias → use TARGET_STAND=test-qa-lab-02 for Jenkins
     ssh: root@10.0.150.102
     profile: qa_lab_02
     recovery_profile: link_formation

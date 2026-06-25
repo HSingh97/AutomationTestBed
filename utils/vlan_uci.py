@@ -184,6 +184,16 @@ def build_nms_syslog_commands(nms_cfg: dict[str, Any]) -> list[str]:
     return cmds
 
 
+def qinq_tags_from_profile(profile_tb: dict[str, Any]) -> tuple[int | None, int | None]:
+    """Return (svlan, cvlan) from profile testbed.qinq — sole source for TRex tagging."""
+    qinq = _qinq(profile_tb)
+    svlan = qinq.get("svlan")
+    cvlan = qinq.get("cvlan")
+    if svlan is None or cvlan is None:
+        return None, None
+    return int(svlan), int(cvlan)
+
+
 def build_verify_commands(profile_tb: dict[str, Any], role: str) -> list[str]:
     keys = _iface_keys(profile_tb, role)
     return [

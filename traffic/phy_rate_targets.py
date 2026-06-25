@@ -34,16 +34,19 @@ def compute_traffic_targets(
     phy_overrides: dict[str, dict[str, float]] | None = None,
     legacy_mcs_caps: dict[str, float] | None = None,
     spatial_streams: int = 2,
+    su_count: int | None = None,
+    operating_rate_mbps: float | None = None,
 ) -> dict[str, Any]:
     dl_ratio, ul_ratio = [float(part) for part in ratio.split(":")]
     total_ratio = dl_ratio + ul_ratio
     if total_ratio <= 0:
         raise ValueError(f"Invalid ratio '{ratio}'")
 
-    phy_max = phy_max_rate_mbps(
+    sheet_rate = phy_max_rate_mbps(
         bandwidth, mcs, overrides=phy_overrides, spatial_streams=spatial_streams
     )
-    effective = phy_max * efficiency_factor
+    base_rate = float(operating_rate_mbps) if operating_rate_mbps is not None else sheet_rate
+    effective = base_rate * efficiency_factor
 
     if target_ceiling_mbps is not None and target_ceiling_mbps > 0:
         effective = min(effective, target_ceiling_mbps)
@@ -63,11 +66,12 @@ def compute_traffic_targets(
     else:
         direction = "uplink"
 
-    return {
+    result: dict[str, Any] = {
         "bandwidth": normalize_bandwidth(bandwidth),
         "mcs": normalize_mcs(mcs),
         "ratio": ratio,
-        "phy_max_mbps": round(phy_max, 2),
+        "operating_rate_mbps": round(base_rate, 2),
+        "phy_max_mbps": round(sheet_rate, 2),
         "efficiency_factor": efficiency_factor,
         "effective_target_mbps": round(effective, 2),
         "target_ceiling_mbps": target_ceiling_mbps,
@@ -77,3 +81,8 @@ def compute_traffic_targets(
         "trex_ul_bw": f"{max(1, int(round(uplink_mbps)))}M",
         "trex_direction": direction,
     }
+    if su_count and su_count > 0:
+        result["su_count"] = su_count
+        result["downlink_per_cpe_mbps"] = round(downlink_mbps / su_count, 2)
+        result["uplink_per_cpe_mbps"] = round(uplink_mbps / su_count, 2)
+    return result

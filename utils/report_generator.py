@@ -34,6 +34,10 @@ def _humanize_module_name(nodeid: str, test_id: str) -> str:
         raw = re.sub(r"^jmb_\d+_?", "", raw, flags=re.I)
         return raw.replace("_", " ").strip().title()
 
+    if re.match(r"PROCESS_\d+", test_id, re.I):
+        raw = re.sub(r"^process_\d+_?", "", raw, flags=re.I)
+        return raw.replace("_", " ").strip().title()
+
     return raw.replace("_", " ").strip().title()
 
 
@@ -54,11 +58,168 @@ def get_group_marker(keywords):
                 return "IP"
             if re.match(r"JMB_\d+", kw, re.I):
                 return "JumboFrames"
-            if kw.lower() in ("jumboframes", "jumbo"):
-                return "JumboFrames"
+            if re.match(r"PROCESS_\d+", kw, re.I):
+                return "ProcessMonitor"
+            if kw.lower() in ("processmonitor", "process_monitor"):
+                return "ProcessMonitor"
             return kw.capitalize()
 
     return "Ungrouped"
+
+
+PROC_PARTIAL_MARKER = "[PROC_PARTIAL]"
+PROC_FAILED_MARKER = "[PROC_FAILED]"
+
+# Official suite runs PROCESS_01–PROCESS_19 only (extended 21–28 are catalog-only).
+OFFICIAL_PROCESS_REPORT_ORDER: tuple[int, ...] = tuple(range(1, 20))
+
+
+def _process_case_number(test_id: str) -> int | None:
+    match = re.match(r"PROCESS_(\d+)", str(test_id), re.I)
+    return int(match.group(1)) if match else None
+
+
+def _sort_process_monitor_records(records: list[dict]) -> list[dict]:
+    """Present ProcessMonitor rows as PROCESS_01 … PROCESS_19, not pytest run order."""
+
+    def sort_key(record: dict) -> tuple[int, int]:
+        num = _process_case_number(record.get("id", ""))
+        if num is None:
+            return (2, 0)
+        try:
+            seq = OFFICIAL_PROCESS_REPORT_ORDER.index(num)
+            return (0, seq)
+        except ValueError:
+            return (1, num)
+
+    return sorted(records, key=sort_key)
+
+
+def _is_process_monitor_test(test: dict) -> bool:
+    keywords = test.get("keywords") or []
+    return "ProcessMonitor" in keywords or any(str(k).startswith("PROCESS_") for k in keywords)
+
+
+_PROC_REASON_NOISE_PREFIXES = (
+    "[",
+    "tests/",
+    "utils/",
+    "venv/",
+    "config/",
+    "pages/",
+    "FAILED ",
+    "PASSED ",
+    "PARTIAL ",
+    "FAILURE:",
+    "________",
+    "request = ",
+)
+
+
+def _trim_proc_reason(raw: str) -> str:
+    """Stop a captured PARTIAL/FAILED reason at the next test/log/traceback line."""
+    lines: list[str] = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not lines:
+            lines.append(line.rstrip())
+            continue
+        if any(stripped.startswith(prefix) for prefix in _PROC_REASON_NOISE_PREFIXES):
+            break
+        if not stripped and lines and not lines[-1].strip():
+            break
+        lines.append(line.rstrip())
+    return "\n".join(lines).strip()
+
+
+def _process_monitor_case_reason(test: dict, longrepr: str) -> tuple[str, str] | None:
+    """Return (FAILED|PARTIAL, reason) for Process Monitor cases, preserving bullet lists."""
+    stdout = str((test.get("call") or {}).get("stdout") or "")
+    blob = f"{longrepr}\n{stdout}"
+    if PROC_PARTIAL_MARKER in blob:
+        match = re.search(r"\[PROC_PARTIAL\]\s+\S+\s+PARTIAL:\s*(.+)", blob, re.DOTALL)
+        reason = _trim_proc_reason(match.group(1)) if match else ""
+        if not reason:
+            for line in reversed(stdout.splitlines()):
+                if "] PARTIAL:" in line:
+                    reason = line.split("] PARTIAL:", 1)[-1].strip()
+                    break
+        return "PARTIAL", reason or "Baseline discrepancy (see console log)"
+    if PROC_FAILED_MARKER in blob:
+        match = re.search(r"\[PROC_FAILED\]\s+\S+\s+FAILED:\s*(.+)", blob, re.DOTALL)
+        reason = _trim_proc_reason(match.group(1)) if match else ""
+        if not reason:
+            for line in reversed(stdout.splitlines()):
+                if "] FAILED:" in line:
+                    reason = line.split("] FAILED:", 1)[-1].strip()
+                    break
+        return "FAILED", reason or "Test failed (see console log)"
+    return None
+
+
+def _format_proc_reason_html(reason: str) -> str:
+    """Render a procmon reason (possibly with '  - foo' bullet lines) as HTML."""
+    if "\n  - " not in reason:
+        return f"<div class='failure-item'>{reason}</div>"
+    head, _, rest = reason.partition("\n  - ")
+    bullet_text = "  - " + rest
+    bullets = [
+        line.strip()[2:].strip()
+        for line in bullet_text.splitlines()
+        if line.strip().startswith("- ")
+    ]
+    head_html = f"<div class='failure-item'>{head.strip()}</div>" if head.strip() else ""
+    items = "".join(f"<li>{name}</li>" for name in bullets if name)
+    return f"{head_html}<ul class='proc-bullet-list'>{items}</ul>"
+
+
+_PROC_PASS_SUMMARY_NOISE = (
+    "Recovery reboot",
+    "Recovery hello",
+    "Recovery disarm",
+    "Reconnecting SSH",
+    "SSH restored",
+    "Waiting up to",
+    "Skipping ",
+    "SEGV on ",
+    "KILL on ",
+    "BATCH ",
+    "Batch ",
+    "Core dump",
+    "Post-reboot ubus probe",
+    "Optional/idle services",
+    "SESSION",
+    " recovered;",
+    "logs quiet",
+    "restart evidence",
+)
+
+
+def _iter_proc_messages(test: dict, case_id: str):
+    """Yield every [PROC][CASE_ID] log line captured for this test, oldest first."""
+    prefix = f"[PROC][{case_id}] "
+    call = test.get("call") or {}
+    stdout = str(call.get("stdout") or "")
+    if stdout:
+        for raw in stdout.splitlines():
+            if raw.startswith(prefix):
+                yield raw[len(prefix):].strip()
+    for record in call.get("log") or []:
+        msg = str(record.get("msg") or "")
+        if msg.startswith(prefix):
+            yield msg[len(prefix):].strip()
+
+
+def _process_monitor_pass_summary(test: dict, case_id: str) -> str:
+    """Pick the most informative trailing [PROC][CASE_ID] log line for the report."""
+    candidates: list[str] = []
+    for msg in _iter_proc_messages(test, case_id):
+        if not msg or any(skip in msg for skip in _PROC_PASS_SUMMARY_NOISE):
+            continue
+        candidates.append(msg)
+    if not candidates:
+        return ""
+    return candidates[-1]
 
 
 def _effective_outcome_for_report(test: dict) -> str:
@@ -211,7 +372,18 @@ def generate():
 
         if not parsed_ip:
             jmb_id = parse_jmb_case_id(nodeid)
-            if jmb_id:
+            proc_kw = next(
+                (str(k).upper() for k in test.get("keywords", []) if re.match(r"PROCESS_\d+", str(k), re.I)),
+                None,
+            )
+            proc_fn = re.search(r"test_process_(\d+)_", nodeid, re.I)
+            if proc_kw or proc_fn:
+                if proc_kw:
+                    test_id = proc_kw
+                else:
+                    test_id = f"PROCESS_{int(proc_fn.group(1)):02d}"
+                test_name = _humanize_module_name(nodeid, test_id)
+            elif jmb_id:
                 test_id = jmb_id
                 test_name = _humanize_module_name(nodeid, test_id)
             else:
@@ -238,12 +410,28 @@ def generate():
         if outcome == 'PASSED':
             stats['passed'] += 1
             status = "PASSED"
-            if validated_params:
-                # Create CSS pills for each parameter
+            proc_summary = (
+                _process_monitor_pass_summary(test, test_id)
+                if _is_process_monitor_test(test)
+                else ""
+            )
+            if proc_summary:
+                reason_html = (
+                    f"<div class='reason-title'>Outcome:</div>"
+                    f"<div class='failure-list'><div class='failure-item'>{proc_summary}</div></div>"
+                )
+                reason_csv = f"Outcome:\n- {proc_summary}"
+            elif validated_params:
                 pills = "".join([f"<span class='param-pill'>{p}</span>" for p in validated_params])
                 reason_html = f"<div class='reason-title'>Successfully Verified ({len(validated_params)} parameters):</div><div class='param-container'>{pills}</div>"
                 reason_csv = f"Successfully Verified ({len(validated_params)} parameters):\n" + ", ".join(
                     validated_params)
+            elif _is_process_monitor_test(test):
+                reason_html = (
+                    "<div class='reason-title'>Outcome:</div>"
+                    "<div class='failure-list'><div class='failure-item'>Test passed; see console log for evidence.</div></div>"
+                )
+                reason_csv = "Outcome:\n- Test passed; see console log for evidence."
             else:
                 reason_html = "All telemetry and backend parameters successfully matched the GUI."
                 reason_csv = reason_html
@@ -253,7 +441,32 @@ def generate():
         elif outcome == 'FAILED':
             longrepr = test.get('call', {}).get('longrepr', '')
 
-            if "FAILURE:" in longrepr:
+            proc_verdict = _process_monitor_case_reason(test, longrepr) if _is_process_monitor_test(test) else None
+            if proc_verdict:
+                proc_status, proc_reason = proc_verdict
+                proc_reason_html = _format_proc_reason_html(proc_reason)
+                proc_reason_csv = proc_reason.replace("\n  - ", "\n- ")
+                if proc_status == "PARTIAL":
+                    stats['partial'] += 1
+                    status = "PARTIAL"
+                    reason_html = (
+                        f"<div class='reason-title' style='color:#b45309;'>Test Partial:</div>"
+                        f"<div class='failure-list'>{proc_reason_html}</div>"
+                    )
+                    reason_csv = f"Test Partial:\n{proc_reason_csv}"
+                    color = "#d97706"
+                    bg = "#fffbeb"
+                else:
+                    stats['failed'] += 1
+                    status = "FAILED"
+                    reason_html = (
+                        f"<div class='reason-title' style='color:#991b1b;'>Test Failed:</div>"
+                        f"<div class='failure-list'>{proc_reason_html}</div>"
+                    )
+                    reason_csv = f"Test Failed:\n{proc_reason_csv}"
+                    color = "#ef4444"
+                    bg = "#fef2f2"
+            elif "FAILURE:" in longrepr:
                 stats['partial'] += 1
                 status = "PARTIAL"
                 raw_failures = re.findall(r'FAILURE: (.*)', longrepr)
@@ -317,6 +530,10 @@ def generate():
         if group_name not in groups:
             groups[group_name] = []
         groups[group_name].append(record)
+
+    for group_name, records in groups.items():
+        if group_name == "ProcessMonitor":
+            groups[group_name] = _sort_process_monitor_records(records)
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     html_filename = ARTIFACTS_DIR / f"{output_prefix}_{build_no}_Report_{date_str}.html"
@@ -430,6 +647,8 @@ def generate():
             .failure-item {{ position: relative; padding-left: 14px; margin-bottom: 8px; }}
             .failure-item::before {{ content: "•"; position: absolute; left: 0; color: #ef4444; font-weight: bold; }}
             .failure-item b {{ color: #0f172a; }}
+            .proc-bullet-list {{ margin: 4px 0 8px 18px; padding-left: 18px; }}
+            .proc-bullet-list li {{ margin: 2px 0; font-family: 'Consolas', monospace; font-size: 12px; color: #334155; list-style-type: disc; }}
             {JUMBO_CAPTURE_REPORT_CSS}
         </style>
         <script>

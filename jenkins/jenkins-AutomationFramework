@@ -1,5 +1,5 @@
 // UBR validation — single pipeline on TARGET_STAND.
-// Select suites via TEST_MARKERS (GUI, IP, Regression, JumboFrames).
+// Select suites via TEST_MARKERS (GUI, IP, Regression, JumboFrames, ProcessMonitor).
 // Optional TEST_FILTER (-k). Report: Senao_UBR_<build>_Report_<date>.html + CSV.
 
 def archiveBuildArtifacts(pattern, allowEmpty = false) {
@@ -25,6 +25,9 @@ def parseMarkerList(String raw) {
             if (u == 'IPV6') {
                 return 'IPv6'
             }
+            if (u == 'PROCESSMONITOR') {
+                return 'ProcessMonitor'
+            }
             return u
         }
 }
@@ -47,6 +50,9 @@ def isIpv4OnlyIpFilterToken(String token) {
 
 /** Pick profiles/<name>.yaml from markers and optional -k filter (no manual profile pick). */
 def resolveProfileName(List markers, List kParts) {
+    if (markers.contains('ProcessMonitor') && !markersIncludeIpSuite(markers)) {
+        return 'ipv4_quickrun'
+    }
     if (!markersIncludeIpSuite(markers)) {
         return 'default'
     }
@@ -73,7 +79,7 @@ pipeline {
         string(
             name: 'TEST_MARKERS',
             defaultValue: 'GUI',
-            description: 'Comma-separated pytest suites: GUI, IP, IPv4, IPv6, Regression, JumboFrames (e.g. IPv4 or IP or GUI,IP)'
+            description: 'Comma-separated pytest suites: GUI, IP, IPv4, IPv6, Regression, JumboFrames, ProcessMonitor (e.g. ProcessMonitor or GUI,IP)'
         )
         string(
             name: 'TEST_FILTER',
@@ -118,7 +124,7 @@ pipeline {
                 script {
                     def markers = parseMarkerList(params.TEST_MARKERS)
                     if (markers.isEmpty()) {
-                        error('TEST_MARKERS is empty. Use at least one of: GUI, IP, IPv4, IPv6, Regression, JumboFrames')
+                        error('TEST_MARKERS is empty. Use at least one of: GUI, IP, IPv4, IPv6, Regression, JumboFrames, ProcessMonitor')
                     }
 
                     def paths = []
@@ -157,17 +163,30 @@ pipeline {
                         mParts << 'JumboFrames'
                         extraFlags << '--allow-destructive-jumbo'
                     }
+                    if (markers.contains('ProcessMonitor')) {
+                        paths << 'tests/ProcessMonitor/'
+                        mParts << 'ProcessMonitor'
+                        extraFlags << '--allow-process-monitor'
+                        extraFlags << '--allow-destructive-process'
+                    }
 
                     def unknown = markers.findAll { m ->
-                        !['GUI', 'IP', 'IPv4', 'IPv6', 'REGRESSION', 'JUMBOFRAMES'].contains(m)
+                        !['GUI', 'IP', 'IPv4', 'IPv6', 'REGRESSION', 'JUMBOFRAMES', 'ProcessMonitor'].contains(m)
                     }
                     if (!unknown.isEmpty()) {
-                        error("Unknown TEST_MARKERS: ${unknown.join(', ')}. Use GUI, IP, IPv4, IPv6, Regression, JumboFrames")
+                        error("Unknown TEST_MARKERS: ${unknown.join(', ')}. Use GUI, IP, IPv4, IPv6, Regression, JumboFrames, ProcessMonitor")
                     }
 
                     def kParts = (params.TEST_FILTER ?: '').split(',')
                         .collect { it.trim() }
                         .findAll { it }
+                    // ProcessMonitor-only: do not apply GUI default -k filter.
+                    if (markers.contains('ProcessMonitor') && !markers.contains('GUI') && !markersIncludeIpSuite(markers)) {
+                        def guiDefault = ['Summary', 'TopPanel', 'WirelessProperties']
+                        if (kParts.isEmpty() || kParts == guiDefault || kParts == ['ProcessMonitor']) {
+                            kParts = []
+                        }
+                    }
                     def runIpCpe = params.RUN_IP_CPE ||
                         kParts.any { (it ?: '').trim().equalsIgnoreCase('cpe') }
                     def ipScope = runIpCpe ? 'IP_' : '(IP_ and bts)'
@@ -238,9 +257,21 @@ pipeline {
                     def remoteIP = (params['Remote IPv6 Address'] ?: '').trim()
                     def profileName = env.PROFILE_NAME ?: 'default'
                     def recoveryProfileName = params.RECOVERY_PROFILE_NAME
-                    def fallbackIp = (params.FALLBACK_IP ?: '10.0.0.1').trim()
+                    def markers = parseMarkerList(params.TEST_MARKERS)
+                    // ProcessMonitor talks to the BTS on its LAN-side mgmt IP only;
+                    // the WAN/factory 10.0.0.1 path is irrelevant for this suite.
+                    def procMonOnly = markers.contains('ProcessMonitor') &&
+                                      !markers.contains('GUI') &&
+                                      !markersIncludeIpSuite(markers) &&
+                                      !markers.contains('REGRESSION') &&
+                                      !markers.contains('JUMBOFRAMES')
+                    def fallbackIp = procMonOnly ? '192.168.2.1' : (params.FALLBACK_IP ?: '10.0.0.1').trim()
+                    if (procMonOnly && (params.FALLBACK_IP ?: '').trim() && (params.FALLBACK_IP ?: '').trim() != '192.168.2.1') {
+                        echo "[procmon] FALLBACK_IP=${params.FALLBACK_IP} overridden — ProcessMonitor always uses 192.168.2.1"
+                    }
                     def ipv6Local = localIP ? "--local-ipv6 \"${localIP}\"" : ''
                     def ipv6Remote = remoteIP ? "--remote-ipv6 \"${remoteIP}\"" : ''
+                    def localIpArg = markers.contains('ProcessMonitor') ? "--local-ip \"${fallbackIp}\"" : ''
 
                     sh '''
                         rm -f reports/artifacts/report.json reports/artifacts/ip_suite_progress.json \
@@ -260,6 +291,7 @@ pipeline {
                             --profile "${profileName}" \
                             --recovery-profile "${recoveryProfileName}" \
                             --fallback-ip "${fallbackIp}" \
+                            ${localIpArg} \
                             ${ipv6Local} \
                             ${ipv6Remote} \
                             ${env.TEST_EXTRA_FLAGS} \
@@ -341,14 +373,14 @@ pipeline {
                     <p><strong>Remote IPv6:</strong> ${params['Remote IPv6 Address'] ?: '(profile default)'}</p>
                     <p><strong>Profile:</strong> ${env.PROFILE_NAME ?: 'default'} (auto)</p>
                     <p><strong>Recovery profile:</strong> ${params.RECOVERY_PROFILE_NAME}</p>
-                    <p><strong>Destructive cases:</strong> enabled when IP / JumboFrames markers are selected</p>
+                    <p><strong>Destructive cases:</strong> enabled when IP / JumboFrames / ProcessMonitor markers are selected</p>
                 """
 
                 try {
                     senao.sendSenaoPipelineEmail([
                         subjectPrefix: 'UBR Validation',
                         reportTitle: 'Senao UBR Validation Execution Report',
-                        footerNote: 'Marker-driven GUI / IP / Regression / Jumbo suites',
+                        footerNote: 'Marker-driven GUI / IP / Regression / Jumbo / ProcessMonitor suites',
                         reportFile: hasReport ? htmlFile : '',
                         csvFile: fileExists(csvFile) ? csvFile : '',
                         detailsHtml: detailsHtml

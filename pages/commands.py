@@ -130,6 +130,24 @@ class RootCommands:
         return f"cat /sys/class/kwn/wifi{radio_idx}/statistics/links"
 
     @staticmethod
+    def get_link_stat_field(radio_idx, assoc_idx, field):
+        return (
+            f"cat /sys/class/kwn/wifi{radio_idx}/statistics/sua{assoc_idx}/{field} "
+            f"2>/dev/null || echo -"
+        )
+
+    @staticmethod
+    def get_link_stat_associd(radio_idx, assoc_idx):
+        return (
+            f"cat /sys/class/kwn/wifi{radio_idx}/statistics/sua{assoc_idx}/assoc "
+            f"2>/dev/null || echo 0"
+        )
+
+    @staticmethod
+    def get_wifi_events_log(radio_idx: int) -> str:
+        return f"cat /tmp/kwn-wifi{radio_idx}-events.log 2>/dev/null"
+
+    @staticmethod
     def get_encryption_key(radio_idx):
         return f"uci get wireless.@wifi-iface[{radio_idx}].key"
 
@@ -147,6 +165,23 @@ class RootCommands:
 
     # --- THROUGHPUT CONFIG COMMANDS ---
     @staticmethod
+    def mcs_ucidyn_set_commands(radio_idx, mcs_rate, spatial_stream, ddrs_rate):
+        """UCI set commands only — caller applies once via remote_exec broadcast."""
+        modulation_rate = ddrs_rate if ddrs_rate is not None else mcs_rate
+        return [
+            f"ucidyn set txparam.ath{radio_idx}.ddrsstatus 0",
+            f"ucidyn set txparam.ath{radio_idx}.spatialstream {spatial_stream}",
+            f"ucidyn set txparam.ath{radio_idx}.ddrsrate {modulation_rate}",
+        ]
+
+    @staticmethod
+    def set_mcs_sequence_commands(radio_idx, mcs_rate, spatial_stream, ddrs_rate):
+        """ddrs_rate should be the numeric UCI index (e.g. 23 for MCS23)."""
+        return RootCommands.mcs_ucidyn_set_commands(
+            radio_idx, mcs_rate, spatial_stream, ddrs_rate
+        ) + ["ucidyn apply"]
+
+    @staticmethod
     def set_bandwidth_commands(radio_idx, bandwidth):
         return [
             f"ucidyn set wireless.wifi{radio_idx}.htmode {bandwidth}",
@@ -154,13 +189,26 @@ class RootCommands:
         ]
 
     @staticmethod
-    def set_mcs_sequence_commands(radio_idx, mcs_rate, spatial_stream, ddrs_rate):
+    def set_dl_ul_ratio_commands(radio_idx, dl_ul_percent: str):
         return [
-            f"ucidyn set txparam.ath{radio_idx}.ddrsstatus 0",
-            f"ucidyn set txparam.ath{radio_idx}.spatialstream {spatial_stream}",
-            f"ucidyn set txparam.ath{radio_idx}.ddrsrate {ddrs_rate}",            
+            f"ucidyn set ath{radio_idx}qos.qoscfg.dlulratio {dl_ul_percent}",
             "ucidyn apply",
         ]
+
+    @staticmethod
+    def set_bandwidth_ratio_apply_commands(radio_idx, bandwidth, dl_ul_percent: str):
+        """Set htmode + DL:UL ratio, then single ucidyn apply (no remote_exec for BTS bw)."""
+        return [
+            f"ucidyn set wireless.wifi{radio_idx}.htmode {bandwidth}",
+            f"ucidyn set ath{radio_idx}qos.qoscfg.dlulratio {dl_ul_percent}",
+            "ucidyn apply",
+        ]
+
+    @staticmethod
+    def remote_exec_command(su_index: int, command: str) -> str:
+        """SET/apply on CPE via BTS RF path — do not use for UCI get / verification."""
+        safe = str(command).replace('"', '\\"')
+        return f'/usr/sbin/remote_exec.sh {su_index} "{safe}"'
 
     @staticmethod
     def remote_apply_all_su():
@@ -223,6 +271,12 @@ class RootCommands:
     GET_DEVICE_LOGS_REBOOT_GREP = "logread 2>/dev/null | grep -Ei 'reboot|kernel|boot' | tail -n 40"
     GET_TEMPERATURE_LOGS = "logread -e 'temp' 2>/dev/null | tail -n 120"
     GET_SYSTEM_LOGS = "logread 2>/dev/null | tail -n 200"
+
+    @staticmethod
+    def kickmac_command(radio_idx: int, mac: str) -> str:
+        """Disconnect one SU station from the BTS VAP (Atheros wlanconfig kickmac)."""
+        safe_mac = str(mac).strip().lower()
+        return f"wlanconfig ath{radio_idx} kickmac {safe_mac}"
 
     @staticmethod
     def emit_system_log_marker(marker: str):

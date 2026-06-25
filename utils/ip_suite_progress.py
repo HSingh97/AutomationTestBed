@@ -11,6 +11,7 @@ from pathlib import Path
 from prettytable import PrettyTable
 
 IP_SUITE_PROGRESS_PATH = Path("reports/artifacts/ip_suite_progress.json")
+PROC_PARTIAL_MARKER = "[PROC_PARTIAL]"
 
 # Any suite case id: IP_01, JMB_04, REG_12, ...
 _CASE_ID_RE = re.compile(r"([A-Z]{2,}_\d+)", re.I)
@@ -91,6 +92,7 @@ class IpSuiteProgress:
         eta_txt = _format_duration(eta_s)
 
         passed = sum(1 for r in self._rows if r.outcome == "PASSED")
+        partial = sum(1 for r in self._rows if r.outcome == "PARTIAL")
         failed = sum(1 for r in self._rows if r.outcome == "FAILED")
         skipped = sum(1 for r in self._rows if r.outcome == "SKIPPED")
         errors = sum(1 for r in self._rows if r.outcome == "ERROR")
@@ -115,7 +117,7 @@ class IpSuiteProgress:
 
         print(
             f"\n[suite] Progress {done}/{total} ({pct}%) | "
-            f"PASS {passed} FAIL {failed} SKIP {skipped} ERR {errors} | "
+            f"PASS {passed} PARTIAL {partial} FAIL {failed} SKIP {skipped} ERR {errors} | "
             f"elapsed {_format_duration(int(elapsed))} | ETA ~{eta_txt}\n"
         )
         print(table)
@@ -158,7 +160,12 @@ def outcome_from_report(report) -> str:
     if report.skipped:
         return "SKIPPED"
     if report.failed:
-        return "FAILED" if report.when == "call" else "ERROR"
+        if report.when != "call":
+            return "ERROR"
+        longrepr = str(getattr(report, "longrepr", "") or "")
+        if PROC_PARTIAL_MARKER in longrepr:
+            return "PARTIAL"
+        return "FAILED"
     if report.passed:
         return "PASSED"
     return "—"
