@@ -120,6 +120,15 @@ def _sanitize_model(raw_output: str) -> str:
     return "—"
 
 
+def _parse_ademodel(raw_output: str) -> str:
+    """Return ``/etc/ademodel`` content for report headers."""
+    scalar = ssh_scalar(raw_output).strip()
+    if scalar and scalar not in {"-", "—", "UNKNOWN", "unknown", "n/a", "N/A"}:
+        if re.fullmatch(r"[A-Za-z0-9._-]{3,40}", scalar):
+            return scalar
+    return _sanitize_model(raw_output)
+
+
 def _sanitize_fw(raw_output: str) -> str:
     text = str(raw_output or "")
     match = _FW_TOKEN_RE.search(text)
@@ -160,7 +169,7 @@ async def collect_device_summary(host: str, password: str, *, fallback_ip: str =
     try:
         model_raw = str((await ssh.send_command(RootCommands.GET_MODEL)).result or "")
         fw_raw = str((await ssh.send_command(RootCommands.GET_SW_VERSION)).result or "")
-        model = _sanitize_model(model_raw)
+        model = _parse_ademodel(model_raw)
         fw_version = _sanitize_fw(fw_raw)
         ip = ssh_scalar((await ssh.send_command(RootCommands.GET_IPv6)).result) or fallback_ip or host
         vlan = await asyncio.to_thread(fetch_vlan_label, host)
@@ -235,7 +244,8 @@ async def collect_testbed_summary(
         profile_ip = profile_hosts[index] if index < len(profile_hosts) else ""
         merged_hosts.append(sysfs_ip or profile_ip)
 
-    bts = await collect_device_summary(bts_host, password, fallback_ip=bts_host)
+    bts_ssh_target = str(bts_ssh_host or bts_host).strip()
+    bts = await collect_device_summary(bts_ssh_target, password, fallback_ip=bts_host)
 
     cpe_entries: list[dict[str, Any]] = []
     if merged_hosts:

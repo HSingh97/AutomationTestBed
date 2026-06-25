@@ -15,7 +15,7 @@ def _sample_record(*, bandwidth: str, mcs: str, rx: float, passed: bool = True, 
         "efficiency_factor": 0.7,
         "duration_s": 30,
         "stats": {
-            "combined": {"rx_mbps": rx},
+            "combined": {"rx_mbps": rx, "tx_mbps": rx * 1.05},
             "trex": {
                 "live_samples": [
                     {
@@ -35,6 +35,7 @@ def _sample_record(*, bandwidth: str, mcs: str, rx: float, passed: bool = True, 
                 {
                     "su_index": 1,
                     "ipv6": "2001:2002:2003:2004:2005:2006:2007:111b",
+                    "mac": "aa:bb:cc:dd:ee:01",
                     "system_name": "UBR650_CPE_3",
                     "r_model": "EOC650-C23",
                     "rx_rate": "258 (22)",
@@ -65,8 +66,10 @@ def test_enrich_matrix_payload_builds_coverage_cells():
     )
     assert len(payload["matrix_cells"]) == 2
     assert payload["matrix_cells"][0]["rx_mbps"] == 170.0
+    assert payload["matrix_cells"][0]["tx_mbps"] == 170.0 * 1.05
     assert payload["matrix_cells"][1]["skipped"] is True
     assert payload["link_devices"][0]["ip_display"].startswith("SU1")
+    assert payload["link_devices"][0]["mac"] == "aa:bb:cc:dd:ee:01"
     assert "BTS2001" in payload["testbed"]["bts"]["ip_display"]
 
 
@@ -77,6 +80,9 @@ def test_write_matrix_grafana_html_smoke(tmp_path: Path):
     html = out.read_text(encoding="utf-8")
     assert "Testbed summary" in html
     assert "Link stats" in html
+    assert "Rx MCS" not in html
+    assert "TX Mbps" in html
+    assert "aa:bb:cc:dd:ee:01" in html
     assert "cov-board" in html
     assert "Live throughput" in html
     assert "% target heatmap" not in html.lower()

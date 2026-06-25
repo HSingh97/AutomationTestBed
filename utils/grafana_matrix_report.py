@@ -58,17 +58,28 @@ def _testbed_devices(
 
     devices: list[dict[str, Any]] = []
     cpes = summary.get("cpes")
+    link_mac_by_su = {
+        int(client.get("su_index") or client.get("sua_index") or 0): str(client.get("mac") or "").strip()
+        for client in link_clients
+    }
     if isinstance(cpes, list) and cpes:
         for unit in cpes:
             label = str(unit.get("label") or f"SU{unit.get('su_index', len(devices) + 1)}")
+            su_index = int(unit.get("su_index") or len(devices) + 1)
             devices.append(
                 {
                     **unit,
                     "label": label,
+                    "su_index": su_index,
+                    "mac": str(unit.get("mac") or link_mac_by_su.get(su_index) or "—"),
                     "ip_display": format_mgmt_ipv6_display(label, str(unit.get("ip") or ""), prefix_len=prefix),
                 }
             )
     elif link_clients:
+        mac_by_su = {
+            int(client.get("su_index") or client.get("sua_index") or 0): str(client.get("mac") or "").strip()
+            for client in link_clients
+        }
         for client in link_clients:
             su_index = int(client.get("su_index") or client.get("sua_index") or len(devices) + 1)
             label = f"SU{su_index}"
@@ -81,7 +92,7 @@ def _testbed_devices(
                     "fw_version": "—",
                     "ip": ipv6 or "—",
                     "ip_display": format_mgmt_ipv6_display(label, ipv6, prefix_len=prefix),
-                    "sysname": str(client.get("system_name") or client.get("r_custname") or "—"),
+                    "mac": mac_by_su.get(su_index) or str(client.get("mac") or "—"),
                     "vlan": "—",
                     "qos": "—",
                 }
@@ -101,14 +112,12 @@ def _link_device_rows(link_clients: list[dict[str, Any]], *, prefix_len: int = 1
         rows.append(
             {
                 "label": label,
-                "sysname": str(client.get("system_name") or client.get("r_custname") or client.get("name") or "—"),
+                "mac": str(client.get("mac") or "—").strip() or "—",
                 "model": str(client.get("r_model") or "—"),
                 "serial": str(client.get("r_serialno") or "—"),
-                "mac": str(client.get("mac") or "—"),
                 "ip_display": format_mgmt_ipv6_display(label, ipv6, prefix_len=prefix_len),
                 "tx_rate": str(client.get("tx_rate") or client.get("out_rate") or "—"),
                 "rx_rate": str(client.get("rx_rate") or client.get("in_rate") or "—"),
-                "rx_mcs": str(client.get("rx_rate_mcs") or client.get("in_mcs") or client.get("operating_mcs") or "—"),
                 "snr": f"{client.get('r_snr1') or '—'}/{client.get('r_snr2') or '—'}",
                 "rssi": str(client.get("r_rssi1") or client.get("l_rssi1") or "—"),
             }
@@ -166,6 +175,7 @@ def _build_matrix_cells(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         stats = record.get("stats") or {}
         combined = stats.get("combined") or {}
         rx_mbps = 0.0 if skipped else float(combined.get("rx_mbps") or 0.0)
+        tx_mbps = 0.0 if skipped else float(combined.get("tx_mbps") or 0.0)
         target_mbps = _target_mbps_for_record(record)
         note = str(
             record.get("mcs_mismatch_note")
@@ -183,6 +193,7 @@ def _build_matrix_cells(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "tested": True,
                 "skipped": skipped,
                 "passed": bool(record.get("passed")),
+                "tx_mbps": tx_mbps,
                 "rx_mbps": rx_mbps,
                 "target_mbps": target_mbps,
                 "pct": _pct(rx_mbps, target_mbps) if not skipped else 0.0,
@@ -238,6 +249,7 @@ def enrich_matrix_payload(
             "bandwidth": cell["bandwidth"],
             "mcs": cell["mcs"],
             "passed": cell["passed"],
+            "tx_mbps": cell["tx_mbps"],
             "rx_mbps": cell["rx_mbps"],
             "target_mbps": cell["target_mbps"],
             "pct": cell["pct"],
@@ -310,7 +322,7 @@ def _render_testbed_table(data: dict[str, Any]) -> str:
             f"<td><strong>{_device_chip(label, is_bts=is_bts)}</strong></td>"
             f"<td>{escape(str(unit.get('model') or '—'))}</td>"
             f"<td>{escape(str(unit.get('fw_version') or '—'))}</td>"
-            f"<td>{escape(str(unit.get('sysname') or '—'))}</td>"
+            f"<td class='mono'>{escape(str(unit.get('mac') or '—'))}</td>"
             f"<td class='mono'>{escape(str(unit.get('ip_display') or unit.get('ip') or '—'))}</td>"
             f"<td>{escape(str(unit.get('vlan') or '—'))}</td>"
             f"<td>{escape(str(unit.get('qos') or '—'))}</td>"
@@ -321,7 +333,7 @@ def _render_testbed_table(data: dict[str, Any]) -> str:
       <table class="data-table testbed-table">
         <thead>
           <tr>
-            <th>Unit</th><th>Model</th><th>Firmware</th><th>Hostname</th>
+            <th>Unit</th><th>Model</th><th>Firmware</th><th>MAC</th>
             <th>Mgmt IPv6</th><th>VLAN</th><th>QoS</th>
           </tr>
         </thead>
@@ -339,12 +351,11 @@ def _render_link_table(link_devices: list[dict[str, Any]]) -> str:
         rows.append(
             f"<tr>"
             f"<td><strong>{escape(device['label'])}</strong></td>"
-            f"<td>{escape(device['sysname'])}</td>"
+            f"<td class='mono'>{escape(device['mac'])}</td>"
             f"<td>{escape(device['model'])}</td>"
             f"<td class='mono'>{escape(device['ip_display'])}</td>"
             f"<td>{escape(device['tx_rate'])}</td>"
             f"<td>{escape(device['rx_rate'])}</td>"
-            f"<td>{escape(device['rx_mcs'])}</td>"
             f"<td>{escape(device['snr'])}</td>"
             f"<td>{escape(device['rssi'])} dBm</td>"
             f"</tr>"
@@ -354,8 +365,8 @@ def _render_link_table(link_devices: list[dict[str, Any]]) -> str:
       <table class="data-table link-table">
         <thead>
           <tr>
-            <th>Unit</th><th>Hostname</th><th>Model</th><th>IPv6</th>
-            <th>Tx rate</th><th>Rx rate</th><th>Rx MCS</th><th>SNR</th><th>RSSI</th>
+            <th>Unit</th><th>MAC</th><th>Model</th><th>IPv6</th>
+            <th>Tx rate</th><th>Rx rate</th><th>SNR</th><th>RSSI</th>
           </tr>
         </thead>
         <tbody>{''.join(rows)}</tbody>
@@ -387,17 +398,20 @@ def _render_coverage_matrix(data: dict[str, Any]) -> str:
             else:
                 status = "fail"
             rx = float(cell.get("rx_mbps") or 0)
+            tx = float(cell.get("tx_mbps") or 0)
             pct = float(cell.get("pct") or 0)
             rx_label = "—" if cell.get("skipped") else f"{rx:.0f}"
+            tx_rx_label = "" if cell.get("skipped") else f"{tx:.0f} sent → {rx:.0f} got"
+            pct_label = "" if cell.get("skipped") else f"{pct:.0f}% of target"
             cell_html.append(
                 f"<button type='button' class='cov-card cov-{status}' "
                 f"data-iter-key='{cell['iter_key']}' "
                 f"style='--bw-color:{bw_colors.get(bw, '#94a3b8')}'>"
                 f"<span class='cov-icon'>{status_icon[status]}</span>"
                 f"<span class='cov-mcs'>{escape(mcs)}</span>"
-                f"<span class='cov-rx'>{rx_label}<small>Mbps</small></span>"
-                f"<span class='cov-pct'>{'' if cell.get('skipped') else f'{pct:.0f}% target'}</span>"
-                f"<span class='cov-cta'>View live chart</span>"
+                f"<span class='cov-rx'>{rx_label}<small>Mbps RX</small></span>"
+                f"<span class='cov-pct'>{tx_rx_label or '—'}</span>"
+                f"<span class='cov-cta'>{pct_label or 'View live chart'}</span>"
                 f"</button>"
             )
         rows_html.append(
@@ -922,6 +936,7 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
             f"class='{'row-skip' if cell.get('skipped') else 'row-pass' if cell.get('passed') else 'row-fail'}'>"
             f"<td><strong>{escape(cell['bandwidth'])}</strong></td>"
             f"<td>{escape(cell['mcs'])}</td>"
+            f"<td>{'—' if cell.get('skipped') else format(float(cell.get('tx_mbps') or 0), '.1f')}</td>"
             f"<td>{'—' if cell.get('skipped') else format(float(cell.get('rx_mbps') or 0), '.1f')}</td>"
             f"<td>{float(cell.get('target_mbps') or 0):.1f}</td>"
             f"<td>{_status_pill(status)}</td>"
@@ -1019,7 +1034,7 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
       <div class="table-scroll">
         <table class="data-table" id="iterLog">
           <thead>
-            <tr><th>BW</th><th>MCS</th><th>RX Mbps</th><th>Target</th><th>Status</th><th>Remarks</th></tr>
+            <tr><th>BW</th><th>MCS</th><th>TX Mbps</th><th>RX Mbps</th><th>Target</th><th>Status</th><th>Remarks</th></tr>
           </thead>
           <tbody>{''.join(iter_rows)}</tbody>
         </table>
@@ -1033,6 +1048,7 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
         str(cell["iter_key"]): {
             "bandwidth": cell["bandwidth"],
             "mcs": cell["mcs"],
+            "tx_mbps": cell["tx_mbps"],
             "rx_mbps": cell["rx_mbps"],
             "remark": cell["remark"],
             "skipped": cell["skipped"],
@@ -1097,7 +1113,8 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
       const meta = cellMeta[activeKey] || {{}};
       const series = seriesData[activeKey] || {{ labels: [], rx_mbps: [], loss_pct: [] }};
       document.getElementById('seriesTitle').textContent =
-        `${{meta.bandwidth || '—'}} · ${{meta.mcs || '—'}} · ${{meta.skipped ? 'skipped' : (meta.rx_mbps || 0).toFixed(1) + ' Mbps'}}`;
+        meta.skipped ? `${{meta.bandwidth || '—'}} · ${{meta.mcs || '—'}} · skipped` :
+        `${{meta.bandwidth || '—'}} · ${{meta.mcs || '—'}} · ${{(meta.tx_mbps || 0).toFixed(1)}} sent → ${{(meta.rx_mbps || 0).toFixed(1)}} Mbps got`;
       document.getElementById('seriesMeta').textContent =
         meta.skipped ? (meta.remark || 'TRex not run') :
         `${{series.labels.length}} live samples · loss from DUT avg_rtx or TX/RX PPS delta`;
