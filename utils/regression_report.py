@@ -11,6 +11,8 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+from utils.net_utils import format_mgmt_ipv6_display
+
 DEFAULT_REGRESSION_REPORT = Path("reports/artifacts/Regression_Report.html")
 DEFAULT_STATE_FILE = Path("reports/artifacts/regression_collector_state.json")
 
@@ -370,11 +372,13 @@ def _render_testbed_summary_table(summary: dict[str, Any]) -> str:
     bts = summary.get("bts", {}) if summary else {}
     cpe = summary.get("cpe", {}) if summary else {}
 
-    def cell(data: dict, key: str) -> str:
-        value = str(data.get(key, "—") or "—")
-        if key == "ip":
-            return f"<span class='ip-cell'>{escape(value)}</span>"
-        return escape(value)
+    def cell(data: dict, key: str, *, label: str) -> str:
+        return _summary_cell(
+            data,
+            key,
+            label=label,
+            prefix_len=int(summary.get("ipv6_prefix_len") or 120),
+        )
 
     rows = (
         ("Model", "model"),
@@ -390,8 +394,8 @@ def _render_testbed_summary_table(summary: dict[str, Any]) -> str:
             f"""
             <tr>
               <th class="row-label">{label}</th>
-              <td>{cell(bts, key)}</td>
-              <td>{cell(cpe, key)}</td>
+              <td>{cell(bts, key, label="BTS")}</td>
+              <td>{cell(cpe, key, label="CPE")}</td>
             </tr>
             """
         )
@@ -433,22 +437,20 @@ def _render_testbed_context_chips(summary: dict[str, Any]) -> str:
 
 def _device_header_cell(unit: dict[str, Any], *, default_label: str) -> str:
     label = str(unit.get("label") or default_label)
-    ip = str(unit.get("ip") or "").strip()
-    ip_line = (
-        f"<span class='device-ip'>{escape(ip)}</span>"
-        if ip and ip not in {"—", "-"}
-        else ""
-    )
-    return (
-        f"<span class='device-name'>{escape(label)}</span>"
-        f"{ip_line}"
-    )
+    return f"<span class='device-name'>{escape(label)}</span>"
 
 
-def _summary_cell(data: dict[str, Any], key: str) -> str:
+def _summary_cell(
+    data: dict,
+    key: str,
+    *,
+    label: str = "",
+    prefix_len: int = 120,
+) -> str:
     value = str(data.get(key, "—") or "—")
     if key == "ip":
-        return f"<span class='ip-cell'>{escape(value)}</span>"
+        display = format_mgmt_ipv6_display(label or str(data.get("label") or ""), value, prefix_len=prefix_len)
+        return f"<span class='ip-cell'>{escape(display)}</span>"
     return escape(value)
 
 
@@ -481,6 +483,7 @@ def _render_wide_testbed_table(
     if any(_is_populated_summary_value(unit.get("qos")) for _, unit in units):
         rows = (*rows, ("QOS", "qos"))
 
+    prefix_len = int(summary.get("ipv6_prefix_len") or 120)
     header_cells = "".join(
         f"<th class='device-head'>{_device_header_cell(unit, default_label=label)}</th>"
         for label, unit in units
@@ -488,7 +491,8 @@ def _render_wide_testbed_table(
     body_rows = []
     for row_label, key in rows:
         cells = "".join(
-            f"<td>{_summary_cell(unit, key)}</td>" for _, unit in units
+            f"<td>{_summary_cell(unit, key, label=label, prefix_len=prefix_len)}</td>"
+            for label, unit in units
         )
         body_rows.append(
             f"""
@@ -519,16 +523,10 @@ def _render_wide_testbed_table(
 
 
 def _render_unit_label_cell(label: str, unit: dict[str, Any]) -> str:
-    ip = str(unit.get("ip") or "").strip()
-    ip_line = (
-        f"<span class='device-ip'>{escape(ip)}</span>"
-        if ip and ip not in {"—", "-"}
-        else ""
-    )
     row_class = "bts-row" if label == "BTS" else ""
     return (
         f"<td class='unit-label-cell {row_class}'>"
-        f"<span class='device-name'>{escape(label)}</span>{ip_line}</td>"
+        f"<span class='device-name'>{escape(label)}</span></td>"
     )
 
 
@@ -552,11 +550,13 @@ def _render_vertical_testbed_table(
     if include_qos:
         columns = (*columns, ("QOS", "qos"))
 
+    prefix_len = int(summary.get("ipv6_prefix_len") or 120)
     header_cells = "".join(f"<th>{label}</th>" for label, _ in columns)
     body_rows = []
     for label, unit in units:
         cells = "".join(
-            f"<td>{_summary_cell(unit, key)}</td>" for _, key in columns
+            f"<td>{_summary_cell(unit, key, label=label, prefix_len=prefix_len)}</td>"
+            for _, key in columns
         )
         body_rows.append(
             f"""

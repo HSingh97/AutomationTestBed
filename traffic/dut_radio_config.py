@@ -9,7 +9,15 @@ import time
 import re
 
 from pages.commands import RootCommands
-from traffic.operating_rate_table import lookup_spec, mcs_number, normalize_bandwidth, uci_htmode_matches, uci_htmode_value
+from traffic.operating_rate_table import (
+    lookup_spec,
+    mcs_number,
+    modulation_scheme,
+    normalize_bandwidth,
+    operating_rate_mbps,
+    uci_htmode_matches,
+    uci_htmode_value,
+)
 from traffic.kwn_sua_statistics import is_sua_associated, read_operating_mcs_by_sua_slot
 from utils.net_utils import format_ssh_host, is_ipv6_literal, normalize_ip
 
@@ -925,14 +933,26 @@ def print_mcs_device_matrix(
     *,
     mcs_rate: str,
     phase: str = "",
+    bandwidth: str = "HT80",
+    spatial_stream: str = "2",
 ) -> None:
     """Jenkins-friendly table: BTS UCI MCS + per-SU operating rx_rate_mcs."""
     expected = str(mcs_number(mcs_rate))
+    modulation = modulation_scheme(mcs_rate)
+    try:
+        sheet_rate = operating_rate_mbps(bandwidth, mcs_rate, spatial_streams=int(spatial_stream))
+    except (TypeError, ValueError):
+        sheet_rate = 0.0
     before_apply = phase in {"skip-check", "before-apply", "pre-apply"}
     if before_apply:
-        title = f"[MCS] CURRENT MCS STATE (before apply) — target {mcs_rate} (index {expected})"
+        title = (
+            f"[MCS] CURRENT MCS STATE (before apply) — target {mcs_rate} "
+            f"({modulation}, {sheet_rate:.0f} Mbps)"
+        )
     else:
-        title = f"[MCS] DEVICE MCS STATUS — target {mcs_rate} (index {expected})"
+        title = (
+            f"[MCS] DEVICE MCS STATUS — target {mcs_rate} ({modulation}, {sheet_rate:.0f} Mbps)"
+        )
         if phase:
             title += f" [{phase}]"
     print(title)
@@ -1205,7 +1225,8 @@ def verify_mcs_all_devices(
     phase: str = "",
 ) -> dict[str, object]:
     """Confirm BTS UCI MCS and every SU operating MCS via BTS sysfs ``rx_rate_mcs``."""
-    del cpe_radio_idx, prefer_cpe_via_bts, snmp_community, snmp_radio_idx, bandwidth, cpe_hosts
+    del cpe_radio_idx, prefer_cpe_via_bts, snmp_community, snmp_radio_idx, cpe_hosts
+    display_bandwidth = bandwidth
     expected_mcs = str(mcs_number(mcs_rate))
     before_apply = phase in {"skip-check", "before-apply", "pre-apply"}
 
@@ -1243,7 +1264,13 @@ def verify_mcs_all_devices(
             ssh_timeout_s=ssh_timeout_s,
         )
 
-    print_mcs_device_matrix(checks, mcs_rate=mcs_rate, phase=phase or "verify")
+    print_mcs_device_matrix(
+        checks,
+        mcs_rate=mcs_rate,
+        phase=phase or "verify",
+        bandwidth=display_bandwidth,
+        spatial_stream=spatial_stream,
+    )
 
     all_ok = all(bool(row.get("ok")) for row in checks)
     if before_apply:
@@ -1948,10 +1975,11 @@ def configure_mcs_profile(
             for row in (mcs_report.get("checks") or [])
             if not row.get("ok")
         ]
-        mcs_report["error"] = (
-            f"MCS config mismatch — not all devices have {mcs_rate}: {', '.join(bad)}"
+        mcs_report["mcs_mismatch_note"] = (
+            f"MCS mismatch on {', '.join(bad)} — throughput will still run"
         )
-        print(f"[ERROR] {mcs_report['error']}")
+        mcs_report["error"] = mcs_report["mcs_mismatch_note"]
+        print(f"[WARN] {mcs_report['mcs_mismatch_note']}")
         return mcs_report
 
     mcs_report["bandwidth_skipped"] = False
@@ -2167,10 +2195,11 @@ def configure_radio_profile(
             for row in (mcs_report.get("checks") or [])
             if not row.get("ok")
         ]
-        mcs_report["error"] = (
-            f"MCS config mismatch — not all devices have {mcs_rate}: {', '.join(bad)}"
+        mcs_report["mcs_mismatch_note"] = (
+            f"MCS mismatch on {', '.join(bad)} — throughput will still run"
         )
-        print(f"[ERROR] {mcs_report['error']}")
+        mcs_report["error"] = mcs_report["mcs_mismatch_note"]
+        print(f"[WARN] {mcs_report['mcs_mismatch_note']}")
         return mcs_report
 
     time.sleep(effective_settle)

@@ -291,17 +291,23 @@ def _mcs_display_cell(record: dict[str, Any], mcs_raw: str) -> str:
     if not num or num in {"—", "?", "-"}:
         return "—"
     mcs_label = f"MCS{num}"
+    bandwidth = str(record.get("bandwidth") or "HT80")
+    spatial = int(record.get("spatial_stream") or 2)
+    rate_mbps: float | None = None
     try:
         modulation = modulation_scheme(f"MCS{num}")
+        spec = lookup_spec(f"MCS{num}", bandwidth, spatial_streams=spatial)
+        rate_mbps = float(spec.get("operating_rate_mbps") or 0) or None
     except (TypeError, ValueError):
         link = record.get("link_validation") or {}
         modulation = str((link.get("spec") or {}).get("modulation") or "")
+        rate_mbps = float(record.get("operating_rate_mbps") or 0) or None
+    parts = [f"<span class='mcs-label'>{escape(mcs_label)}</span>"]
     if modulation:
-        return (
-            f"<span class='mcs-label'>{escape(mcs_label)}</span>"
-            f"<br/><span class='modulation'>{escape(modulation)}</span>"
-        )
-    return f"<span class='mcs-label'>{escape(mcs_label)}</span>"
+        parts.append(f"<br/><span class='modulation'>{escape(modulation)}</span>")
+    if rate_mbps:
+        parts.append(f"<br/><span class='modulation'>{rate_mbps:.0f} Mbps</span>")
+    return "".join(parts) if len(parts) > 1 else parts[0]
 
 
 def _record_mcs_group_cell(record: dict[str, Any], row: dict[str, Any]) -> str:
@@ -533,6 +539,21 @@ def _render_report_javascript() -> str:
     """
 
 
+def _record_remarks_cell(record: dict[str, Any]) -> str:
+    if record.get("skipped_trex"):
+        text = str(record.get("error") or "Skipped")[:120]
+        return escape(text)
+    badge = _result_badge(record)
+    note = str(
+        record.get("mcs_mismatch_note")
+        or (record.get("mcs_config") or {}).get("mcs_mismatch_note")
+        or ""
+    ).strip()
+    if note:
+        return f"{badge}<br/><span class='modulation'>{escape(note[:120])}</span>"
+    return badge
+
+
 def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
     """Sheet-style matrix: CPE rows per MCS, shared columns rowspan."""
     if not records:
@@ -565,7 +586,7 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
             remarks = escape(row["error"][:120] if row["error"] else "Skipped")
         else:
             total_cell = _throughput_cell(row["bidi_mbps"], row["bidi_target"])
-            remarks = _result_badge(record)
+            remarks = _record_remarks_cell(record)
 
         for idx, unit in enumerate(units):
             shared = ""

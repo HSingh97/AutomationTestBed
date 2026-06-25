@@ -10,7 +10,8 @@ from typing import Any
 
 from pages.commands import RootCommands
 from scrapli.driver.generic import AsyncGenericDriver
-from utils.net_utils import format_snmp_host
+from traffic.kwn_sua_statistics import read_operating_mcs_by_sua_slot, resolve_sua_display_ip
+from utils.net_utils import format_snmp_host, normalize_ip
 from utils.parsers import clean_ssh_output, ssh_scalar
 
 SNMP_COMMUNITY = "ubr@rw123"
@@ -175,26 +176,89 @@ async def collect_device_summary(host: str, password: str, *, fallback_ip: str =
         await _close_ssh(ssh)
 
 
+def fetch_su_ipv6_from_bts_sysfs(
+    bts_ssh_ip: str,
+    password: str,
+    *,
+    su_count: int,
+    ssh_user: str = "root",
+) -> list[str]:
+    """Live SU mgmt IPv6 from BTS ``/sys/class/kwn/sua{N}/statistics/ipv6``."""
+    slots = read_operating_mcs_by_sua_slot(
+        bts_ssh_ip,
+        ssh_user=ssh_user,
+        ssh_password=password,
+        max_sua=max(su_count, 1),
+    )
+    hosts: list[str] = []
+    for su_index in range(1, su_count + 1):
+        slot = slots.get(su_index, {})
+        ip = resolve_sua_display_ip(
+            ipv4=str(slot.get("ip") or ""),
+            ipv6=str(slot.get("ipv6") or ""),
+        )
+        hosts.append(normalize_ip(ip) if ip and ip != "-" else "")
+    return hosts
+
+
 async def collect_testbed_summary(
     bts_host: str,
     cpe_hosts: list[str],
     password: str,
+    *,
+    bts_ssh_host: str | None = None,
+    ipv6_prefix_len: int = 120,
+    su_count: int | None = None,
 ) -> dict[str, Any]:
-    hosts = [str(h).strip() for h in cpe_hosts if str(h).strip()]
+    profile_hosts = [str(h).strip() for h in cpe_hosts if str(h).strip()]
+    sysfs_hosts: list[str] = []
+    effective_count = su_count or len(profile_hosts) or 1
+    if bts_ssh_host and password:
+        try:
+            sysfs_hosts = await asyncio.to_thread(
+                fetch_su_ipv6_from_bts_sysfs,
+                bts_ssh_host,
+                password,
+                su_count=effective_count,
+            )
+            if any(sysfs_hosts):
+                print(
+                    f"[testbed] SU IPv6 from BTS sysfs: "
+                    f"{sum(1 for ip in sysfs_hosts if ip)}/{effective_count}"
+                )
+        except Exception as exc:
+            print(f"[testbed] WARN sysfs SU IPv6 read failed: {exc}")
+
+    merged_hosts: list[str] = []
+    for index in range(effective_count):
+        sysfs_ip = sysfs_hosts[index] if index < len(sysfs_hosts) else ""
+        profile_ip = profile_hosts[index] if index < len(profile_hosts) else ""
+        merged_hosts.append(sysfs_ip or profile_ip)
+
     bts = await collect_device_summary(bts_host, password, fallback_ip=bts_host)
 
     cpe_entries: list[dict[str, Any]] = []
-    if hosts:
+    if merged_hosts:
+        async def _summary_for_host(host: str) -> DeviceSummary | Exception:
+            if not host:
+                return DeviceSummary(ip="—")
+            try:
+                return await collect_device_summary(host, password, fallback_ip=host)
+            except Exception as exc:
+                return exc
+
         results = await asyncio.gather(
-            *[collect_device_summary(host, password, fallback_ip=host) for host in hosts],
-            return_exceptions=True,
+            *[_summary_for_host(host) for host in merged_hosts],
         )
-        for index, (host, result) in enumerate(zip(hosts, results), start=1):
+        for index, (host, result) in enumerate(zip(merged_hosts, results), start=1):
+            sysfs_ip = sysfs_hosts[index - 1] if index - 1 < len(sysfs_hosts) else ""
             if isinstance(result, Exception):
-                print(f"[testbed] SU{index} summary unavailable ({host}): {result}")
-                device = DeviceSummary(ip=host)
+                print(f"[testbed] SU{index} summary unavailable ({host or 'no-ip'}): {result}")
+                device = DeviceSummary(ip=sysfs_ip or host or "—")
             else:
                 device = result
+                if sysfs_ip:
+                    device.ip = sysfs_ip
             cpe_entries.append(
                 {
                     "label": f"SU{index}",
@@ -214,4 +278,5 @@ async def collect_testbed_summary(
         "cpe": legacy_cpe,
         "cpes": cpe_entries,
         "su_count": len(cpe_entries),
+        "ipv6_prefix_len": ipv6_prefix_len,
     }

@@ -77,6 +77,32 @@ def test_html_report_includes_bandwidth_filter_controls(tmp_path):
     assert "applyFilter('all')" in html
 
 
+def test_mcs_display_cell_includes_operating_rate():
+    from utils.performance_report import _mcs_display_cell
+
+    record = {
+        "bandwidth": "HT80",
+        "spatial_stream": 2,
+        "mcs": "MCS23",
+    }
+    html = _mcs_display_cell(record, "23")
+    assert "MCS23" in html
+    assert "1024-QAM" in html
+    assert "Mbps" in html
+
+
+def test_record_remarks_include_mcs_mismatch_note():
+    from utils.performance_report import _record_remarks_cell
+
+    html = _record_remarks_cell(
+        {
+            "passed": True,
+            "mcs_mismatch_note": "MCS mismatch on SU3 — throughput ran anyway",
+        }
+    )
+    assert "MCS mismatch on SU3" in html
+
+
 def test_testbed_summary_renders_one_column_per_su():
     summary = {
         "stand": "test-qa-lab-02",

@@ -1,6 +1,27 @@
 from traffic.performance_matrix import _print_matrix_console_table
 
 
+def test_print_matrix_console_table_shows_mismatch_but_ran(capsys):
+    records = [
+        {
+            "bandwidth": "HT20",
+            "mcs": "MCS22",
+            "passed": True,
+            "mcs_config": {"mcs_config_ok": False, "checks": [
+                {"role": "BTS", "actual_mcs": "22"},
+                {"role": "CPE", "actual_mcs": "23"},
+            ]},
+            "mcs_mismatch_note": "MCS mismatch on SU1 — throughput ran anyway",
+            "stats": {"combined": {"rx_mbps": 500.0}},
+        },
+    ]
+    _print_matrix_console_table(records, bandwidths=["HT20"], mcs_rates=["MCS22"])
+    output = capsys.readouterr().out
+    assert "MISMATCH" in output
+    assert "PASS" in output
+    assert "MCS mismatch" in output
+
+
 def test_print_matrix_console_table_smoke(capsys):
     records = [
         {

@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>UBR Performance Report #84</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg0: #f8fafc;
+      --bg1: #f1f5f9;
+      --panel: #ffffff;
+      --panel-border: #e2e8f0;
+      --text: #0f172a;
+      --muted: #64748b;
+      --accent: #2563eb;
+      --accent2: #4f46e5;
+      --ok: #059669;
+      --warn: #d97706;
+      --bad: #dc2626;
+      --shadow: 0 4px 24px rgba(15, 23, 42, 0.06);
+      --radius: 14px;
+      --radius-sm: 10px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: "Plus Jakarta Sans", Inter, system-ui, sans-serif;
+      color: var(--text);
+      min-height: 100vh;
+      background: linear-gradient(180deg, var(--bg0), var(--bg1));
+    }
+    .hero {
+      position: relative;
+      padding: 28px 28px 24px;
+      border-bottom: 1px solid var(--panel-border);
+      background: linear-gradient(135deg, #ffffff 0%, #eff6ff 55%, #e0e7ff 100%);
+      overflow: hidden;
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      right: -60px;
+      top: -60px;
+      width: 220px;
+      height: 220px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(37,99,235,0.08), transparent 68%);
+      pointer-events: none;
+    }
+    .hero-inner {
+      max-width: 1680px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 24px;
+      flex-wrap: wrap;
+      position: relative;
+      z-index: 1;
+    }
+    .hero-brand {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+    .hero-mark {
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      font-size: 14px;
+      letter-spacing: 0.04em;
+      color: #1d4ed8;
+      background: #ffffff;
+      border: 1px solid #bfdbfe;
+      box-shadow: 0 2px 8px rgba(37,99,235,0.12);
+    }
+    .hero-eyebrow {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .hero h1 {
+      margin: 4px 0 0;
+      font-size: clamp(28px, 4vw, 38px);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.05;
+      color: var(--text);
+    }
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .meta-chip {
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #334155;
+      background: #ffffff;
+      border: 1px solid var(--panel-border);
+    }
+    .hero-status {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 10px;
+    }
+    .hero-badge {
+      padding: 12px 18px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 700;
+      background: #ffffff;
+      border: 1px solid var(--panel-border);
+      box-shadow: var(--shadow);
+    }
+    .hero-badge.ok { border-color: #6ee7b7; color: #047857; background: #ecfdf5; }
+    .hero-badge.warn { border-color: #fcd34d; color: #b45309; background: #fffbeb; }
+    .hero-badge.bad { border-color: #fca5a5; color: #b91c1c; background: #fef2f2; }
+    .hero-time { font-size: 12px; color: var(--muted); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 18px;
+      padding: 22px 18px 40px;
+      max-width: 1680px;
+      margin: 0 auto;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius);
+      padding: 20px 22px;
+      box-shadow: var(--shadow);
+    }
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .panel h2 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #475569;
+    }
+    .panel-desc {
+      margin: 6px 0 0;
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--muted);
+      max-width: 62ch;
+    }
+    .span-12 { grid-column: span 12; }
+
+    .device-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .device-chip .chip-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .device-chip.bts { color: #b45309; background: #fffbeb; border: 1px solid #fde68a; }
+    .device-chip.su { color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .kpi-card {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      padding: 16px 18px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--panel-border);
+      background: #f8fafc;
+    }
+    .kpi-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      font-size: 18px;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+    }
+    .kpi-card.accent-ok .kpi-icon { background: #ecfdf5; border-color: #6ee7b7; }
+    .kpi-card.accent-warn .kpi-icon { background: #fffbeb; border-color: #fcd34d; }
+    .kpi-card.accent-bad .kpi-icon { background: #fef2f2; border-color: #fca5a5; }
+    .kpi-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-weight: 700; }
+    .kpi-value {
+      margin-top: 4px;
+      font-size: 30px;
+      line-height: 1;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: var(--text);
+    }
+    .kpi-value span { font-size: 14px; color: var(--muted); font-weight: 600; margin-left: 4px; }
+    .kpi-sub { margin-top: 6px; font-size: 12px; color: var(--muted); }
+
+    .cov-board { display: grid; gap: 12px; }
+    .cov-row {
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 12px;
+      align-items: stretch;
+    }
+    .cov-bw-label {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      color: var(--bw-color);
+      background: color-mix(in srgb, var(--bw-color) 10%, white);
+      border: 1px solid color-mix(in srgb, var(--bw-color) 25%, white);
+    }
+    .cov-row-cells {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 10px;
+    }
+    .cov-card {
+      appearance: none;
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 14px 12px;
+      min-height: 128px;
+      background: #ffffff;
+      color: var(--text);
+      cursor: pointer;
+      text-align: left;
+      display: grid;
+      gap: 4px;
+      position: relative;
+      overflow: hidden;
+      transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+    }
+    .cov-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 4px;
+      background: var(--bw-color);
+      opacity: 0.85;
+    }
+    .cov-card:hover, .cov-card.selected {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(15,23,42,0.08);
+      border-color: color-mix(in srgb, var(--bw-color) 35%, #e2e8f0);
+    }
+    .cov-card.selected { outline: 2px solid color-mix(in srgb, var(--bw-color) 40%, transparent); outline-offset: 1px; }
+    .cov-card.cov-pass { background: linear-gradient(180deg, #ecfdf5, #ffffff); }
+    .cov-card.cov-fail { background: linear-gradient(180deg, #fef2f2, #ffffff); }
+    .cov-card.cov-skip { background: linear-gradient(180deg, #fffbeb, #ffffff); }
+    .cov-card.cov-empty { opacity: 0.5; cursor: default; display: grid; place-items: center; color: var(--muted); }
+    .cov-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 800;
+      background: #f1f5f9;
+      border: 1px solid var(--panel-border);
+    }
+    .cov-mcs { font-size: 13px; font-weight: 800; letter-spacing: 0.04em; }
+    .cov-rx { font-size: 24px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; }
+    .cov-rx small { font-size: 11px; color: var(--muted); font-weight: 700; margin-left: 4px; }
+    .cov-pct { font-size: 11px; color: var(--muted); font-weight: 600; }
+    .cov-cta {
+      margin-top: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent);
+      opacity: 0;
+      transform: translateY(4px);
+      transition: opacity .16s ease, transform .16s ease;
+    }
+    .cov-card:hover .cov-cta, .cov-card.selected .cov-cta { opacity: 1; transform: translateY(0); }
+    .cov-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin-top: 14px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .cov-legend i.lg {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      margin-right: 6px;
+      vertical-align: -1px;
+    }
+    i.lg.pass { background: var(--ok); }
+    i.lg.fail { background: var(--bad); }
+    i.lg.skip { background: var(--warn); }
+    i.lg.empty { background: #94a3b8; }
+
+    .chart-panel {
+      padding: 0;
+      overflow: hidden;
+    }
+    .chart-head {
+      padding: 20px 22px 0;
+    }
+    .series-title { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; color: var(--text); }
+    .series-meta { font-size: 13px; color: var(--muted); margin-top: 6px; }
+    .chart-wrap {
+      padding: 8px 18px 22px;
+      min-height: 320px;
+      background: #f8fafc;
+    }
+
+    .table-scroll { overflow: auto; border-radius: var(--radius-sm); border: 1px solid var(--panel-border); }
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      background: #ffffff;
+    }
+    table.data-table th, table.data-table td {
+      padding: 11px 14px;
+      border-bottom: 1px solid #f1f5f9;
+      text-align: left;
+      vertical-align: middle;
+    }
+    table.data-table td.mono {
+      font-family: ui-monospace, "Cascadia Code", monospace;
+      font-size: 12px;
+      color: #334155;
+      word-break: break-all;
+      white-space: normal;
+      max-width: 280px;
+    }
+    table.data-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #f8fafc;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--panel-border);
+      white-space: nowrap;
+    }
+    table.data-table tbody tr:hover { background: #f8fafc; }
+    table.data-table tbody tr.row-bts { background: #fffbeb; }
+    table.data-table tbody tr.row-bts:hover { background: #fef3c7; }
+    table.data-table tbody tr.row-pass { box-shadow: inset 3px 0 0 #34d399; }
+    table.data-table tbody tr.row-fail { box-shadow: inset 3px 0 0 #f87171; }
+    table.data-table tbody tr.row-skip { box-shadow: inset 3px 0 0 #fbbf24; }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .pill.pass { color: #047857; background: #ecfdf5; border: 1px solid #6ee7b7; }
+    .pill.fail { color: #b91c1c; background: #fef2f2; border: 1px solid #fca5a5; }
+    .pill.skip { color: #b45309; background: #fffbeb; border: 1px solid #fcd34d; }
+    .pill.neutral { color: #475569; background: #f1f5f9; border: 1px solid #e2e8f0; }
+
+    .empty-note {
+      margin: 0;
+      padding: 18px;
+      border-radius: var(--radius-sm);
+      border: 1px dashed #cbd5e1;
+      color: var(--muted);
+      background: #f8fafc;
+      font-size: 13px;
+    }
+
+    @media (max-width: 1100px) {
+      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .cov-row { grid-template-columns: 1fr; }
+      .cov-bw-label { min-height: 36px; }
+    }
+    @media (max-width: 720px) {
+      .kpi-grid { grid-template-columns: 1fr; }
+      .hero-status { align-items: flex-start; }
+    }
+
+</style>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <div>
+        <div class="hero-brand">
+          <div class="hero-mark">UBR</div>
+          <div>
+            <div class="hero-eyebrow">Throughput matrix report</div>
+            <h1>Performance Run #84</h1>
+          </div>
+        </div>
+        <div class="hero-meta">
+          <span class="meta-chip">test-qa-lab-02</span>
+          <span class="meta-chip">qa_lab_02</span>
+          <span class="meta-chip">6 test cells</span>
+        </div>
+      </div>
+      <div class="hero-status">
+        <div class="hero-badge ok">4/4 TRex passed</div>
+        <div class="hero-time">2026-06-25 · 11:28:46.826168</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section class="panel span-12">
+      <div class="panel-head">
+        <div>
+          <h2>Testbed summary</h2>
+          <p class="panel-desc">BTS and SU inventory — model, firmware, hostname, and management IPv6 (/120).</p>
+        </div>
+      </div>
+      
+    <div class="table-scroll">
+      <table class="data-table testbed-table">
+        <thead>
+          <tr>
+            <th>Unit</th><th>Model</th><th>Firmware</th><th>Hostname</th>
+            <th>Mgmt IPv6</th><th>VLAN</th><th>QoS</th>
+          </tr>
+        </thead>
+        <tbody><tr class=''><td><strong><span class="device-chip su"><span class="chip-dot"></span>SU1</span></strong></td><td>EOC650-C23</td><td>—</td><td>UBR650_CPE_3</td><td class='mono'>SU12001:2002:2003:2004:2005:2006:2007:111b/120</td><td>—</td><td>—</td></tr><tr class=''><td><strong><span class="device-chip su"><span class="chip-dot"></span>SU2</span></strong></td><td>EOC650-C23</td><td>—</td><td>UBR650_CPE_5</td><td class='mono'>SU22001:2002:2003:2004:2005:2006:2007:11c9/120</td><td>—</td><td>—</td></tr><tr class=''><td><strong><span class="device-chip su"><span class="chip-dot"></span>SU3</span></strong></td><td>EOC650-C23</td><td>—</td><td>UBR650_CPE_1</td><td class='mono'>SU32001:2002:2003:2004:2005:2006:2007:1186/120</td><td>—</td><td>—</td></tr><tr class=''><td><strong><span class="device-chip su"><span class="chip-dot"></span>SU4</span></strong></td><td>EOC650-C23</td><td>—</td><td>UBR650_CPE-2</td><td class='mono'>SU42001:2002:2003:2004:2005:2006:2007:1144/120</td><td>—</td><td>—</td></tr><tr class=''><td><strong><span class="device-chip su"><span class="chip-dot"></span>SU5</span></strong></td><td>EOC650-C23</td><td>—</td><td>UBR650_CPE_4</td><td class='mono'>SU52001:2002:2003:2004:2005:2006:2007:1178/120</td><td>—</td><td>—</td></tr><tr class=''><td><strong><span class="device-chip su"><span class="chip-dot"></span>SU6</span></strong></td><td>EOC650-C23</td><td>—</td><td>UBR650_SU_6</td><td class='mono'>SU62001:2002:2003:2004:2005:2006:2007:118b/120</td><td>—</td><td>—</td></tr></tbody>
+      </table>
+    </div>
+    
+    </section>
+
+    <section class="panel span-12">
+      <div class="panel-head">
+        <div>
+          <h2>Link stats</h2>
+          <p class="panel-desc">Live RF snapshot from BTS KWN sysfs during the reference iteration.</p>
+        </div>
+      </div>
+      
+    <div class="table-scroll">
+      <table class="data-table link-table">
+        <thead>
+          <tr>
+            <th>Unit</th><th>Hostname</th><th>Model</th><th>IPv6</th>
+            <th>Tx rate</th><th>Rx rate</th><th>Rx MCS</th><th>SNR</th><th>RSSI</th>
+          </tr>
+        </thead>
+        <tbody><tr><td><strong>SU1</strong></td><td>UBR650_CPE_3</td><td>EOC650-C23</td><td class='mono'>SU12001:2002:2003:2004:2005:2006:2007:111b/120</td><td>573 (23)</td><td>573 (23)</td><td>23</td><td>58/51</td><td>-56 dBm</td></tr><tr><td><strong>SU2</strong></td><td>UBR650_CPE_5</td><td>EOC650-C23</td><td class='mono'>SU22001:2002:2003:2004:2005:2006:2007:11c9/120</td><td>573 (23)</td><td>573 (23)</td><td>23</td><td>64/61</td><td>-62 dBm</td></tr><tr><td><strong>SU3</strong></td><td>UBR650_CPE_1</td><td>EOC650-C23</td><td class='mono'>SU32001:2002:2003:2004:2005:2006:2007:1186/120</td><td>573 (23)</td><td>573 (23)</td><td>23</td><td>63/61</td><td>-61 dBm</td></tr><tr><td><strong>SU4</strong></td><td>UBR650_CPE-2</td><td>EOC650-C23</td><td class='mono'>SU42001:2002:2003:2004:2005:2006:2007:1144/120</td><td>573 (23)</td><td>573 (23)</td><td>23</td><td>52/65</td><td>-61 dBm</td></tr><tr><td><strong>SU5</strong></td><td>UBR650_CPE_4</td><td>EOC650-C23</td><td class='mono'>SU52001:2002:2003:2004:2005:2006:2007:1178/120</td><td>573 (23)</td><td>573 (23)</td><td>23</td><td>54/60</td><td>-57 dBm</td></tr><tr><td><strong>SU6</strong></td><td>UBR650_SU_6</td><td>EOC650-C23</td><td class='mono'>SU62001:2002:2003:2004:2005:2006:2007:118b/120</td><td>573 (23)</td><td>573 (23)</td><td>23</td><td>58/54</td><td>-56 dBm</td></tr></tbody>
+      </table>
+    </div>
+    
+    </section>
+
+    <section class="panel span-12">
+      
+    <div class="kpi-grid">
+      <article class="kpi-card accent-ok">
+        <div class="kpi-icon">◎</div>
+        <div class="kpi-body">
+          <div class="kpi-label">Matrix pass rate</div>
+          <div class="kpi-value">4<span>/ 4</span></div>
+          <div class="kpi-sub">TRex iterations executed</div>
+        </div>
+      </article>
+      <article class="kpi-card accent-ok">
+        <div class="kpi-icon">⚡</div>
+        <div class="kpi-body">
+          <div class="kpi-label">Peak throughput</div>
+          <div class="kpi-value">359<span>Mbps</span></div>
+          <div class="kpi-sub">Best on HT40</div>
+        </div>
+      </article>
+      <article class="kpi-card accent-ok">
+        <div class="kpi-icon">⬡</div>
+        <div class="kpi-body">
+          <div class="kpi-label">Connected SUs</div>
+          <div class="kpi-value">6</div>
+          <div class="kpi-sub">Live link snapshot</div>
+        </div>
+      </article>
+      <article class="kpi-card accent-neutral">
+        <div class="kpi-icon">▦</div>
+        <div class="kpi-body">
+          <div class="kpi-label">Coverage</div>
+          <div class="kpi-value">6<span>cells</span></div>
+          <div class="kpi-sub">MCS22 × MCS23</div>
+        </div>
+      </article>
+    </div>
+    
+    </section>
+
+    <section class="panel span-12">
+      <div class="panel-head">
+        <div>
+          <h2>Coverage matrix</h2>
+          <p class="panel-desc">Bandwidth × MCS cells executed in this run. Click a card to plot throughput and loss over time.</p>
+        </div>
+      </div>
+      
+    <div class="cov-board" id="coverageMatrix">
+      <div class='cov-row'><div class='cov-bw-label' style='--bw-color:#34d399'>HT20</div><div class='cov-row-cells'><button type='button' class='cov-card cov-pass' data-iter-key='0' style='--bw-color:#34d399'><span class='cov-icon'>✓</span><span class='cov-mcs'>MCS22</span><span class='cov-rx'>171<small>Mbps</small></span><span class='cov-pct'>95% target</span><span class='cov-cta'>View live chart</span></button><button type='button' class='cov-card cov-pass' data-iter-key='1' style='--bw-color:#34d399'><span class='cov-icon'>✓</span><span class='cov-mcs'>MCS23</span><span class='cov-rx'>186<small>Mbps</small></span><span class='cov-pct'>93% target</span><span class='cov-cta'>View live chart</span></button></div></div><div class='cov-row'><div class='cov-bw-label' style='--bw-color:#60a5fa'>HT40</div><div class='cov-row-cells'><button type='button' class='cov-card cov-pass' data-iter-key='2' style='--bw-color:#60a5fa'><span class='cov-icon'>✓</span><span class='cov-mcs'>MCS22</span><span class='cov-rx'>330<small>Mbps</small></span><span class='cov-pct'>91% target</span><span class='cov-cta'>View live chart</span></button><button type='button' class='cov-card cov-pass' data-iter-key='3' style='--bw-color:#60a5fa'><span class='cov-icon'>✓</span><span class='cov-mcs'>MCS23</span><span class='cov-rx'>359<small>Mbps</small></span><span class='cov-pct'>90% target</span><span class='cov-cta'>View live chart</span></button></div></div><div class='cov-row'><div class='cov-bw-label' style='--bw-color:#c084fc'>HT80</div><div class='cov-row-cells'><button type='button' class='cov-card cov-skip' data-iter-key='4' style='--bw-color:#c084fc'><span class='cov-icon'>!</span><span class='cov-mcs'>MCS22</span><span class='cov-rx'>—<small>Mbps</small></span><span class='cov-pct'></span><span class='cov-cta'>View live chart</span></button><button type='button' class='cov-card cov-skip' data-iter-key='5' style='--bw-color:#c084fc'><span class='cov-icon'>!</span><span class='cov-mcs'>MCS23</span><span class='cov-rx'>—<small>Mbps</small></span><span class='cov-pct'></span><span class='cov-cta'>View live chart</span></button></div></div>
+    </div>
+    <div class="cov-legend">
+      <span><i class="lg pass"></i> Pass</span>
+      <span><i class="lg fail"></i> Fail</span>
+      <span><i class="lg skip"></i> Skipped</span>
+      <span><i class="lg empty"></i> Not tested</span>
+    </div>
+    
+    </section>
+
+    <section class="panel span-12 chart-panel" id="chartSection">
+      <div class="chart-head">
+        <h2>Live throughput</h2>
+        <div class="series-title" id="seriesTitle">Select a matrix cell</div>
+        <div class="series-meta" id="seriesMeta">Click a highlighted BW×MCS card to plot TRex live samples.</div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="timeSeriesChart"></canvas>
+      </div>
+    </section>
+
+    <section class="panel span-12">
+      <div class="panel-head">
+        <div>
+          <h2>Iteration log</h2>
+          <p class="panel-desc">Full matrix audit trail with throughput result and remarks.</p>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table" id="iterLog">
+          <thead>
+            <tr><th>BW</th><th>MCS</th><th>RX Mbps</th><th>Target</th><th>Status</th><th>Remarks</th></tr>
+          </thead>
+          <tbody><tr data-iter-key='0' class='row-pass'><td><strong>HT20</strong></td><td>MCS22</td><td>170.9</td><td>180.6</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='1' class='row-pass'><td><strong>HT20</strong></td><td>MCS23</td><td>185.9</td><td>200.2</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='2' class='row-pass'><td><strong>HT40</strong></td><td>MCS22</td><td>330.0</td><td>361.2</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='3' class='row-pass'><td><strong>HT40</strong></td><td>MCS23</td><td>359.0</td><td>401.1</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='4' class='row-skip'><td><strong>HT80</strong></td><td>MCS22</td><td>—</td><td>756.0</td><td><span class="pill skip">Skipped</span></td><td>MCS config mismatch — not all devices have MCS22: SU1, SU3, SU5</td></tr><tr data-iter-key='5' class='row-skip'><td><strong>HT80</strong></td><td>MCS23</td><td>—</td><td>840.7</td><td><span class="pill skip">Skipped</span></td><td>MCS config mismatch — not all devices have MCS23: SU1, SU2, SU3, SU5, SU6</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const seriesData = {"0": {"labels": ["11:15:05", "11:15:07", "11:15:09", "11:15:11", "11:15:13", "11:15:15", "11:15:17", "11:15:19", "11:15:21", "11:15:23", "11:15:25", "11:15:27", "11:15:29", "11:15:31", "11:15:33", "11:15:34"], "rx_mbps": [176.08, 170.01, 172.91, 173.46, 172.26, 172.27, 172.44, 173.73, 166.18, 169.01, 172.6, 179.43, 166.13, 164.18, 172.11, 163.39], "loss_pct": [2.433, 5.8, 4.2, 3.913, 4.547, 4.534, 4.466, 3.746, 7.933, 6.328, 4.316, 0.666, 7.921, 9.045, 4.634, 9.49]}, "1": {"labels": ["11:16:22", "11:16:24", "11:16:26", "11:16:28", "11:16:30", "11:16:32", "11:16:34", "11:16:36", "11:16:38", "11:16:40", "11:16:42", "11:16:44", "11:16:46", "11:16:48", "11:16:50", "11:16:51"], "rx_mbps": [187.53, 185.66, 190.63, 191.48, 187.14, 185.06, 182.14, 184.8, 188.2, 181.58, 182.4, 182.99, 188.06, 191.94, 184.72, 181.08], "loss_pct": [6.503, 7.461, 4.898, 4.506, 6.66, 7.715, 9.191, 7.819, 6.144, 9.439, 9.07, 8.737, 6.193, 4.319, 7.856, 9.734]}, "2": {"labels": ["11:20:31", "11:20:33", "11:20:35", "11:20:37", "11:20:39", "11:20:42", "11:20:44", "11:20:46", "11:20:48", "11:20:50", "11:20:52", "11:20:54", "11:20:56", "11:20:58", "11:21:00", "11:21:00"], "rx_mbps": [341.73, 320.06, 331.84, 319.95, 334.26, 340.0, 331.47, 322.21, 322.72, 326.36, 325.68, 325.06, 324.24, 345.81, 333.91, 337.55], "loss_pct": [5.61, 11.588, 8.238, 11.667, 7.655, 6.073, 8.42, 10.962, 10.822, 9.857, 9.998, 10.2, 10.41, 4.467, 7.737, 6.71]}, "3": {"labels": ["11:21:48", "11:21:50", "11:21:52", "11:21:54", "11:21:56", "11:21:58", "11:22:00", "11:22:02", "11:22:04", "11:22:06", "11:22:08", "11:22:10", "11:22:12", "11:22:14", "11:22:16", "11:22:16"], "rx_mbps": [356.55, 356.43, 382.92, 360.5, 320.98, 355.55, 381.37, 352.78, 344.6, 357.45, 382.02, 354.73, 366.32, 360.4, 342.63, 368.84], "loss_pct": [11.323, 11.345, 4.753, 10.333, 20.18, 11.563, 5.15, 12.247, 14.284, 11.067, 4.982, 11.778, 8.894, 10.361, 14.807, 8.177]}, "4": {"labels": [], "rx_mbps": [], "loss_pct": []}, "5": {"labels": [], "rx_mbps": [], "loss_pct": []}};
+    const cellMeta = {"0": {"bandwidth": "HT20", "mcs": "MCS22", "rx_mbps": 170.94, "remark": "\u2014", "skipped": false}, "1": {"bandwidth": "HT20", "mcs": "MCS23", "rx_mbps": 185.93, "remark": "\u2014", "skipped": false}, "2": {"bandwidth": "HT40", "mcs": "MCS22", "rx_mbps": 330.0, "remark": "\u2014", "skipped": false}, "3": {"bandwidth": "HT40", "mcs": "MCS23", "rx_mbps": 359.01, "remark": "\u2014", "skipped": false}, "4": {"bandwidth": "HT80", "mcs": "MCS22", "rx_mbps": 0.0, "remark": "MCS config mismatch \u2014 not all devices have MCS22: SU1, SU3, SU5", "skipped": true}, "5": {"bandwidth": "HT80", "mcs": "MCS23", "rx_mbps": 0.0, "remark": "MCS config mismatch \u2014 not all devices have MCS23: SU1, SU2, SU3, SU5, SU6", "skipped": true}};
+    let activeKey = "0";
+    const gridColor = 'rgba(148,163,184,0.25)';
+    const chartEl = document.getElementById('timeSeriesChart');
+    const chartCtx = chartEl.getContext('2d');
+    const rxGradient = chartCtx.createLinearGradient(0, 0, 0, 320);
+    rxGradient.addColorStop(0, 'rgba(37,99,235,0.18)');
+    rxGradient.addColorStop(1, 'rgba(37,99,235,0.02)');
+
+    const chart = new Chart(chartEl, {
+      type: 'line',
+      data: { labels: [], datasets: [] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: {
+            labels: { color: '#334155', font: { family: 'Plus Jakarta Sans', size: 12, weight: '600' } }
+          },
+          tooltip: {
+            backgroundColor: '#ffffff',
+            borderColor: '#e2e8f0',
+            borderWidth: 1,
+            titleColor: '#0f172a',
+            bodyColor: '#475569',
+            titleFont: { family: 'Plus Jakarta Sans', weight: '700' },
+            bodyFont: { family: 'Plus Jakarta Sans' },
+            padding: 12,
+            cornerRadius: 10,
+          }
+        },
+        scales: {
+          x: {
+            ticks: { color: '#64748b', font: { family: 'Plus Jakarta Sans' } },
+            grid: { color: gridColor }
+          },
+          y: {
+            type: 'linear', position: 'left',
+            title: { display: true, text: 'Throughput (Mbps)', color: '#64748b', font: { weight: '600' } },
+            ticks: { color: '#64748b' }, grid: { color: gridColor }, suggestedMin: 0
+          },
+          y1: {
+            type: 'linear', position: 'right',
+            title: { display: true, text: 'Packet loss %', color: '#d97706', font: { weight: '600' } },
+            ticks: { color: '#d97706' }, grid: { drawOnChartArea: false }, suggestedMin: 0
+          }
+        }
+      }
+    });
+
+    function selectCell(key) {
+      activeKey = String(key);
+      document.querySelectorAll('.cov-card[data-iter-key]').forEach(el => {
+        el.classList.toggle('selected', el.dataset.iterKey === activeKey);
+      });
+      const meta = cellMeta[activeKey] || {};
+      const series = seriesData[activeKey] || { labels: [], rx_mbps: [], loss_pct: [] };
+      document.getElementById('seriesTitle').textContent =
+        `${meta.bandwidth || '—'} · ${meta.mcs || '—'} · ${meta.skipped ? 'skipped' : (meta.rx_mbps || 0).toFixed(1) + ' Mbps'}`;
+      document.getElementById('seriesMeta').textContent =
+        meta.skipped ? (meta.remark || 'TRex not run') :
+        `${series.labels.length} live samples · loss from DUT avg_rtx or TX/RX PPS delta`;
+      chart.data.labels = series.labels;
+      chart.data.datasets = [
+        {
+          label: 'Combined RX Mbps',
+          data: series.rx_mbps,
+          borderColor: '#2563eb',
+          backgroundColor: rxGradient,
+          fill: true,
+          tension: 0.35,
+          yAxisID: 'y',
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          pointBackgroundColor: '#2563eb',
+          borderWidth: 2.5,
+        },
+        {
+          label: 'Packet loss %',
+          data: series.loss_pct,
+          borderColor: '#d97706',
+          backgroundColor: 'rgba(217,119,6,0.08)',
+          borderDash: [6, 4],
+          tension: 0.3,
+          yAxisID: 'y1',
+          pointRadius: 3,
+          borderWidth: 2,
+        },
+      ];
+      chart.update();
+      document.getElementById('chartSection').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    document.getElementById('coverageMatrix').addEventListener('click', (event) => {
+      const cell = event.target.closest('.cov-card[data-iter-key]');
+      if (!cell || cell.classList.contains('cov-empty')) return;
+      selectCell(cell.dataset.iterKey);
+    });
+
+    if (activeKey && seriesData[activeKey]) selectCell(activeKey);
+  </script>
+</body>
+</html>

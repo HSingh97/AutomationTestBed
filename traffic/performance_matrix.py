@@ -49,6 +49,7 @@ from utils.vlan_uci import qinq_tags_from_profile
 from utils.bench_config import profile_for_stand, recovery_profile_for_stand
 from utils.console_output import enable_live_console_output
 from utils.net_utils import normalize_ip
+from utils.grafana_sample_report import build_matrix_grafana_payload, write_grafana_sample_html
 from utils.performance_report import write_html_report, write_summary_csv
 from utils.profile_manager import load_profile_bundle
 from utils.recovery_manager import RecoveryManager
@@ -485,6 +486,23 @@ def _check_bandwidth_before_trex(
     return True, "", validation
 
 
+def _mcs_mismatch_note(mcs_config: dict[str, object]) -> str:
+    """Human-readable note when post-apply MCS verify did not match target."""
+    if mcs_config.get("mcs_config_ok", True):
+        return ""
+    existing = str(mcs_config.get("mcs_mismatch_note") or mcs_config.get("error") or "").strip()
+    if existing:
+        return existing
+    bad = [
+        str(row.get("label"))
+        for row in (mcs_config.get("checks") or [])
+        if not row.get("ok")
+    ]
+    if bad:
+        return f"MCS mismatch on {', '.join(bad)} — throughput ran anyway"
+    return "MCS mismatch — throughput ran anyway"
+
+
 def _mcs_status_summary(mcs_config: dict[str, object]) -> tuple[str, str]:
     """Return (bts_uci_mcs, su_operating_mcs_csv) from verify checks."""
     checks = mcs_config.get("checks") or []
@@ -528,10 +546,14 @@ def _print_matrix_console_table(
                 config_status = "FAIL" if mcs_config.get("mcs_config_ok") is False else "SKIP"
                 trex_status = "SKIP"
             elif record.get("passed"):
-                config_status = "OK"
+                config_status = (
+                    "MISMATCH" if mcs_config.get("mcs_config_ok") is False else "OK"
+                )
                 trex_status = "PASS"
             elif record:
-                config_status = "OK" if mcs_config.get("mcs_config_ok") is not False else "FAIL"
+                config_status = (
+                    "MISMATCH" if mcs_config.get("mcs_config_ok") is False else "OK"
+                )
                 trex_status = "FAIL"
             else:
                 config_status = "—"
@@ -549,7 +571,9 @@ def _print_matrix_console_table(
                 except (TypeError, ValueError):
                     return str(value)
 
-            notes = str(record.get("error") or "").strip()
+            notes = str(record.get("mcs_mismatch_note") or record.get("error") or "").strip()
+            if not notes:
+                notes = _mcs_mismatch_note(mcs_config)
             if len(notes) > 32:
                 notes = notes[:29] + "..."
             if not notes and record.get("throughput_grade") == "warn":
@@ -745,8 +769,17 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         )
     if not args.skip_dut_config:
         try:
+            mgmt = testbed_tb.get("mgmt_vlan") or {}
+            ipv6_prefix_len = int(mgmt.get("prefix_len") or dut.get("ipv6_prefix_len") or 120)
             testbed_summary = asyncio.run(
-                collect_testbed_summary(dut_ip, cpe_hosts, dut_password)
+                collect_testbed_summary(
+                    dut_ip,
+                    cpe_hosts,
+                    dut_password,
+                    bts_ssh_host=dut_ssh_ip,
+                    ipv6_prefix_len=ipv6_prefix_len,
+                    su_count=configured_su,
+                )
             )
             testbed_summary["stand"] = args.stand or profile_bundle.active.get("name", "")
             testbed_summary["profile"] = args.profile
@@ -851,23 +884,12 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 skip_if_unchanged=args.skip_config_if_unchanged,
                             )
                             if not mcs_config.get("mcs_config_ok", True):
-                                err = str(
-                                    mcs_config.get("error")
-                                    or "MCS config mismatch — throughput skipped"
+                                mcs_note = _mcs_mismatch_note(mcs_config)
+                                mcs_config = dict(mcs_config)
+                                mcs_config["mcs_mismatch_note"] = mcs_note
+                                print(
+                                    f"[WARN] {mcs_note} — continuing with TRex throughput"
                                 )
-                                print(f"[ERROR] {err}")
-                                _append_skipped_iteration(
-                                    records,
-                                    bandwidth=bandwidth,
-                                    mcs=mcs,
-                                    mode=mode,
-                                    ratio=ratio,
-                                    target_mbps=args.target,
-                                    error=err,
-                                    mcs_config=mcs_config,
-                                    noise_dbm=args.noise_dbm,
-                                )
-                                continue
                             bw_ready, bw_error, pre_trex_link_validation = (
                                 _check_bandwidth_before_trex(
                                     dut_ssh_ip,
@@ -995,6 +1017,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         "uplink_per_cpe_mbps": targets.get("uplink_per_cpe_mbps"),
                         "link_validation": pre_trex_link_validation,
                         "mcs_config": mcs_config,
+                        "mcs_mismatch_note": _mcs_mismatch_note(mcs_config),
                         "cpe_hosts": cpe_hosts,
                         "packet_size": args.packet_size,
                         "duration_s": args.time,
@@ -1270,6 +1293,19 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         path=html_path,
         testbed_summary=testbed_summary,
     )
+    grafana_path = html_path.with_name(html_path.stem + "_Grafana.html")
+    try:
+        report_id = html_path.stem.replace("Performance_Report_", "")
+        grafana_payload = build_matrix_grafana_payload(
+            records,
+            testbed_summary=testbed_summary,
+            report_id=report_id,
+            generated_at=executed_at,
+        )
+        write_grafana_sample_html(grafana_path, grafana_payload)
+        print(f"Grafana report: {grafana_path}")
+    except Exception as exc:
+        print(f"[WARN] Grafana report generation failed: {exc}")
 
     print("\n" + "=" * 72)
     _print_matrix_console_table(

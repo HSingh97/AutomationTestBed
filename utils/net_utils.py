@@ -33,3 +33,19 @@ def format_snmp_host(ip_text: str) -> str:
     clean = normalize_ip(ip_text)
     return f"udp6:[{clean}]" if is_ipv6_literal(clean) else clean
 
+
+def format_mgmt_ipv6_display(label: str, ipv6: str, *, prefix_len: int = 120) -> str:
+    """Compact testbed summary IP, e.g. ``BTS2001:...:1111/120``."""
+    raw = str(ipv6 or "").strip()
+    if not raw or raw in {"—", "-", "N/A", "n/a"}:
+        return "—"
+    host = normalize_ip(raw.split("/")[0])
+    plen = prefix_len
+    if "/" in raw:
+        try:
+            plen = int(raw.split("/", 1)[1])
+        except ValueError:
+            pass
+    tag = str(label or "").strip().upper() or "NODE"
+    return f"{tag}{host}/{plen}"
+
