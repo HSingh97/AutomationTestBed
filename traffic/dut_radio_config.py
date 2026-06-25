@@ -928,25 +928,30 @@ def print_mcs_device_matrix(
 ) -> None:
     """Jenkins-friendly table: BTS UCI MCS + per-SU operating rx_rate_mcs."""
     expected = str(mcs_number(mcs_rate))
-    title = f"[MCS] DEVICE MCS STATUS — target {mcs_rate} (index {expected})"
-    if phase:
-        title += f" [{phase}]"
+    before_apply = phase in {"skip-check", "before-apply", "pre-apply"}
+    if before_apply:
+        title = f"[MCS] CURRENT MCS STATE (before apply) — target {mcs_rate} (index {expected})"
+    else:
+        title = f"[MCS] DEVICE MCS STATUS — target {mcs_rate} (index {expected})"
+        if phase:
+            title += f" [{phase}]"
     print(title)
-    header = f"{'Device':<8} | {'BTS UCI':<8} | {'SU rx_mcs':<10} | {'rx_rate':<10} | {'Status':<8}"
+    header = f"{'Device':<8} | {'BTS UCI':<8} | {'SU rx_mcs':<10} | {'rx_rate':<10} | {'vs target':<8}"
     print(header)
     print("-" * len(header))
     for row in checks:
         label = str(row.get("label") or "")
+        at_target = bool(row.get("ok"))
+        if before_apply:
+            status = "match" if at_target else str(row.get("actual_mcs") or "?")
+        else:
+            status = "OK" if at_target else "MISMATCH"
         if row.get("role") == "BTS":
             uci = str(row.get("actual_mcs") or "?")
-            print(
-                f"{label:<8} | {uci:<8} | {'—':<10} | {'—':<10} | "
-                f"{'OK' if row.get('ok') else 'MISMATCH':<8}"
-            )
+            print(f"{label:<8} | {uci:<8} | {'—':<10} | {'—':<10} | {status:<8}")
             continue
         rx_mcs = str(row.get("actual_mcs") or "?")
         rx_rate = str(row.get("rx_rate_mbps") or "—")
-        status = "OK" if row.get("ok") else "MISMATCH"
         print(f"{label:<8} | {'—':<8} | {rx_mcs:<10} | {rx_rate:<10} | {status:<8}")
     print("")
 
@@ -1125,27 +1130,37 @@ def verify_mcs_all_devices(
     print_mcs_device_matrix(checks, mcs_rate=mcs_rate, phase=phase or "verify")
 
     all_ok = all(bool(row.get("ok")) for row in checks)
-    for row in checks:
-        status = "OK" if row.get("ok") else "MISMATCH"
-        detail = f" [{row.get('source')}]" if row.get("source") else ""
-        rate = row.get("rx_rate_mbps")
-        if rate:
-            detail += f" rx_rate={rate} Mbps"
-        err = row.get("error")
-        if err and not row.get("ok"):
-            detail += f" — {err}"
-        print(
-            f"[MCS] {row['label']}: expected={expected_mcs}, "
-            f"actual={row.get('actual_mcs')}{detail} ({status})"
-        )
-    if all_ok:
-        print(
-            f"[MCS] All {len(checks)} device(s) at operating {mcs_rate} "
-            f"(MCS index {expected_mcs})"
-        )
+    before_apply = phase in {"skip-check", "before-apply", "pre-apply"}
+    if before_apply:
+        if all_ok:
+            print(f"[MCS] Already at target {mcs_rate} (index {expected_mcs}) — MCS apply can be skipped")
+        else:
+            print(
+                f"[MCS] Not at target {mcs_rate} yet (devices still on prior MCS) — "
+                f"MCS apply will run next; this is NOT a verify failure"
+            )
     else:
-        bad = [str(row["label"]) for row in checks if not row.get("ok")]
-        print(f"[MCS] MISMATCH on: {', '.join(bad)}")
+        for row in checks:
+            status = "OK" if row.get("ok") else "MISMATCH"
+            detail = f" [{row.get('source')}]" if row.get("source") else ""
+            rate = row.get("rx_rate_mbps")
+            if rate:
+                detail += f" rx_rate={rate} Mbps"
+            err = row.get("error")
+            if err and not row.get("ok"):
+                detail += f" — {err}"
+            print(
+                f"[MCS] {row['label']}: expected={expected_mcs}, "
+                f"actual={row.get('actual_mcs')}{detail} ({status})"
+            )
+        if all_ok:
+            print(
+                f"[MCS] All {len(checks)} device(s) at operating {mcs_rate} "
+                f"(MCS index {expected_mcs})"
+            )
+        else:
+            bad = [str(row["label"]) for row in checks if not row.get("ok")]
+            print(f"[MCS] MISMATCH on: {', '.join(bad)}")
 
     return {
         "configured_mcs": mcs_rate,
@@ -1748,10 +1763,12 @@ def configure_mcs_profile(
             return mcs_report
 
     print(
-        f"[CONFIG] Target MCS {spec['mcs']} ({spec['modulation']}); "
-        f"operating rate ~{spec['operating_rate_mbps']:.0f} Mbps checked after config"
+        f"[CONFIG] Applying {mcs_rate} via remote_exec.sh 1 broadcast → BTS + {su_count} CPE(s)"
     )
-    print(f"[CONFIG] MCS={mcs_rate} on BTS + {su_count} CPE(s)")
+    print(
+        f"[CONFIG] Target MCS {spec['mcs']} ({spec['modulation']}); "
+        f"operating rate ~{spec['operating_rate_mbps']:.0f} Mbps checked after apply"
+    )
     if prefer_cpe_via_bts:
         configure_mcs_broadcast_bts_and_all_cpes(
             bts_ip,
@@ -1789,7 +1806,7 @@ def configure_mcs_profile(
         )
 
     time.sleep(effective_settle)
-    print("[CONFIG] Verify MCS on all devices")
+    print(f"[CONFIG] Post-apply verify {mcs_rate} (poll sysfs up to {operating_mcs_wait_s:.0f}s)")
     mcs_report = verify_mcs_all_devices(
         bts_ip,
         user,
