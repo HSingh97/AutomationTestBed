@@ -27,6 +27,8 @@ from utils.cpe_api_24_config import (
     FW_UPGRADE_WAIT_MAX_S,
     POST_UPGRADE_LINK_POLL_DELAY_S,
     POST_UPGRADE_POLL_DELAY_S,
+    RADIO24_API_REBOOT_BOOT_MIN_S,
+    RADIO24_API_REJOIN_INTERVAL_S,
     UPLOAD_SW_PATH,
     DEFAULT_LINK_THROUGHPUT_DURATION_S,
     DEFAULT_LINK_THROUGHPUT_READ_TIMEOUT_S,
@@ -73,6 +75,10 @@ class CpeApi24Client:
         self.config = config
         # Set in API_09 from FW filename; drives post-upgrade link wait in API_11.
         self._fw_upload_model: str | None = None
+        # Cached before reboot for hidden nmcli rejoin (case 46 / API_12).
+        self._cached_mgmt_bssid: str | None = None
+        self._mgmt_profile_prepared: bool = False
+        self._rejoin_link_reset_done: bool = False
 
     def set_fw_upload_model(self, model: str) -> None:
         self._fw_upload_model = (model or "").strip().upper() or None
@@ -94,12 +100,24 @@ class CpeApi24Client:
         path: str,
         *,
         json_body: dict[str, Any] | None = None,
+        content: str | bytes | None = None,
+        headers: dict[str, str] | None = None,
         read_timeout_s: float = 30.0,
+        log: bool = True,
     ) -> CpeApiResponse:
         url = self._url(path)
         timeout = self._timeout(read_timeout_s)
+        if log:
+            print(f"    -> [API] {method.upper()} {url} (read timeout {read_timeout_s:.0f}s)")
+        req_headers = dict(headers or {})
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.request(method, url, json=json_body)
+            response = await client.request(
+                method,
+                url,
+                json=json_body,
+                content=content,
+                headers=req_headers or None,
+            )
         parsed: dict[str, Any] | None = None
         try:
             body = response.json()
@@ -112,6 +130,251 @@ class CpeApi24Client:
             json_body=parsed,
             raw_body=response.text,
             headers=dict(response.headers),
+        )
+
+    async def request_raw(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        content: str | bytes | None = None,
+        headers: dict[str, str] | None = None,
+        read_timeout_s: float = 30.0,
+        log: bool = True,
+    ) -> CpeApiResponse:
+        """HTTP request with optional raw body / custom headers (negative tests)."""
+        return await self._request(
+            method,
+            path,
+            json_body=json_body,
+            content=content,
+            headers=headers,
+            read_timeout_s=read_timeout_s,
+            log=log,
+        )
+
+    async def get_timed(
+        self,
+        path: str,
+        *,
+        read_timeout_s: float = 30.0,
+    ) -> tuple[CpeApiResponse, float]:
+        """GET path and return (response, elapsed_ms)."""
+        start = time.monotonic()
+        response = await self.get(path, read_timeout_s=read_timeout_s)
+        elapsed_ms = (time.monotonic() - start) * 1000.0
+        return response, elapsed_ms
+
+    async def _reboot_and_wait_after_reboot(
+        self,
+        *,
+        max_wait_s: float | None = None,
+        label: str = "2_4G_RADIO_46",
+        bts_host: str | None = None,
+        bts_username: str = "root",
+        bts_password: str = "",
+        ready_via: str = "api",
+    ) -> float:
+        """Software reboot via SSH; rejoin mgmt Wi‑Fi; wait until CPE is ready (API or backend SSH)."""
+        from utils.cpe_mgmt_wifi import is_mgmt_api_reachable
+
+        wait_s = max_wait_s if max_wait_s is not None else self.config.reset_wait_s
+        backend_first = ready_via == "backend"
+        ready_label = "backend SSH (/etc/version)" if backend_first else "mgmt API"
+        can_rejoin = bool(
+            (self.config.cpe_mgmt_ssid and self.config.cpe_mgmt_password != "")
+            or (bts_host and bts_password)
+        )
+        if can_rejoin:
+            await self._prefetch_mgmt_bssid_before_reboot(
+                label=label,
+                bts_host=bts_host,
+                bts_username=bts_username,
+                bts_password=bts_password,
+            )
+            await self._prepare_mgmt_profile_before_reboot(label=label)
+            ssid = (self.config.cpe_mgmt_ssid or "").strip()
+            bssid_note = f", BSSID {self._cached_mgmt_bssid}" if self._cached_mgmt_bssid else ""
+            print(f"    -> [{label}] pre-reboot: profile {ssid!r}{bssid_note}")
+        print(f"    -> [{label}] sending CPE reboot via SSH {self.config.cpe_ssh_host}...")
+        try:
+            await self.ssh_run("reboot", timeout_s=15.0)
+        except Exception as exc:
+            if type(exc).__name__ not in (
+                "ConnectionLost",
+                "DisconnectError",
+                "ConnectionResetError",
+                "TimeoutError",
+            ):
+                raise
+        start = time.monotonic()
+        await self._wait_for_mgmt_api_down(attempts=24, delay_s=3.0)
+        await asyncio.sleep(API_12_MGMT_AP_GRACE_S)
+
+        boot_min_s = RADIO24_API_REBOOT_BOOT_MIN_S
+        if backend_first:
+            print(
+                f"    -> [{label}] reboot sent — wait {boot_min_s / 60:.0f} min, "
+                f"then nmcli join {self.config.cpe_mgmt_ssid!r}..."
+            )
+            await asyncio.sleep(boot_min_s)
+        else:
+            print(
+                f"    -> [{label}] CPE rebooting — waiting {boot_min_s / 60:.0f} min "
+                f"before Wi‑Fi rejoin..."
+            )
+            await asyncio.sleep(boot_min_s)
+
+        deadline = start + wait_s
+        rejoin_attempt = 0
+        rejoin_interval_s = (
+            RADIO24_API_REJOIN_INTERVAL_S if backend_first else API_12_REJOIN_INTERVAL_S
+        )
+        mgmt_creds: Any = None
+
+        async def _is_ready() -> bool:
+            from utils.cpe_mgmt_wifi import (
+                resolve_cpe_mgmt_wifi_credentials,
+                verify_cpe_mgmt_wifi_linked,
+            )
+
+            creds = resolve_cpe_mgmt_wifi_credentials(self.config)
+            if not await verify_cpe_mgmt_wifi_linked(
+                self.config,
+                creds,
+                settle_s=8.0,
+                require_api=not backend_first,
+            ):
+                return False
+            if backend_first:
+                result = await self._ssh_run_on_mgmt_host(
+                    "cat /etc/version 2>/dev/null | head -n 1",
+                    timeout_s=8.0,
+                )
+                if not result:
+                    return False
+                exit_status, stdout, _ = result
+                if exit_status not in (0, None):
+                    return False
+                return bool((stdout or "").strip())
+            return await is_mgmt_api_reachable(self.config.base_url, timeout_s=3.0)
+
+        if backend_first and can_rejoin:
+            pass  # join loop below — no extra banner
+
+        last_rejoin = 0.0
+        rejoin_announced = False
+        first_rejoin_after = start + boot_min_s
+
+        while time.monotonic() < deadline:
+            if backend_first:
+                if can_rejoin:
+                    rejoin_attempt += 1
+                    joined_ip = await self._attempt_join_known_mgmt_wifi(
+                        label=label,
+                        quiet=True,
+                        require_api=False,
+                    )
+                    if joined_ip:
+                        print(
+                            f"    -> [{label}] joined {self.config.cpe_mgmt_ssid!r} "
+                            f"({joined_ip})"
+                        )
+                if await _is_ready():
+                    elapsed = time.monotonic() - start
+                    print(f"    -> [{label}] CPE ready ({elapsed:.0f}s).")
+                    return elapsed
+                if rejoin_attempt > 0 and rejoin_attempt % 6 == 0:
+                    print(
+                        f"    -> [{label}] still joining {self.config.cpe_mgmt_ssid!r} "
+                        f"(attempt {rejoin_attempt})..."
+                    )
+                await asyncio.sleep(rejoin_interval_s)
+                continue
+
+            if await _is_ready():
+                elapsed = time.monotonic() - start
+                print(f"    -> [{label}] CPE {ready_label} up ({elapsed:.0f}s).")
+                return elapsed
+            if (
+                can_rejoin
+                and time.monotonic() >= first_rejoin_after
+                and time.monotonic() - last_rejoin >= API_12_REJOIN_INTERVAL_S
+            ):
+                last_rejoin = time.monotonic()
+                if not rejoin_announced:
+                    print(
+                        f"    -> [{label}] rejoining CPE mgmt Wi‑Fi "
+                        f"(PC drops link when AP reboots)..."
+                    )
+                    rejoin_announced = True
+                mgmt_creds = await self._try_rejoin_mgmt_soft(
+                    bts_host=bts_host or "",
+                    bts_username=bts_username,
+                    bts_password=bts_password,
+                    mgmt_creds=mgmt_creds,
+                    label=label,
+                )
+                if await _is_ready():
+                    elapsed = time.monotonic() - start
+                    print(f"    -> [{label}] CPE {ready_label} up ({elapsed:.0f}s).")
+                    return elapsed
+                if mgmt_creds and not self._cached_mgmt_bssid and bts_host and bts_password:
+                    from utils.cpe_api_24_lab import fetch_cpe_mgmt_ap_bssid
+
+                    bssid = await fetch_cpe_mgmt_ap_bssid(
+                        username=bts_username or self.config.cpe_ssh_user,
+                        password=bts_password or str(self.config.cpe_ssh_password),
+                        cpe_ipv6=self.config.cpe_ssh_fallback_host,
+                        bts_host=bts_host,
+                        known_mgmt_ssid=mgmt_creds.ssid,
+                    )
+                    if bssid:
+                        self._cached_mgmt_bssid = bssid
+            await asyncio.sleep(POST_UPGRADE_POLL_DELAY_S)
+
+        raise RuntimeError(
+            f"{label}: CPE {ready_label} did not return within {wait_s:.0f}s after reboot.\n"
+            "  Rejoin CPE 2.4 GHz mgmt Wi‑Fi manually, then re-run."
+        )
+
+    async def reboot_and_wait_for_api(
+        self,
+        *,
+        max_wait_s: float | None = None,
+        label: str = "2_4G_RADIO_46",
+        bts_host: str | None = None,
+        bts_username: str = "root",
+        bts_password: str = "",
+    ) -> float:
+        """Software reboot via SSH; rejoin mgmt Wi‑Fi; wait for HTTP mgmt API."""
+        return await self._reboot_and_wait_after_reboot(
+            max_wait_s=max_wait_s,
+            label=label,
+            bts_host=bts_host,
+            bts_username=bts_username,
+            bts_password=bts_password,
+            ready_via="api",
+        )
+
+    async def reboot_and_wait_for_backend(
+        self,
+        *,
+        max_wait_s: float | None = None,
+        label: str = "2_4G_RADIO_46",
+        bts_host: str | None = None,
+        bts_username: str = "root",
+        bts_password: str = "",
+    ) -> float:
+        """Software reboot via SSH; rejoin mgmt Wi‑Fi; wait for backend SSH (/etc/version) — no HTTP yet."""
+        return await self._reboot_and_wait_after_reboot(
+            max_wait_s=max_wait_s,
+            label=label,
+            bts_host=bts_host,
+            bts_username=bts_username,
+            bts_password=bts_password,
+            ready_via="backend",
         )
 
     async def btsconnect(
@@ -282,10 +545,33 @@ class CpeApi24Client:
         )
 
     async def get(self, path: str, *, read_timeout_s: float = 30.0, log: bool = True) -> CpeApiResponse:
-        url = self._url(path)
         if log:
-            print(f"    -> [API] GET {url} (read timeout {read_timeout_s:.0f}s)")
-        return await self._request("GET", path, read_timeout_s=read_timeout_s)
+            print(
+                f"    -> [API] GET {self._url(path)} (read timeout {read_timeout_s:.0f}s)"
+            )
+        return await self._request(
+            "GET", path, read_timeout_s=read_timeout_s, log=False
+        )
+
+    async def put(
+        self,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        read_timeout_s: float = 30.0,
+        log: bool = True,
+    ) -> CpeApiResponse:
+        if log:
+            print(
+                f"    -> [API] PUT {self._url(path)} (read timeout {read_timeout_s:.0f}s)"
+            )
+        return await self._request(
+            "PUT",
+            path,
+            json_body=json_body,
+            read_timeout_s=read_timeout_s,
+            log=False,
+        )
 
     async def get_event_stream_sample(
         self,
@@ -314,15 +600,71 @@ class CpeApi24Client:
                     headers=dict(response.headers),
                 )
 
+    async def _ssh_run_on_mgmt_host(
+        self,
+        command: str,
+        *,
+        timeout_s: float = 10.0,
+        verify_cpe: bool = True,
+    ) -> tuple[int | None, str, str] | None:
+        """SSH to 169.254.254.1 on PC CPE mgmt Wi‑Fi only (fast poll; no IPv6 fallback)."""
+        from utils.cpe_api_24_lab import _assert_ssh_session_is_cpe
+
+        if not self.config.cpe_ssh_password:
+            return None
+        try:
+            conn = await asyncssh.connect(
+                self.config.cpe_ssh_host,
+                username=self.config.cpe_ssh_user,
+                password=str(self.config.cpe_ssh_password),
+                known_hosts=None,
+                connect_timeout=4.0,
+            )
+            if verify_cpe:
+                await _assert_ssh_session_is_cpe(conn, context=f"SSH CPE @ {self.config.cpe_ssh_host}")
+            async with conn:
+                result = await conn.run(command, check=False, timeout=timeout_s)
+                return result.exit_status, (result.stdout or ""), (result.stderr or "")
+        except Exception:
+            return None
+
     async def ssh_run(self, command: str, *, timeout_s: float = 20.0) -> tuple[int | None, str, str]:
-        """Run a non-reset SSH command on the CPE."""
-        host = self.config.cpe_ssh_host
+        """Run a non-reset SSH command on the CPE (not BTS lan24 at the same mgmt IP)."""
+        from utils.cpe_api_24_lab import _assert_ssh_session_is_cpe, _ssh_session_device_role
+
         if not self.config.cpe_ssh_password:
             raise RuntimeError("CPE SSH password missing (--password or profile dut.password).")
-        conn = await self._connect_ssh_with_retries(host=host)
-        async with conn:
-            result = await conn.run(command, check=False, timeout=timeout_s)
-            return result.exit_status, (result.stdout or ""), (result.stderr or "")
+
+        hosts = [self.config.cpe_ssh_host]
+        fallback = (self.config.cpe_ssh_fallback_host or "").strip()
+        if fallback and fallback not in hosts:
+            hosts.append(fallback)
+
+        last_error: Exception | None = None
+        for host in hosts:
+            try:
+                conn = await self._connect_ssh_with_retries(host=host)
+                await _assert_ssh_session_is_cpe(conn, context=f"SSH CPE @ {host}")
+                async with conn:
+                    result = await conn.run(command, check=False, timeout=timeout_s)
+                    return result.exit_status, (result.stdout or ""), (result.stderr or "")
+            except Exception as exc:
+                last_error = exc
+                role_note = ""
+                if host == self.config.cpe_ssh_host:
+                    try:
+                        probe = await self._connect_ssh_with_retries(host=host)
+                        role = await _ssh_session_device_role(probe)
+                        probe.close()
+                        if role == "bts":
+                            role_note = " (PC on BTS UBRMGMT* Wi‑Fi — join CPE KWDEJPOQ)"
+                    except Exception:
+                        pass
+                if host == hosts[-1]:
+                    raise RuntimeError(
+                        f"CPE SSH failed on {hosts!r}{role_note}: {last_error}"
+                    ) from last_error
+        raise RuntimeError(f"CPE SSH failed: {last_error}")
 
     async def _factory_reset_via_mgmt_api(self) -> bool:
         """Optional REST override (--cpe-24-factory-reset-path). Device has no default endpoint."""
@@ -1028,6 +1370,192 @@ class CpeApi24Client:
                 return ssh_ver, "ssh"
         return None, ""
 
+    async def _prefetch_mgmt_bssid_before_reboot(
+        self,
+        *,
+        label: str,
+        bts_host: str | None,
+        bts_username: str,
+        bts_password: str,
+    ) -> str | None:
+        """Read CPE ath0 BSSID while still on mgmt Wi‑Fi (before reboot drops the link)."""
+        if self._cached_mgmt_bssid:
+            return self._cached_mgmt_bssid
+
+        from utils.cpe_api_24_lab import _CPE_AP_BSSID_RE, fetch_cpe_mgmt_ap_bssid
+
+        result = await self._ssh_run_on_mgmt_host(
+            "ifconfig ath0 2>/dev/null | awk '/HWaddr/{print $5; exit}'",
+            timeout_s=10.0,
+        )
+        if result:
+            _, stdout, _ = result
+            text = (stdout or "").strip()
+            if text:
+                match = _CPE_AP_BSSID_RE.search(text)
+                bssid = match.group(1).upper() if match else text.split()[0].upper()
+                if bssid:
+                    self._cached_mgmt_bssid = bssid
+                    return bssid
+
+        bssid = await fetch_cpe_mgmt_ap_bssid(
+            username=bts_username or self.config.cpe_ssh_user,
+            password=bts_password or str(self.config.cpe_ssh_password),
+            cpe_ipv6=self.config.cpe_ssh_fallback_host,
+            bts_host=bts_host,
+            known_mgmt_ssid=self.config.cpe_mgmt_ssid,
+        )
+        if bssid:
+            self._cached_mgmt_bssid = bssid
+        return bssid
+
+    async def _prepare_mgmt_profile_before_reboot(self, *, label: str) -> None:
+        """Pre-create nmcli profile with cached BSSID so post-reboot rejoin can use connection up."""
+        from utils.cpe_mgmt_wifi import (
+            ensure_cpe_hidden_mgmt_profile,
+            resolve_cpe_mgmt_wifi_credentials,
+            resolve_wifi_interface,
+        )
+
+        creds = resolve_cpe_mgmt_wifi_credentials(self.config)
+        iface = await resolve_wifi_interface(self.config.wifi_interface or "")
+        if await ensure_cpe_hidden_mgmt_profile(
+            iface,
+            creds,
+            connection_name=self.config.wifi_connection_name,
+            bssid=self._cached_mgmt_bssid,
+        ):
+            self._mgmt_profile_prepared = True
+
+    async def _attempt_join_known_mgmt_wifi(
+        self,
+        *,
+        label: str,
+        quiet: bool = True,
+        require_api: bool = False,
+    ) -> str | None:
+        """nmcli join using profile SSID/password + cached BSSID (no BTS fetch)."""
+        from utils.cpe_mgmt_wifi import (
+            CpeMgmtWifiCredentials,
+            connect_pc_to_cpe_hidden_wifi,
+            resolve_cpe_mgmt_wifi_credentials,
+            _wait_for_iface_ipv4,
+        )
+
+        creds = resolve_cpe_mgmt_wifi_credentials(self.config)
+        if not creds.ssid or creds.password == "":
+            return None
+        wifi = CpeMgmtWifiCredentials(
+            ssid=creds.ssid,
+            password=str(creds.password),
+            hidden=creds.hidden,
+        )
+        try:
+            iface = await connect_pc_to_cpe_hidden_wifi(
+                self.config.wifi_interface or "",
+                wifi,
+                connection_name=self.config.wifi_connection_name,
+                settle_s=min(self.config.wifi_settle_s, 8.0),
+                bts_ssid=self.config.bts_ssid,
+                quiet=quiet,
+                config=self.config,
+                cached_bssid=self._cached_mgmt_bssid,
+                require_api=require_api,
+            )
+            return await _wait_for_iface_ipv4(iface, timeout_s=8, prefix="169.254.")
+        except Exception:
+            return None
+
+    async def _resolve_rejoin_mgmt_creds(
+        self,
+        *,
+        bts_host: str,
+        bts_username: str,
+        bts_password: str,
+        mgmt_creds: Any,
+    ) -> Any:
+        from utils.cpe_api_24_lab import FetchedWifiCredentials, fetch_cpe_mgmt_ap_credentials
+        from utils.cpe_mgmt_wifi import _mgmt_fetch_kwargs
+
+        if mgmt_creds is not None:
+            return mgmt_creds
+        if self.config.cpe_mgmt_ssid and self.config.cpe_mgmt_password != "":
+            return FetchedWifiCredentials(
+                ssid=self.config.cpe_mgmt_ssid,
+                password=str(self.config.cpe_mgmt_password),
+                hidden=self.config.cpe_mgmt_hidden,
+            )
+        if bts_host and bts_password:
+            return await fetch_cpe_mgmt_ap_credentials(
+                **_mgmt_fetch_kwargs(
+                    self.config,
+                    bts_host=bts_host,
+                    bts_username=bts_username,
+                    bts_password=bts_password,
+                )
+            )
+        return None
+
+    async def _try_rejoin_mgmt_soft(
+        self,
+        *,
+        bts_host: str,
+        bts_username: str,
+        bts_password: str,
+        mgmt_creds: Any,
+        label: str,
+        require_api: bool = True,
+        max_attempts: int = 3,
+    ) -> Any:
+        """Best-effort hidden rejoin after reboot — never raises; retries connection up only."""
+        from utils.cpe_mgmt_wifi import (
+            CpeMgmtWifiCredentials,
+            _wait_for_iface_ipv4,
+            resolve_wifi_interface,
+            try_rejoin_cpe_mgmt_wifi,
+        )
+
+        mgmt_creds = await self._resolve_rejoin_mgmt_creds(
+            bts_host=bts_host,
+            bts_username=bts_username,
+            bts_password=bts_password,
+            mgmt_creds=mgmt_creds,
+        )
+        if mgmt_creds is None:
+            return None
+
+        wifi_creds = CpeMgmtWifiCredentials(
+            ssid=mgmt_creds.ssid,
+            password=mgmt_creds.password,
+            hidden=mgmt_creds.hidden,
+        )
+        joined = await try_rejoin_cpe_mgmt_wifi(
+            self.config,
+            wifi_creds,
+            bssid=self._cached_mgmt_bssid,
+            ensure_profile=not self._mgmt_profile_prepared,
+            reset_link=not self._rejoin_link_reset_done,
+            require_api=require_api,
+            max_attempts=max_attempts,
+        )
+        if not self._rejoin_link_reset_done:
+            self._rejoin_link_reset_done = True
+        if joined:
+            iface_ip = await _wait_for_iface_ipv4(
+                (await resolve_wifi_interface(self.config.wifi_interface or "")),
+                timeout_s=5,
+            )
+            ip_note = f", {iface_ip}" if iface_ip else ""
+            print(f"    -> [{label}] CPE mgmt Wi‑Fi linked {wifi_creds.ssid!r}{ip_note}")
+        elif self._cached_mgmt_bssid and not quiet:
+            print(
+                f"    -> [{label}] rejoin pending "
+                f"(BSSID {self._cached_mgmt_bssid} not joined yet)"
+            )
+        if not self._mgmt_profile_prepared:
+            self._mgmt_profile_prepared = True
+        return mgmt_creds
+
     async def _api_12_try_rejoin_mgmt(
         self,
         *,
@@ -1036,16 +1564,18 @@ class CpeApi24Client:
         bts_password: str,
         mgmt_creds: Any,
     ) -> Any:
-        """Fetch CPE mgmt AP creds once (via BTS tunnel), then nmcli rejoin."""
-        from utils.cpe_api_24_lab import fetch_cpe_mgmt_ap_credentials
+        """Rejoin PC to CPE hidden mgmt AP (profile creds first; never BTS UBRMGMT*)."""
         from utils.cpe_mgmt_wifi import CpeMgmtWifiCredentials, rejoin_cpe_mgmt_wifi
 
+        mgmt_creds = await self._resolve_rejoin_mgmt_creds(
+            bts_host=bts_host,
+            bts_username=bts_username,
+            bts_password=bts_password,
+            mgmt_creds=mgmt_creds,
+        )
         if mgmt_creds is None:
-            mgmt_creds = await fetch_cpe_mgmt_ap_credentials(
-                bts_host=bts_host,
-                username=bts_username,
-                password=bts_password,
-                bts_ssid=(self.config.bts_ssid or "").strip(),
+            raise RuntimeError(
+                "Cannot rejoin CPE mgmt Wi‑Fi: set cpe_mgmt_ssid/password in profile or pass --local-ipv6."
             )
         await rejoin_cpe_mgmt_wifi(
             self.config,
@@ -1056,6 +1586,10 @@ class CpeApi24Client:
             ),
             label="API_12",
             quiet=True,
+            bts_host=bts_host or None,
+            bts_username=bts_username,
+            bts_password=bts_password,
+            cached_bssid=self._cached_mgmt_bssid,
         )
         return mgmt_creds
 

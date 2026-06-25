@@ -155,7 +155,7 @@ async def assert_api_02_btsconnect_auth_fail(client: CpeApi24Client, config: Cpe
 
 
 async def assert_api_03_btsconnect_ssid_not_found(client: CpeApi24Client, config: CpeApi24Config) -> None:
-    """No reset — POST invalid BTS SSID → failure (404 ssid_not_found or 401 on some builds)."""
+    """No reset — POST invalid BTS SSID + valid password → HTTP 404, reason=ssid_not_found."""
     invalid_ssid = config.invalid_ssid
     print_section("API_03 — SSID not found (no CPE reset before this case)")
     print_kv_block(
@@ -163,7 +163,7 @@ async def assert_api_03_btsconnect_ssid_not_found(client: CpeApi24Client, config
         {
             "BTS SSID": f'invalid "{invalid_ssid}"',
             "Password": "(valid BTS key)",
-            "Expected": "HTTP 404 ssid_not_found (or 401 auth_fail on this CPE firmware)",
+            "Expected": "HTTP 404, status=failure, reason=ssid_not_found",
         },
     )
     response = await client.btsconnect(
@@ -172,14 +172,23 @@ async def assert_api_03_btsconnect_ssid_not_found(client: CpeApi24Client, config
         read_timeout_s=config.btsconnect_negative_timeout_s,
     )
     body = _body(response)
-    _print_result("API_03", response, "404 or 401")
-    assert response.status_code in (401, 404), (
-        f"API_03: expected 401 or 404, got {response.status_code}: {response.raw_body[:400]}"
+    reason = str(body.get("reason", "")).lower()
+    print_comparison_table(
+        [
+            ("HTTP status", str(response.status_code), "404", "CHECK"),
+            ("Transport", response.transport, "2.4 GHz mgmt", "INFO"),
+            ("JSON status", str(body.get("status", "")), "failure", "CHECK"),
+            ("Reason", reason or "(missing)", "ssid_not_found", "CHECK"),
+            ("JSON body", str(body)[:120], "—", "INFO"),
+        ]
+    )
+    assert response.status_code == 404, (
+        f"API_03: expected HTTP 404 (ssid_not_found), got {response.status_code}: "
+        f"{response.raw_body[:400]}"
     )
     assert str(body.get("status", "")).lower() == "failure", f"API_03: expected status=failure, got {body!r}"
-    reason = str(body.get("reason", "")).lower()
-    assert reason in ("ssid_not_found", "authentication_fail"), (
-        f"API_03: expected reason=ssid_not_found or authentication_fail, got {body.get('reason')!r}"
+    assert reason == "ssid_not_found", (
+        f"API_03: expected reason=ssid_not_found, got {body.get('reason')!r}"
     )
 
 

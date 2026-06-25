@@ -214,6 +214,33 @@ class RadioPropertiesLocators:
     MAXIMUM_SU_INPUT = "//*[@name='wireless.@wifi-iface[1].maxsta']"
 
 
+class Radio24Locators:
+    """Wireless > 2.4 GHz Radio (radio0 / ath0)."""
+
+    MENU_WIRELESS = CommonLocators.MENU_WIRELESS
+    SUBMENU_RADIO_24 = CommonLocators.submenu_by_href("/wireless/radio0")
+    RADIO_0_URL_CHUNK = "/admin/wireless/radio0"
+
+    STATUS_DROPDOWN = "select[name='wireless.@wifi-iface[0].disabled']"
+    SSID_INPUT = "input[name='wireless.@wifi-iface[0].ssid']"
+    BANDWIDTH_DROPDOWN = "select[name='wireless.wifi0.htmode'], #supp_band"
+    CONFIGURED_CHANNEL_DROPDOWN = "select[name='advwireless.ath0.channel'], #supp_chan"
+    ACTIVE_CHANNEL_DISPLAY = "#opchannel"
+    ENCRYPTION_DROPDOWN = "select[name='wireless.@wifi-iface[0].encryption']"
+    ENCRYPTION_KEY_INPUT = "input[name='wireless.@wifi-iface[0].key'], #key_input"
+
+
+class WirelessSecurityLocators:
+    """Wireless Security (WPA2-WPA3 plan) — Radio 1 encryption controls."""
+
+    MENU_WIRELESS = RadioPropertiesLocators.MENU_WIRELESS
+    SUBMENU_RADIO_1 = RadioPropertiesLocators.SUBMENU_RADIO_1
+    SSID_INPUT = RadioPropertiesLocators.SSID_INPUT
+    ENCRYPTION_DROPDOWN = RadioPropertiesLocators.ENCRYPTION_DROPDOWN
+    ENCRYPTION_KEY_INPUT = RadioPropertiesLocators.ENCRYPTION_KEY_INPUT
+    NETWORK_SECRET_INPUT = RadioPropertiesLocators.NETWORK_SECRET_INPUT
+    RADIO_URL_CHUNK = "/admin/wireless/radio1"
+
 
 class ManagementLocators:
     # Sidebar

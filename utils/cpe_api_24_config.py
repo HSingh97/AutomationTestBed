@@ -7,7 +7,11 @@ import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from config.defaults import RADIO_24_SCAN_DEFAULTS
+
 CPE_24_MGMT_API_HOST = "169.254.254.1"
+DEFAULT_CPE_MGMT_SSID = str(RADIO_24_SCAN_DEFAULTS.get("CPE_MGMT_HIDDEN_SSID", "KWDEJPOQ")).strip()
+DEFAULT_CPE_MGMT_PASSWORD = str(RADIO_24_SCAN_DEFAULTS.get("CPE_MGMT_HIDDEN_PASSWORD", ""))
 DEFAULT_CPE_API_24_BASE = f"http://{CPE_24_MGMT_API_HOST}"
 BTSCONNECT_PATH = "/api/v1/CPE/btsconnect"
 BTSCONNECT_URL = f"{DEFAULT_CPE_API_24_BASE}{BTSCONNECT_PATH}"
@@ -59,6 +63,35 @@ API_12_PROGRESS_INTERVAL_S = 180.0
 INVALID_FW_STATUS_POLL_MAX_S = 60.0
 INVALID_FW_STATUS_POLL_DELAY_S = 2.0
 
+# 2.4G_RADIO_41–50 — generic CPE mgmt API validation (169.254.254.1 over 2.4 GHz Wi‑Fi).
+SW_VERSION_PATH = "/api/v1/cpe/sw-version"
+ALIGNMENT_DATA_PATH = "/api/v1/cpe/alignment-data"
+UPLOAD_SW_STATUS_PATH = "/api/v1/cpe/upload-sw-status"
+INVALID_API_PATH = "/api/v1/cpe/not-a-valid-endpoint"
+RADIO24_API_LOAD_REQUESTS = 100
+RADIO24_API_LOAD_WINDOW_S = 60.0
+RADIO24_API_RESPONSE_MAX_MS = 500.0
+# Case 46: 4 min boot settle, then nmcli join with profile SSID/password (no BTS-link wait).
+RADIO24_API_REBOOT_BOOT_MIN_S = 240.0  # 4 min before first join attempt
+RADIO24_API_REJOIN_INTERVAL_S = 15.0
+RADIO24_API_REBOOT_WAIT_S = 600.0  # 10 min total (4 min boot + up to 6 min retries)
+RADIO24_BTS_LINK_WAIT_S = 300.0
+RADIO24_API_LOG_PATTERNS = [
+    r"sw-version",
+    r"sw_version",
+    r"swversion",
+    r"Software version",
+    r"/api/v1",
+    r"api/v1/cpe",
+    r"cpe_api_body",
+    r"senao-openapi",
+    r"api\.fcgi",
+    r"METHOD_NOT_ALLOWED",
+    r"endpoint_not_found",
+    r"ssid_not_found",
+    r"openapi",
+]
+
 
 @dataclass(frozen=True)
 class CpeApi24Config:
@@ -78,6 +111,7 @@ class CpeApi24Config:
     factory_reset_command: str
     factory_reset_path: str | None
     cpe_ssh_host: str
+    cpe_ssh_fallback_host: str | None
     cpe_ssh_tunnel_host: str | None
     cpe_ssh_via_bts_tunnel: bool
     cpe_ssh_user: str
@@ -120,14 +154,34 @@ def resolve_cpe_api_24_config(request, profile: dict | None = None) -> CpeApi24C
     ).strip()
     cpe_ssh_password = request.config.getoption("--password") or dut.get("password") or ""
     cpe_ssh_user = request.config.getoption("--username") or dut.get("username") or "root"
+    remote_ipv6s = dut.get("remote_ipv6s") or []
+    cli_fallback = getattr(request.config.option, "cpe_24_ssh_fallback_host", None)
+    cpe_ssh_fallback = (
+        (str(cli_fallback).strip() if cli_fallback else "")
+        or (cpe24.get("cpe_ssh_fallback_host") or "").strip()
+        or (remote_ipv6s[0] if remote_ipv6s else "")
+    )
+    default_mgmt_ssid = DEFAULT_CPE_MGMT_SSID
+    default_mgmt_password = DEFAULT_CPE_MGMT_PASSWORD
+    cpe_mgmt_ssid = (
+        (request.config.getoption("--cpe-24-mgmt-ssid") or "").strip()
+        or str(cpe24.get("cpe_mgmt_ssid") or "").strip()
+        or default_mgmt_ssid
+    )
     return CpeApi24Config(
         base_url=base_url,
         btsconnect_path=BTSCONNECT_PATH,
         wifi_interface=request.config.getoption("--cpe-24-wifi-interface") or None,
-        wifi_connection_name="cpe-api-24-mgmt",
+        wifi_connection_name=cpe_mgmt_ssid,
         wifi_settle_s=8.0,
-        cpe_mgmt_ssid=(request.config.getoption("--cpe-24-mgmt-ssid") or "").strip(),
-        cpe_mgmt_password=_cli_password(request, "--cpe-24-mgmt-password"),
+        cpe_mgmt_ssid=cpe_mgmt_ssid,
+        cpe_mgmt_password=_cli_password(request, "--cpe-24-mgmt-password")
+        if request.config.getoption("--cpe-24-mgmt-password") is not None
+        else (
+            cpe24.get("cpe_mgmt_password")
+            if cpe24.get("cpe_mgmt_password") is not None
+            else default_mgmt_password
+        ),
         cpe_mgmt_hidden=True,
         bts_ssid=(request.config.getoption("--cpe-24-bts-ssid") or "").strip(),
         bts_password=_cli_password(request, "--cpe-24-bts-password"),
@@ -151,6 +205,7 @@ def resolve_cpe_api_24_config(request, profile: dict | None = None) -> CpeApi24C
             or cpe24.get("cpe_ssh_host")
             or DEFAULT_CPE_SSH_HOST
         ),
+        cpe_ssh_fallback_host=cpe_ssh_fallback or None,
         cpe_ssh_tunnel_host=str(cpe24.get("cpe_ssh_tunnel_host")).strip() if cpe24.get("cpe_ssh_tunnel_host") else None,
         cpe_ssh_via_bts_tunnel=bool(cpe24.get("cpe_ssh_via_bts_tunnel", False)),
         cpe_ssh_user=cpe_ssh_user,

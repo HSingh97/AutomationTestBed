@@ -1,8 +1,5 @@
 """
-CPE API — BTS SSH for btsconnect creds; PC joins CPE mgmt Wi‑Fi manually.
-
-  Step 1: You connect PC to CPE 2.4 GHz mgmt Wi‑Fi → tests print active SSID + check 169.254.254.1
-  Step 2: BTS SSID/key from BTS SSH (--local-ipv6) or --cpe-24-bts-* CLI
+CPE API — PC auto-joins CPE hidden mgmt Wi‑Fi KWDEJPOQ (169.254.254.1); BTS creds for link restore only.
 """
 
 from __future__ import annotations
@@ -98,7 +95,7 @@ async def cpe_api_24_config(request, profile_bundle, bsu_ip, device_creds):
 
 
 @pytest.fixture(scope="session")
-async def cpe_24_mgmt_wifi_ready(cpe_api_24_config, request):
+async def cpe_24_mgmt_wifi_ready(cpe_api_24_config, request, bsu_ip, device_creds):
     if request.config.getoption("--skip-cpe-api-24"):
         pytest.skip("CPE API tests skipped (--skip-cpe-api-24).")
 
@@ -106,6 +103,9 @@ async def cpe_24_mgmt_wifi_ready(cpe_api_24_config, request):
         cpe_api_24_config,
         wifi_interface=cpe_api_24_config.wifi_interface,
         auto_join_wifi=request.config.getoption("--cpe-24-auto-join-wifi"),
+        bts_host=bsu_ip if cpe_api_24_config.fetch_bts_via_ssh else None,
+        bts_username=device_creds["user"],
+        bts_password=device_creds["pass"],
     )
     yield join
 
@@ -127,8 +127,9 @@ async def cpe_api_24_client(cpe_api_24_config, cpe_24_mgmt_wifi_ready, request):
     print_kv_block(
         "API run",
         {
-            "PC connected SSID": cpe_24_mgmt_wifi_ready.ssid or "(see Step 1 above)",
-            "BTS btsconnect SSID": cpe_api_24_config.bts_ssid,
+            "PC connected SSID": cpe_24_mgmt_wifi_ready.ssid or "KWDEJPOQ",
+            "CPE mgmt SSID (required)": cpe_api_24_config.cpe_mgmt_ssid or "KWDEJPOQ",
+            "BTS btsconnect SSID (CPE backhaul only)": cpe_api_24_config.bts_ssid,
             "CPE API": cpe_api_24_config.base_url,
         },
     )

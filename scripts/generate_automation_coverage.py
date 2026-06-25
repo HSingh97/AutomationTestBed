@@ -283,11 +283,18 @@ def classify_case(case: dict, automated_ids: set[str]) -> tuple[str, str, str]:
     if cid.startswith("ARPBRIDGE"):
         if cid in automated_ids:
             return "Automated", "tests/ArpBridgeTable/", "done"
-        if cid in ("ARPBRIDGE_01", "ARPBRIDGE_06", "ARPBRIDGE_08", "ARPBRIDGE_09", "ARPBRIDGE_10", "ARPBRIDGE_13", "ARPBRIDGE_14"):
-            return "Automated", "tests/ArpBridgeTable/Arp&BridgeTable.py", "done"
+        if cid in ("ARPBRIDGE_01", "ARPBRIDGE_06", "ARPBRIDGE_08", "ARPBRIDGE_09", "ARPBRIDGE_10", "ARPBRIDGE_12", "ARPBRIDGE_13", "ARPBRIDGE_14"):
+            return "Automated", "tests/ArpBridgeTable/test_arp_bridge_table.py", "done"
         if cid in ("ARPBRIDGE_02", "ARPBRIDGE_07"):
             return "Partial coverage", "Partial (GUI_107 ARP table)", "0.5 day"
         return "Not automated", "Manual / lab injection", "1–2 days"
+
+    if cid.startswith("W_SECURITY"):
+        if cid in automated_ids:
+            return "Automated", "tests/WirelessSecurity/", "done"
+        if cid in ("W_SECURITY_01", "W_SECURITY_03", "W_SECURITY_05", "W_SECURITY_06", "W_SECURITY_07", "W_SECURITY_09", "W_SECURITY_11", "W_SECURITY_14"):
+            return "Automated", "tests/WirelessSecurity/test_wireless_security.py", "done"
+        return "Not automated", "Medium (Wireless Security GUI+SSH)", "1–2 days"
 
     if sheet in ("Sanity", "Ethernet_Test", "Speed Test"):
         return "Not automated", "Medium (mixed sanity)", "1–2 days"

@@ -10,6 +10,12 @@ dut:
     - "2401:4900:d0:40d4::17b8:0:331"
   bts_pc_ipv6: "2401:4900:d0:40d4::17b8:0:301"
   cpe_pc_ipv6: "2401:4900:d0:40d4::17b8:0:302"
+  cpe_pc_ip: "10.0.150.33"
+  cpe_pc_password: "senao1234#"
+  # Lab PC with Wi‑Fi NIC for 2.4G_RADIO scan cases (SSH + nmcli/iwlist)
+  scan_pc_ip: "10.0.150.7"
+  scan_pc_password: "senao1234#"
+  cpe_fallback_ip: "10.0.0.1"
   mgmt_oob_ipv6: "2401:4900:d0:40d4::17b8:0:301"
   username: root
   password: Sen@0ubRNwk$
@@ -155,6 +161,9 @@ cpe_api_24:
   base_url: "http://169.254.254.1"
   btsconnect_path: "/api/v1/CPE/btsconnect"
   cpe_ssh_host: "169.254.254.1"
+  cpe_ssh_fallback_host: "2401:4900:d0:40d4::17b8:0:331"
+  cpe_mgmt_ssid: "KWDEJPOQ"
+  cpe_mgmt_password: "xvxsbulj"
   factory_reset_command: "firstboot -y && reboot"
   reset_wait_s: 180
   invalid_ssid: "UBR_INVALID_SSID_NOT_FOUND"

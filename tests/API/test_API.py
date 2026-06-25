@@ -128,6 +128,7 @@ async def test_api_02_btsconnect_authentication_fail(
 @pytest.mark.API_03
 @pytest.mark.CPE_API_24
 async def test_api_03_btsconnect_ssid_not_found(cpe_api_24_client, cpe_api_24_config):
+    """API_03 — invalid BTS SSID must return HTTP 404, reason=ssid_not_found (401 is FAIL)."""
     await assert_api_03_btsconnect_ssid_not_found(cpe_api_24_client, cpe_api_24_config)
 
 
