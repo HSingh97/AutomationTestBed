@@ -57,28 +57,6 @@ class RootCommands:
 
     # Optional: Command to check logs for the timestamp verify
     GET_LOGS = "logread | tail -n 20"
-    GET_BRIDGE_FDB = "brctl showmacs br-lan"
-    GET_ARP_TABLE = "arp"
-    GET_CONFIG_LOGS = "sed -n '1,200p' /etc/config_logs 2>/dev/null"
-    GET_DEVICE_LOGS = "sed -n '1,200p' /etc/device_logs 2>/dev/null"
-    GET_DEVICE_LOGS_TAIL = "tail -n 150 /etc/device_logs 2>/dev/null"
-    GET_DEVICE_LOGS_REBOOT_GREP = (
-        "grep -iE 'reboot|restart|reset|power|boot|watchdog' /etc/device_logs 2>/dev/null | tail -n 60"
-    )
-    GET_LOGREAD_REBOOT_GREP = (
-        "logread 2>/dev/null | grep -iE "
-        "'reboot|restart|kernel|procd|init|jffs2|watchdog|sysinit|software reset|umount' | tail -n 60"
-    )
-    GET_LOGREAD_WIRELESS_GREP = (
-        "logread 2>/dev/null | grep -iE "
-        "'wifi|wireless|ath|link|network|reload|partner|disconnect|connect|kwn' | tail -n 60"
-    )
-    GET_DEVICE_LOGS_WIRELESS_GREP = (
-        "grep -iE 'wifi|wireless|ath|link|network|reload|partner|disconnect|connect|kwn' "
-        "/etc/device_logs 2>/dev/null | tail -n 60"
-    )
-    GET_TEMPERATURE_LOGS = "sed -n '1,200p' /tmp/temp-log 2>/dev/null"
-    GET_SYSTEM_LOGS = "logread"
 
     # --- DYNAMIC LAN COMMANDS ---
     @staticmethod
@@ -185,34 +163,6 @@ class RootCommands:
     def get_maxcpe(radio_idx):
         return f"uci get wireless.@wifi-iface[{radio_idx}].maxsta"
 
-    @staticmethod
-    def get_dl_ul_ratio(radio_idx):
-        return f"uci get ath{radio_idx}qos.qoscfg.dlulratio"
-
-    @staticmethod
-    def get_ddrs_status(radio_idx):
-        return f"uci get txparam.ath{radio_idx}.ddrsstatus"
-
-    @staticmethod
-    def get_spatial_stream(radio_idx):
-        return f"uci get txparam.ath{radio_idx}.spatialstream"
-
-    @staticmethod
-    def get_ddrs_rate(radio_idx):
-        return f"uci get txparam.ath{radio_idx}.ddrsrate"
-
-    @staticmethod
-    def get_atpc_status(radio_idx):
-        return f"uci get txparam.ath{radio_idx}.atpcstatus"
-
-    @staticmethod
-    def get_tx_power(radio_idx):
-        return f"uci get txparam.ath{radio_idx}.atpcpower"
-
-    @staticmethod
-    def get_max_eirp(radio_idx):
-        return f"uci get txparam.ath{radio_idx}.maxeirp"
-
     # --- THROUGHPUT CONFIG COMMANDS ---
     @staticmethod
     def mcs_ucidyn_set_commands(radio_idx, mcs_rate, spatial_stream, ddrs_rate):
@@ -262,7 +212,65 @@ class RootCommands:
 
     @staticmethod
     def remote_apply_all_su():
-        return RootCommands.remote_exec_command(1, "ucidyn apply")
+        return '/usr/sbin/remote_exec.sh 1 "ucidyn apply"'
+
+    # --- LINK TEST TOOL (Monitor -> Tools -> Link Test Tool) ---
+    @staticmethod
+    def get_tool_bw(radio_idx: int = 1):
+        return f"uci get tool.ath{radio_idx}.bw"
+
+    @staticmethod
+    def get_tool_duration(radio_idx: int = 1):
+        return f"uci get tool.ath{radio_idx}.dur"
+
+    @staticmethod
+    def get_tool_vlan(radio_idx: int = 1):
+        return f"uci get tool.ath{radio_idx}.vlanid"
+
+    @staticmethod
+    def get_tool_direction(radio_idx: int = 1):
+        return f"uci get tool.ath{radio_idx}.dir"
+
+    @staticmethod
+    def get_tool_iplist(radio_idx: int = 1):
+        return f"uci get tool.ath{radio_idx}.iplist"
+
+    @staticmethod
+    def get_link_test_active(radio_idx: int = 1):
+        return f"cfg80211tool ath{radio_idx} g_kwn_tput_test"
+
+    @staticmethod
+    def clear_tool_cpe_list(radio_idx: int = 1):
+        return (
+            f"uci -q delete tool.ath{radio_idx}.iplist; "
+            f"uci -q delete tool.ath{radio_idx}.associdlist; "
+            f"uci set tool.ath{radio_idx}.start=0; uci commit tool"
+        )
+
+    @staticmethod
+    def get_active_link_count(radio_idx: int = 1):
+        return f"cfg80211tool ath{radio_idx} g_kwnlinks"
+
+    @staticmethod
+    def get_link_stat_field(radio_idx: int, assoc_idx: int, field: str):
+        prefix = "sub" if radio_idx == 2 else "sua"
+        return f"cat /sys/class/kwn/{prefix}{assoc_idx}/statistics/{field} 2>/dev/null"
+
+    @staticmethod
+    def get_link_stat_associd(radio_idx: int, assoc_idx: int):
+        return RootCommands.get_link_stat_field(radio_idx, assoc_idx, "associd")
+
+    GET_BRCTL_SHOW = "brctl show br-lan 2>/dev/null"
+    GET_BRCTL_SHOWMACS = "brctl showmacs br-lan 2>/dev/null"
+    GET_ARP_TABLE = "ip neigh show 2>/dev/null"
+    GET_ARP_TABLE_PROC = "cat /proc/net/arp 2>/dev/null"
+    GET_IP6_NEIGH = "ip -6 neigh show 2>/dev/null"
+    GET_CONFIG_LOGS = "logread -e 'uci:' 2>/dev/null | tail -n 120"
+    GET_DEVICE_LOGS = "logread 2>/dev/null | tail -n 120"
+    GET_DEVICE_LOGS_TAIL = "logread 2>/dev/null | tail -n 80"
+    GET_DEVICE_LOGS_REBOOT_GREP = "logread 2>/dev/null | grep -Ei 'reboot|kernel|boot' | tail -n 40"
+    GET_TEMPERATURE_LOGS = "logread -e 'temp' 2>/dev/null | tail -n 120"
+    GET_SYSTEM_LOGS = "logread 2>/dev/null | tail -n 200"
 
     @staticmethod
     def kickmac_command(radio_idx: int, mac: str) -> str:
@@ -272,5 +280,28 @@ class RootCommands:
 
     @staticmethod
     def emit_system_log_marker(marker: str):
-        safe_marker = str(marker).replace("'", "'\"'\"'")
-        return f"logger -t cursor_monitor '{safe_marker}'"
+        safe_marker = str(marker).replace('"', "").replace("'", "")
+        return f'logger "{safe_marker}"'
+
+    @staticmethod
+    def find_pcap_files():
+        return "ls -lt /tmp/*.pcap /var/*.pcap /var/pcap/*.pcap 2>/dev/null | head -3"
+
+    @staticmethod
+    def pcap_size_bytes(path: str):
+        return f"wc -c < {path} 2>/dev/null"
+
+    @staticmethod
+    def pcap_magic_hex(path: str):
+        return f"head -c 4 {path} 2>/dev/null | hexdump -v -e '1/1 \"%.2x\"' 2>/dev/null"
+
+    @staticmethod
+    def get_link_test_stats(radio_idx: int = 1, assoc_idx: int = 1):
+        prefix = "sub" if radio_idx == 2 else "sua"
+        base = f"/sys/class/kwn/{prefix}{assoc_idx}/statistics"
+        return {
+            "ul_throughput": f"cat {base}/tool_txtput 2>/dev/null",
+            "dl_throughput": f"cat {base}/tool_rxtput 2>/dev/null",
+            "ul_latency": f"cat {base}/tool_l_lat 2>/dev/null",
+            "dl_latency": f"cat {base}/tool_r_lat 2>/dev/null",
+        }

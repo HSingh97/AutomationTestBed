@@ -1,0 +1,49 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.1.1, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-124-generic-x86_64-with-glibc2.35', 'Packages': {'pytest': '8.1.1', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.13.0', 'order': '1.2.0', 'check': '2.8.0', 'asyncio': '0.23.5', 'xdist': '3.5.0', 'json-report': '1.5.0', 'html': '4.1.1', 'metadata': '3.1.1'}}
+rootdir: /home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed
+configfile: pytest.ini
+plugins: anyio-4.13.0, order-1.2.0, check-2.8.0, asyncio-0.23.5, xdist-3.5.0, json-report-1.5.0, html-4.1.1, metadata-3.1.1
+asyncio: mode=auto
+collecting ... collected 3 items
+
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_21_no_ssid_during_boot 
+========================================================================
+2_4G_RADIO_21: Reboot CPE — while CPE is booting, scan PC 10.0.150.7 must not connect to hidden SSID 'KWDEJPOQ'
+========================================================================
+Field                   GUI                           Backend/CLI             Result  
+----------------------  ----------------------------  ----------------------  --------
+CPE reboot              command sent                  sent                    PASS    
+Boot window             CPE booting                   1 connect attempt(s)    PASS    
+Hidden SSID connect     must not connect during boot  blocked                 PASS    
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_22_ssid_appears_after_boot 
+========================================================================
+2_4G_RADIO_22: Step 1 reboot CPE — Step 2 when up scan + connect hidden SSID 'KWDEJPOQ' on lab PC 10.0.150.7
+========================================================================
+[RADIO_24_SCAN] scan PC Wi‑Fi recovery level 2 on wlp3s0
+[RADIO_24_SCAN] scan PC Wi‑Fi recovery level 3 on wlp3s0
+Field                      GUI                        Backend/CLI             Result  
+-------------------------  -------------------------  ----------------------  --------
+Step 1 — CPE reboot        command sent               sent                    PASS    
+Step 2 — CPE SSH (CPE PC)  CPE up                     up                      PASS    
+Step 2 — SSID on scan PC   available (BSSID in scan)  C4:E3:CE:61:D7:61       PASS    
+Step 2 — scan PC connect   ok                         ok                      PASS    
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_23_broadcast_delay_validation 
+========================================================================
+2_4G_RADIO_23: Record boot → hidden SSID connect delay on scan PC 10.0.150.7
+========================================================================
+[RADIO_24_SCAN] 2_4G_RADIO_23: boot → hidden SSID connect = 290.4s
+Field                   GUI                     Backend/CLI             Result  
+----------------------  ----------------------  ----------------------  --------
+CPE reboot              command sent            sent                    PASS    
+Hidden SSID connect     ok after boot           ok                      PASS    
+Boot → SSID connect     recorded                290.4s                  PASS    
+
+PASSED
+
+======================== 3 passed in 1353.64s (0:22:33) ========================

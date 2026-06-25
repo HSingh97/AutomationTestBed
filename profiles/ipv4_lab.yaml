@@ -1,0 +1,41 @@
+name: ipv4_lab
+description: IPv4 lab testbed for GUI link test (BTS 192.168.2.10, CPE 192.168.2.11).
+
+dut:
+  ip_mode: ipv4
+  strict_ipv6: false
+  local_ip: "192.168.2.10"
+  remote_ips:
+    - "192.168.2.11"
+  username: root
+  password: Sen@0ubRNwk$
+
+link:
+  expected_mode: linked
+  min_connected_clients: 1
+  health_check_timeout_s: 20
+
+recovery:
+  max_retries: 2
+  retry_backoff_seconds:
+    - 3
+    - 8
+  allow_factory_reset: false
+  factory_reset_command: firstboot && reboot
+  reboot_wait_seconds: 120
+
+traffic:
+  benchmark_backend: ixia
+  stats_backend: trex
+
+link_test:
+  vlan_id: 0
+  vlan_min: 0
+  vlan_max: 4094
+  duration_s: 30
+  duration_min: 1
+  duration_max: 300
+  bw_min: 20
+  bw_max: 400
+  result_tolerance_throughput_mbps: 25
+  result_tolerance_latency_ms: 5

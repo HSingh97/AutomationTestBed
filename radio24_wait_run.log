@@ -1,0 +1,85 @@
+/home/senao/.local/lib/python3.10/site-packages/asyncssh/crypto/cipher.py:29: CryptographyDeprecationWarning: ARC4 has been moved to cryptography.hazmat.decrepit.ciphers.algorithms.ARC4 and will be removed from cryptography.hazmat.primitives.ciphers.algorithms in 48.0.0.
+  from cryptography.hazmat.primitives.ciphers.algorithms import AES, ARC4
+/home/senao/.local/lib/python3.10/site-packages/asyncssh/crypto/cipher.py:30: CryptographyDeprecationWarning: TripleDES has been moved to cryptography.hazmat.decrepit.ciphers.algorithms.TripleDES and will be removed from cryptography.hazmat.primitives.ciphers.algorithms in 48.0.0.
+  from cryptography.hazmat.primitives.ciphers.algorithms import TripleDES
+waiting for BTS↔CPE link (594s left)...
+waiting for BTS↔CPE link (574s left)...
+waiting for BTS↔CPE link (553s left)...
+waiting for BTS↔CPE link (533s left)...
+waiting for BTS↔CPE link (512s left)...
+waiting for BTS↔CPE link (492s left)...
+waiting for BTS↔CPE link (471s left)...
+BTS↔CPE link stable — settling 45s before pytest...
+running: /usr/bin/python3 -m pytest tests/Radio24Scan/test_2_4g_radio.py -m RADIO_24_01 or RADIO_24_02 --profile=default -v
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.1.1, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-124-generic-x86_64-with-glibc2.35', 'Packages': {'pytest': '8.1.1', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.13.0', 'order': '1.2.0', 'check': '2.8.0', 'asyncio': '0.23.5', 'xdist': '3.5.0', 'json-report': '1.5.0', 'html': '4.1.1', 'metadata': '3.1.1'}}
+rootdir: /home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed
+configfile: pytest.ini
+plugins: anyio-4.13.0, order-1.2.0, check-2.8.0, asyncio-0.23.5, xdist-3.5.0, json-report-1.5.0, html-4.1.1, metadata-3.1.1
+asyncio: mode=auto
+collecting ... collected 5 items / 3 deselected / 2 selected
+
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_01_hidden_ssid_not_visible 
+========================================================================
+2_4G_RADIO_01: Scan near CPE from lab PC 10.0.150.7 — hidden mgmt SSID 'KWDEJPOQ' must not appear in scan
+========================================================================
+
+--- Wi‑Fi scan SSIDs ---
+   1. [LG_MicrowaveOven]35b8
+   2. [LG_MicrowaveOven]3726
+   3. Airtel_Zerotouch
+   4. Cloud Radius
+   5. DIRECT-1c-HP 2606 LaserJet Tank
+   6. DIRECT-A7-HP M329dw LJ
+   7. DLI_LPC980
+   8. ECW_220PSK
+   9. EnGenius Zyxel
+  10. EnGenius-Guest
+  11. EnGeniusCorpNet
+  12. EPC WiFi
+  13. Fit- GUEST Wi-Fi
+  14. Fit- STAFF Wi-Fi
+  15. Phani
+  16. SenaoCorpNet
+  17. TEST
+  18. UBRMGMT40931B
+  19. UBRMGMT409327
+  20. UBRMGMT4C969D
+  21. UBRMGMT4C96A9
+  22. VLAN Test
+
+  TARGET 'KWDEJPOQ': not in scan — PASS (hidden)
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_02_connect_hidden_ssid 
+========================================================================
+2_4G_RADIO_02: SSH nmcli connect hidden SSID 'KWDEJPOQ' on lab PC 10.0.150.7
+========================================================================
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.1.1, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-124-generic-x86_64-with-glibc2.35', 'Packages': {'pytest': '8.1.1', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.13.0', 'order': '1.2.0', 'check': '2.8.0', 'asyncio': '0.23.5', 'xdist': '3.5.0', 'json-report': '1.5.0', 'html': '4.1.1', 'metadata': '3.1.1'}}
+rootdir: /home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed
+configfile: pytest.ini
+plugins: anyio-4.13.0, order-1.2.0, check-2.8.0, asyncio-0.23.5, xdist-3.5.0, json-report-1.5.0, html-4.1.1, metadata-3.1.1
+asyncio: mode=auto
+collecting ... collected 5 items / 4 deselected / 1 selected
+
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_02_connect_hidden_ssid 
+========================================================================
+2_4G_RADIO_02: SSH nmcli connect hidden SSID 'KWDEJPOQ' on lab PC 10.0.150.7
+========================================================================
+  CPE 2.4 GHz AP BSSID: C4:E3:CE:61:D7:61 (WPA2-PSK hidden join)
+Field                     GUI                     Backend/CLI             Result  
+------------------------  ----------------------  ----------------------  --------
+Wi‑Fi device state        connected               100 (connected)         PASS    
+Hidden SSID               KWDEJPOQ                KWDEJPOQ                PASS    
+nmcli connect (SSH)       profile add + up        ok                      PASS    
+Ping CPE mgmt via wlp3s0  169.254.254.1           reachable               PASS    
+Internet via wlp3s0       no reply to 8.8.8.8     no internet             PASS    
+
+PASSED
+
+======================= 1 passed, 4 deselected in 20.43s =======================

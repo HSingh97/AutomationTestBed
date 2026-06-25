@@ -1,0 +1,14 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.1.1, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-124-generic-x86_64-with-glibc2.35', 'Packages': {'pytest': '8.1.1', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.13.0', 'order': '1.2.0', 'check': '2.8.0', 'asyncio': '0.23.5', 'xdist': '3.5.0', 'json-report': '1.5.0', 'html': '4.1.1', 'metadata': '3.1.1'}}
+rootdir: /home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed
+configfile: pytest.ini
+plugins: anyio-4.13.0, order-1.2.0, check-2.8.0, asyncio-0.23.5, xdist-3.5.0, json-report-1.5.0, html-4.1.1, metadata-3.1.1
+asyncio: mode=auto
+collecting ... collected 10 items / 9 deselected / 1 selected
+
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_05_factory_reset_scan_ssid 
+========================================================================
+2_4G_RADIO_05: Factory reset CPE — Radio 1 SSID after boot — 2.4 GHz SSID hidden
+========================================================================

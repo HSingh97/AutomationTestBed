@@ -1,0 +1,243 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.1.1, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-124-generic-x86_64-with-glibc2.35', 'Packages': {'pytest': '8.1.1', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.13.0', 'order': '1.2.0', 'check': '2.8.0', 'asyncio': '0.23.5', 'xdist': '3.5.0', 'json-report': '1.5.0', 'html': '4.1.1', 'metadata': '3.1.1'}}
+rootdir: /home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed
+configfile: pytest.ini
+plugins: anyio-4.13.0, order-1.2.0, check-2.8.0, asyncio-0.23.5, xdist-3.5.0, json-report-1.5.0, html-4.1.1, metadata-3.1.1
+asyncio: mode=auto
+collecting ... collected 9 items
+
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_01_hidden_ssid_not_visible 
+========================================================================
+2_4G_RADIO_01: Scan near CPE from lab PC 10.0.150.7 — hidden mgmt SSID 'KWDEJPOQ' must not appear in scan
+========================================================================
+
+--- Wi‑Fi scan SSIDs ---
+   1. [LG_MicrowaveOven]35b8
+   2. [LG_MicrowaveOven]3726
+   3. Airtel_Zerotouch
+   4. Arrow-IOT
+   5. Cloud Radius
+   6. DIRECT-1c-HP 2606 LaserJet Tank
+   7. DIRECT-A7-HP M329dw LJ
+   8. DLI_LPC980
+   9. ECW_220PSK
+  10. EnGenius Zyxel
+  11. EnGenius-Guest
+  12. EnGeniusCorpNet
+  13. EPC WiFi
+  14. Fit- GUEST Wi-Fi
+  15. Fit- STAFF Wi-Fi
+  16. GNXS-2.4G-1B5C30
+  17. Phani
+  18. Samsung Fridge_E50AJTRA136A
+  19. SenaoCorpNet
+  20. TEST
+  21. UBRMGMT40931B
+  22. UBRMGMT409327
+  23. UBRMGMT4C969D
+  24. UBRMGMT4C96A9
+  25. VLAN Test
+
+  TARGET 'KWDEJPOQ': not in scan — PASS (hidden)
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_02_connect_hidden_ssid 
+========================================================================
+2_4G_RADIO_02: SSH nmcli connect hidden SSID 'KWDEJPOQ' on lab PC 10.0.150.7
+========================================================================
+  CPE 2.4 GHz AP BSSID: C4:E3:CE:61:D7:61 (WPA&WPA2 Personal hidden join)
+  Wi‑Fi join target: scan PC 10.0.150.7 (not the pytest runner desktop)
+Field                     GUI                     Backend/CLI             Result  
+------------------------  ----------------------  ----------------------  --------
+Wi‑Fi device state        connected               100 (connected)         PASS    
+Hidden SSID               KWDEJPOQ                KWDEJPOQ                PASS    
+wlp3s0 IPv4               169.254.x               169.254.254.100         PASS    
+nmcli connect (SSH)       profile add + up        ok                      PASS    
+Ping CPE mgmt via wlp3s0  169.254.254.1           reachable               PASS    
+Internet via wlp3s0       no reply to 8.8.8.8     no internet             PASS    
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_03_connect_hidden_ssid_wrong_password 
+========================================================================
+2_4G_RADIO_03: Disconnect all Wi‑Fi — hidden SSID 'KWDEJPOQ' must not appear; wrong password must not connect
+========================================================================
+
+--- Wi‑Fi scan SSIDs ---
+   1. [LG_MicrowaveOven]35b8
+   2. [LG_MicrowaveOven]3726
+   3. Airtel_Zerotouch
+   4. Arrow-Guest
+   5. Arrow-IOT
+   6. Cloud Radius
+   7. DIRECT-1c-HP 2606 LaserJet Tank
+   8. DIRECT-A4-HP 
+   9. DIRECT-A7-HP M329dw LJ
+  10. DLI_LPC980
+  11. ECW_220PSK
+  12. EnGenius Zyxel
+  13. EnGenius-Guest
+  14. EnGeniusCorpNet
+  15. EPC WiFi
+  16. Fit- GUEST Wi-Fi
+  17. Fit- STAFF Wi-Fi
+  18. GNXS-2.4G-1B5C30
+  19. Phani
+  20. Samsung Fridge_E50AJTRA136A
+  21. SenaoCorpNet
+  22. TEST
+  23. UBRMGMT40931B
+  24. UBRMGMT409327
+  25. UBRMGMT4C969D
+  26. UBRMGMT4C96A9
+  27. VLAN Test
+
+  TARGET 'KWDEJPOQ': not in scan — PASS (hidden)
+
+Field                           GUI                     Backend/CLI             Result  
+------------------------------  ----------------------  ----------------------  --------
+Hidden SSID in scan             not visible             not in scan             PASS    
+Wi‑Fi device state              not connected           30 (disconnected)       PASS    
+Hidden SSID                     not 'KWDEJPOQ'          (not connected)         PASS    
+nmcli connect (wrong password)  activation fails        failed                  PASS    
+Ping CPE mgmt via wlp3s0        no reply                no reply                PASS    
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_04_reboot_cpe_scan_hidden_ssid 
+========================================================================
+2_4G_RADIO_04: Reboot CPE — wait for BTS/CPE link — scan; 'KWDEJPOQ' must stay hidden
+========================================================================
+Field                   GUI                     Backend/CLI             Result  
+----------------------  ----------------------  ----------------------  --------
+CPE reboot              command sent            sent                    PASS    
+BTS SSH                 reachable               ok                      PASS    
+BTS ping CPE IPv6       reachable               ok                      PASS    
+Link stable             BTS + CPE ping          stable                  PASS    
+
+
+--- Wi‑Fi scan SSIDs ---
+   1. [LG_MicrowaveOven]35b8
+   2. Airtel_Zerotouch
+   3. Arrow-Guest
+   4. Arrow-IOT
+   5. Cloud Radius
+   6. DIRECT-1c-HP 2606 LaserJet Tank
+   7. DIRECT-A7-HP M329dw LJ
+   8. DLI_LPC980
+   9. ECW_220PSK
+  10. EnGenius Zyxel
+  11. EnGenius-Guest
+  12. EnGeniusCorpNet
+  13. EPC WiFi
+  14. Fit- GUEST Wi-Fi
+  15. GNXS-2.4G-1B5C30
+  16. Phani
+  17. Samsung Fridge_E50AJTRA136A
+  18. SenaoCorpNet
+  19. TEST
+  20. UBRMGMT40931B
+  21. UBRMGMT409327
+  22. UBRMGMT4C96A9
+
+  TARGET 'KWDEJPOQ': not in scan — PASS (hidden)
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_08_fw_upgrade_scan_hidden_ssid 
+========================================================================
+2_4G_RADIO_08: FW upgrade 'Senao-UBR650-xxx-0.0.0.730-single.tgz' (preserve config) — link up — scan; 'KWDEJPOQ' must stay hidden
+========================================================================
+
+--- Wi‑Fi scan SSIDs ---
+   1. [LG_MicrowaveOven]35b8
+   2. [LG_MicrowaveOven]3726
+   3. Airtel_Zerotouch
+   4. Arrow-Guest
+   5. Arrow-IOT
+   6. Cloud Radius
+   7. DIRECT-1c-HP 2606 LaserJet Tank
+   8. DIRECT-A7-HP M329dw LJ
+   9. DLI_LPC980
+  10. ECW_220PSK
+  11. EnGenius Zyxel
+  12. EnGenius-Guest
+  13. EnGeniusCorpNet
+  14. EPC WiFi
+  15. Fit- GUEST Wi-Fi
+  16. Fit- STAFF Wi-Fi
+  17. GNXS-2.4G-1B5C30
+  18. Phani
+  19. Samsung Fridge_E50AJTRA136A
+  20. SenaoCorpNet
+  21. TEST
+  22. UBRMGMT40931B
+  23. UBRMGMT409327
+  24. UBRMGMT4C969D
+  25. UBRMGMT4C96A9
+  26. VLAN Test
+
+  TARGET 'KWDEJPOQ': not in scan — PASS (hidden)
+
+Field                      GUI                     Backend/CLI             Result  
+-------------------------  ----------------------  ----------------------  --------
+CPE mgmt AP ready          enabled                 ready                   PASS    
+FW upload (API)            upload-sw success       ok                      PASS    
+FW upgrade preserveConfig  UPGRADE_STARTED         started                 PASS    
+BTS link after upgrade     stable                  stable                  PASS    
+Hidden SSID in scan        not visible             not in scan             PASS    
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_17_dhcp_server_down_no_ip 
+========================================================================
+2_4G_RADIO_17: Disable CPE 2.4 GHz DHCP server — scan PC must not connect on mgmt Wi‑Fi
+========================================================================
+Field                   GUI                     Backend/CLI                                                         Result  
+----------------------  ----------------------  ------------------------------------------------------------------  --------
+CPE lan24 DHCP          disabled (ignore=1)     ignore=1                                                            PASS    
+Mgmt Wi‑Fi link         not connected           state='70 (connecting (getting IP configuration))' ssid='KWDEJPOQ'  PASS    
+wlp3s0 IPv4             none on mgmt subnet     (none)                                                              PASS    
+Ping CPE mgmt           unreachable             fail                                                                PASS    
+nmcli join attempt      no usable link          ok                                                                  PASS    
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_18_dhcp_recovery_after_reboot 
+========================================================================
+2_4G_RADIO_18: Reboot CPE (DHCP on) — link up — connect mgmt Wi‑Fi — IP 169.254.254.100
+========================================================================
+Field                   GUI                     Backend/CLI             Result  
+----------------------  ----------------------  ----------------------  --------
+CPE mgmt + DHCP         ready                   ready                   PASS    
+BTS↔CPE link            stable                  stable                  PASS    
+wlp3s0 DHCP IP          169.254.254.100         169.254.254.100         PASS    
+nmcli connect           ok                      ok                      PASS    
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_19_dhcp_stress_connect_disconnect 
+========================================================================
+2_4G_RADIO_19: Toggle Wi‑Fi 25x (LAN up) — auto-connect — DHCP IP 169.254.254.100
+========================================================================
+Field                     GUI                     Backend/CLI             Result  
+------------------------  ----------------------  ----------------------  --------
+LAN ports                 up                      enp4s0, enp1s0          PASS    
+Wi‑Fi radio toggles       25                      25                      PASS    
+Wi‑Fi auto-connect        KWDEJPOQ                connected               PASS    
+DHCP IP                   169.254.254.100         169.254.254.100         PASS    
+Ping CPE mgmt             169.254.254.1           ok                      PASS    
+CPE reachable (BTS ping)  ok                      ok                      PASS    
+
+PASSED
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_20_dhcp_logs_lease_assignment 
+========================================================================
+2_4G_RADIO_20: Verify scan PC on CPE 2.4 SSID — CPE Leases tab matches this client
+========================================================================
+Field                      GUI                     Backend/CLI             Result  
+-------------------------  ----------------------  ----------------------  --------
+Scan PC SSID               KWDEJPOQ                connected               PASS    
+Client DHCP IP (this PC)   169.254.254.100         169.254.254.100         PASS    
+Client MAC (Wi‑Fi)         3c:64:cf:8d:83:75       3c:64:cf:8d:83:75       PASS    
+Client hostname (this PC)  senao                   senao                   PASS    
+CPE dhcp.leases            MAC + IP + hostname     found                   PASS    
+
+PASSED
+
+======================== 9 passed in 1769.85s (0:29:29) ========================

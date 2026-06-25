@@ -1,0 +1,121 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.1.1, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-124-generic-x86_64-with-glibc2.35', 'Packages': {'pytest': '8.1.1', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.13.0', 'order': '1.2.0', 'check': '2.8.0', 'asyncio': '0.23.5', 'xdist': '3.5.0', 'json-report': '1.5.0', 'html': '4.1.1', 'metadata': '3.1.1'}}
+rootdir: /home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed
+configfile: pytest.ini
+plugins: anyio-4.13.0, order-1.2.0, check-2.8.0, asyncio-0.23.5, xdist-3.5.0, json-report-1.5.0, html-4.1.1, metadata-3.1.1
+asyncio: mode=auto
+collecting ... collected 9 items / 8 deselected / 1 selected
+
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_19_dhcp_stress_connect_disconnect 
+========================================================================
+2_4G_RADIO_19: Toggle WAN 25x — mgmt SSID auto-connect — DHCP IP 169.254.254.100
+========================================================================
+[RADIO_24_SCAN] lan24 DHCP set ignore=0 failed: [Errno 101] Network is unreachable
+FAILED
+
+=================================== FAILURES ===================================
+_______________ test_radio_24_19_dhcp_stress_connect_disconnect ________________
+
+profile_bundle = ProfileBundle(active_name='default', recovery_name='link_formation', active={'name': 'default', 'description': 'Baseli...ir': '/tmp/ubr_jumbo_captures', 'bts_host': '', 'cpe_host': '', 'bts_interface': 'enp3s0', 'cpe_interface': 'enp3s0'}})
+
+    @pytest.mark.order(19)
+    @pytest.mark.asyncio(scope="session")
+    @pytest.mark.RADIO_24_19
+    @pytest.mark.Radio24Scan
+    async def test_radio_24_19_dhcp_stress_connect_disconnect(profile_bundle):
+        """2.4G_RADIO_19 — toggle WAN port 25x; Wi‑Fi auto-reconnects with DHCP IP."""
+>       await assert_radio_24_19_dhcp_stress_connect_disconnect(profile_bundle)
+
+tests/Radio24Scan/test_2_4g_radio.py:87: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+utils/radio24_scan_flows.py:2380: in assert_radio_24_19_dhcp_stress_connect_disconnect
+    toggled = await _toggle_scan_pc_wan_port(
+utils/radio24_scan_flows.py:1978: in _toggle_scan_pc_wan_port
+    await _ssh_run(conn, f"nmcli device disconnect {wan_iface}", timeout_s=20)
+utils/radio24_scan_flows.py:48: in _ssh_run
+    result = await conn.run(command, check=False, timeout=timeout_s)
+/home/senao/.local/lib/python3.10/site-packages/asyncssh/connection.py:4325: in run
+    return await process.wait(check, timeout)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <asyncssh.process.SSHClientProcess object at 0x7f4867b3da20>
+check = False, timeout = 20
+
+    async def wait(self, check: bool = False,
+                   timeout: Optional[float] = None) -> SSHCompletedProcess:
+        """Wait for process to exit
+    
+           This method is a coroutine which waits for the process to
+           exit. It returns an :class:`SSHCompletedProcess` object with
+           the exit status or signal information and the output sent
+           to stdout and stderr if those are redirected to pipes.
+    
+           If the check argument is set to `True`, a non-zero exit
+           status from the process with trigger the :exc:`ProcessError`
+           exception to be raised.
+    
+           If a timeout is specified and it expires before the process
+           exits, the :exc:`TimeoutError` exception will be raised. By
+           default, no timeout is set and this call will wait indefinitely.
+    
+           :param check:
+               Whether or not to raise an error on non-zero exit status
+           :param timeout:
+               Amount of time in seconds to wait for process to exit, or
+               `None` to wait indefinitely
+           :type check: `bool`
+           :type timeout: `int`, `float`, or `None`
+    
+           :returns: :class:`SSHCompletedProcess`
+    
+           :raises: | :exc:`ProcessError` if check is set to `True`
+                      and the process returns a non-zero exit status
+                    | :exc:`TimeoutError` if the timeout expires
+                      before the process exits
+    
+        """
+    
+        try:
+            stdout_data, stderr_data = \
+                await asyncio.wait_for(self.communicate(), timeout)
+        except asyncio.TimeoutError:
+            stdout_data, stderr_data = self.collect_output()
+    
+>           raise TimeoutError(self.env, self.command, self.subsystem,
+                               self.exit_status, self.exit_signal,
+                               self.returncode, stdout_data,
+                               stderr_data) from None
+E           asyncssh.process.TimeoutError
+
+/home/senao/.local/lib/python3.10/site-packages/asyncssh/process.py:1482: TimeoutError
+=========================== short test summary info ============================
+FAILED tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_19_dhcp_stress_connect_disconnect
+======================= 1 failed, 8 deselected in 54.29s =======================
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.1.1, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-124-generic-x86_64-with-glibc2.35', 'Packages': {'pytest': '8.1.1', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.13.0', 'order': '1.2.0', 'check': '2.8.0', 'asyncio': '0.23.5', 'xdist': '3.5.0', 'json-report': '1.5.0', 'html': '4.1.1', 'metadata': '3.1.1'}}
+rootdir: /home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed
+configfile: pytest.ini
+plugins: anyio-4.13.0, order-1.2.0, check-2.8.0, asyncio-0.23.5, xdist-3.5.0, json-report-1.5.0, html-4.1.1, metadata-3.1.1
+asyncio: mode=auto
+collecting ... collected 9 items / 8 deselected / 1 selected
+
+tests/Radio24Scan/test_2_4g_radio.py::test_radio_24_19_dhcp_stress_connect_disconnect 
+========================================================================
+2_4G_RADIO_19: Toggle Wi‑Fi 25x (LAN up) — auto-connect — DHCP IP 169.254.254.100
+========================================================================
+Field                     GUI                     Backend/CLI             Result  
+------------------------  ----------------------  ----------------------  --------
+LAN ports                 up                      enp4s0, enp1s0          PASS    
+Wi‑Fi radio toggles       25                      25                      PASS    
+Wi‑Fi auto-connect        KWDEJPOQ                connected               PASS    
+DHCP IP                   169.254.254.100         169.254.254.100         PASS    
+Ping CPE mgmt             169.254.254.1           ok                      PASS    
+CPE reachable (BTS ping)  ok                      ok                      PASS    
+
+PASSED
+
+================= 1 passed, 8 deselected in 114.42s (0:01:54) ==================

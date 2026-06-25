@@ -47,6 +47,19 @@ def _cli_remote_override(config, profile_name: str) -> str | None:
         return config.getoption("--remote-ipv6") or config.getoption("--remote-ip") or None
     return config.getoption("--remote-ip") or None
 
+
+# =====================================================================
+# EVENT LOOP (session-scoped asyncio for Radio24Scan / API tests)
+# =====================================================================
+@pytest.fixture(scope="session")
+def event_loop():
+    """Overrides pytest default function-scoped event loop."""
+    policy = asyncio.get_event_loop_policy()
+    loop = policy.new_event_loop()
+    yield loop
+    loop.close()
+
+
 # =====================================================================
 # 1. COMMAND LINE ARGUMENTS
 # =====================================================================

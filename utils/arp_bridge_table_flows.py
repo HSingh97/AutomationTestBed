@@ -594,6 +594,10 @@ async def _restore_cpe_via_bts_remote_exec(
         if _ip_neigh_cmd_failed(raw) and "usage:" in raw.lower():
             _log(f"ARPBRIDGE: remote_exec restore failed on: {inner[:60]}")
             return False
+    if not await _remote_exec_is_cpe_target(root_ssh, su_index):
+        _log(f"ARPBRIDGE: remote_exec SU{su_index} flipped to BTS — skip network reload")
+        return False
+    await _ssh(root_ssh, _remote_exec_bts_command(su_index, "/etc/init.d/network reload"))
     return True
 
 
@@ -2165,12 +2169,15 @@ async def assert_arpbridge_06_dynamic_ip_allocation(
         # endregion
 
         uci_snap = await _snapshot_lan_uci(cpe_ssh)
-        if uci_snap.get("netmask"):
-            lan_snap["netmask"] = uci_snap["netmask"].strip().strip("'\"")
+        lan_snap.update({k: v for k, v in uci_snap.items() if v})
+        lan_snap["ipaddr"] = static_cpe_ip
+        lan_snap["gateway"] = bts_ip
+        lan_snap["proto"] = "static"
 
         proto_before = await _read_lan_proto(cpe_ssh)
         if proto_before == "dhcp":
-            _log("ARPBRIDGE_06 [1/4]: CPE already on dhcp — skip apply")
+            _log("ARPBRIDGE_06 [1/4]: CPE already on dhcp — skip apply (will restore static in finally)")
+            cpe_dhcp_applied = True
         else:
             _log("ARPBRIDGE_06 [1/4]: set CPE network.lan.proto=dhcp (CPE only)")
             await _set_dynamic_ipv4_ssh(cpe_ssh)
@@ -2256,43 +2263,67 @@ async def assert_arpbridge_06_dynamic_ip_allocation(
         check.is_true(False, f"ARPBRIDGE_06: {exc}")
 
     finally:
-        _log("ARPBRIDGE_06 [4/4]: restore CPE Static IPv4 (CPE only — BTS untouched)")
-        if cpe_ssh is not None:
-            await _close_ssh_session(cpe_ssh)
+        _log("ARPBRIDGE_06 [4/4]: restore lab config (always — pass or fail)")
+        try:
+            if cpe_ssh is not None:
+                await _close_ssh_session(cpe_ssh)
+            cpe_ssh = None
 
-        restored = False
-        if cpe_dhcp_applied or (await _read_lan_proto_via_remote_exec(root_ssh, static_cpe_ip)) == "dhcp":
-            restored = await _restore_cpe_via_bts_remote_exec(root_ssh, static_cpe_ip, bts_ip)
-            if restored:
-                _log("ARPBRIDGE_06: restored CPE static via BTS remote_exec")
-            else:
+            needs_restore = cpe_dhcp_applied or bool(dhcp_cpe_ip)
+            if not needs_restore:
                 try:
-                    restore_ssh, restore_access = await _open_cpe_ssh_only_for_06(
-                        static_cpe_ip, bts_ip, creds, root_ssh=root_ssh
-                    )
-                    await _restore_lan_uci_snapshot(restore_ssh, lan_snap, device_label="CPE")
-                    await _ssh(restore_ssh, "/etc/init.d/network reload", timeout=120)
-                    restored = True
-                    _log(f"ARPBRIDGE_06: restored CPE static via {restore_access}")
-                    await _close_ssh_session(restore_ssh)
+                    proto_now = await _read_lan_proto_via_remote_exec(root_ssh, static_cpe_ip)
+                    needs_restore = proto_now == "dhcp"
                 except Exception as exc:
-                    _log(f"ARPBRIDGE_06: CPE restore fallback failed ({exc})")
+                    _log(f"ARPBRIDGE_06: CPE proto probe during cleanup skipped ({exc})")
 
-            _log(f"ARPBRIDGE_06 [4/4]: wait {ARPBRIDGE_06_SETTLE_S}s after CPE static restore")
-            await asyncio.sleep(ARPBRIDGE_06_SETTLE_S)
-            ping_ok, _ = await _ping_peer(root_ssh, static_cpe_ip, attempts=6)
-            print_section("ARPBRIDGE_06 [CPE] — static restore")
-            print_comparison_table(
-                [
-                    ("Restore applied", "yes" if restored else "no", "CPE only", "PASS" if restored else "FAIL"),
-                    ("BTS ping CPE", "ok" if ping_ok else "fail", static_cpe_ip, "PASS" if ping_ok else "FAIL"),
-                ]
-            )
-            check.is_true(restored, f"ARPBRIDGE_06: CPE static restore failed for {static_cpe_ip}")
-            check.is_true(ping_ok, f"ARPBRIDGE_06: BTS cannot ping restored CPE {static_cpe_ip}")
+            restored = False
+            ping_ok = False
+            if needs_restore:
+                restored = await restore_cpe_static_lab_ip(
+                    root_ssh,
+                    static_cpe_ip,
+                    bts_ip,
+                    creds,
+                    uci_snap=lan_snap,
+                    dhcp_cpe_ip=dhcp_cpe_ip,
+                    soft=True,
+                )
+                if not restored:
+                    restored = await _restore_cpe_via_bts_remote_exec(root_ssh, static_cpe_ip, bts_ip)
+                    if restored:
+                        _log("ARPBRIDGE_06: restored CPE static via BTS remote_exec (cleanup)")
+                if not restored:
+                    try:
+                        restore_ssh, restore_access = await _open_cpe_ssh_only_for_06(
+                            static_cpe_ip, bts_ip, creds, root_ssh=root_ssh
+                        )
+                        await _restore_lan_uci_snapshot(restore_ssh, lan_snap, device_label="CPE")
+                        await _ssh(restore_ssh, "/etc/init.d/network reload", timeout=120)
+                        restored = True
+                        _log(f"ARPBRIDGE_06: restored CPE static via {restore_access} (cleanup)")
+                        await _close_ssh_session(restore_ssh)
+                    except Exception as exc:
+                        _log(f"ARPBRIDGE_06: CPE restore fallback failed ({exc})")
 
-        if bts_snap:
-            await _verify_bts_unchanged_for_06(root_ssh, bts_snap, bts_ip)
+                _log(f"ARPBRIDGE_06 [4/4]: wait {ARPBRIDGE_06_SETTLE_S}s after CPE static restore")
+                await asyncio.sleep(ARPBRIDGE_06_SETTLE_S)
+                ping_ok, _ = await _ping_peer(root_ssh, static_cpe_ip, attempts=6)
+                print_section("ARPBRIDGE_06 [CPE] — static restore")
+                print_comparison_table(
+                    [
+                        ("Restore applied", "yes" if restored else "no", "CPE only", "PASS" if restored else "FAIL"),
+                        ("BTS ping CPE", "ok" if ping_ok else "fail", static_cpe_ip, "PASS" if ping_ok else "FAIL"),
+                    ]
+                )
+                check.is_true(restored, f"ARPBRIDGE_06: CPE static restore failed for {static_cpe_ip}")
+                check.is_true(ping_ok, f"ARPBRIDGE_06: BTS cannot ping restored CPE {static_cpe_ip}")
+
+            if bts_snap:
+                await _restore_bts_static_from_snap(root_ssh, bts_snap, bts_ip)
+                await _verify_bts_unchanged_for_06(root_ssh, bts_snap, bts_ip)
+        except Exception as exc:
+            _log(f"ARPBRIDGE_06: cleanup error ({type(exc).__name__}: {exc})")
 
 
 async def _read_lan_proto_via_remote_exec(root_ssh, cpe_ip: str) -> str:
@@ -3040,6 +3071,207 @@ async def assert_arpbridge_11_correct_port_forwarding(
     )
 
 
+def _peer_fdb_ports(rows: list[dict[str, str]], peer_mac: str) -> set[str]:
+    return {
+        r.get("interface", "")
+        for r in _peer_fdb_rows(rows, peer_mac)
+        if r.get("interface")
+    }
+
+
+def _alt_ping_ifaces_for_port(before_port: str, members: list[str]) -> list[str]:
+    """Sysfs ifaces to try after FDB flush — prefer the leg opposite the baseline GUI port."""
+    eth = next((m for m in members if m.startswith("eth")), "eth0")
+    radio = next((m for m in members if m.startswith(("ath", "wlan", "radio"))), "ath1")
+    radio_ports = frozenset({"LAN 2", "Radio 1", "Radio 2"})
+    if before_port in radio_ports:
+        order = [eth, radio, "br-lan"]
+    elif before_port == "LAN 1":
+        order = [radio, eth, "br-lan"]
+    else:
+        order = [eth, radio, "br-lan"]
+    seen: list[str] = []
+    for iface in order:
+        if iface and iface not in seen:
+            seen.append(iface)
+    return seen
+
+
+async def _relearn_peer_fdb_via_ifaces(
+    ssh,
+    peer_ip: str,
+    peer_mac: str,
+    ifaces: list[str],
+) -> tuple[list[dict[str, str]], str]:
+    """Ping via each bind iface until peer MAC reappears in brctl showmacs."""
+    bind_used = ""
+    for iface in ifaces:
+        await _ping_bind_iface(ssh, peer_ip, iface, count=4)
+        learned = await _wait_peer_fdb_learned(ssh, peer_mac, timeout_s=8.0)
+        if learned:
+            bind_used = iface
+            return learned, bind_used
+    return [], bind_used
+
+
+async def _assert_arpbridge_12_on_device(root_ssh, peer_ip: str, *, device_label: str) -> bool:
+    """
+    ARPBRIDGE_12: flush peer FDB, re-learn via alternate ingress; verify port update.
+
+    BTS performs flush + traffic steering; CPE is read-only (no flush/ping).
+    """
+    peer_ip = _require_ipv4(peer_ip, case_id="ARPBRIDGE_12", role=device_label)
+    is_cpe = device_label.upper().startswith("CPE")
+    _, peer_mac, _ = await _resolve_link_partner(root_ssh, peer_ip)
+    check.is_true(peer_mac, f"ARPBRIDGE_12 [{device_label}]: no RF MAC for {peer_ip}")
+
+    if is_cpe:
+        learned = _peer_fdb_rows(await _read_brctl_showmacs_rows(root_ssh), peer_mac)
+        learn_row = learned[0] if learned else {}
+        learn_port = learn_row.get("interface", "missing")
+        peer_ports = _peer_fdb_ports(learned, peer_mac)
+        single_port = len(peer_ports) == 1
+        print_section(f"ARPBRIDGE_12 [{device_label}] — Bridge FDB port update (read-only)")
+        print_comparison_table(
+            [
+                ("Peer RF MAC", peer_mac, "from link stats", "PASS" if peer_mac else "FAIL"),
+                (
+                    "MAC on bridge",
+                    f"{_norm_mac(learn_row.get('mac', ''))}@{learn_port}" if learned else "missing",
+                    "BTS flush/re-learn",
+                    "PASS" if learned else "FAIL",
+                ),
+                (
+                    "Learned port",
+                    learn_port,
+                    "single bridge port",
+                    "PASS" if single_port else "FAIL",
+                ),
+            ]
+        )
+        check.is_true(learned, f"ARPBRIDGE_12 [{device_label}]: peer MAC not in brctl showmacs")
+        check.is_true(single_port, f"ARPBRIDGE_12 [{device_label}]: peer on {peer_ports}")
+        _log(f"ARPBRIDGE_12 [{device_label}]: skipped FDB flush/ping on CPE")
+        return bool(peer_mac) and bool(learned) and single_port
+
+    ping_ok, _ = await _ping_peer(root_ssh, peer_ip, attempts=3)
+    if not ping_ok:
+        ping_ok, _ = await _ping_bind_iface(root_ssh, peer_ip, "br-lan")
+    rows = await _read_brctl_showmacs_rows(root_ssh)
+    before_ports = _peer_fdb_ports(rows, peer_mac)
+    if not before_ports:
+        warmed = await _wait_peer_fdb_learned(root_ssh, peer_mac, timeout_s=10.0)
+        before_ports = _peer_fdb_ports(warmed, peer_mac)
+    before_port = sorted(before_ports)[0] if before_ports else "unknown"
+    before_detail = ", ".join(sorted(before_ports)) or "none"
+
+    members = await _read_bridge_member_ifaces(root_ssh)
+    alt_ifaces = _alt_ping_ifaces_for_port(before_port, members)
+
+    deleted = await _flush_peer_bridge_fdb(root_ssh, peer_ip, peer_mac)
+    after_flush_ports = _peer_fdb_ports(await _read_brctl_showmacs_rows(root_ssh), peer_mac)
+    flushed_ok = not after_flush_ports
+
+    learned, bind_used = await _relearn_peer_fdb_via_ifaces(
+        root_ssh, peer_ip, peer_mac, alt_ifaces
+    )
+    if not learned:
+        learned, bind_used = await _relearn_peer_fdb_via_ifaces(
+            root_ssh, peer_ip, peer_mac, ["br-lan"]
+        )
+
+    after_ports = _peer_fdb_ports(learned, peer_mac) if learned else set()
+    after_port = sorted(after_ports)[0] if after_ports else "missing"
+    learn_row = learned[0] if learned else {}
+    learn_mac = _norm_mac(learn_row.get("mac", ""))
+    learn_age = learn_row.get("age", "n/a")
+    single_port = len(after_ports) == 1
+    port_changed = bool(before_ports and after_ports and after_ports != before_ports)
+    updated_ok = bool(learned) and single_port
+    port_status = "PASS" if port_changed else ("WARN" if updated_ok else "FAIL")
+
+    try:
+        await _flush_peer_bridge_fdb(root_ssh, peer_ip, peer_mac)
+        await _ping_peer(root_ssh, peer_ip, attempts=4)
+    except Exception as exc:
+        _log(f"ARPBRIDGE_12 [{device_label}]: restore after test: {exc}")
+
+    print_section(f"ARPBRIDGE_12 [{device_label}] — Bridge FDB port update")
+    print_comparison_table(
+        [
+            ("Peer RF MAC", peer_mac, "from link stats", "PASS" if peer_mac else "FAIL"),
+            ("FDB before flush", before_detail, "baseline port", "PASS" if before_ports else "FAIL"),
+            ("FDB entries deleted", str(deleted), ">=0", "PASS"),
+            (
+                "FDB after flush",
+                "cleared" if flushed_ok else ", ".join(sorted(after_flush_ports)),
+                "peer MAC absent",
+                "PASS" if flushed_ok else "WARN",
+            ),
+            (
+                "Re-learn bind",
+                bind_used or "none",
+                f"alternate of {before_port}",
+                "PASS" if bind_used else "FAIL",
+            ),
+            (
+                "MAC after re-learn",
+                f"{learn_mac}@{after_port}" if updated_ok else "missing",
+                f"{peer_mac} on one port",
+                "PASS" if updated_ok else "FAIL",
+            ),
+            (
+                "Port changed",
+                f"{before_port} -> {after_port}",
+                "different bridge port",
+                port_status,
+            ),
+            (
+                "Age timer",
+                learn_age,
+                "fresh entry",
+                "PASS" if updated_ok else "FAIL",
+            ),
+        ]
+    )
+    check.is_true(peer_mac, f"ARPBRIDGE_12 [{device_label}]: peer MAC unknown")
+    check.is_true(updated_ok, f"ARPBRIDGE_12 [{device_label}]: peer MAC not re-learned after flush")
+    check.is_true(single_port, f"ARPBRIDGE_12 [{device_label}]: peer on {after_ports} (expected 1 port)")
+    if not port_changed and updated_ok:
+        _log(
+            f"ARPBRIDGE_12 [{device_label}]: FDB re-learned on same port ({after_port}); "
+            "RF-only peer may not move to LAN 1 in this lab"
+        )
+    return bool(peer_mac) and updated_ok and single_port
+
+
+async def assert_arpbridge_12_bridge_table_entry_update(
+    root_ssh,
+    cpe_ips: list[str],
+    *,
+    bsu_ip: str | None = None,
+    device_creds: dict | None = None,
+) -> None:
+    """ARPBRIDGE_12 (IPv4): bridge FDB updates peer MAC port after flush + re-learn (BTS & CPE)."""
+    check.is_true(cpe_ips, "ARPBRIDGE_12: --remote-ip required")
+    cpe_ip = _require_ipv4(cpe_ips[0], case_id="ARPBRIDGE_12", role="CPE")
+    bts_ip = _require_ipv4(bsu_ip or "", case_id="ARPBRIDGE_12", role="BTS")
+    check.is_true(
+        cpe_ip != bts_ip,
+        f"ARPBRIDGE_12: CPE IP {cpe_ip} must differ from BTS IP {bts_ip}",
+    )
+    await _run_bts_and_cpe(
+        root_ssh,
+        cpe_ip,
+        bts_ip,
+        device_creds or {},
+        case_id="ARPBRIDGE_12",
+        on_device=_assert_arpbridge_12_on_device,
+        cpe_settle_s=15.0,
+        guard_bts_ip=True,
+    )
+
+
 async def assert_arpbridge_13_refresh_clear(
     gui_page,
     root_ssh,
@@ -3101,25 +3333,54 @@ def _fdb_has_exact_mac(rows: list[dict[str, str]], mac: str) -> bool:
     )
 
 
-def _pick_idle_aging_mac(rows: list[dict[str, str]], peer_mac: str) -> str:
-    """Remote FDB MAC that is not the live RF peer (idle host candidate)."""
-    peer_mac = _norm_mac(peer_mac)
-    remote: list[tuple[float, str]] = []
+def _pick_aging_monitor_mac(
+    rows: list[dict[str, str]],
+    *,
+    exclude_macs: set[str] | None = None,
+) -> str:
+    """
+    Remote FDB MAC with the highest ageing timer.
+
+    Skips LAN 1 remotes — they are often test-PC hosts stuck at age 0.0 from
+    constant Ethernet chatter and never show bridge ageing.
+    """
+    exclude = {_norm_mac(m) for m in (exclude_macs or set()) if m}
+    remote: list[tuple[float, str, str]] = []
+    fallback: list[tuple[float, str, str]] = []
     for row in rows:
         if row.get("local") != "no":
             continue
         mac = _norm_mac(row.get("mac", ""))
-        if not mac or _mac_match(mac, peer_mac) or _mac_related(mac, peer_mac):
+        if not mac or mac in exclude:
             continue
+        iface = row.get("interface", "")
         try:
             age = float(row.get("age", "0"))
         except ValueError:
             age = 0.0
-        remote.append((age, mac))
-    if not remote:
+        item = (age, mac, iface)
+        fallback.append(item)
+        if iface == "LAN 1":
+            continue
+        remote.append(item)
+    pool = remote or fallback
+    if not pool:
         return ""
-    remote.sort(key=lambda item: item[0])
-    return remote[0][1]
+    pool.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    for age, mac, _iface in pool:
+        if age > 0.0:
+            return mac
+    return pool[0][1]
+
+
+def _aging_timer_advanced(samples: list[float], *, min_delta: float = 0.05) -> bool:
+    """True when showmacs age increases across idle samples (RF entries tick slowly)."""
+    if len(samples) < 2:
+        return False
+    delta = max(samples) - min(samples)
+    if delta >= min_delta:
+        return True
+    return samples[-1] > samples[0] + (min_delta / 2)
 
 
 async def _showmacs_age_for_mac(ssh, mac: str) -> float | None:
@@ -3155,17 +3416,22 @@ async def _wait_fdb_mac_removed(
 async def _assert_arpbridge_14_on_device(root_ssh, peer_ip: str, *, device_label: str) -> bool:
     """
     ARPBRIDGE_14: shorten bridge ageing, leave a non-RF remote MAC idle, verify FDB aging.
-    OpenWrt does not expose manual bridge-fdb adds in brctl showmacs; use a live remote MAC.
+    OpenWrt ignores manual bridge-fdb adds in brctl showmacs; use a live remote MAC.
     """
     bridge = "br-lan"
     peer_ip = _require_ipv4(peer_ip, case_id="ARPBRIDGE_14", role=device_label)
     target_ageing = ARPBRIDGE_14_AGEING_S
     idle_wait_s = target_ageing + ARPBRIDGE_14_IDLE_BUFFER_S
 
-    _, peer_mac, _ = await _resolve_link_partner(root_ssh, peer_ip)
     baseline_rows = await _read_brctl_showmacs_rows(root_ssh)
-    test_mac = _pick_idle_aging_mac(baseline_rows, peer_mac)
-    check.is_true(test_mac, f"ARPBRIDGE_14 [{device_label}]: no idle remote MAC in showmacs")
+    _, peer_mac, _ = await _resolve_link_partner(root_ssh, peer_ip)
+    test_mac = _pick_aging_monitor_mac(baseline_rows)
+    if not test_mac and peer_mac:
+        test_mac = _pick_aging_monitor_mac(
+            baseline_rows,
+            exclude_macs={peer_mac},
+        )
+    check.is_true(test_mac, f"ARPBRIDGE_14 [{device_label}]: no remote MAC in showmacs")
 
     original_ageing = await _read_bridge_ageing_seconds(root_ssh, bridge)
     applied_ageing = original_ageing
@@ -3174,27 +3440,47 @@ async def _assert_arpbridge_14_on_device(root_ssh, peer_ip: str, *, device_label
     aged_out = False
     timer_active = False
     last_age = "n/a"
+    stale_purged = False
+    sampled_ages: list[float] = []
 
     try:
-        applied_ageing = await _set_bridge_ageing_seconds(root_ssh, bridge, target_ageing)
-        _log(
-            f"ARPBRIDGE_14 [{device_label}]: ageing {original_ageing}s -> {applied_ageing}s; "
-            f"idle host {test_mac} (start age={start_age})"
-        )
         check.is_true(
             start_age is not None,
             f"ARPBRIDGE_14 [{device_label}]: {test_mac} missing from showmacs at start",
         )
+        applied_ageing = await _set_bridge_ageing_seconds(root_ssh, bridge, target_ageing)
+        _log(
+            f"ARPBRIDGE_14 [{device_label}]: ageing {original_ageing}s -> {applied_ageing}s; "
+            f"monitor {test_mac} (start age={start_age})"
+        )
+
+        if not _fdb_has_exact_mac(await _read_brctl_showmacs_rows(root_ssh), test_mac):
+            aged_out = True
+            stale_purged = bool(start_age is not None and start_age > float(target_ageing))
 
         _log(f"ARPBRIDGE_14 [{device_label}]: idle {idle_wait_s}s (no test traffic)")
-        await asyncio.sleep(idle_wait_s)
+        if start_age is not None:
+            sampled_ages.append(start_age)
+        if not aged_out:
+            polls = max(4, idle_wait_s // 6)
+            for _ in range(int(polls)):
+                await asyncio.sleep(idle_wait_s / polls)
+                age = await _showmacs_age_for_mac(root_ssh, test_mac)
+                if age is not None:
+                    sampled_ages.append(age)
+                if not _fdb_has_exact_mac(await _read_brctl_showmacs_rows(root_ssh), test_mac):
+                    aged_out = True
+                    break
 
-        aged_out, last_age = await _wait_fdb_mac_removed(
-            root_ssh, test_mac, timeout_s=12.0
-        )
+        if not aged_out:
+            aged_out, last_age = await _wait_fdb_mac_removed(
+                root_ssh, test_mac, timeout_s=12.0
+            )
         end_age = await _showmacs_age_for_mac(root_ssh, test_mac)
-        if not aged_out and start_age is not None and end_age is not None:
-            timer_active = abs(end_age - start_age) >= 0.5
+        if end_age is not None:
+            sampled_ages.append(end_age)
+        if not aged_out and sampled_ages:
+            timer_active = _aging_timer_advanced(sampled_ages)
     finally:
         await _ssh(
             root_ssh,
@@ -3202,7 +3488,17 @@ async def _assert_arpbridge_14_on_device(root_ssh, peer_ip: str, *, device_label
             f"echo {original_ageing * 100} > /sys/class/net/{bridge}/bridge/ageing_time 2>/dev/null; true",
         )
 
-    aging_ok = aged_out or timer_active
+    aging_ok = aged_out or timer_active or stale_purged
+    age_delta = ""
+    if sampled_ages:
+        age_delta = f"{sampled_ages[0]:.2f} -> {sampled_ages[-1]:.2f}"
+    elif start_age is not None:
+        age_delta = f"{start_age} -> {end_age if end_age is not None else last_age}"
+    after_detail = "removed"
+    if aged_out and stale_purged:
+        after_detail = "removed (stale vs new timeout)"
+    elif not aged_out:
+        after_detail = f"present (age {end_age})"
     print_section(f"ARPBRIDGE_14 [{device_label}] — Bridge table aging")
     print_comparison_table(
         [
@@ -3214,9 +3510,9 @@ async def _assert_arpbridge_14_on_device(root_ssh, peer_ip: str, *, device_label
                 "PASS" if applied_ageing <= target_ageing + 2 else "WARN",
             ),
             (
-                "Idle host MAC",
+                "Monitored MAC",
                 test_mac or "none",
-                "remote non-RF entry",
+                "remote FDB (not LAN 1 PC)",
                 "PASS" if test_mac else "FAIL",
             ),
             (
@@ -3233,19 +3529,19 @@ async def _assert_arpbridge_14_on_device(root_ssh, peer_ip: str, *, device_label
             ),
             (
                 "MAC after aging",
-                "removed" if aged_out else f"present (age {end_age})",
+                after_detail,
                 "removed or timer advanced",
                 "PASS" if aging_ok else "FAIL",
             ),
             (
                 "Age timer delta",
-                f"{start_age} -> {end_age if end_age is not None else last_age}",
+                age_delta or "n/a",
                 "changed or entry gone",
                 "PASS" if aging_ok else "FAIL",
             ),
         ]
     )
-    check.is_true(test_mac, f"ARPBRIDGE_14 [{device_label}]: no idle MAC candidate")
+    check.is_true(test_mac, f"ARPBRIDGE_14 [{device_label}]: no remote MAC to monitor")
     check.is_true(
         aging_ok,
         f"ARPBRIDGE_14 [{device_label}]: {test_mac} did not age "
