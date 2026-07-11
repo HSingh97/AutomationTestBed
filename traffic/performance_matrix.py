@@ -1181,6 +1181,14 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 f"In={primary.get('in_rate') or primary.get('rx_rate')} "
                                 f"(expected Out {link_validation['expected_operating_rate_mbps']} Mbps)"
                             )
+                        if post_clients:
+                            rf_bits = []
+                            for client in post_clients[:6]:
+                                su = client.get("su_index") or client.get("sua_index") or "?"
+                                snr = f"{client.get('r_snr1') or '—'}/{client.get('r_snr2') or '—'}"
+                                rssi = client.get("r_rssi1") or client.get("l_rssi1") or "—"
+                                rf_bits.append(f"SU{su} SNR={snr} RSSI={rssi}")
+                            print(f"  RF post-TRex: {' | '.join(rf_bits)}")
                     except Exception as exc:
                         record["passed"] = False
                         err_text = str(exc)

@@ -100,7 +100,179 @@ def _testbed_devices(
     return bts, devices
 
 
+def _client_snr(client: dict[str, Any]) -> str:
+    return f"{client.get('r_snr1') or '—'}/{client.get('r_snr2') or '—'}"
+
+
+def _client_rssi(client: dict[str, Any]) -> str:
+    return str(client.get("r_rssi1") or client.get("l_rssi1") or "—")
+
+
+def _client_rx_mcs(client: dict[str, Any]) -> str:
+    raw = (
+        client.get("rx_rate_mcs")
+        or client.get("in_mcs")
+        or client.get("operating_mcs")
+        or client.get("actual_mcs")
+        or ""
+    )
+    text = str(raw).strip()
+    if not text or text in {"—", "-"}:
+        # Fall back to parenthetical MCS in rx_rate like "258 (22)"
+        rate = str(client.get("rx_rate") or client.get("in_rate") or "")
+        match = re.search(r"\((\d+)\)", rate)
+        return match.group(1) if match else "—"
+    return re.sub(r"^MCS", "", text, flags=re.IGNORECASE)
+
+
+def _fmt_su_mbps(value: Any) -> str:
+    num = _parse_float(value)
+    if num is None:
+        return "—"
+    return f"{num:.1f}"
+
+
+def _trex_su_stats(stats: dict[str, Any], su_index: int) -> dict[str, Any]:
+    """Per-SU TRex averages from summary_by_device, with live-sample fallback."""
+    trex = stats.get("trex") or {}
+    by_device = trex.get("summary_by_device") or {}
+    row = dict(by_device.get(f"SU{su_index}") or {})
+    if row.get("avg_tx_mbps") is None:
+        tx_values: list[float] = []
+        for sample in trex.get("live_samples") or []:
+            device = (sample.get("devices") or {}).get(f"SU{su_index}") or {}
+            if isinstance(device, dict) and device.get("tx_mbps") is not None:
+                tx_values.append(float(device["tx_mbps"]))
+        if tx_values:
+            row["avg_tx_mbps"] = sum(tx_values) / len(tx_values)
+    if row.get("avg_rx_mbps") is None:
+        rx_values: list[float] = []
+        for sample in trex.get("live_samples") or []:
+            device = (sample.get("devices") or {}).get(f"SU{su_index}") or {}
+            if isinstance(device, dict) and device.get("rx_mbps") is not None:
+                rx_values.append(float(device["rx_mbps"]))
+        if rx_values:
+            row["avg_rx_mbps"] = sum(rx_values) / len(rx_values)
+    return row
+
+
+def _su_rf_rows(
+    clients: list[dict[str, Any]],
+    *,
+    stats: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    stats = stats or {}
+    for client in sorted(
+        clients,
+        key=lambda row: int(row.get("su_index") or row.get("sua_index") or 0),
+    ):
+        su_index = int(client.get("su_index") or client.get("sua_index") or 0)
+        label = f"SU{su_index}" if su_index else "SU"
+        trex_dev = _trex_su_stats(stats, su_index) if su_index else {}
+        rows.append(
+            {
+                "label": label,
+                "mac": str(client.get("mac") or "—").strip() or "—",
+                "tx_rate": str(client.get("tx_rate") or client.get("out_rate") or "—"),
+                "rx_rate": str(client.get("rx_rate") or client.get("in_rate") or "—"),
+                "rx_mcs": _client_rx_mcs(client),
+                "tx_mbps": _fmt_su_mbps(trex_dev.get("avg_tx_mbps")),
+                "rx_mbps": _fmt_su_mbps(trex_dev.get("avg_rx_mbps")),
+                "snr": _client_snr(client),
+                "rssi": _client_rssi(client),
+            }
+        )
+    return rows
+
+
+def _snr_rssi_summaries(su_rf: list[dict[str, Any]]) -> tuple[str, str]:
+    """Return (snr_summary, rssi_summary) across SUs — min chain SNR and worst RSSI."""
+    snr_mins: list[float] = []
+    snr_avgs: list[float] = []
+    rssi_vals: list[float] = []
+    for row in su_rf:
+        parts = [p for p in str(row.get("snr") or "").split("/") if p and p != "—"]
+        nums = [_parse_float(p) for p in parts]
+        nums = [n for n in nums if n is not None]
+        if nums:
+            snr_mins.append(min(nums))
+            snr_avgs.append(sum(nums) / len(nums))
+        rssi = _parse_float(row.get("rssi"))
+        if rssi is not None:
+            rssi_vals.append(rssi)
+    if snr_mins:
+        snr_summary = f"{min(snr_mins):.0f}/{sum(snr_avgs) / len(snr_avgs):.0f}"
+    else:
+        snr_summary = "—"
+    rssi_summary = f"{min(rssi_vals):.0f}" if rssi_vals else "—"
+    return snr_summary, rssi_summary
+
+
+def _rf_from_record(record: dict[str, Any]) -> dict[str, Any]:
+    stats = record.get("stats") if isinstance(record.get("stats"), dict) else {}
+    for key in ("link_validation_post", "link_validation"):
+        clients = (record.get(key) or {}).get("clients") or []
+        if clients:
+            su_rf = _su_rf_rows(list(clients), stats=stats)
+            snr_summary, rssi_summary = _snr_rssi_summaries(su_rf)
+            return {
+                "su_rf": su_rf,
+                "snr_summary": snr_summary,
+                "rssi_summary": rssi_summary,
+            }
+    return {"su_rf": [], "snr_summary": "—", "rssi_summary": "—"}
+
+
+def _wanted_mcs_num(mcs: str) -> str:
+    return re.sub(r"^MCS", "", str(mcs or "").strip(), flags=re.IGNORECASE) or "—"
+
+
+def _enrich_mismatch_remark(
+    note: str,
+    *,
+    wanted_mcs: str,
+    su_rf: list[dict[str, Any]],
+    mcs_config: dict[str, Any] | None = None,
+) -> str:
+    """Attach expected vs actual MCS and SNR when a mismatch note is present."""
+    text = (note or "").strip()
+    if not text or "mismatch" not in text.lower():
+        return text or "—"
+
+    want = _wanted_mcs_num(wanted_mcs)
+    details: list[str] = []
+
+    # Prefer verify checks (role/label + actual_mcs) when available
+    checks = (mcs_config or {}).get("checks") or []
+    bad_checks = [row for row in checks if not row.get("ok")]
+    if bad_checks:
+        for row in bad_checks:
+            label = str(row.get("label") or row.get("role") or "SU")
+            got = _wanted_mcs_num(str(row.get("actual_mcs") or "?"))
+            snr = "—"
+            for rf in su_rf:
+                if rf["label"] == label or label.endswith(rf["label"]):
+                    snr = rf.get("snr") or "—"
+                    if got in {"?", "—"}:
+                        got = str(rf.get("rx_mcs") or got)
+                    break
+            details.append(f"{label}: want MCS{want} got MCS{got} (SNR {snr})")
+    elif su_rf:
+        for rf in su_rf:
+            got = str(rf.get("rx_mcs") or "—")
+            if got != want and got != "—":
+                details.append(
+                    f"{rf['label']}: want MCS{want} got MCS{got} (SNR {rf.get('snr') or '—'})"
+                )
+
+    if details:
+        return "MCS mismatch — " + "; ".join(details)
+    return text
+
+
 def _link_device_rows(link_clients: list[dict[str, Any]], *, prefix_len: int = 120) -> list[dict[str, Any]]:
+    """Inventory-style rows (still used for testbed MAC merge / payload compat)."""
     rows: list[dict[str, Any]] = []
     for client in sorted(
         link_clients,
@@ -118,8 +290,8 @@ def _link_device_rows(link_clients: list[dict[str, Any]], *, prefix_len: int = 1
                 "ip_display": format_mgmt_ipv6_display(label, ipv6, prefix_len=prefix_len),
                 "tx_rate": str(client.get("tx_rate") or client.get("out_rate") or "—"),
                 "rx_rate": str(client.get("rx_rate") or client.get("in_rate") or "—"),
-                "snr": f"{client.get('r_snr1') or '—'}/{client.get('r_snr2') or '—'}",
-                "rssi": str(client.get("r_rssi1") or client.get("l_rssi1") or "—"),
+                "snr": _client_snr(client),
+                "rssi": _client_rssi(client),
             }
         )
     return rows
@@ -177,6 +349,8 @@ def _build_matrix_cells(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         rx_mbps = 0.0 if skipped else float(combined.get("rx_mbps") or 0.0)
         tx_mbps = 0.0 if skipped else float(combined.get("tx_mbps") or 0.0)
         target_mbps = _target_mbps_for_record(record)
+        mcs_label = str(record.get("mcs") or "")
+        rf = _rf_from_record(record)
         note = str(
             record.get("mcs_mismatch_note")
             or (record.get("mcs_config") or {}).get("mcs_mismatch_note")
@@ -185,11 +359,17 @@ def _build_matrix_cells(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ).strip()
         if skipped and not note:
             note = "TRex skipped"
+        note = _enrich_mismatch_remark(
+            note,
+            wanted_mcs=mcs_label,
+            su_rf=rf["su_rf"],
+            mcs_config=record.get("mcs_config") if isinstance(record.get("mcs_config"), dict) else None,
+        )
         cells.append(
             {
                 "iter_key": rec_idx,
                 "bandwidth": str(record.get("bandwidth") or ""),
-                "mcs": str(record.get("mcs") or ""),
+                "mcs": mcs_label,
                 "tested": True,
                 "skipped": skipped,
                 "passed": bool(record.get("passed")),
@@ -198,6 +378,9 @@ def _build_matrix_cells(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "target_mbps": target_mbps,
                 "pct": _pct(rx_mbps, target_mbps) if not skipped else 0.0,
                 "remark": note or "—",
+                "snr_summary": rf["snr_summary"],
+                "rssi_summary": rf["rssi_summary"],
+                "su_rf": rf["su_rf"],
                 "duration_s": int(record.get("duration_s") or 0),
                 "time_series": None if skipped else _extract_time_series(record),
             }
@@ -253,6 +436,8 @@ def enrich_matrix_payload(
             "rx_mbps": cell["rx_mbps"],
             "target_mbps": cell["target_mbps"],
             "pct": cell["pct"],
+            "snr_summary": cell["snr_summary"],
+            "rssi_summary": cell["rssi_summary"],
             "remark": cell["remark"],
             "skipped": cell["skipped"],
         }
@@ -343,53 +528,22 @@ def _render_testbed_table(data: dict[str, Any]) -> str:
     """
 
 
-def _render_link_table(link_devices: list[dict[str, Any]]) -> str:
-    if not link_devices:
-        return '<p class="empty-note">No per-SU link snapshot (from BTS KWN sysfs).</p>'
-    rows = []
-    for device in link_devices:
-        rows.append(
-            f"<tr>"
-            f"<td><strong>{escape(device['label'])}</strong></td>"
-            f"<td class='mono'>{escape(device['mac'])}</td>"
-            f"<td>{escape(device['model'])}</td>"
-            f"<td class='mono'>{escape(device['ip_display'])}</td>"
-            f"<td>{escape(device['tx_rate'])}</td>"
-            f"<td>{escape(device['rx_rate'])}</td>"
-            f"<td>{escape(device['snr'])}</td>"
-            f"<td>{escape(device['rssi'])} dBm</td>"
-            f"</tr>"
-        )
-    return f"""
-    <div class="table-scroll">
-      <table class="data-table link-table">
-        <thead>
-          <tr>
-            <th>Unit</th><th>MAC</th><th>Model</th><th>IPv6</th>
-            <th>Tx rate</th><th>Rx rate</th><th>SNR</th><th>RSSI</th>
-          </tr>
-        </thead>
-        <tbody>{''.join(rows)}</tbody>
-      </table>
-    </div>
-    """
-
-
 def _render_coverage_matrix(data: dict[str, Any]) -> str:
     bandwidths = data.get("bandwidths") or ["HT20", "HT40", "HT80"]
     mcs_rates = data.get("mcs_rates") or []
     cells = data.get("matrix_cells") or []
     by_key = {(c["bandwidth"], c["mcs"]): c for c in cells}
-    bw_colors = {"HT20": "#34d399", "HT40": "#60a5fa", "HT80": "#c084fc"}
-    status_icon = {"pass": "✓", "fail": "✕", "skip": "!"}
 
+    header_cells = "".join(
+        f"<th class='heat-mcs'>{escape(mcs.replace('MCS', ''))}</th>" for mcs in mcs_rates
+    )
     rows_html = []
     for bw in bandwidths:
         cell_html = []
         for mcs in mcs_rates:
             cell = by_key.get((bw, mcs))
             if not cell:
-                cell_html.append("<div class='cov-card cov-empty'><span>—</span></div>")
+                cell_html.append("<td class='heat-cell heat-empty'>—</td>")
                 continue
             if cell.get("skipped"):
                 status = "skip"
@@ -400,35 +554,40 @@ def _render_coverage_matrix(data: dict[str, Any]) -> str:
             rx = float(cell.get("rx_mbps") or 0)
             tx = float(cell.get("tx_mbps") or 0)
             pct = float(cell.get("pct") or 0)
+            snr = cell.get("snr_summary") or "—"
             rx_label = "—" if cell.get("skipped") else f"{rx:.0f}"
-            tx_rx_label = "" if cell.get("skipped") else f"{tx:.0f} sent → {rx:.0f} got"
-            pct_label = "" if cell.get("skipped") else f"{pct:.0f}% of target"
+            title = (
+                f"{bw} {mcs}: skipped"
+                if cell.get("skipped")
+                else f"{bw} {mcs}: {tx:.0f} sent → {rx:.0f} got ({pct:.0f}% target) · SNR {snr}"
+            )
             cell_html.append(
-                f"<button type='button' class='cov-card cov-{status}' "
-                f"data-iter-key='{cell['iter_key']}' "
-                f"style='--bw-color:{bw_colors.get(bw, '#94a3b8')}'>"
-                f"<span class='cov-icon'>{status_icon[status]}</span>"
-                f"<span class='cov-mcs'>{escape(mcs)}</span>"
-                f"<span class='cov-rx'>{rx_label}<small>Mbps RX</small></span>"
-                f"<span class='cov-pct'>{tx_rx_label or '—'}</span>"
-                f"<span class='cov-cta'>{pct_label or 'View live chart'}</span>"
-                f"</button>"
+                f"<td><button type='button' class='heat-cell heat-{status}' "
+                f"data-iter-key='{cell['iter_key']}' title='{escape(title)}'>"
+                f"<span class='heat-rx'>{rx_label}</span>"
+                f"</button></td>"
             )
         rows_html.append(
-            f"<div class='cov-row'>"
-            f"<div class='cov-bw-label' style='--bw-color:{bw_colors.get(bw, '#94a3b8')}'>{escape(bw)}</div>"
-            f"<div class='cov-row-cells'>{''.join(cell_html)}</div></div>"
+            f"<tr><th class='heat-bw'>{escape(bw)}</th>{''.join(cell_html)}</tr>"
         )
 
     return f"""
-    <div class="cov-board" id="coverageMatrix">
-      {''.join(rows_html)}
+    <div class="table-scroll heat-scroll" id="coverageMatrix">
+      <table class="heat-table">
+        <thead>
+          <tr><th class="heat-corner">BW \\ MCS</th>{header_cells}</tr>
+        </thead>
+        <tbody>
+          {''.join(rows_html)}
+        </tbody>
+      </table>
     </div>
     <div class="cov-legend">
       <span><i class="lg pass"></i> Pass</span>
       <span><i class="lg fail"></i> Fail</span>
       <span><i class="lg skip"></i> Skipped</span>
       <span><i class="lg empty"></i> Not tested</span>
+      <span class="legend-note">Cell value = RX Mbps · hover for TX→RX and SNR · click for detail</span>
     </div>
     """
 
@@ -436,6 +595,9 @@ def _render_coverage_matrix(data: dict[str, Any]) -> str:
 def _render_kpi_cards(data: dict[str, Any], *, passed: int, ran: int, total: int, peak_rx: float, pass_cls: str) -> str:
     peaks = data.get("peaks") or {}
     best_bw = max(peaks.items(), key=lambda item: float((item[1] or {}).get("rx_mbps") or 0))[0] if peaks else "—"
+    mcs_rates = data.get("mcs_rates") or []
+    bandwidths = data.get("bandwidths") or []
+    coverage_sub = f"{len(bandwidths)} BW × {len(mcs_rates)} MCS" if mcs_rates else "matrix cells"
     return f"""
     <div class="kpi-grid">
       <article class="kpi-card accent-{pass_cls}">
@@ -459,7 +621,7 @@ def _render_kpi_cards(data: dict[str, Any], *, passed: int, ran: int, total: int
         <div class="kpi-body">
           <div class="kpi-label">Connected SUs</div>
           <div class="kpi-value">{int(data.get('su_count') or 0)}</div>
-          <div class="kpi-sub">Live link snapshot</div>
+          <div class="kpi-sub">From testbed inventory</div>
         </div>
       </article>
       <article class="kpi-card accent-neutral">
@@ -467,7 +629,7 @@ def _render_kpi_cards(data: dict[str, Any], *, passed: int, ran: int, total: int
         <div class="kpi-body">
           <div class="kpi-label">Coverage</div>
           <div class="kpi-value">{total}<span>cells</span></div>
-          <div class="kpi-sub">{escape(' × '.join(data.get('mcs_rates') or []))}</div>
+          <div class="kpi-sub">{escape(coverage_sub)}</div>
         </div>
       </article>
     </div>
@@ -697,93 +859,84 @@ _REPORT_CSS = """
     .kpi-value span { font-size: 14px; color: var(--muted); font-weight: 600; margin-left: 4px; }
     .kpi-sub { margin-top: 6px; font-size: 12px; color: var(--muted); }
 
-    .cov-board { display: grid; gap: 12px; }
-    .cov-row {
-      display: grid;
-      grid-template-columns: 72px 1fr;
-      gap: 12px;
-      align-items: stretch;
-    }
-    .cov-bw-label {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: var(--radius-sm);
+    .heat-scroll { overflow: auto; border-radius: var(--radius-sm); border: 1px solid var(--panel-border); }
+    table.heat-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 4px;
       font-size: 12px;
-      font-weight: 800;
-      letter-spacing: 0.08em;
-      color: var(--bw-color);
-      background: color-mix(in srgb, var(--bw-color) 10%, white);
-      border: 1px solid color-mix(in srgb, var(--bw-color) 25%, white);
-    }
-    .cov-row-cells {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-      gap: 10px;
-    }
-    .cov-card {
-      appearance: none;
-      border: 1px solid var(--panel-border);
-      border-radius: 12px;
-      padding: 14px 12px;
-      min-height: 128px;
       background: #ffffff;
-      color: var(--text);
-      cursor: pointer;
-      text-align: left;
-      display: grid;
-      gap: 4px;
-      position: relative;
-      overflow: hidden;
-      transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+      min-width: max-content;
     }
-    .cov-card::before {
-      content: "";
-      position: absolute;
-      inset: 0 auto 0 0;
-      width: 4px;
-      background: var(--bw-color);
-      opacity: 0.85;
+    table.heat-table th, table.heat-table td {
+      padding: 0;
+      text-align: center;
+      vertical-align: middle;
     }
-    .cov-card:hover, .cov-card.selected {
-      transform: translateY(-2px);
-      box-shadow: 0 8px 24px rgba(15,23,42,0.08);
-      border-color: color-mix(in srgb, var(--bw-color) 35%, #e2e8f0);
+    .heat-corner, .heat-bw {
+      position: sticky;
+      left: 0;
+      z-index: 2;
+      background: #f8fafc;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding: 8px 10px !important;
+      white-space: nowrap;
     }
-    .cov-card.selected { outline: 2px solid color-mix(in srgb, var(--bw-color) 40%, transparent); outline-offset: 1px; }
-    .cov-card.cov-pass { background: linear-gradient(180deg, #ecfdf5, #ffffff); }
-    .cov-card.cov-fail { background: linear-gradient(180deg, #fef2f2, #ffffff); }
-    .cov-card.cov-skip { background: linear-gradient(180deg, #fffbeb, #ffffff); }
-    .cov-card.cov-empty { opacity: 0.5; cursor: default; display: grid; place-items: center; color: var(--muted); }
-    .cov-icon {
-      width: 24px;
-      height: 24px;
-      border-radius: 999px;
+    .heat-mcs {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--muted);
+      padding: 6px 4px !important;
+      min-width: 40px;
+    }
+    .heat-cell {
+      appearance: none;
       display: grid;
       place-items: center;
-      font-size: 12px;
-      font-weight: 800;
-      background: #f1f5f9;
+      width: 100%;
+      min-width: 40px;
+      height: 40px;
+      border-radius: 8px;
       border: 1px solid var(--panel-border);
+      background: #f8fafc;
+      color: var(--text);
+      cursor: pointer;
+      font-weight: 800;
+      font-size: 12px;
+      padding: 0;
+      transition: transform .12s ease, box-shadow .12s ease, outline-color .12s ease;
     }
-    .cov-mcs { font-size: 13px; font-weight: 800; letter-spacing: 0.04em; }
-    .cov-rx { font-size: 24px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; }
-    .cov-rx small { font-size: 11px; color: var(--muted); font-weight: 700; margin-left: 4px; }
-    .cov-pct { font-size: 11px; color: var(--muted); font-weight: 600; }
-    .cov-cta {
-      margin-top: 4px;
-      font-size: 11px;
-      font-weight: 700;
-      color: var(--accent);
-      opacity: 0;
-      transform: translateY(4px);
-      transition: opacity .16s ease, transform .16s ease;
+    .heat-cell:hover, .heat-cell.selected {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(15,23,42,0.08);
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
     }
-    .cov-card:hover .cov-cta, .cov-card.selected .cov-cta { opacity: 1; transform: translateY(0); }
+    td.heat-cell.heat-empty, .heat-empty {
+      display: grid;
+      place-items: center;
+      min-width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      color: var(--muted);
+      background: #f1f5f9;
+      border: 1px dashed #cbd5e1;
+      cursor: default;
+    }
+    .heat-pass { background: #ecfdf5; border-color: #6ee7b7; color: #047857; }
+    .heat-fail { background: #fef2f2; border-color: #fca5a5; color: #b91c1c; }
+    .heat-skip { background: #fffbeb; border-color: #fcd34d; color: #b45309; }
+    .heat-rx { line-height: 1; }
+
     .cov-legend {
       display: flex;
       flex-wrap: wrap;
       gap: 14px;
+      align-items: center;
       margin-top: 14px;
       font-size: 12px;
       color: var(--muted);
@@ -796,6 +949,7 @@ _REPORT_CSS = """
       margin-right: 6px;
       vertical-align: -1px;
     }
+    .legend-note { margin-left: auto; font-size: 11px; }
     i.lg.pass { background: var(--ok); }
     i.lg.fail { background: var(--bad); }
     i.lg.skip { background: var(--warn); }
@@ -811,9 +965,20 @@ _REPORT_CSS = """
     .series-title { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; color: var(--text); }
     .series-meta { font-size: 13px; color: var(--muted); margin-top: 6px; }
     .chart-wrap {
-      padding: 8px 18px 22px;
-      min-height: 320px;
+      padding: 8px 18px 16px;
+      min-height: 280px;
       background: #f8fafc;
+    }
+    .cell-rf {
+      padding: 0 18px 20px;
+    }
+    .cell-rf h3 {
+      margin: 0 0 10px;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #475569;
     }
 
     .table-scroll { overflow: auto; border-radius: var(--radius-sm); border: 1px solid var(--panel-border); }
@@ -883,8 +1048,6 @@ _REPORT_CSS = """
 
     @media (max-width: 1100px) {
       .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .cov-row { grid-template-columns: 1fr; }
-      .cov-bw-label { min-height: 36px; }
     }
     @media (max-width: 720px) {
       .kpi-grid { grid-template-columns: 1fr; }
@@ -931,6 +1094,9 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
             status = "PASS"
         else:
             status = "FAIL"
+        snr = cell.get("snr_summary") or "—"
+        rssi = cell.get("rssi_summary") or "—"
+        rssi_cell = "—" if cell.get("skipped") or rssi == "—" else f"{rssi} dBm"
         iter_rows.append(
             f"<tr data-iter-key='{cell['iter_key']}' "
             f"class='{'row-skip' if cell.get('skipped') else 'row-pass' if cell.get('passed') else 'row-fail'}'>"
@@ -939,6 +1105,8 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
             f"<td>{'—' if cell.get('skipped') else format(float(cell.get('tx_mbps') or 0), '.1f')}</td>"
             f"<td>{'—' if cell.get('skipped') else format(float(cell.get('rx_mbps') or 0), '.1f')}</td>"
             f"<td>{float(cell.get('target_mbps') or 0):.1f}</td>"
+            f"<td>{escape(str(snr))}</td>"
+            f"<td>{escape(rssi_cell)}</td>"
             f"<td>{_status_pill(status)}</td>"
             f"<td>{escape(str(cell.get('remark') or '—'))}</td></tr>"
         )
@@ -983,20 +1151,10 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
       <div class="panel-head">
         <div>
           <h2>Testbed summary</h2>
-          <p class="panel-desc">BTS and SU inventory — model, firmware, hostname, and management IPv6 (/120).</p>
+          <p class="panel-desc">BTS and SU inventory — model, firmware, MAC, and management IPv6 (/120).</p>
         </div>
       </div>
       {_render_testbed_table(data)}
-    </section>
-
-    <section class="panel span-12">
-      <div class="panel-head">
-        <div>
-          <h2>Link stats</h2>
-          <p class="panel-desc">Live RF snapshot from BTS KWN sysfs during the reference iteration.</p>
-        </div>
-      </div>
-      {_render_link_table(data.get('link_devices') or [])}
     </section>
 
     <section class="panel span-12">
@@ -1007,7 +1165,7 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
       <div class="panel-head">
         <div>
           <h2>Coverage matrix</h2>
-          <p class="panel-desc">Bandwidth × MCS cells executed in this run. Click a card to plot throughput and loss over time.</p>
+          <p class="panel-desc">Compact BW × MCS heatmap. Cell value is RX Mbps. Click a cell for live chart and per-SU RF (SNR/RSSI) from that iteration.</p>
         </div>
       </div>
       {_render_coverage_matrix(data)}
@@ -1015,12 +1173,28 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
 
     <section class="panel span-12 chart-panel" id="chartSection">
       <div class="chart-head">
-        <h2>Live throughput</h2>
+        <h2>Cell detail</h2>
         <div class="series-title" id="seriesTitle">Select a matrix cell</div>
-        <div class="series-meta" id="seriesMeta">Click a highlighted BW×MCS card to plot TRex live samples.</div>
+        <div class="series-meta" id="seriesMeta">Click a heatmap cell to plot TRex live samples and show RF for that MCS.</div>
       </div>
       <div class="chart-wrap">
         <canvas id="timeSeriesChart"></canvas>
+      </div>
+      <div class="cell-rf">
+        <h3>RF snapshot for selected cell</h3>
+        <div class="table-scroll">
+          <table class="data-table" id="cellRfTable">
+            <thead>
+              <tr>
+                <th>Unit</th><th>MAC</th><th>Tx rate</th><th>Rx rate</th>
+                <th>TX Mbps</th><th>RX Mbps</th><th>SNR</th><th>RSSI</th>
+              </tr>
+            </thead>
+            <tbody id="cellRfBody">
+              <tr><td colspan="8" class="empty-note" style="border:none">Select a cell to load per-SU RF.</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
 
@@ -1028,13 +1202,16 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
       <div class="panel-head">
         <div>
           <h2>Iteration log</h2>
-          <p class="panel-desc">Full matrix audit trail with throughput result and remarks.</p>
+          <p class="panel-desc">Full matrix audit trail with TX/RX, per-cell SNR/RSSI summaries, and remarks.</p>
         </div>
       </div>
       <div class="table-scroll">
         <table class="data-table" id="iterLog">
           <thead>
-            <tr><th>BW</th><th>MCS</th><th>TX Mbps</th><th>RX Mbps</th><th>Target</th><th>Status</th><th>Remarks</th></tr>
+            <tr>
+              <th>BW</th><th>MCS</th><th>TX Mbps</th><th>RX Mbps</th><th>Target</th>
+              <th>SNR</th><th>RSSI</th><th>Status</th><th>Remarks</th>
+            </tr>
           </thead>
           <tbody>{''.join(iter_rows)}</tbody>
         </table>
@@ -1050,6 +1227,10 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
             "mcs": cell["mcs"],
             "tx_mbps": cell["tx_mbps"],
             "rx_mbps": cell["rx_mbps"],
+            "target_mbps": cell.get("target_mbps"),
+            "snr_summary": cell.get("snr_summary") or "—",
+            "rssi_summary": cell.get("rssi_summary") or "—",
+            "su_rf": cell.get("su_rf") or [],
             "remark": cell["remark"],
             "skipped": cell["skipped"],
         }
@@ -1105,9 +1286,28 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
       }}
     }});
 
+    function renderRfTable(suRf) {{
+      const body = document.getElementById('cellRfBody');
+      if (!suRf || !suRf.length) {{
+        body.innerHTML = '<tr><td colspan="8"><p class="empty-note" style="border:none;margin:0">No RF snapshot for this cell.</p></td></tr>';
+        return;
+      }}
+      body.innerHTML = suRf.map(row => `
+        <tr>
+          <td><strong>${{row.label || '—'}}</strong></td>
+          <td class="mono">${{row.mac || '—'}}</td>
+          <td>${{row.tx_rate || '—'}}</td>
+          <td>${{row.rx_rate || '—'}}</td>
+          <td>${{row.tx_mbps || '—'}}</td>
+          <td>${{row.rx_mbps || '—'}}</td>
+          <td>${{row.snr || '—'}}</td>
+          <td>${{row.rssi && row.rssi !== '—' ? row.rssi + ' dBm' : '—'}}</td>
+        </tr>`).join('');
+    }}
+
     function selectCell(key) {{
       activeKey = String(key);
-      document.querySelectorAll('.cov-card[data-iter-key]').forEach(el => {{
+      document.querySelectorAll('.heat-cell[data-iter-key]').forEach(el => {{
         el.classList.toggle('selected', el.dataset.iterKey === activeKey);
       }});
       const meta = cellMeta[activeKey] || {{}};
@@ -1117,7 +1317,8 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
         `${{meta.bandwidth || '—'}} · ${{meta.mcs || '—'}} · ${{(meta.tx_mbps || 0).toFixed(1)}} sent → ${{(meta.rx_mbps || 0).toFixed(1)}} Mbps got`;
       document.getElementById('seriesMeta').textContent =
         meta.skipped ? (meta.remark || 'TRex not run') :
-        `${{series.labels.length}} live samples · loss from DUT avg_rtx or TX/RX PPS delta`;
+        `${{series.labels.length}} live samples · SNR ${{meta.snr_summary || '—'}} · RSSI ${{meta.rssi_summary && meta.rssi_summary !== '—' ? meta.rssi_summary + ' dBm' : '—'}} · loss from DUT avg_rtx or TX/RX PPS delta`;
+      renderRfTable(meta.su_rf || []);
       chart.data.labels = series.labels;
       chart.data.datasets = [
         {{
@@ -1150,8 +1351,8 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
     }}
 
     document.getElementById('coverageMatrix').addEventListener('click', (event) => {{
-      const cell = event.target.closest('.cov-card[data-iter-key]');
-      if (!cell || cell.classList.contains('cov-empty')) return;
+      const cell = event.target.closest('.heat-cell[data-iter-key]');
+      if (!cell || cell.classList.contains('heat-empty')) return;
       selectCell(cell.dataset.iterKey);
     }});
 

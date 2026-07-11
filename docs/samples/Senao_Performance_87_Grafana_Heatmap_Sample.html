@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>UBR Performance Report #87-sample</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg0: #f8fafc;
+      --bg1: #f1f5f9;
+      --panel: #ffffff;
+      --panel-border: #e2e8f0;
+      --text: #0f172a;
+      --muted: #64748b;
+      --accent: #2563eb;
+      --accent2: #4f46e5;
+      --ok: #059669;
+      --warn: #d97706;
+      --bad: #dc2626;
+      --shadow: 0 4px 24px rgba(15, 23, 42, 0.06);
+      --radius: 14px;
+      --radius-sm: 10px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: "Plus Jakarta Sans", Inter, system-ui, sans-serif;
+      color: var(--text);
+      min-height: 100vh;
+      background: linear-gradient(180deg, var(--bg0), var(--bg1));
+    }
+    .hero {
+      position: relative;
+      padding: 28px 28px 24px;
+      border-bottom: 1px solid var(--panel-border);
+      background: linear-gradient(135deg, #ffffff 0%, #eff6ff 55%, #e0e7ff 100%);
+      overflow: hidden;
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      right: -60px;
+      top: -60px;
+      width: 220px;
+      height: 220px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(37,99,235,0.08), transparent 68%);
+      pointer-events: none;
+    }
+    .hero-inner {
+      max-width: 1680px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 24px;
+      flex-wrap: wrap;
+      position: relative;
+      z-index: 1;
+    }
+    .hero-brand {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+    .hero-mark {
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      font-size: 14px;
+      letter-spacing: 0.04em;
+      color: #1d4ed8;
+      background: #ffffff;
+      border: 1px solid #bfdbfe;
+      box-shadow: 0 2px 8px rgba(37,99,235,0.12);
+    }
+    .hero-eyebrow {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .hero h1 {
+      margin: 4px 0 0;
+      font-size: clamp(28px, 4vw, 38px);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.05;
+      color: var(--text);
+    }
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .meta-chip {
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #334155;
+      background: #ffffff;
+      border: 1px solid var(--panel-border);
+    }
+    .hero-status {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 10px;
+    }
+    .hero-badge {
+      padding: 12px 18px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 700;
+      background: #ffffff;
+      border: 1px solid var(--panel-border);
+      box-shadow: var(--shadow);
+    }
+    .hero-badge.ok { border-color: #6ee7b7; color: #047857; background: #ecfdf5; }
+    .hero-badge.warn { border-color: #fcd34d; color: #b45309; background: #fffbeb; }
+    .hero-badge.bad { border-color: #fca5a5; color: #b91c1c; background: #fef2f2; }
+    .hero-time { font-size: 12px; color: var(--muted); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 18px;
+      padding: 22px 18px 40px;
+      max-width: 1680px;
+      margin: 0 auto;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius);
+      padding: 20px 22px;
+      box-shadow: var(--shadow);
+    }
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .panel h2 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #475569;
+    }
+    .panel-desc {
+      margin: 6px 0 0;
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--muted);
+      max-width: 62ch;
+    }
+    .span-12 { grid-column: span 12; }
+
+    .device-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .device-chip .chip-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .device-chip.bts { color: #b45309; background: #fffbeb; border: 1px solid #fde68a; }
+    .device-chip.su { color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .kpi-card {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      padding: 16px 18px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--panel-border);
+      background: #f8fafc;
+    }
+    .kpi-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      font-size: 18px;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+    }
+    .kpi-card.accent-ok .kpi-icon { background: #ecfdf5; border-color: #6ee7b7; }
+    .kpi-card.accent-warn .kpi-icon { background: #fffbeb; border-color: #fcd34d; }
+    .kpi-card.accent-bad .kpi-icon { background: #fef2f2; border-color: #fca5a5; }
+    .kpi-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-weight: 700; }
+    .kpi-value {
+      margin-top: 4px;
+      font-size: 30px;
+      line-height: 1;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: var(--text);
+    }
+    .kpi-value span { font-size: 14px; color: var(--muted); font-weight: 600; margin-left: 4px; }
+    .kpi-sub { margin-top: 6px; font-size: 12px; color: var(--muted); }
+
+    .heat-scroll { overflow: auto; border-radius: var(--radius-sm); border: 1px solid var(--panel-border); }
+    table.heat-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 4px;
+      font-size: 12px;
+      background: #ffffff;
+      min-width: max-content;
+    }
+    table.heat-table th, table.heat-table td {
+      padding: 0;
+      text-align: center;
+      vertical-align: middle;
+    }
+    .heat-corner, .heat-bw {
+      position: sticky;
+      left: 0;
+      z-index: 2;
+      background: #f8fafc;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding: 8px 10px !important;
+      white-space: nowrap;
+    }
+    .heat-mcs {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--muted);
+      padding: 6px 4px !important;
+      min-width: 40px;
+    }
+    .heat-cell {
+      appearance: none;
+      display: grid;
+      place-items: center;
+      width: 100%;
+      min-width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      border: 1px solid var(--panel-border);
+      background: #f8fafc;
+      color: var(--text);
+      cursor: pointer;
+      font-weight: 800;
+      font-size: 12px;
+      padding: 0;
+      transition: transform .12s ease, box-shadow .12s ease, outline-color .12s ease;
+    }
+    .heat-cell:hover, .heat-cell.selected {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(15,23,42,0.08);
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+    td.heat-cell.heat-empty, .heat-empty {
+      display: grid;
+      place-items: center;
+      min-width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      color: var(--muted);
+      background: #f1f5f9;
+      border: 1px dashed #cbd5e1;
+      cursor: default;
+    }
+    .heat-pass { background: #ecfdf5; border-color: #6ee7b7; color: #047857; }
+    .heat-fail { background: #fef2f2; border-color: #fca5a5; color: #b91c1c; }
+    .heat-skip { background: #fffbeb; border-color: #fcd34d; color: #b45309; }
+    .heat-rx { line-height: 1; }
+
+    .cov-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      align-items: center;
+      margin-top: 14px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .cov-legend i.lg {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      margin-right: 6px;
+      vertical-align: -1px;
+    }
+    .legend-note { margin-left: auto; font-size: 11px; }
+    i.lg.pass { background: var(--ok); }
+    i.lg.fail { background: var(--bad); }
+    i.lg.skip { background: var(--warn); }
+    i.lg.empty { background: #94a3b8; }
+
+    .chart-panel {
+      padding: 0;
+      overflow: hidden;
+    }
+    .chart-head {
+      padding: 20px 22px 0;
+    }
+    .series-title { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; color: var(--text); }
+    .series-meta { font-size: 13px; color: var(--muted); margin-top: 6px; }
+    .chart-wrap {
+      padding: 8px 18px 16px;
+      min-height: 280px;
+      background: #f8fafc;
+    }
+    .cell-rf {
+      padding: 0 18px 20px;
+    }
+    .cell-rf h3 {
+      margin: 0 0 10px;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #475569;
+    }
+
+    .table-scroll { overflow: auto; border-radius: var(--radius-sm); border: 1px solid var(--panel-border); }
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      background: #ffffff;
+    }
+    table.data-table th, table.data-table td {
+      padding: 11px 14px;
+      border-bottom: 1px solid #f1f5f9;
+      text-align: left;
+      vertical-align: middle;
+    }
+    table.data-table td.mono {
+      font-family: ui-monospace, "Cascadia Code", monospace;
+      font-size: 12px;
+      color: #334155;
+      word-break: break-all;
+      white-space: normal;
+      max-width: 280px;
+    }
+    table.data-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #f8fafc;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--panel-border);
+      white-space: nowrap;
+    }
+    table.data-table tbody tr:hover { background: #f8fafc; }
+    table.data-table tbody tr.row-bts { background: #fffbeb; }
+    table.data-table tbody tr.row-bts:hover { background: #fef3c7; }
+    table.data-table tbody tr.row-pass { box-shadow: inset 3px 0 0 #34d399; }
+    table.data-table tbody tr.row-fail { box-shadow: inset 3px 0 0 #f87171; }
+    table.data-table tbody tr.row-skip { box-shadow: inset 3px 0 0 #fbbf24; }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .pill.pass { color: #047857; background: #ecfdf5; border: 1px solid #6ee7b7; }
+    .pill.fail { color: #b91c1c; background: #fef2f2; border: 1px solid #fca5a5; }
+    .pill.skip { color: #b45309; background: #fffbeb; border: 1px solid #fcd34d; }
+    .pill.neutral { color: #475569; background: #f1f5f9; border: 1px solid #e2e8f0; }
+
+    .empty-note {
+      margin: 0;
+      padding: 18px;
+      border-radius: var(--radius-sm);
+      border: 1px dashed #cbd5e1;
+      color: var(--muted);
+      background: #f8fafc;
+      font-size: 13px;
+    }
+
+    @media (max-width: 1100px) {
+      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 720px) {
+      .kpi-grid { grid-template-columns: 1fr; }
+      .hero-status { align-items: flex-start; }
+    }
+
+</style>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <div>
+        <div class="hero-brand">
+          <div class="hero-mark">UBR</div>
+          <div>
+            <div class="hero-eyebrow">Throughput matrix report</div>
+            <h1>Performance Run #87-sample</h1>
+          </div>
+        </div>
+        <div class="hero-meta">
+          <span class="meta-chip">test-qa-lab-02</span>
+          <span class="meta-chip">qa_lab_02</span>
+          <span class="meta-chip">72 test cells</span>
+        </div>
+      </div>
+      <div class="hero-status">
+        <div class="hero-badge ok">72/72 TRex passed</div>
+        <div class="hero-time">2026-07-11 11:38:56 U · C</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section class="panel span-12">
+      <div class="panel-head">
+        <div>
+          <h2>Testbed summary</h2>
+          <p class="panel-desc">BTS and SU inventory — model, firmware, MAC, and management IPv6 (/120).</p>
+        </div>
+      </div>
+      
+    <div class="table-scroll">
+      <table class="data-table testbed-table">
+        <thead>
+          <tr>
+            <th>Unit</th><th>Model</th><th>Firmware</th><th>MAC</th>
+            <th>Mgmt IPv6</th><th>VLAN</th><th>QoS</th>
+          </tr>
+        </thead>
+        <tbody><tr class='row-bts'><td><strong><span class="device-chip bts"><span class="chip-dot"></span>BTS</span></strong></td><td>UBR630</td><td>0.0.0.751</td><td class='mono'>—</td><td class='mono'>BTS2001:2002:2003:2004:2005:2006:2007:1111/120</td><td>—</td><td>—</td></tr><tr class=''><td><strong><span class="device-chip su"><span class="chip-dot"></span>SU1</span></strong></td><td>UBR650-C23</td><td>0.0.0.753</td><td class='mono'>aa:bb:cc:dd:ee:01</td><td class='mono'>SU12001:2002:2003:2004:2005:2006:2007:111b/120</td><td>Enabled ( Transparent )</td><td>—</td></tr></tbody>
+      </table>
+    </div>
+    
+    </section>
+
+    <section class="panel span-12">
+      
+    <div class="kpi-grid">
+      <article class="kpi-card accent-ok">
+        <div class="kpi-icon">◎</div>
+        <div class="kpi-body">
+          <div class="kpi-label">Matrix pass rate</div>
+          <div class="kpi-value">72<span>/ 72</span></div>
+          <div class="kpi-sub">TRex iterations executed</div>
+        </div>
+      </article>
+      <article class="kpi-card accent-ok">
+        <div class="kpi-icon">⚡</div>
+        <div class="kpi-body">
+          <div class="kpi-label">Peak throughput</div>
+          <div class="kpi-value">746<span>Mbps</span></div>
+          <div class="kpi-sub">Best on HT80</div>
+        </div>
+      </article>
+      <article class="kpi-card accent-ok">
+        <div class="kpi-icon">⬡</div>
+        <div class="kpi-body">
+          <div class="kpi-label">Connected SUs</div>
+          <div class="kpi-value">1</div>
+          <div class="kpi-sub">From testbed inventory</div>
+        </div>
+      </article>
+      <article class="kpi-card accent-neutral">
+        <div class="kpi-icon">▦</div>
+        <div class="kpi-body">
+          <div class="kpi-label">Coverage</div>
+          <div class="kpi-value">72<span>cells</span></div>
+          <div class="kpi-sub">3 BW × 24 MCS</div>
+        </div>
+      </article>
+    </div>
+    
+    </section>
+
+    <section class="panel span-12">
+      <div class="panel-head">
+        <div>
+          <h2>Coverage matrix</h2>
+          <p class="panel-desc">Compact BW × MCS heatmap. Cell value is RX Mbps. Click a cell for live chart and per-SU RF (SNR/RSSI) from that iteration.</p>
+        </div>
+      </div>
+      
+    <div class="table-scroll heat-scroll" id="coverageMatrix">
+      <table class="heat-table">
+        <thead>
+          <tr><th class="heat-corner">BW \ MCS</th><th class='heat-mcs'>0</th><th class='heat-mcs'>1</th><th class='heat-mcs'>2</th><th class='heat-mcs'>3</th><th class='heat-mcs'>4</th><th class='heat-mcs'>5</th><th class='heat-mcs'>6</th><th class='heat-mcs'>7</th><th class='heat-mcs'>8</th><th class='heat-mcs'>9</th><th class='heat-mcs'>10</th><th class='heat-mcs'>11</th><th class='heat-mcs'>12</th><th class='heat-mcs'>13</th><th class='heat-mcs'>14</th><th class='heat-mcs'>15</th><th class='heat-mcs'>16</th><th class='heat-mcs'>17</th><th class='heat-mcs'>18</th><th class='heat-mcs'>19</th><th class='heat-mcs'>20</th><th class='heat-mcs'>21</th><th class='heat-mcs'>22</th><th class='heat-mcs'>23</th></tr>
+        </thead>
+        <tbody>
+          <tr><th class='heat-bw'>HT20</th><td><button type='button' class='heat-cell heat-pass' data-iter-key='0' title='HT20 MCS0: 10 sent → 10 got (91% target) · SNR 53/56'><span class='heat-rx'>10</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='1' title='HT20 MCS1: 19 sent → 18 got (91% target) · SNR 53/56'><span class='heat-rx'>18</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='2' title='HT20 MCS2: 27 sent → 26 got (91% target) · SNR 53/56'><span class='heat-rx'>26</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='3' title='HT20 MCS3: 36 sent → 34 got (91% target) · SNR 53/56'><span class='heat-rx'>34</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='4' title='HT20 MCS4: 44 sent → 42 got (91% target) · SNR 53/56'><span class='heat-rx'>42</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='5' title='HT20 MCS5: 52 sent → 50 got (91% target) · SNR 53/56'><span class='heat-rx'>50</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='6' title='HT20 MCS6: 61 sent → 58 got (91% target) · SNR 53/56'><span class='heat-rx'>58</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='7' title='HT20 MCS7: 69 sent → 66 got (91% target) · SNR 53/56'><span class='heat-rx'>66</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='8' title='HT20 MCS8: 78 sent → 74 got (91% target) · SNR 53/56'><span class='heat-rx'>74</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='9' title='HT20 MCS9: 86 sent → 82 got (91% target) · SNR 53/56'><span class='heat-rx'>82</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='10' title='HT20 MCS10: 94 sent → 90 got (91% target) · SNR 53/56'><span class='heat-rx'>90</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='11' title='HT20 MCS11: 103 sent → 98 got (91% target) · SNR 53/56'><span class='heat-rx'>98</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='12' title='HT20 MCS12: 111 sent → 106 got (91% target) · SNR 53/56'><span class='heat-rx'>106</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='13' title='HT20 MCS13: 120 sent → 114 got (91% target) · SNR 53/56'><span class='heat-rx'>114</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='14' title='HT20 MCS14: 128 sent → 122 got (91% target) · SNR 53/56'><span class='heat-rx'>122</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='15' title='HT20 MCS15: 136 sent → 130 got (91% target) · SNR 53/56'><span class='heat-rx'>130</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='16' title='HT20 MCS16: 145 sent → 138 got (91% target) · SNR 53/56'><span class='heat-rx'>138</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='17' title='HT20 MCS17: 153 sent → 146 got (91% target) · SNR 53/56'><span class='heat-rx'>146</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='18' title='HT20 MCS18: 162 sent → 154 got (91% target) · SNR 53/56'><span class='heat-rx'>154</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='19' title='HT20 MCS19: 170 sent → 162 got (91% target) · SNR 53/56'><span class='heat-rx'>162</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='20' title='HT20 MCS20: 178 sent → 170 got (91% target) · SNR 53/56'><span class='heat-rx'>170</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='21' title='HT20 MCS21: 187 sent → 178 got (91% target) · SNR 53/56'><span class='heat-rx'>178</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='22' title='HT20 MCS22: 195 sent → 186 got (91% target) · SNR 53/56'><span class='heat-rx'>186</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='23' title='HT20 MCS23: 204 sent → 194 got (91% target) · SNR 53/56'><span class='heat-rx'>194</span></button></td></tr><tr><th class='heat-bw'>HT40</th><td><button type='button' class='heat-cell heat-pass' data-iter-key='24' title='HT40 MCS0: 10 sent → 10 got (91% target) · SNR 53/56'><span class='heat-rx'>10</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='25' title='HT40 MCS1: 27 sent → 26 got (91% target) · SNR 53/56'><span class='heat-rx'>26</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='26' title='HT40 MCS2: 44 sent → 42 got (91% target) · SNR 53/56'><span class='heat-rx'>42</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='27' title='HT40 MCS3: 61 sent → 58 got (91% target) · SNR 53/56'><span class='heat-rx'>58</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='28' title='HT40 MCS4: 78 sent → 74 got (91% target) · SNR 53/56'><span class='heat-rx'>74</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='29' title='HT40 MCS5: 94 sent → 90 got (91% target) · SNR 53/56'><span class='heat-rx'>90</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='30' title='HT40 MCS6: 111 sent → 106 got (91% target) · SNR 53/56'><span class='heat-rx'>106</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='31' title='HT40 MCS7: 128 sent → 122 got (91% target) · SNR 53/56'><span class='heat-rx'>122</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='32' title='HT40 MCS8: 145 sent → 138 got (91% target) · SNR 53/56'><span class='heat-rx'>138</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='33' title='HT40 MCS9: 162 sent → 154 got (91% target) · SNR 53/56'><span class='heat-rx'>154</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='34' title='HT40 MCS10: 178 sent → 170 got (91% target) · SNR 53/56'><span class='heat-rx'>170</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='35' title='HT40 MCS11: 195 sent → 186 got (91% target) · SNR 53/56'><span class='heat-rx'>186</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='36' title='HT40 MCS12: 212 sent → 202 got (91% target) · SNR 53/56'><span class='heat-rx'>202</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='37' title='HT40 MCS13: 229 sent → 218 got (91% target) · SNR 53/56'><span class='heat-rx'>218</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='38' title='HT40 MCS14: 246 sent → 234 got (91% target) · SNR 53/56'><span class='heat-rx'>234</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='39' title='HT40 MCS15: 262 sent → 250 got (91% target) · SNR 53/56'><span class='heat-rx'>250</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='40' title='HT40 MCS16: 279 sent → 266 got (91% target) · SNR 53/56'><span class='heat-rx'>266</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='41' title='HT40 MCS17: 296 sent → 282 got (91% target) · SNR 53/56'><span class='heat-rx'>282</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='42' title='HT40 MCS18: 313 sent → 298 got (91% target) · SNR 53/56'><span class='heat-rx'>298</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='43' title='HT40 MCS19: 330 sent → 314 got (91% target) · SNR 53/56'><span class='heat-rx'>314</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='44' title='HT40 MCS20: 346 sent → 330 got (91% target) · SNR 53/56'><span class='heat-rx'>330</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='45' title='HT40 MCS21: 363 sent → 346 got (91% target) · SNR 53/56'><span class='heat-rx'>346</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='46' title='HT40 MCS22: 380 sent → 362 got (91% target) · SNR 53/56'><span class='heat-rx'>362</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='47' title='HT40 MCS23: 397 sent → 378 got (91% target) · SNR 53/56'><span class='heat-rx'>378</span></button></td></tr><tr><th class='heat-bw'>HT80</th><td><button type='button' class='heat-cell heat-pass' data-iter-key='48' title='HT80 MCS0: 10 sent → 10 got (91% target) · SNR 53/56'><span class='heat-rx'>10</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='49' title='HT80 MCS1: 44 sent → 42 got (91% target) · SNR 53/56'><span class='heat-rx'>42</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='50' title='HT80 MCS2: 78 sent → 74 got (91% target) · SNR 53/56'><span class='heat-rx'>74</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='51' title='HT80 MCS3: 111 sent → 106 got (91% target) · SNR 53/56'><span class='heat-rx'>106</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='52' title='HT80 MCS4: 145 sent → 138 got (91% target) · SNR 53/56'><span class='heat-rx'>138</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='53' title='HT80 MCS5: 178 sent → 170 got (91% target) · SNR 53/56'><span class='heat-rx'>170</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='54' title='HT80 MCS6: 212 sent → 202 got (91% target) · SNR 53/56'><span class='heat-rx'>202</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='55' title='HT80 MCS7: 246 sent → 234 got (91% target) · SNR 53/56'><span class='heat-rx'>234</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='56' title='HT80 MCS8: 279 sent → 266 got (91% target) · SNR 53/56'><span class='heat-rx'>266</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='57' title='HT80 MCS9: 313 sent → 298 got (91% target) · SNR 53/56'><span class='heat-rx'>298</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='58' title='HT80 MCS10: 346 sent → 330 got (91% target) · SNR 53/56'><span class='heat-rx'>330</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='59' title='HT80 MCS11: 380 sent → 362 got (91% target) · SNR 53/56'><span class='heat-rx'>362</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='60' title='HT80 MCS12: 414 sent → 394 got (91% target) · SNR 53/56'><span class='heat-rx'>394</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='61' title='HT80 MCS13: 447 sent → 426 got (91% target) · SNR 53/56'><span class='heat-rx'>426</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='62' title='HT80 MCS14: 481 sent → 458 got (91% target) · SNR 53/56'><span class='heat-rx'>458</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='63' title='HT80 MCS15: 514 sent → 490 got (91% target) · SNR 53/56'><span class='heat-rx'>490</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='64' title='HT80 MCS16: 548 sent → 522 got (91% target) · SNR 53/56'><span class='heat-rx'>522</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='65' title='HT80 MCS17: 582 sent → 554 got (91% target) · SNR 53/56'><span class='heat-rx'>554</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='66' title='HT80 MCS18: 615 sent → 586 got (91% target) · SNR 53/56'><span class='heat-rx'>586</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='67' title='HT80 MCS19: 649 sent → 618 got (91% target) · SNR 53/56'><span class='heat-rx'>618</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='68' title='HT80 MCS20: 682 sent → 650 got (91% target) · SNR 53/56'><span class='heat-rx'>650</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='69' title='HT80 MCS21: 716 sent → 682 got (91% target) · SNR 53/56'><span class='heat-rx'>682</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='70' title='HT80 MCS22: 750 sent → 714 got (91% target) · SNR 53/56'><span class='heat-rx'>714</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='71' title='HT80 MCS23: 783 sent → 746 got (91% target) · SNR 53/56'><span class='heat-rx'>746</span></button></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="cov-legend">
+      <span><i class="lg pass"></i> Pass</span>
+      <span><i class="lg fail"></i> Fail</span>
+      <span><i class="lg skip"></i> Skipped</span>
+      <span><i class="lg empty"></i> Not tested</span>
+      <span class="legend-note">Cell value = RX Mbps · hover for TX→RX and SNR · click for detail</span>
+    </div>
+    
+    </section>
+
+    <section class="panel span-12 chart-panel" id="chartSection">
+      <div class="chart-head">
+        <h2>Cell detail</h2>
+        <div class="series-title" id="seriesTitle">Select a matrix cell</div>
+        <div class="series-meta" id="seriesMeta">Click a heatmap cell to plot TRex live samples and show RF for that MCS.</div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="timeSeriesChart"></canvas>
+      </div>
+      <div class="cell-rf">
+        <h3>RF snapshot for selected cell</h3>
+        <div class="table-scroll">
+          <table class="data-table" id="cellRfTable">
+            <thead>
+              <tr>
+                <th>Unit</th><th>MAC</th><th>Tx rate</th><th>Rx rate</th>
+                <th>Rx MCS</th><th>SNR</th><th>RSSI</th>
+              </tr>
+            </thead>
+            <tbody id="cellRfBody">
+              <tr><td colspan="7" class="empty-note" style="border:none">Select a cell to load per-SU RF.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel span-12">
+      <div class="panel-head">
+        <div>
+          <h2>Iteration log</h2>
+          <p class="panel-desc">Full matrix audit trail with TX/RX, per-cell SNR/RSSI summaries, and remarks.</p>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table" id="iterLog">
+          <thead>
+            <tr>
+              <th>BW</th><th>MCS</th><th>TX Mbps</th><th>RX Mbps</th><th>Target</th>
+              <th>SNR</th><th>RSSI</th><th>Status</th><th>Remarks</th>
+            </tr>
+          </thead>
+          <tbody><tr data-iter-key='0' class='row-pass'><td><strong>HT20</strong></td><td>MCS0</td><td>10.5</td><td>10.0</td><td>11.0</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>MCS mismatch — SU1: want MCS0 got MCS22 (SNR 60/53)</td></tr><tr data-iter-key='1' class='row-pass'><td><strong>HT20</strong></td><td>MCS1</td><td>18.9</td><td>18.0</td><td>19.8</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='2' class='row-pass'><td><strong>HT20</strong></td><td>MCS2</td><td>27.3</td><td>26.0</td><td>28.6</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='3' class='row-pass'><td><strong>HT20</strong></td><td>MCS3</td><td>35.7</td><td>34.0</td><td>37.4</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='4' class='row-pass'><td><strong>HT20</strong></td><td>MCS4</td><td>44.1</td><td>42.0</td><td>46.2</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='5' class='row-pass'><td><strong>HT20</strong></td><td>MCS5</td><td>52.5</td><td>50.0</td><td>55.0</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='6' class='row-pass'><td><strong>HT20</strong></td><td>MCS6</td><td>60.9</td><td>58.0</td><td>63.8</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='7' class='row-pass'><td><strong>HT20</strong></td><td>MCS7</td><td>69.3</td><td>66.0</td><td>72.6</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='8' class='row-pass'><td><strong>HT20</strong></td><td>MCS8</td><td>77.7</td><td>74.0</td><td>81.4</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='9' class='row-pass'><td><strong>HT20</strong></td><td>MCS9</td><td>86.1</td><td>82.0</td><td>90.2</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='10' class='row-pass'><td><strong>HT20</strong></td><td>MCS10</td><td>94.5</td><td>90.0</td><td>99.0</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='11' class='row-pass'><td><strong>HT20</strong></td><td>MCS11</td><td>102.9</td><td>98.0</td><td>107.8</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='12' class='row-pass'><td><strong>HT20</strong></td><td>MCS12</td><td>111.3</td><td>106.0</td><td>116.6</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='13' class='row-pass'><td><strong>HT20</strong></td><td>MCS13</td><td>119.7</td><td>114.0</td><td>125.4</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='14' class='row-pass'><td><strong>HT20</strong></td><td>MCS14</td><td>128.1</td><td>122.0</td><td>134.2</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='15' class='row-pass'><td><strong>HT20</strong></td><td>MCS15</td><td>136.5</td><td>130.0</td><td>143.0</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='16' class='row-pass'><td><strong>HT20</strong></td><td>MCS16</td><td>144.9</td><td>138.0</td><td>151.8</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='17' class='row-pass'><td><strong>HT20</strong></td><td>MCS17</td><td>153.3</td><td>146.0</td><td>160.6</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='18' class='row-pass'><td><strong>HT20</strong></td><td>MCS18</td><td>161.7</td><td>154.0</td><td>169.4</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='19' class='row-pass'><td><strong>HT20</strong></td><td>MCS19</td><td>170.1</td><td>162.0</td><td>178.2</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='20' class='row-pass'><td><strong>HT20</strong></td><td>MCS20</td><td>178.5</td><td>170.0</td><td>187.0</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='21' class='row-pass'><td><strong>HT20</strong></td><td>MCS21</td><td>186.9</td><td>178.0</td><td>195.8</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='22' class='row-pass'><td><strong>HT20</strong></td><td>MCS22</td><td>195.3</td><td>186.0</td><td>204.6</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='23' class='row-pass'><td><strong>HT20</strong></td><td>MCS23</td><td>203.7</td><td>194.0</td><td>213.4</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='24' class='row-pass'><td><strong>HT40</strong></td><td>MCS0</td><td>10.5</td><td>10.0</td><td>11.0</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>MCS mismatch — SU1: want MCS0 got MCS22 (SNR 60/53)</td></tr><tr data-iter-key='25' class='row-pass'><td><strong>HT40</strong></td><td>MCS1</td><td>27.3</td><td>26.0</td><td>28.6</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='26' class='row-pass'><td><strong>HT40</strong></td><td>MCS2</td><td>44.1</td><td>42.0</td><td>46.2</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='27' class='row-pass'><td><strong>HT40</strong></td><td>MCS3</td><td>60.9</td><td>58.0</td><td>63.8</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='28' class='row-pass'><td><strong>HT40</strong></td><td>MCS4</td><td>77.7</td><td>74.0</td><td>81.4</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='29' class='row-pass'><td><strong>HT40</strong></td><td>MCS5</td><td>94.5</td><td>90.0</td><td>99.0</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='30' class='row-pass'><td><strong>HT40</strong></td><td>MCS6</td><td>111.3</td><td>106.0</td><td>116.6</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='31' class='row-pass'><td><strong>HT40</strong></td><td>MCS7</td><td>128.1</td><td>122.0</td><td>134.2</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='32' class='row-pass'><td><strong>HT40</strong></td><td>MCS8</td><td>144.9</td><td>138.0</td><td>151.8</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='33' class='row-pass'><td><strong>HT40</strong></td><td>MCS9</td><td>161.7</td><td>154.0</td><td>169.4</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='34' class='row-pass'><td><strong>HT40</strong></td><td>MCS10</td><td>178.5</td><td>170.0</td><td>187.0</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='35' class='row-pass'><td><strong>HT40</strong></td><td>MCS11</td><td>195.3</td><td>186.0</td><td>204.6</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='36' class='row-pass'><td><strong>HT40</strong></td><td>MCS12</td><td>212.1</td><td>202.0</td><td>222.2</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='37' class='row-pass'><td><strong>HT40</strong></td><td>MCS13</td><td>228.9</td><td>218.0</td><td>239.8</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='38' class='row-pass'><td><strong>HT40</strong></td><td>MCS14</td><td>245.7</td><td>234.0</td><td>257.4</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='39' class='row-pass'><td><strong>HT40</strong></td><td>MCS15</td><td>262.5</td><td>250.0</td><td>275.0</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='40' class='row-pass'><td><strong>HT40</strong></td><td>MCS16</td><td>279.3</td><td>266.0</td><td>292.6</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='41' class='row-pass'><td><strong>HT40</strong></td><td>MCS17</td><td>296.1</td><td>282.0</td><td>310.2</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='42' class='row-pass'><td><strong>HT40</strong></td><td>MCS18</td><td>312.9</td><td>298.0</td><td>327.8</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='43' class='row-pass'><td><strong>HT40</strong></td><td>MCS19</td><td>329.7</td><td>314.0</td><td>345.4</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='44' class='row-pass'><td><strong>HT40</strong></td><td>MCS20</td><td>346.5</td><td>330.0</td><td>363.0</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='45' class='row-pass'><td><strong>HT40</strong></td><td>MCS21</td><td>363.3</td><td>346.0</td><td>380.6</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='46' class='row-pass'><td><strong>HT40</strong></td><td>MCS22</td><td>380.1</td><td>362.0</td><td>398.2</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='47' class='row-pass'><td><strong>HT40</strong></td><td>MCS23</td><td>396.9</td><td>378.0</td><td>415.8</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='48' class='row-pass'><td><strong>HT80</strong></td><td>MCS0</td><td>10.5</td><td>10.0</td><td>11.0</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>MCS mismatch — SU1: want MCS0 got MCS22 (SNR 60/53)</td></tr><tr data-iter-key='49' class='row-pass'><td><strong>HT80</strong></td><td>MCS1</td><td>44.1</td><td>42.0</td><td>46.2</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='50' class='row-pass'><td><strong>HT80</strong></td><td>MCS2</td><td>77.7</td><td>74.0</td><td>81.4</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='51' class='row-pass'><td><strong>HT80</strong></td><td>MCS3</td><td>111.3</td><td>106.0</td><td>116.6</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='52' class='row-pass'><td><strong>HT80</strong></td><td>MCS4</td><td>144.9</td><td>138.0</td><td>151.8</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='53' class='row-pass'><td><strong>HT80</strong></td><td>MCS5</td><td>178.5</td><td>170.0</td><td>187.0</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='54' class='row-pass'><td><strong>HT80</strong></td><td>MCS6</td><td>212.1</td><td>202.0</td><td>222.2</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='55' class='row-pass'><td><strong>HT80</strong></td><td>MCS7</td><td>245.7</td><td>234.0</td><td>257.4</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='56' class='row-pass'><td><strong>HT80</strong></td><td>MCS8</td><td>279.3</td><td>266.0</td><td>292.6</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='57' class='row-pass'><td><strong>HT80</strong></td><td>MCS9</td><td>312.9</td><td>298.0</td><td>327.8</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='58' class='row-pass'><td><strong>HT80</strong></td><td>MCS10</td><td>346.5</td><td>330.0</td><td>363.0</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='59' class='row-pass'><td><strong>HT80</strong></td><td>MCS11</td><td>380.1</td><td>362.0</td><td>398.2</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='60' class='row-pass'><td><strong>HT80</strong></td><td>MCS12</td><td>413.7</td><td>394.0</td><td>433.4</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='61' class='row-pass'><td><strong>HT80</strong></td><td>MCS13</td><td>447.3</td><td>426.0</td><td>468.6</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='62' class='row-pass'><td><strong>HT80</strong></td><td>MCS14</td><td>480.9</td><td>458.0</td><td>503.8</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='63' class='row-pass'><td><strong>HT80</strong></td><td>MCS15</td><td>514.5</td><td>490.0</td><td>539.0</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='64' class='row-pass'><td><strong>HT80</strong></td><td>MCS16</td><td>548.1</td><td>522.0</td><td>574.2</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='65' class='row-pass'><td><strong>HT80</strong></td><td>MCS17</td><td>581.7</td><td>554.0</td><td>609.4</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='66' class='row-pass'><td><strong>HT80</strong></td><td>MCS18</td><td>615.3</td><td>586.0</td><td>644.6</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='67' class='row-pass'><td><strong>HT80</strong></td><td>MCS19</td><td>648.9</td><td>618.0</td><td>679.8</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='68' class='row-pass'><td><strong>HT80</strong></td><td>MCS20</td><td>682.5</td><td>650.0</td><td>715.0</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='69' class='row-pass'><td><strong>HT80</strong></td><td>MCS21</td><td>716.1</td><td>682.0</td><td>750.2</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='70' class='row-pass'><td><strong>HT80</strong></td><td>MCS22</td><td>749.7</td><td>714.0</td><td>785.4</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='71' class='row-pass'><td><strong>HT80</strong></td><td>MCS23</td><td>783.3</td><td>746.0</td><td>820.6</td><td>53/56</td><td>-54 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const seriesData = {"0": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [9.0, 10.0], "loss_pct": [0.5, 0.2]}, "1": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [16.2, 18.0], "loss_pct": [0.5, 0.2]}, "2": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [23.4, 26.0], "loss_pct": [0.5, 0.2]}, "3": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [30.6, 34.0], "loss_pct": [0.5, 0.2]}, "4": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [37.8, 42.0], "loss_pct": [0.5, 0.2]}, "5": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [45.0, 50.0], "loss_pct": [0.5, 0.2]}, "6": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [52.2, 58.0], "loss_pct": [0.5, 0.2]}, "7": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [59.4, 66.0], "loss_pct": [0.5, 0.2]}, "8": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [66.6, 74.0], "loss_pct": [0.5, 0.2]}, "9": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [73.8, 82.0], "loss_pct": [0.5, 0.2]}, "10": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [81.0, 90.0], "loss_pct": [0.5, 0.2]}, "11": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [88.2, 98.0], "loss_pct": [0.5, 0.2]}, "12": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [95.4, 106.0], "loss_pct": [0.5, 0.2]}, "13": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [102.6, 114.0], "loss_pct": [0.5, 0.2]}, "14": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [109.8, 122.0], "loss_pct": [0.5, 0.2]}, "15": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [117.0, 130.0], "loss_pct": [0.5, 0.2]}, "16": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [124.2, 138.0], "loss_pct": [0.5, 0.2]}, "17": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [131.4, 146.0], "loss_pct": [0.5, 0.2]}, "18": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [138.6, 154.0], "loss_pct": [0.5, 0.2]}, "19": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [145.8, 162.0], "loss_pct": [0.5, 0.2]}, "20": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [153.0, 170.0], "loss_pct": [0.5, 0.2]}, "21": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [160.2, 178.0], "loss_pct": [0.5, 0.2]}, "22": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [167.4, 186.0], "loss_pct": [0.5, 0.2]}, "23": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [174.6, 194.0], "loss_pct": [0.5, 0.2]}, "24": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [9.0, 10.0], "loss_pct": [0.5, 0.2]}, "25": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [23.4, 26.0], "loss_pct": [0.5, 0.2]}, "26": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [37.8, 42.0], "loss_pct": [0.5, 0.2]}, "27": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [52.2, 58.0], "loss_pct": [0.5, 0.2]}, "28": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [66.6, 74.0], "loss_pct": [0.5, 0.2]}, "29": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [81.0, 90.0], "loss_pct": [0.5, 0.2]}, "30": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [95.4, 106.0], "loss_pct": [0.5, 0.2]}, "31": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [109.8, 122.0], "loss_pct": [0.5, 0.2]}, "32": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [124.2, 138.0], "loss_pct": [0.5, 0.2]}, "33": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [138.6, 154.0], "loss_pct": [0.5, 0.2]}, "34": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [153.0, 170.0], "loss_pct": [0.5, 0.2]}, "35": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [167.4, 186.0], "loss_pct": [0.5, 0.2]}, "36": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [181.8, 202.0], "loss_pct": [0.5, 0.2]}, "37": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [196.2, 218.0], "loss_pct": [0.5, 0.2]}, "38": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [210.6, 234.0], "loss_pct": [0.5, 0.2]}, "39": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [225.0, 250.0], "loss_pct": [0.5, 0.2]}, "40": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [239.4, 266.0], "loss_pct": [0.5, 0.2]}, "41": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [253.8, 282.0], "loss_pct": [0.5, 0.2]}, "42": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [268.2, 298.0], "loss_pct": [0.5, 0.2]}, "43": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [282.6, 314.0], "loss_pct": [0.5, 0.2]}, "44": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [297.0, 330.0], "loss_pct": [0.5, 0.2]}, "45": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [311.4, 346.0], "loss_pct": [0.5, 0.2]}, "46": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [325.8, 362.0], "loss_pct": [0.5, 0.2]}, "47": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [340.2, 378.0], "loss_pct": [0.5, 0.2]}, "48": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [9.0, 10.0], "loss_pct": [0.5, 0.2]}, "49": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [37.8, 42.0], "loss_pct": [0.5, 0.2]}, "50": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [66.6, 74.0], "loss_pct": [0.5, 0.2]}, "51": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [95.4, 106.0], "loss_pct": [0.5, 0.2]}, "52": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [124.2, 138.0], "loss_pct": [0.5, 0.2]}, "53": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [153.0, 170.0], "loss_pct": [0.5, 0.2]}, "54": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [181.8, 202.0], "loss_pct": [0.5, 0.2]}, "55": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [210.6, 234.0], "loss_pct": [0.5, 0.2]}, "56": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [239.4, 266.0], "loss_pct": [0.5, 0.2]}, "57": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [268.2, 298.0], "loss_pct": [0.5, 0.2]}, "58": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [297.0, 330.0], "loss_pct": [0.5, 0.2]}, "59": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [325.8, 362.0], "loss_pct": [0.5, 0.2]}, "60": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [354.6, 394.0], "loss_pct": [0.5, 0.2]}, "61": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [383.4, 426.0], "loss_pct": [0.5, 0.2]}, "62": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [412.2, 458.0], "loss_pct": [0.5, 0.2]}, "63": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [441.0, 490.0], "loss_pct": [0.5, 0.2]}, "64": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [469.8, 522.0], "loss_pct": [0.5, 0.2]}, "65": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [498.6, 554.0], "loss_pct": [0.5, 0.2]}, "66": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [527.4, 586.0], "loss_pct": [0.5, 0.2]}, "67": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [556.2, 618.0], "loss_pct": [0.5, 0.2]}, "68": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [585.0, 650.0], "loss_pct": [0.5, 0.2]}, "69": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [613.8, 682.0], "loss_pct": [0.5, 0.2]}, "70": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [642.6, 714.0], "loss_pct": [0.5, 0.2]}, "71": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [671.4, 746.0], "loss_pct": [0.5, 0.2]}};
+    const cellMeta = {"0": {"bandwidth": "HT20", "mcs": "MCS0", "tx_mbps": 10.5, "rx_mbps": 10.0, "target_mbps": 11.0, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "snr": "60/53", "rssi": "-54"}], "remark": "MCS mismatch \u2014 SU1: want MCS0 got MCS22 (SNR 60/53)", "skipped": false}, "1": {"bandwidth": "HT20", "mcs": "MCS1", "tx_mbps": 18.900000000000002, "rx_mbps": 18.0, "target_mbps": 19.8, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "1", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "2": {"bandwidth": "HT20", "mcs": "MCS2", "tx_mbps": 27.3, "rx_mbps": 26.0, "target_mbps": 28.6, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "2", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "3": {"bandwidth": "HT20", "mcs": "MCS3", "tx_mbps": 35.7, "rx_mbps": 34.0, "target_mbps": 37.400000000000006, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "3", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "4": {"bandwidth": "HT20", "mcs": "MCS4", "tx_mbps": 44.1, "rx_mbps": 42.0, "target_mbps": 46.2, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "4", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "5": {"bandwidth": "HT20", "mcs": "MCS5", "tx_mbps": 52.5, "rx_mbps": 50.0, "target_mbps": 55.00000000000001, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "5", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "6": {"bandwidth": "HT20", "mcs": "MCS6", "tx_mbps": 60.900000000000006, "rx_mbps": 58.0, "target_mbps": 63.800000000000004, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "6", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "7": {"bandwidth": "HT20", "mcs": "MCS7", "tx_mbps": 69.3, "rx_mbps": 66.0, "target_mbps": 72.60000000000001, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "7", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "8": {"bandwidth": "HT20", "mcs": "MCS8", "tx_mbps": 77.7, "rx_mbps": 74.0, "target_mbps": 81.4, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "8", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "9": {"bandwidth": "HT20", "mcs": "MCS9", "tx_mbps": 86.10000000000001, "rx_mbps": 82.0, "target_mbps": 90.2, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "9", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "10": {"bandwidth": "HT20", "mcs": "MCS10", "tx_mbps": 94.5, "rx_mbps": 90.0, "target_mbps": 99.00000000000001, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "10", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "11": {"bandwidth": "HT20", "mcs": "MCS11", "tx_mbps": 102.9, "rx_mbps": 98.0, "target_mbps": 107.80000000000001, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "11", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "12": {"bandwidth": "HT20", "mcs": "MCS12", "tx_mbps": 111.30000000000001, "rx_mbps": 106.0, "target_mbps": 116.60000000000001, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "12", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "13": {"bandwidth": "HT20", "mcs": "MCS13", "tx_mbps": 119.7, "rx_mbps": 114.0, "target_mbps": 125.4, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "13", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "14": {"bandwidth": "HT20", "mcs": "MCS14", "tx_mbps": 128.1, "rx_mbps": 122.0, "target_mbps": 134.20000000000002, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "14", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "15": {"bandwidth": "HT20", "mcs": "MCS15", "tx_mbps": 136.5, "rx_mbps": 130.0, "target_mbps": 143.0, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "15", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "16": {"bandwidth": "HT20", "mcs": "MCS16", "tx_mbps": 144.9, "rx_mbps": 138.0, "target_mbps": 151.8, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "16", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "17": {"bandwidth": "HT20", "mcs": "MCS17", "tx_mbps": 153.3, "rx_mbps": 146.0, "target_mbps": 160.60000000000002, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "17", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "18": {"bandwidth": "HT20", "mcs": "MCS18", "tx_mbps": 161.70000000000002, "rx_mbps": 154.0, "target_mbps": 169.4, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "18", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "19": {"bandwidth": "HT20", "mcs": "MCS19", "tx_mbps": 170.1, "rx_mbps": 162.0, "target_mbps": 178.20000000000002, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "19", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "20": {"bandwidth": "HT20", "mcs": "MCS20", "tx_mbps": 178.5, "rx_mbps": 170.0, "target_mbps": 187.00000000000003, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "20", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "21": {"bandwidth": "HT20", "mcs": "MCS21", "tx_mbps": 186.9, "rx_mbps": 178.0, "target_mbps": 195.8, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "21", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "22": {"bandwidth": "HT20", "mcs": "MCS22", "tx_mbps": 195.3, "rx_mbps": 186.0, "target_mbps": 204.60000000000002, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "23": {"bandwidth": "HT20", "mcs": "MCS23", "tx_mbps": 203.70000000000002, "rx_mbps": 194.0, "target_mbps": 213.4, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "23", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "24": {"bandwidth": "HT40", "mcs": "MCS0", "tx_mbps": 10.5, "rx_mbps": 10.0, "target_mbps": 11.0, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "snr": "60/53", "rssi": "-54"}], "remark": "MCS mismatch \u2014 SU1: want MCS0 got MCS22 (SNR 60/53)", "skipped": false}, "25": {"bandwidth": "HT40", "mcs": "MCS1", "tx_mbps": 27.3, "rx_mbps": 26.0, "target_mbps": 28.6, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "1", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "26": {"bandwidth": "HT40", "mcs": "MCS2", "tx_mbps": 44.1, "rx_mbps": 42.0, "target_mbps": 46.2, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "2", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "27": {"bandwidth": "HT40", "mcs": "MCS3", "tx_mbps": 60.900000000000006, "rx_mbps": 58.0, "target_mbps": 63.800000000000004, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "3", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "28": {"bandwidth": "HT40", "mcs": "MCS4", "tx_mbps": 77.7, "rx_mbps": 74.0, "target_mbps": 81.4, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "4", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "29": {"bandwidth": "HT40", "mcs": "MCS5", "tx_mbps": 94.5, "rx_mbps": 90.0, "target_mbps": 99.00000000000001, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "5", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "30": {"bandwidth": "HT40", "mcs": "MCS6", "tx_mbps": 111.30000000000001, "rx_mbps": 106.0, "target_mbps": 116.60000000000001, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "6", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "31": {"bandwidth": "HT40", "mcs": "MCS7", "tx_mbps": 128.1, "rx_mbps": 122.0, "target_mbps": 134.20000000000002, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "7", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "32": {"bandwidth": "HT40", "mcs": "MCS8", "tx_mbps": 144.9, "rx_mbps": 138.0, "target_mbps": 151.8, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "8", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "33": {"bandwidth": "HT40", "mcs": "MCS9", "tx_mbps": 161.70000000000002, "rx_mbps": 154.0, "target_mbps": 169.4, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "9", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "34": {"bandwidth": "HT40", "mcs": "MCS10", "tx_mbps": 178.5, "rx_mbps": 170.0, "target_mbps": 187.00000000000003, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "10", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "35": {"bandwidth": "HT40", "mcs": "MCS11", "tx_mbps": 195.3, "rx_mbps": 186.0, "target_mbps": 204.60000000000002, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "11", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "36": {"bandwidth": "HT40", "mcs": "MCS12", "tx_mbps": 212.10000000000002, "rx_mbps": 202.0, "target_mbps": 222.20000000000002, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "12", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "37": {"bandwidth": "HT40", "mcs": "MCS13", "tx_mbps": 228.9, "rx_mbps": 218.0, "target_mbps": 239.8, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "13", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "38": {"bandwidth": "HT40", "mcs": "MCS14", "tx_mbps": 245.70000000000002, "rx_mbps": 234.0, "target_mbps": 257.40000000000003, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "14", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "39": {"bandwidth": "HT40", "mcs": "MCS15", "tx_mbps": 262.5, "rx_mbps": 250.0, "target_mbps": 275.0, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "15", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "40": {"bandwidth": "HT40", "mcs": "MCS16", "tx_mbps": 279.3, "rx_mbps": 266.0, "target_mbps": 292.6, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "16", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "41": {"bandwidth": "HT40", "mcs": "MCS17", "tx_mbps": 296.1, "rx_mbps": 282.0, "target_mbps": 310.20000000000005, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "17", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "42": {"bandwidth": "HT40", "mcs": "MCS18", "tx_mbps": 312.90000000000003, "rx_mbps": 298.0, "target_mbps": 327.8, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "18", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "43": {"bandwidth": "HT40", "mcs": "MCS19", "tx_mbps": 329.7, "rx_mbps": 314.0, "target_mbps": 345.40000000000003, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "19", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "44": {"bandwidth": "HT40", "mcs": "MCS20", "tx_mbps": 346.5, "rx_mbps": 330.0, "target_mbps": 363.00000000000006, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "20", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "45": {"bandwidth": "HT40", "mcs": "MCS21", "tx_mbps": 363.3, "rx_mbps": 346.0, "target_mbps": 380.6, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "21", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "46": {"bandwidth": "HT40", "mcs": "MCS22", "tx_mbps": 380.1, "rx_mbps": 362.0, "target_mbps": 398.20000000000005, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "47": {"bandwidth": "HT40", "mcs": "MCS23", "tx_mbps": 396.90000000000003, "rx_mbps": 378.0, "target_mbps": 415.8, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "23", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "48": {"bandwidth": "HT80", "mcs": "MCS0", "tx_mbps": 10.5, "rx_mbps": 10.0, "target_mbps": 11.0, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "snr": "60/53", "rssi": "-54"}], "remark": "MCS mismatch \u2014 SU1: want MCS0 got MCS22 (SNR 60/53)", "skipped": false}, "49": {"bandwidth": "HT80", "mcs": "MCS1", "tx_mbps": 44.1, "rx_mbps": 42.0, "target_mbps": 46.2, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "1", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "50": {"bandwidth": "HT80", "mcs": "MCS2", "tx_mbps": 77.7, "rx_mbps": 74.0, "target_mbps": 81.4, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "2", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "51": {"bandwidth": "HT80", "mcs": "MCS3", "tx_mbps": 111.30000000000001, "rx_mbps": 106.0, "target_mbps": 116.60000000000001, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "3", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "52": {"bandwidth": "HT80", "mcs": "MCS4", "tx_mbps": 144.9, "rx_mbps": 138.0, "target_mbps": 151.8, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "4", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "53": {"bandwidth": "HT80", "mcs": "MCS5", "tx_mbps": 178.5, "rx_mbps": 170.0, "target_mbps": 187.00000000000003, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "5", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "54": {"bandwidth": "HT80", "mcs": "MCS6", "tx_mbps": 212.10000000000002, "rx_mbps": 202.0, "target_mbps": 222.20000000000002, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "6", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "55": {"bandwidth": "HT80", "mcs": "MCS7", "tx_mbps": 245.70000000000002, "rx_mbps": 234.0, "target_mbps": 257.40000000000003, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "7", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "56": {"bandwidth": "HT80", "mcs": "MCS8", "tx_mbps": 279.3, "rx_mbps": 266.0, "target_mbps": 292.6, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "8", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "57": {"bandwidth": "HT80", "mcs": "MCS9", "tx_mbps": 312.90000000000003, "rx_mbps": 298.0, "target_mbps": 327.8, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "9", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "58": {"bandwidth": "HT80", "mcs": "MCS10", "tx_mbps": 346.5, "rx_mbps": 330.0, "target_mbps": 363.00000000000006, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "10", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "59": {"bandwidth": "HT80", "mcs": "MCS11", "tx_mbps": 380.1, "rx_mbps": 362.0, "target_mbps": 398.20000000000005, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "11", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "60": {"bandwidth": "HT80", "mcs": "MCS12", "tx_mbps": 413.70000000000005, "rx_mbps": 394.0, "target_mbps": 433.40000000000003, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "12", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "61": {"bandwidth": "HT80", "mcs": "MCS13", "tx_mbps": 447.3, "rx_mbps": 426.0, "target_mbps": 468.6, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "13", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "62": {"bandwidth": "HT80", "mcs": "MCS14", "tx_mbps": 480.90000000000003, "rx_mbps": 458.0, "target_mbps": 503.80000000000007, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "14", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "63": {"bandwidth": "HT80", "mcs": "MCS15", "tx_mbps": 514.5, "rx_mbps": 490.0, "target_mbps": 539.0, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "15", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "64": {"bandwidth": "HT80", "mcs": "MCS16", "tx_mbps": 548.1, "rx_mbps": 522.0, "target_mbps": 574.2, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "16", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "65": {"bandwidth": "HT80", "mcs": "MCS17", "tx_mbps": 581.7, "rx_mbps": 554.0, "target_mbps": 609.4000000000001, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "17", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "66": {"bandwidth": "HT80", "mcs": "MCS18", "tx_mbps": 615.3000000000001, "rx_mbps": 586.0, "target_mbps": 644.6, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "18", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "67": {"bandwidth": "HT80", "mcs": "MCS19", "tx_mbps": 648.9, "rx_mbps": 618.0, "target_mbps": 679.8000000000001, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "19", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "68": {"bandwidth": "HT80", "mcs": "MCS20", "tx_mbps": 682.5, "rx_mbps": 650.0, "target_mbps": 715.0000000000001, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "20", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "69": {"bandwidth": "HT80", "mcs": "MCS21", "tx_mbps": 716.1, "rx_mbps": 682.0, "target_mbps": 750.2, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "21", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "70": {"bandwidth": "HT80", "mcs": "MCS22", "tx_mbps": 749.7, "rx_mbps": 714.0, "target_mbps": 785.4000000000001, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}, "71": {"bandwidth": "HT80", "mcs": "MCS23", "tx_mbps": 783.3000000000001, "rx_mbps": 746.0, "target_mbps": 820.6, "snr_summary": "53/56", "rssi_summary": "-54", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "23", "snr": "60/53", "rssi": "-54"}], "remark": "\u2014", "skipped": false}};
+    let activeKey = "0";
+    const gridColor = 'rgba(148,163,184,0.25)';
+    const chartEl = document.getElementById('timeSeriesChart');
+    const chartCtx = chartEl.getContext('2d');
+    const rxGradient = chartCtx.createLinearGradient(0, 0, 0, 320);
+    rxGradient.addColorStop(0, 'rgba(37,99,235,0.18)');
+    rxGradient.addColorStop(1, 'rgba(37,99,235,0.02)');
+
+    const chart = new Chart(chartEl, {
+      type: 'line',
+      data: { labels: [], datasets: [] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: {
+            labels: { color: '#334155', font: { family: 'Plus Jakarta Sans', size: 12, weight: '600' } }
+          },
+          tooltip: {
+            backgroundColor: '#ffffff',
+            borderColor: '#e2e8f0',
+            borderWidth: 1,
+            titleColor: '#0f172a',
+            bodyColor: '#475569',
+            titleFont: { family: 'Plus Jakarta Sans', weight: '700' },
+            bodyFont: { family: 'Plus Jakarta Sans' },
+            padding: 12,
+            cornerRadius: 10,
+          }
+        },
+        scales: {
+          x: {
+            ticks: { color: '#64748b', font: { family: 'Plus Jakarta Sans' } },
+            grid: { color: gridColor }
+          },
+          y: {
+            type: 'linear', position: 'left',
+            title: { display: true, text: 'Throughput (Mbps)', color: '#64748b', font: { weight: '600' } },
+            ticks: { color: '#64748b' }, grid: { color: gridColor }, suggestedMin: 0
+          },
+          y1: {
+            type: 'linear', position: 'right',
+            title: { display: true, text: 'Packet loss %', color: '#d97706', font: { weight: '600' } },
+            ticks: { color: '#d97706' }, grid: { drawOnChartArea: false }, suggestedMin: 0
+          }
+        }
+      }
+    });
+
+    function renderRfTable(suRf) {
+      const body = document.getElementById('cellRfBody');
+      if (!suRf || !suRf.length) {
+        body.innerHTML = '<tr><td colspan="7"><p class="empty-note" style="border:none;margin:0">No RF snapshot for this cell.</p></td></tr>';
+        return;
+      }
+      body.innerHTML = suRf.map(row => `
+        <tr>
+          <td><strong>${row.label || '—'}</strong></td>
+          <td class="mono">${row.mac || '—'}</td>
+          <td>${row.tx_rate || '—'}</td>
+          <td>${row.rx_rate || '—'}</td>
+          <td>${row.rx_mcs || '—'}</td>
+          <td>${row.snr || '—'}</td>
+          <td>${row.rssi && row.rssi !== '—' ? row.rssi + ' dBm' : '—'}</td>
+        </tr>`).join('');
+    }
+
+    function selectCell(key) {
+      activeKey = String(key);
+      document.querySelectorAll('.heat-cell[data-iter-key]').forEach(el => {
+        el.classList.toggle('selected', el.dataset.iterKey === activeKey);
+      });
+      const meta = cellMeta[activeKey] || {};
+      const series = seriesData[activeKey] || { labels: [], rx_mbps: [], loss_pct: [] };
+      document.getElementById('seriesTitle').textContent =
+        meta.skipped ? `${meta.bandwidth || '—'} · ${meta.mcs || '—'} · skipped` :
+        `${meta.bandwidth || '—'} · ${meta.mcs || '—'} · ${(meta.tx_mbps || 0).toFixed(1)} sent → ${(meta.rx_mbps || 0).toFixed(1)} Mbps got`;
+      document.getElementById('seriesMeta').textContent =
+        meta.skipped ? (meta.remark || 'TRex not run') :
+        `${series.labels.length} live samples · SNR ${meta.snr_summary || '—'} · RSSI ${meta.rssi_summary && meta.rssi_summary !== '—' ? meta.rssi_summary + ' dBm' : '—'} · loss from DUT avg_rtx or TX/RX PPS delta`;
+      renderRfTable(meta.su_rf || []);
+      chart.data.labels = series.labels;
+      chart.data.datasets = [
+        {
+          label: 'Combined RX Mbps',
+          data: series.rx_mbps,
+          borderColor: '#2563eb',
+          backgroundColor: rxGradient,
+          fill: true,
+          tension: 0.35,
+          yAxisID: 'y',
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          pointBackgroundColor: '#2563eb',
+          borderWidth: 2.5,
+        },
+        {
+          label: 'Packet loss %',
+          data: series.loss_pct,
+          borderColor: '#d97706',
+          backgroundColor: 'rgba(217,119,6,0.08)',
+          borderDash: [6, 4],
+          tension: 0.3,
+          yAxisID: 'y1',
+          pointRadius: 3,
+          borderWidth: 2,
+        },
+      ];
+      chart.update();
+      document.getElementById('chartSection').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    document.getElementById('coverageMatrix').addEventListener('click', (event) => {
+      const cell = event.target.closest('.heat-cell[data-iter-key]');
+      if (!cell || cell.classList.contains('heat-empty')) return;
+      selectCell(cell.dataset.iterKey);
+    });
+
+    if (activeKey && seriesData[activeKey]) selectCell(activeKey);
+  </script>
+</body>
+</html>
