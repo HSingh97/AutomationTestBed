@@ -294,6 +294,52 @@ def _resolve_dut_ssh_ip(profile_bundle, dut_ip: str) -> str:
     return normalize_ip(ssh_host) if ssh_host else dut_ip
 
 
+def _ensure_lab_pc_fallback_for_bts_ssh(
+    profile_bundle,
+    dut_ssh_ip: str,
+    *,
+    password: str,
+) -> None:
+    """
+    If BTS SSH is via 10.0.0.x (factory/WAN), ensure the lab backend NIC has a
+    10.0.0.x address (e.g. enp3s0 → 10.0.0.10). Throughput does not always run
+    full testbed bootstrap, so this must be explicit.
+    """
+    host = normalize_ip(dut_ssh_ip)
+    if not host.startswith("10.0."):
+        return
+    tb = dict(profile_bundle.active.get("testbed") or {})
+    primary = dict(tb.get("primary_pc") or {})
+    if not primary:
+        primary = {
+            "local": True,
+            "mgmt_interface": "enp3s0",
+            "fallback_ipv4": "10.0.0.10",
+            "fallback_prefix_len": 8,
+        }
+    primary.setdefault("local", not str(primary.get("ssh") or primary.get("internet_ssh") or "").strip())
+    primary.setdefault("mgmt_interface", "enp3s0")
+    primary.setdefault("fallback_ipv4", "10.0.0.10")
+    primary.setdefault("fallback_prefix_len", 8)
+    internet_ssh = str(primary.get("internet_ssh") or "").strip()
+    if internet_ssh and not primary.get("ssh"):
+        primary["ssh"] = internet_ssh
+        primary["local"] = False
+
+    from utils.lab_pc_net import ensure_fallback_subnet
+
+    print(
+        f"[testbed] Ensuring lab PC backend has 10.0.0.x for BTS SSH {host} "
+        f"(iface={primary.get('mgmt_interface')}, fallback={primary.get('fallback_ipv4')})"
+    )
+    ok = asyncio.run(ensure_fallback_subnet(primary, password))
+    if not ok:
+        print(
+            f"[WARN] Could not ensure 10.0.0.x on lab PC — SSH to {host} may fail "
+            f"if the backend interface has no address in that subnet"
+        )
+
+
 def _artifact_name(bandwidth: str, mcs: str, mode: str, ratio: str) -> str:
     safe_ratio = ratio.replace(":", "_")
     return f"Throughput_{bandwidth}_{mcs}_{mode}_{safe_ratio}.json"
@@ -653,6 +699,10 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     dut_user = args.dut_user or dut["username"]
     dut_password = args.dut_password or dut["password"]
     testbed_tb = dict(profile_bundle.active.get("testbed") or {})
+    if not args.skip_dut_config:
+        _ensure_lab_pc_fallback_for_bts_ssh(
+            profile_bundle, dut_ssh_ip, password=dut_password
+        )
 
     qinq_svlan = args.trex_svlan
     qinq_cvlan = args.trex_cvlan
@@ -739,34 +789,40 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         ssh_user=dut_user,
         ssh_password=dut_password,
         cpe_hosts=profile_hosts,
-        max_sua=configured_su,
+        max_sua=max(configured_su, 8),
     )
     detected_count = len(detected_clients)
-    cpe_hosts = resolve_cpe_hosts_for_run(
-        profile_hosts,
-        detected_clients,
-        su_count=configured_su,
-    )
-    if cpe_hosts:
-        print(f"[DUT] CPE targets for run ({len(cpe_hosts)}/{configured_su}): {', '.join(cpe_hosts)}")
-    if detected_count > 0:
+    # Live associated IPs only — never pad with profile placeholders while any SU is up.
+    live_hosts = resolve_cpe_hosts_for_run([], detected_clients, su_count=configured_su)
+    if live_hosts:
+        cpe_hosts = live_hosts
+        args.su_count = len(cpe_hosts)
+        print(
+            f"[DUT] Using {len(cpe_hosts)} live-associated SU(s) for throughput "
+            f"(profile su_count was {configured_su}): {', '.join(cpe_hosts)}"
+        )
+        print(f"[DUT] Effective TRex SU count: {args.su_count}")
         if detected_count > configured_su:
             print(
                 f"[DUT] BTS reports {detected_count} associated SUA slot(s); "
-                f"using configured su_count={configured_su}"
+                f"capped to {len(cpe_hosts)} for this run"
             )
-        elif detected_count < configured_su:
+    else:
+        cpe_hosts = resolve_cpe_hosts_for_run(
+            profile_hosts,
+            [],
+            su_count=configured_su,
+        )
+        if cpe_hosts:
             print(
-                f"[DUT] Connected CPE detected: {detected_count}/{configured_su} — "
-                f"will wait for all {configured_su} after bandwidth apply"
+                f"[DUT] No live SU IPs from sysfs — falling back to profile hosts "
+                f"({len(cpe_hosts)}/{configured_su}): {', '.join(cpe_hosts)}"
             )
         else:
-            print(f"[DUT] Connected CPE detected: {detected_count}")
-    else:
-        print(
-            f"[WARN] Could not detect connected CPE count via {args.link_stats_source}; "
-            f"using su_count={args.su_count}"
-        )
+            print(
+                f"[WARN] Could not detect connected CPE IPs via {args.link_stats_source}; "
+                f"using su_count={args.su_count} without CPE host list"
+            )
     if not args.skip_dut_config:
         try:
             mgmt = testbed_tb.get("mgmt_vlan") or {}
@@ -778,7 +834,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                     dut_password,
                     bts_ssh_host=dut_ssh_ip,
                     ipv6_prefix_len=ipv6_prefix_len,
-                    su_count=configured_su,
+                    su_count=args.su_count,
                 )
             )
             testbed_summary["stand"] = args.stand or profile_bundle.active.get("name", "")

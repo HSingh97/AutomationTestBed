@@ -20,7 +20,12 @@ def resolve_cpe_hosts_for_run(
     *,
     su_count: int,
 ) -> list[str]:
-    """Associated SU mgmt IPs only, ordered by sua slot, capped at ``su_count``."""
+    """
+    CPE mgmt IPs for the run, ordered by SUA slot, capped at ``su_count``.
+
+    Prefer live associated SU IPs from BTS sysfs. Only fall back to profile
+    host list when no live SU IP is available.
+    """
     hosts: list[str] = []
     ordered = sorted(
         detected_clients,
@@ -39,6 +44,11 @@ def resolve_cpe_hosts_for_run(
             normalized = normalize_ip(ip)
             if normalized not in hosts:
                 hosts.append(normalized)
+
+    if hosts:
+        # Live associations win — do not pad with stale profile IPv6 placeholders.
+        return hosts[:su_count]
+
     for ip in profile_hosts:
         if len(hosts) >= su_count:
             break
