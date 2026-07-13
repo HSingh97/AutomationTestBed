@@ -59,6 +59,37 @@ def _run_shell(cmd: str) -> str:
         return str(output).strip()
 
 
+def _is_ssh_noise(text: str) -> bool:
+    """True when shell/SSH failure text leaked into a supposed sysfs value."""
+    lower = str(text or "").strip().lower()
+    if not lower:
+        return False
+    markers = (
+        "sshpass",
+        "permission denied",
+        "connection refused",
+        "connection timed out",
+        "no route to host",
+        "name or service not known",
+        "could not resolve",
+        "/bin/sh:",
+        "command not found",
+        "no such file",
+    )
+    return any(marker in lower for marker in markers)
+
+
+def clean_sysfs_value(value: str) -> str:
+    """Return a single-line sysfs value, or '-' when empty/SSH noise."""
+    text = str(value or "").strip()
+    if not text or _is_ssh_noise(text):
+        return "-"
+    # Sysfs scalars are single-line; multi-line is almost always command noise.
+    if "\n" in text or "\r" in text:
+        return "-"
+    return text
+
+
 def ssh_read_sysfs_field(
     *,
     host: str,
@@ -77,25 +108,33 @@ def ssh_read_sysfs_field(
         f"-o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 {ssh_user_q}@{ssh_host} "
         f"\"cat {shlex.quote(path)} 2>/dev/null || echo -\""
     )
-    value = _run_shell(cmd).strip()
-    return value if value else "-"
+    return clean_sysfs_value(_run_shell(cmd))
 
 
 def resolve_sua_display_ip(*, ipv4: str = "", ipv6: str = "") -> str:
-    """Prefer IPv4; when missing or 0.0.0.0, use IPv6."""
-    ip4 = str(ipv4 or "").strip()
-    if ip4 and ip4 not in {"-", "0", "0.0.0.0"}:
-        if re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", ip4):
-            return ip4
-    ip6 = str(ipv6 or "").strip()
-    if not ip6 or ip6 == "-":
-        return ""
-    if is_ipv6_literal(ip6):
-        return normalize_ip(ip6)
-    ipv6_match = re.search(r"(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:]{0,}", ip6)
-    if ipv6_match:
-        return normalize_ip(ipv6_match.group(0))
-    return ip6
+    """Prefer IPv4; when missing or 0.0.0.0, use IPv6. Never return SSH/shell noise."""
+    candidates = (
+        clean_sysfs_value(str(ipv4 or "")),
+        clean_sysfs_value(str(ipv6 or "")),
+    )
+    # Prefer a real IPv4 when present.
+    for candidate in candidates:
+        if candidate in {"-", "0", "0.0.0.0"}:
+            continue
+        if re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", candidate):
+            return candidate
+    # Otherwise accept IPv6 from either sysfs field (ip or ipv6).
+    for candidate in candidates:
+        if candidate in {"-", "0", "0.0.0.0"}:
+            continue
+        if is_ipv6_literal(candidate):
+            return normalize_ip(candidate)
+        ipv6_match = re.search(r"(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:]{0,}", candidate)
+        if ipv6_match:
+            parsed = normalize_ip(ipv6_match.group(0))
+            if is_ipv6_literal(parsed):
+                return parsed
+    return ""
 
 
 def _meaningful_stat(value: str) -> bool:
@@ -320,7 +359,10 @@ def ssh_read_kwn_sysfs_bulk(
         f"-o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 {ssh_user_q}@{ssh_host} "
         f"{shlex.quote(inner)}"
     )
-    return _parse_bulk_kwn_output(_run_shell(cmd))
+    text = _run_shell(cmd).strip()
+    if not text or _is_ssh_noise(text):
+        return {}
+    return _parse_bulk_kwn_output(text)
 
 
 def fetch_kwn_sua_statistics(

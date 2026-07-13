@@ -22,6 +22,7 @@ import argparse
 import asyncio
 import json
 import os
+import shutil
 import sys
 import time
 from datetime import datetime, timezone
@@ -41,6 +42,7 @@ from traffic.operating_rate_table import normalize_bandwidth, operating_rate_mbp
 from traffic.operating_rate_table import lookup_spec
 from traffic.phy_rate_targets import compute_traffic_targets
 from traffic.trex_runner import (
+    SSHPASS_MISSING_MSG,
     build_trex_client_command,
     run_trex_stats_check,
     stop_remote_trex_servers,
@@ -698,6 +700,8 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     dut_ssh_ip = _resolve_dut_ssh_ip(profile_bundle, dut_ip)
     dut_user = args.dut_user or dut["username"]
     dut_password = args.dut_password or dut["password"]
+    if dut_password and shutil.which("sshpass") is None:
+        raise RuntimeError(SSHPASS_MISSING_MSG)
     testbed_tb = dict(profile_bundle.active.get("testbed") or {})
     if not args.skip_dut_config:
         _ensure_lab_pc_fallback_for_bts_ssh(

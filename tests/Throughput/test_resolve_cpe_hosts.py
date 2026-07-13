@@ -47,3 +47,12 @@ def test_resolve_cpe_hosts_falls_back_to_profile_when_no_live_ips():
     ]
     hosts = resolve_cpe_hosts_for_run(profile, [], su_count=6)
     assert hosts == profile
+
+
+def test_resolve_cpe_hosts_rejects_sshpass_noise_as_live_ip():
+    profile = ["2001:2002:2003:2004:2005:2006:2007:11c9"]
+    detected = [
+        {"su_index": 1, "ip": "/bin/sh: 1: sshpass: not found", "ipv6": "/bin/sh: 1: sshpass: not found"},
+    ]
+    hosts = resolve_cpe_hosts_for_run(profile, detected, su_count=6)
+    assert hosts == profile

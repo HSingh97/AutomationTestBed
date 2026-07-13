@@ -7,11 +7,24 @@ import shlex
 import subprocess
 from typing import Any
 
-from traffic.kwn_sua_statistics import fetch_kwn_sua_statistics, resolve_sua_display_ip
+from traffic.kwn_sua_statistics import (
+    clean_sysfs_value,
+    fetch_kwn_sua_statistics,
+    resolve_sua_display_ip,
+)
 from traffic.operating_rate_table import lookup_spec, operating_rate_mbps
 from utils.net_utils import is_ipv6_literal, normalize_ip
 
 DEFAULT_SSH_USER = "root"
+
+
+def _is_usable_host_ip(ip_text: str) -> bool:
+    clean = normalize_ip(str(ip_text or "").strip())
+    if not clean or clean == "-":
+        return False
+    if re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", clean):
+        return True
+    return is_ipv6_literal(clean)
 
 
 def resolve_cpe_hosts_for_run(
@@ -34,16 +47,15 @@ def resolve_cpe_hosts_for_run(
     for client in ordered:
         if len(hosts) >= su_count:
             break
-        ip = str(client.get("ip") or "").strip()
-        if not ip or ip == "-":
-            ip = resolve_sua_display_ip(
-                ipv4=str(client.get("ip") or ""),
-                ipv6=str(client.get("ipv6") or ""),
-            )
-        if ip and ip != "-":
-            normalized = normalize_ip(ip)
-            if normalized not in hosts:
-                hosts.append(normalized)
+        ip = resolve_sua_display_ip(
+            ipv4=str(client.get("ip") or ""),
+            ipv6=str(client.get("ipv6") or ""),
+        )
+        if not _is_usable_host_ip(ip):
+            continue
+        normalized = normalize_ip(ip)
+        if normalized not in hosts:
+            hosts.append(normalized)
 
     if hosts:
         # Live associations win — do not pad with stale profile IPv6 placeholders.
@@ -53,7 +65,7 @@ def resolve_cpe_hosts_for_run(
         if len(hosts) >= su_count:
             break
         clean = str(ip).strip()
-        if not clean:
+        if not _is_usable_host_ip(clean):
             continue
         normalized = normalize_ip(clean)
         if normalized not in hosts:
@@ -283,7 +295,7 @@ def _ssh_read_field(
         f"-o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 {ssh_user_q}@{ssh_host} "
         f"\"cat {path} 2>/dev/null || echo -\""
     )
-    value = _run_shell(cmd).strip()
+    value = clean_sysfs_value(_run_shell(cmd))
     return value if value else "-"
 
 

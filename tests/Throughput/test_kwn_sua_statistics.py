@@ -19,6 +19,18 @@ def test_resolve_sua_display_ip_falls_back_to_ipv6_when_ipv4_zero():
     assert "2001:2002" in ip
 
 
+def test_resolve_sua_display_ip_rejects_sshpass_noise():
+    noise = "/bin/sh: 1: sshpass: not found"
+    assert resolve_sua_display_ip(ipv4=noise, ipv6=noise) == ""
+    assert resolve_sua_display_ip(ipv4=noise, ipv6="2001::1") == "2001::1"
+
+
+def test_is_sua_associated_ignores_ssh_noise_as_ip():
+    noise = "/bin/sh: 1: sshpass: not found"
+    assert is_sua_associated({"ip": noise, "ipv6": noise}) is False
+    assert is_sua_associated({"ip": noise, "mac": "aa:bb:cc:dd:ee:ff"}) is True
+
+
 def test_is_sua_associated_requires_identity_or_traffic():
     assert is_sua_associated({"ipv6": "2001::1"}) is True
     assert is_sua_associated({"rx_rate": "1080"}) is True

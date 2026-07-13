@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -26,6 +27,11 @@ SSH_OPTIONS = [
     "-o",
     "ConnectTimeout=12",
 ]
+
+SSHPASS_MISSING_MSG = (
+    "sshpass is not installed on this host (required for password SSH to BTS/TRex). "
+    "Install with: sudo apt-get install -y sshpass"
+)
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 LIVE_HEADER_RE = re.compile(r"^--- Live Stats @ (?P<timestamp>[^-]+?) ---$")
@@ -115,7 +121,13 @@ def _avg(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
+def _require_sshpass_if_needed(password: str) -> None:
+    if password and shutil.which("sshpass") is None:
+        raise RuntimeError(SSHPASS_MISSING_MSG)
+
+
 def _build_ssh_command(host: str, user: str, password: str, remote_script: str) -> list[str]:
+    _require_sshpass_if_needed(password)
     ssh_host = format_ssh_host(host)
     ssh_target = normalize_ip(host)
     command: list[str] = []
@@ -140,13 +152,19 @@ def _run_remote_command(
     timeout_s: int = 30,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        _build_ssh_command(host, user, password, remote_script),
-        capture_output=True,
-        text=True,
-        timeout=timeout_s,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            _build_ssh_command(host, user, password, remote_script),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        missing = str(exc.filename or "")
+        if "sshpass" in missing or "sshpass" in str(exc).lower():
+            raise RuntimeError(SSHPASS_MISSING_MSG) from exc
+        raise
     if check and result.returncode != 0:
         raise RuntimeError(
             f"Remote command failed on {host} with exit code {result.returncode}: "
@@ -452,30 +470,38 @@ def stop_remote_trex_server(
 ) -> None:
     """Stop any TRex server process on the remote host (idempotent)."""
     print(f"[TRex] Stopping remote TRex server on {trex_server} (if running)...")
-    _run_remote_command(
-        trex_server,
-        trex_user,
-        trex_password,
-        "pkill -f '_t-rex-64' || true; pkill -f 't-rex-64' || true; sleep 1",
-        timeout_s=15,
-        check=False,
-    )
-    deadline = time.monotonic() + 15.0
-    while time.monotonic() < deadline:
-        if not _has_running_trex_server(
-            trex_server=trex_server,
-            trex_user=trex_user,
-            trex_password=trex_password,
-        ):
-            return
+    try:
         _run_remote_command(
             trex_server,
             trex_user,
             trex_password,
-            "pkill -9 -f '_t-rex-64' || true; pkill -9 -f 't-rex-64' || true",
+            "pkill -f '_t-rex-64' || true; pkill -f 't-rex-64' || true; sleep 1",
             timeout_s=15,
             check=False,
         )
+    except RuntimeError as exc:
+        print(f"[TRex] WARN: could not stop TRex on {trex_server}: {exc}")
+        return
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        try:
+            if not _has_running_trex_server(
+                trex_server=trex_server,
+                trex_user=trex_user,
+                trex_password=trex_password,
+            ):
+                return
+            _run_remote_command(
+                trex_server,
+                trex_user,
+                trex_password,
+                "pkill -9 -f '_t-rex-64' || true; pkill -9 -f 't-rex-64' || true",
+                timeout_s=15,
+                check=False,
+            )
+        except RuntimeError as exc:
+            print(f"[TRex] WARN: could not stop TRex on {trex_server}: {exc}")
+            return
         time.sleep(1)
     print(f"[TRex] WARN: TRex process may still be running on {trex_server}")
 
@@ -636,6 +662,7 @@ def _normalize_client_script(script_path: str) -> tuple[str, str]:
 
 
 def _build_scp_command(host: str, user: str, password: str, local_path: str, remote_path: str) -> list[str]:
+    _require_sshpass_if_needed(password)
     ssh_host = format_ssh_host(host)
     ssh_target = normalize_ip(host)
     command: list[str] = []
