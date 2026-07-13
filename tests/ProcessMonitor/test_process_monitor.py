@@ -49,10 +49,13 @@ def _require_destructive_process(request):
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.PROCESS_01
 @pytest.mark.ProcessMonitor
-async def test_process_01_visibility(request, procmon_ssh, bsu_ip, device_creds):
+async def test_process_01_visibility(request, procmon_ssh, bsu_ip, device_creds, gui_page):
     _require_process_monitor(request)
     await assert_process_01_visibility(
-        procmon_ssh.conn, host=bsu_ip, password=device_creds["pass"]
+        procmon_ssh.conn,
+        host=bsu_ip,
+        password=device_creds["pass"],
+        gui_page=gui_page,
     )
 
 

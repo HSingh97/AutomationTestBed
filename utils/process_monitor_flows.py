@@ -159,6 +159,41 @@ class ServiceCrashFailure(Exception):
         super().__init__(reason)
 
 
+def _ssh_session_lost(exc: BaseException) -> bool:
+    """True when Scrapli/asyncssh dropped because sshd/network was crashed."""
+    name = type(exc).__name__.lower()
+    text = f"{name}: {exc}".lower()
+    if name in {"brokenpipeerror", "connectionreseterror", "connectionlost", "connectionaborted"}:
+        return True
+    if "scrapli" in name and "connection" in name:
+        return True
+    needles = (
+        "connection lost",
+        "connection reset",
+        "channel not open",
+        "not open for sending",
+        "eof reading from transport",
+        "device closed the connection",
+        "connection aborted",
+    )
+    return any(needle in text for needle in needles)
+
+
+def _ssh_loss_case_reason(
+    service_name: str,
+    signal: str,
+    exc: BaseException,
+    *,
+    phase: str,
+) -> str:
+    """Human-readable case failure when mgmt SSH drops mid crash/recover."""
+    return (
+        f"SSH session lost while {phase} {service_name} ({signal}): "
+        f"mgmt path dropped after crashing reconnect-sensitive service '{service_name}'. "
+        f"Reconnect/verify did not complete ({type(exc).__name__})."
+    )
+
+
 _SWEEP_CONTINUE_ON_FAILURE = False
 _SWEEP_CRITICAL_ONLY_FAIL = False
 
@@ -241,24 +276,87 @@ def _sweep_failure_policy(case_id: str):
 def _non_respawning_summary() -> str:
     parts: list[str] = []
     if _NON_RESPAWNING_SERVICES:
-        parts.append(
-            "no-respawn=["
-            + ", ".join(f"{n} ({r})" for n, r in sorted(_NON_RESPAWNING_SERVICES.items()))
-            + "]"
-        )
+        parts.append(f"no-respawn={len(_NON_RESPAWNING_SERVICES)}")
     if _COUNTER_QUIRK_SERVICES:
-        parts.append(
-            "no-counter=["
-            + ", ".join(f"{n} ({r})" for n, r in sorted(_COUNTER_QUIRK_SERVICES.items()))
-            + "]"
-        )
+        parts.append(f"counter-quirk={len(_COUNTER_QUIRK_SERVICES)}")
     if _NOT_RUNNING_SERVICES:
-        parts.append(
-            "not-running=["
-            + ", ".join(f"{n} ({r})" for n, r in sorted(_NOT_RUNNING_SERVICES.items()))
-            + "]"
-        )
-    return "; ".join(parts) if parts else "none"
+        parts.append(f"not-running={len(_NOT_RUNNING_SERVICES)}")
+    return ", ".join(parts) if parts else "none"
+
+
+def _skip_reason_bucket(reason: str) -> str:
+    text = str(reason or "").lower()
+    if "does not respawn" in text:
+        return "no-respawn"
+    if "counter quirk" in text:
+        return "counter-quirk"
+    if "not registered" in text or "not on this firmware" in text:
+        return "not-on-firmware"
+    if "session quirk" in text:
+        return "session-quirk"
+    if "respawn disabled" in text:
+        return "respawn-disabled"
+    if "optional/idle" in text:
+        return "optional-idle"
+    if "not running" in text:
+        return "not-running"
+    return "other"
+
+
+def _normalize_skip_entries(
+    skipped: list[tuple[str, str]] | list[str],
+) -> list[tuple[str, str]]:
+    items: list[tuple[str, str]] = []
+    for entry in skipped:
+        if isinstance(entry, tuple):
+            items.append((str(entry[0]), str(entry[1])))
+            continue
+        text = str(entry)
+        if " (" in text and text.endswith(")"):
+            name, reason = text[:-1].split(" (", 1)
+            items.append((name, reason))
+        else:
+            items.append((text, "other"))
+    return items
+
+
+def _format_skip_summary(skipped: list[tuple[str, str]] | list[str]) -> str:
+    """Count-only skip summary — no per-service name lists."""
+    items = _normalize_skip_entries(skipped)
+    if not items:
+        return "none"
+    buckets: dict[str, int] = {}
+    for _name, reason in items:
+        key = _skip_reason_bucket(reason)
+        buckets[key] = buckets.get(key, 0) + 1
+    order = (
+        "no-respawn",
+        "counter-quirk",
+        "not-on-firmware",
+        "not-running",
+        "respawn-disabled",
+        "optional-idle",
+        "session-quirk",
+        "other",
+    )
+    parts = [f"{key}={buckets[key]}" for key in order if key in buckets]
+    return ", ".join(parts)
+
+
+def _clear_session_service_quirks(*, case_id: str, reason: str) -> int:
+    """Drop session skip blacklist so later cases can retest after DUT recovery."""
+    cleared = (
+        len(_NON_RESPAWNING_SERVICES)
+        + len(_COUNTER_QUIRK_SERVICES)
+        + len(_NOT_RUNNING_SERVICES)
+    )
+    if not cleared:
+        return 0
+    _NON_RESPAWNING_SERVICES.clear()
+    _COUNTER_QUIRK_SERVICES.clear()
+    _NOT_RUNNING_SERVICES.clear()
+    _log(case_id, f"Cleared {cleared} session skip(s) ({reason})")
+    return cleared
 
 
 def _note_non_respawning_service(case_id: str, service_name: str, reason: str) -> None:
@@ -314,8 +412,8 @@ async def prepare_procmon_case(
 ) -> AsyncGenericDriver:
     """Reconnect SSH if needed and disarm dead-man recovery before a PROCESS_* case."""
     ssh = _resolve_ssh(ssh)
-    if _NON_RESPAWNING_SERVICES:
-        _log(case_id, f"SESSION non-respawning (skip): {_non_respawning_summary()}")
+    if _NON_RESPAWNING_SERVICES or _COUNTER_QUIRK_SERVICES or _NOT_RUNNING_SERVICES:
+        _log(case_id, f"SESSION skips: {_non_respawning_summary()}")
     await instant_recover_dut_if_armed(host, password, case_id=f"{case_id}_PRE")
     hosts = procmon_ssh_candidates(host)
     last_ping_detail = ""
@@ -452,10 +550,12 @@ async def _instant_reboot_and_wait(
                 conn = await _wait_for_ssh(host, password, timeout_s=10, interval_s=1)
                 await _disarm_recovery_reboot(conn, case_id=case_id)
                 _RECOVERY_LEFT_ARMED = False
+                _clear_session_service_quirks(
+                    case_id=case_id, reason="DUT recovered after reboot"
+                )
                 _log(
                     case_id,
-                    f"Recovery reboot: device {host} back online (ping up, SSH restored) "
-                    f"after reboot triggered because {recovery_reason}",
+                    f"Recovery reboot: device {host} back online (ping up, SSH restored)",
                 )
                 return conn
             except Exception as exc:
@@ -1468,7 +1568,17 @@ async def _crash_and_verify_restart_maybe_reconnect(
 
     reboot_delay = _recovery_reboot_delay_for(service_name, recovery_timeout_s)
     await _arm_recovery_reboot(ssh, case_id=case_id, delay_s=reboot_delay)
-    await _induce_signal(ssh, service_name, signal, case_id=case_id)
+    try:
+        await _induce_signal(ssh, service_name, signal, case_id=case_id)
+    except Exception as exc:
+        # SEGV/KILL on sshd|network often tears the session during the kill itself.
+        if not _ssh_session_lost(exc):
+            raise
+        _log(
+            case_id,
+            f"{signal} on {service_name} dropped SSH during kill "
+            f"(expected for reconnect services): {type(exc).__name__}",
+        )
     try:
         await ssh.send_command("echo ok", timeout_ops=3)
     except Exception:
@@ -1478,52 +1588,67 @@ async def _crash_and_verify_restart_maybe_reconnect(
     except Exception:
         pass
 
-    ssh = await _publish_ssh(
-        await _reconnect_ssh(host, password, case_id=case_id, service_name=service_name)
-    )
-    await _recovery_reboot_hello(ssh, case_id=case_id, delay_s=reboot_delay)
-    after = await _wait_for_service_restart(
-        ssh,
-        service_name,
-        host=host,
-        password=password,
-        old_pid=old_pid,
-        crashes_before=crashes_before,
-        case_id=case_id,
-        timeout_s=recovery_timeout_s,
-    )
-    if not after.pid or after.pid == old_pid:
-        await _fail_crash_case(
-            ssh,
-            host,
-            password,
-            case_id,
-            f"{service_name} PID did not change after crash ({old_pid} -> {after.pid})",
-            service_name=service_name,
+    try:
+        ssh = await _publish_ssh(
+            await _reconnect_ssh(host, password, case_id=case_id, service_name=service_name)
         )
-    if after.total_crashes < crashes_before + 1:
-        await _fail_crash_case(
-            ssh,
-            host,
-            password,
-            case_id,
-            f"{service_name} crash counter did not increment "
-            f"({crashes_before} -> {after.total_crashes})",
-            service_name=service_name,
-        )
-    await _assert_no_reboot(ssh, uptime_before, case_id=case_id)
-
-    core_path = None
-    if signal == "SEGV" and old_pid:
-        core_path = await _find_core_file(
+        await _recovery_reboot_hello(ssh, case_id=case_id, delay_s=reboot_delay)
+        after = await _wait_for_service_restart(
             ssh,
             service_name,
+            host=host,
+            password=password,
             old_pid=old_pid,
-            cores_before=cores_before,
+            crashes_before=crashes_before,
             case_id=case_id,
+            timeout_s=recovery_timeout_s,
         )
+        if not after.pid or after.pid == old_pid:
+            await _fail_crash_case(
+                ssh,
+                host,
+                password,
+                case_id,
+                f"{service_name} PID did not change after crash ({old_pid} -> {after.pid})",
+                service_name=service_name,
+            )
+        if after.total_crashes < crashes_before + 1:
+            await _fail_crash_case(
+                ssh,
+                host,
+                password,
+                case_id,
+                f"{service_name} crash counter did not increment "
+                f"({crashes_before} -> {after.total_crashes})",
+                service_name=service_name,
+            )
+        await _assert_no_reboot(ssh, uptime_before, case_id=case_id)
 
-    await _disarm_recovery_reboot(ssh, case_id=case_id)
+        core_path = None
+        if signal == "SEGV" and old_pid:
+            core_path = await _find_core_file(
+                ssh,
+                service_name,
+                old_pid=old_pid,
+                cores_before=cores_before,
+                case_id=case_id,
+            )
+
+        await _disarm_recovery_reboot(ssh, case_id=case_id)
+    except (ServiceCrashFailure, _ServiceCrashSkipped):
+        raise
+    except Exception as exc:
+        if _ssh_session_lost(exc) or isinstance(exc, TimeoutError):
+            await _fail_crash_case(
+                None,
+                host,
+                password,
+                case_id,
+                _ssh_loss_case_reason(service_name, signal, exc, phase="recovering"),
+                service_name=service_name,
+            )
+        raise
+
     return (
         CrashResult(
             service_name=service_name,
@@ -1548,6 +1673,11 @@ async def _run_all_services_crash_case(
 ) -> AsyncGenericDriver:
     """Run crash/kill scenario on every procd-respawnable service (official case full coverage)."""
     ssh = await prepare_procmon_case(ssh, host=host, password=password, case_id=case_id)
+    # Kill-phase cases should retest services; crash-phase session skips must not stick forever.
+    if signal == "KILL":
+        _clear_session_service_quirks(
+            case_id=case_id, reason=f"{case_id} kill phase retarget"
+        )
     await _require_procmon_ready(ssh, case_id=case_id)
     crashable_before = await _crashable_services_on_dut(ssh)
     results: list[CrashResult] = []
@@ -1568,8 +1698,10 @@ async def _run_all_services_crash_case(
             for service_name in SERVICE_SWEEP_ORDER:
                 action, reason = await _classify_service_for_crash(ssh, service_name)
                 if action == "skip":
-                    _log(case_id, f"Skipping {service_name}: {reason}")
                     skipped.append((service_name, reason))
+                    # Session blacklist skips are summarized once at the end.
+                    if not str(reason).startswith("session:"):
+                        _log(case_id, f"Skipping {service_name}: {reason}")
                     continue
                 if action == "fail":
                     if service_name in MUST_BE_RUNNING:
@@ -1605,10 +1737,6 @@ async def _run_all_services_crash_case(
 
                 for service_name in list(serial_targets):
                     if _is_known_quirk(service_name):
-                        _log(
-                            case_id,
-                            f"Skipping {service_name}: session quirk (already noted)",
-                        )
                         skipped.append((service_name, "session quirk"))
                         continue
                     timeout_s = _recovery_timeout_for(service_name)
@@ -1643,6 +1771,34 @@ async def _run_all_services_crash_case(
                             )
                         )
                         continue
+                    except Exception as exc:
+                        if not _ssh_session_lost(exc):
+                            raise
+                        reason = _ssh_loss_case_reason(
+                            service_name, signal, exc, phase="crashing/recovering"
+                        )
+                        try:
+                            await _fail_crash_case(
+                                None,
+                                host,
+                                password,
+                                case_id,
+                                reason,
+                                service_name=service_name,
+                            )
+                        except ServiceCrashFailure as crash_exc:
+                            skipped.append((crash_exc.service_name, crash_exc.reason))
+                            try:
+                                ssh = await _publish_ssh(
+                                    await _ensure_live_ssh(
+                                        ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S
+                                    )
+                                )
+                            except Exception:
+                                pass
+                            continue
+                        # _fail_crash_case hard-fails via pytest.fail when not continuing
+                        raise
                     results.append(result)
                     if check_logs:
                         before_crashes = result.after.total_crashes - 1
@@ -1689,12 +1845,13 @@ async def _run_all_services_crash_case(
     if signal == "SEGV":
         _report_core_gaps(case_id, results)
 
+    tested_names = sorted(tested)
     _log(
         case_id,
-        f"All-services {signal} complete: {len(tested)} services, "
-        f"{len(results)} crash(es), {len(skipped)} skipped"
-        + (f"; stress={stress_mode}" if stress_mode else "")
-        + f"; skipped=[{'; '.join(f'{n} ({r})' for n, r in skipped) or 'none'}]",
+        f"{signal} done: tested={len(tested_names)}, crashes={len(results)}, "
+        f"skipped={len(skipped)}"
+        + (f" ({_format_skip_summary(skipped)})" if skipped else "")
+        + (f", stress={stress_mode}" if stress_mode else ""),
     )
     ssh = await _ensure_live_ssh(ssh, host, password, timeout_s=SSH_RECONNECT_WAIT_S)
     await _disarm_recovery_reboot(ssh, case_id=case_id)
@@ -1706,13 +1863,16 @@ async def _assert_unauthorized_kill_all_services(
     *,
     case_id: str,
 ) -> None:
+    _clear_session_service_quirks(case_id=case_id, reason=f"{case_id} unauthorized-kill retarget")
     crashable = await _crashable_services_on_dut(ssh)
     tested_names: list[str] = []
-    skipped: list[str] = []
+    skipped: list[tuple[str, str]] = []
     for service_name in SERVICE_SWEEP_ORDER:
         action, reason = await _classify_service_for_crash(ssh, service_name)
         if action != "test":
-            skipped.append(f"{service_name} ({reason})")
+            skipped.append((service_name, reason))
+            if not str(reason).startswith("session:"):
+                _log(case_id, f"Skipping {service_name}: {reason}")
             continue
         await _assert_unauthorized_kill(ssh, case_id=case_id, target=service_name)
         tested_names.append(service_name)
@@ -1721,8 +1881,8 @@ async def _assert_unauthorized_kill_all_services(
         _fail_case(case_id, f"Unauthorized kill not attempted on: {', '.join(missed)}")
     _log(
         case_id,
-        f"Unauthorized kill blocked on {len(tested_names)} services; "
-        f"skipped {len(skipped)} [{'; '.join(skipped) or 'none'}]",
+        f"Unauthorized kill: tested={len(tested_names)}, skipped={len(skipped)}"
+        + (f" ({_format_skip_summary(skipped)})" if skipped else ""),
     )
 
 
@@ -1796,6 +1956,7 @@ async def _wait_for_reboot_and_ssh(
             break
         await asyncio.sleep(POLL_INTERVAL_S)
     conn = await _wait_for_ssh(host, password, timeout_s=up_timeout_s, interval_s=2)
+    _clear_session_service_quirks(case_id=case_id, reason="DUT recovered after reboot")
     _log(case_id, f"SSH restored on {host} after watchdog reboot.")
     return conn
 
@@ -1865,15 +2026,7 @@ async def _assert_unauthorized_kill(
             case_id,
             f"Unprivileged kill unexpectedly succeeded (exit={exit_code!r}): {raw!r}",
         )
-    audit = await _ssh_run(
-        ssh,
-        "logread 2>/dev/null | grep -iE 'denied|permission|unauthorized|kill' | tail -n 20",
-        timeout_ops=30,
-    )
-    _log(
-        case_id,
-        f"Unauthorized kill blocked (exit={exit_code}); audit tail: {audit[:120] or '(none)'}",
-    )
+    _log(case_id, f"Unauthorized kill blocked on {target} (exit={exit_code})")
 
 
 async def _assert_post_reboot_services(
@@ -2071,6 +2224,7 @@ async def assert_process_01_visibility(
     host: str,
     password: str,
     case_id: str = "PROCESS_01",
+    gui_page=None,
 ) -> AsyncGenericDriver:
     ssh = await prepare_procmon_case(ssh, host=host, password=password, case_id=case_id)
     await _require_procmon_ready(ssh, case_id=case_id)
@@ -2088,6 +2242,27 @@ async def assert_process_01_visibility(
     if other_down:
         _log(case_id, f"Other monitored services not running: {', '.join(other_down)}")
     assert not hard_down, f"{case_id}: required services not running: {', '.join(hard_down)}"
+
+    if gui_page is not None:
+        gui_rows = await _fetch_process_monitoring_gui_rows(gui_page)
+        name_counts: dict[str, int] = {}
+        for row in gui_rows:
+            name = str(row.get("process") or "").strip()
+            if not name:
+                continue
+            name_counts[name] = name_counts.get(name, 0) + 1
+        duplicates = sorted(
+            ((name, count) for name, count in name_counts.items() if count > 1),
+            key=lambda item: item[0],
+        )
+        if duplicates:
+            detail = ", ".join(f"{name} (seen {count} times)" for name, count in duplicates)
+            _partial_case(
+                case_id,
+                f"Duplicate process name(s) in Process Monitoring GUI: {detail}",
+            )
+        else:
+            _log(case_id, "GUI process names are unique (no duplicate rows).")
 
     counter_issues: list[str] = []
     for name, inst in sorted(visible.items()):
@@ -2349,17 +2524,27 @@ async def assert_process_14_dependency_handling(
     ssh = await prepare_procmon_case(ssh, host=host, password=password, case_id=case_id)
     child_before = await _ensure_service_present(ssh, DEPENDENCY_CHILD)
     parent_before = await _ensure_service_present(ssh, DEPENDENCY_PARENT)
-    parent_result, ssh = await _crash_and_verify_restart_maybe_reconnect(
-        ssh,
-        DEPENDENCY_PARENT,
-        host=host,
-        password=password,
-        case_id=case_id,
-        signal="SEGV",
-        recovery_timeout_s=NETIFD_RECOVERY_S,
-    )
-    child_after = await _ensure_service_present(ssh, DEPENDENCY_CHILD)
-    parent_after = await _ensure_service_present(ssh, DEPENDENCY_PARENT)
+    try:
+        parent_result, ssh = await _crash_and_verify_restart_maybe_reconnect(
+            ssh,
+            DEPENDENCY_PARENT,
+            host=host,
+            password=password,
+            case_id=case_id,
+            signal="SEGV",
+            recovery_timeout_s=NETIFD_RECOVERY_S,
+        )
+        child_after = await _ensure_service_present(ssh, DEPENDENCY_CHILD)
+        parent_after = await _ensure_service_present(ssh, DEPENDENCY_PARENT)
+    except Exception as exc:
+        if _ssh_session_lost(exc) or isinstance(exc, TimeoutError):
+            _fail_case(
+                case_id,
+                _ssh_loss_case_reason(
+                    DEPENDENCY_PARENT, "SEGV", exc, phase="recovering dependency parent"
+                ),
+            )
+        raise
     if not child_after.running:
         _fail_case(
             case_id,
