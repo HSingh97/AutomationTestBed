@@ -11,6 +11,14 @@ benches:
     profile: default
     recovery_profile: link_formation
 
+  test-qa-lab-01:
+    description: >
+      QA Automation Setup :01 — Jenkins agent test-qa-lab-01 on 10.0.150.104.
+      Uses qa_lab_02 profile until a dedicated lab-01 profile exists.
+    ssh: root@10.0.150.104
+    profile: qa_lab_02
+    recovery_profile: link_formation
+
   test-qa-lab-02:
     description: >
       PTMP 6-CPE throughput — TRex 192.168.1.1 (1 BTS + 3 CPE on ports 1-3),
@@ -23,5 +31,11 @@ benches:
   qa-lab-02:
     description: Alias → use TARGET_STAND=test-qa-lab-02 for Jenkins
     ssh: root@10.0.150.102
+    profile: qa_lab_02
+    recovery_profile: link_formation
+
+  qa-lab-01:
+    description: Alias → use TARGET_STAND=test-qa-lab-01 for Jenkins
+    ssh: root@10.0.150.104
     profile: qa_lab_02
     recovery_profile: link_formation
