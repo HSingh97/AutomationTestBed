@@ -245,7 +245,7 @@ ICMP validation across MTU 1500–9000, VLAN, P2MP, boundary values. **`JMB_07`*
 
 ### ProcessMonitor (`PROCESS_01`–`19`)
 
-Process watchdog, procd, memory/CPU stress. Destructive cases `PROCESS_09`, `PROCESS_15` need `--allow-destructive-process`. Uses dedicated BTS IP `192.168.2.1` in suite conftest.
+Process watchdog, procd, memory/CPU stress. Destructive cases `PROCESS_09`, `PROCESS_15` need `--allow-destructive-process`. Prefers BTS `192.168.2.1`, soft-falls back to `10.0.0.1` if LAN is unreachable.
 
 ### CPE 2.4 GHz API (`API_01`–`API_18`)
 

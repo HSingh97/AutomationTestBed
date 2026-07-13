@@ -48,6 +48,20 @@ NON_CRITICAL_TARGET = "snlog-scraper"
 DEPENDENCY_PARENT = "network"
 DEPENDENCY_CHILD = "dnsmasq"
 
+# Prefer LAN mgmt; WAN/factory is a soft backup (unreachable candidates are skipped).
+PROCMON_SSH_PREFERRED = "192.168.2.1"
+PROCMON_SSH_BACKUP = "10.0.0.1"
+
+
+def procmon_ssh_candidates(preferred: str | None = None) -> list[str]:
+    """Ordered SSH hosts: preferred (if any), then LAN mgmt, then factory backup."""
+    hosts: list[str] = []
+    for host in (preferred, PROCMON_SSH_PREFERRED, PROCMON_SSH_BACKUP):
+        text = str(host or "").strip()
+        if text and text not in hosts:
+            hosts.append(text)
+    return hosts
+
 # Services that may be idle on some firmware builds; not a hard visibility failure.
 OPTIONAL_IDLE_SERVICES = frozenset({"sysstat", "cron", "breakpad"})
 MUST_BE_RUNNING = frozenset(
@@ -303,33 +317,35 @@ async def prepare_procmon_case(
     if _NON_RESPAWNING_SERVICES:
         _log(case_id, f"SESSION non-respawning (skip): {_non_respawning_summary()}")
     await instant_recover_dut_if_armed(host, password, case_id=f"{case_id}_PRE")
-    ping_ok, ping_detail = await _local_ping_host(host)
-    if not ping_ok:
-        _log(case_id, f"prepare: lab ping to {host} down ({ping_detail}) — recovery reboot")
-        recovered = await _instant_reboot_and_wait(
-            None,
-            host,
-            password,
-            case_id=case_id,
-            recovery_reason=f"prepare: lab ping to {host} not reachable before {case_id}",
-        )
-        if recovered is not None:
-            return await _publish_ssh(recovered)
-        raise ConnectionError(f"prepare: {host} unreachable after recovery reboot ({ping_detail})")
-    try:
-        return await _publish_ssh(await _ensure_live_ssh(ssh, host, password))
-    except Exception as exc:
-        _log(case_id, f"prepare: SSH not ready on {host} ({exc}) — recovery reboot")
-        recovered = await _instant_reboot_and_wait(
-            ssh,
-            host,
-            password,
-            case_id=case_id,
-            recovery_reason=f"prepare: SSH to {host} not ready before {case_id} ({exc})",
-        )
-        if recovered is not None:
-            return await _publish_ssh(recovered)
-        raise ConnectionError(f"prepare: SSH to {host} not restored after recovery reboot") from exc
+    hosts = procmon_ssh_candidates(host)
+    last_ping_detail = ""
+    for candidate in hosts:
+        ping_ok, ping_detail = await _local_ping_host(candidate)
+        if not ping_ok:
+            last_ping_detail = ping_detail
+            _log(case_id, f"prepare: {candidate} not reachable ({ping_detail}) — trying next host")
+            continue
+        try:
+            return await _publish_ssh(await _ensure_live_ssh(ssh, candidate, password))
+        except Exception as exc:
+            _log(case_id, f"prepare: SSH not ready on {candidate} ({exc}) — trying next host")
+    primary = hosts[0]
+    _log(case_id, f"prepare: no SSH host reachable among {hosts} — recovery reboot via {primary}")
+    recovered = await _instant_reboot_and_wait(
+        None,
+        primary,
+        password,
+        case_id=case_id,
+        recovery_reason=(
+            f"prepare: no SSH among {hosts} before {case_id} "
+            f"(last ping: {last_ping_detail or 'n/a'})"
+        ),
+    )
+    if recovered is not None:
+        return await _publish_ssh(recovered)
+    raise ConnectionError(
+        f"prepare: unreachable after recovery reboot among {hosts} ({last_ping_detail})"
+    )
 
 
 def recovery_reboot_may_be_armed() -> bool:
@@ -1377,27 +1393,29 @@ async def _crashable_services_on_dut(ssh: AsyncGenericDriver) -> set[str]:
 
 async def _reconnect_ssh(host: str, password: str, *, case_id: str, service_name: str) -> AsyncGenericDriver:
     """Wait for sshd/network to restore SSH; recovery-reboot if the link does not return."""
-    _log(case_id, f"Reconnecting SSH after {service_name} crash...")
+    hosts = procmon_ssh_candidates(host)
+    _log(case_id, f"Reconnecting SSH after {service_name} crash (hosts={hosts})...")
     deadline = time.monotonic() + SSH_RECONNECT_WAIT_S
     last_error = ""
     while time.monotonic() < deadline:
-        ping_ok, ping_detail = await _local_ping_host(host)
-        if not ping_ok:
-            last_error = f"ping down ({ping_detail})"
-            await asyncio.sleep(POLL_INTERVAL_S)
-            continue
-        try:
-            return await _wait_for_ssh(host, password, timeout_s=10, interval_s=1)
-        except Exception as exc:
-            last_error = str(exc)
-            await asyncio.sleep(1)
+        for candidate in hosts:
+            ping_ok, ping_detail = await _local_ping_host(candidate)
+            if not ping_ok:
+                last_error = f"{candidate} ping down ({ping_detail})"
+                continue
+            try:
+                return await _wait_for_ssh(candidate, password, timeout_s=10, interval_s=1)
+            except Exception as exc:
+                last_error = f"{candidate}: {exc}"
+        await asyncio.sleep(POLL_INTERVAL_S)
+    primary = hosts[0]
     _log(
         case_id,
         f"SSH reconnect after {service_name} timed out ({last_error}); triggering recovery reboot",
     )
     recovered = await _instant_reboot_and_wait(
         None,
-        host,
+        primary,
         password,
         case_id=case_id,
         recovery_reason=(
@@ -1406,7 +1424,7 @@ async def _reconnect_ssh(host: str, password: str, *, case_id: str, service_name
     )
     if recovered is None:
         raise TimeoutError(
-            f"SSH to {host} not ready after {service_name} crash and recovery reboot: {last_error}"
+            f"SSH among {hosts} not ready after {service_name} crash and recovery reboot: {last_error}"
         )
     return recovered
 

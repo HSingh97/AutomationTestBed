@@ -50,6 +50,9 @@ testbed:
     fallback_ipv4: "10.0.0.10"
     fallback_prefix_len: 8
     internet_ssh: ""
+    # Tagged mgmt VLAN IPv4 (bootstrap must assign this; configure_mgmt_interface is IPv6-only)
+    mgmt_vlan_ipv4: "192.168.2.10"
+    mgmt_vlan_netmask: "255.255.255.0"
   secondary_pc:
     enabled: true
     ssh: "root@10.0.150.187"

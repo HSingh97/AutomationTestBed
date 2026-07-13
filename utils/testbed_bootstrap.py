@@ -12,7 +12,13 @@ from typing import Any
 from scrapli.driver.generic import AsyncGenericDriver
 
 from utils.cpe_discovery import discover_cpe_ipv6s
-from utils.lab_pc_net import _parse_ssh_target, configure_mgmt_interface, ensure_fallback_subnet
+from utils.lab_pc_net import (
+    _parse_ssh_target,
+    configure_mgmt_interface,
+    ensure_fallback_subnet,
+    ensure_lab_pc_mgmt_vlan_ipv4,
+    ensure_secondary_pc_mgmt_vlan_ipv4,
+)
 from utils.link_formation import (
     apply_cpe_pre_link_via_secondary_pc,
     ensure_cpe_link_credentials_always,
@@ -179,9 +185,10 @@ async def _setup_lab_pcs(
     state: TestbedState,
     password: str,
 ) -> None:
-    """Configure lab PC Ethernet tagging + mgmt IPv6 via internet SSH (before device access)."""
+    """Configure lab PC Ethernet tagging + mgmt addressing via internet SSH (before device access)."""
     tb = _tb(active)
     mgmt = _mgmt(active)
+    ip_cfg = active.get("ip", {}) or {}
     prefix_len = int(mgmt.get("prefix_len", 120))
     bts_pc_tag = lab_pc_vlan_plan(tb, side="bts")
     cpe_pc_tag = lab_pc_vlan_plan(tb, side="cpe")
@@ -205,6 +212,41 @@ async def _setup_lab_pcs(
         tagging=bts_pc_tag,
     )
 
+    # configure_mgmt_interface only places IPv6 on the tagged if. IPv4 suites /
+    # ProcessMonitor reach the BTS on 192.168.2.1 via enp3s0.101 — assign that too.
+    primary_mgmt_v4 = str(
+        primary_pc.get("mgmt_vlan_ipv4")
+        or ip_cfg.get("lab_pc_mgmt_ipv4")
+        or ""
+    ).strip()
+    if primary_mgmt_v4 and not bts_pc_tag.get("untagged"):
+        vlan_id = int(
+            bts_pc_tag.get("vlan_id")
+            or bts_pc_tag.get("cvlan")
+            or state.mgmt_vlan_id
+            or state.qinq_cvlan
+            or 101
+        )
+        mask = str(
+            primary_pc.get("mgmt_vlan_netmask")
+            or ip_cfg.get("lab_pc_mgmt_netmask")
+            or "255.255.255.0"
+        ).strip()
+        vlan_if = await ensure_lab_pc_mgmt_vlan_ipv4(
+            primary_pc,
+            vlan_id=vlan_id,
+            ipv4=primary_mgmt_v4,
+            netmask=mask,
+            password=password,
+        )
+        if vlan_if:
+            print(f"[testbed] primary PC mgmt IPv4 {primary_mgmt_v4} on {vlan_if}")
+        else:
+            print(
+                f"[testbed] WARNING: failed to assign primary PC mgmt IPv4 "
+                f"{primary_mgmt_v4} on VLAN {vlan_id}"
+            )
+
     secondary_pc = tb.get("secondary_pc", {}) or {}
     if secondary_pc.get("enabled", True):
         sec_cfg = dict(secondary_pc)
@@ -220,6 +262,14 @@ async def _setup_lab_pcs(
             vlan_id=0,
             tagging=cpe_pc_tag,
         )
+        if sec_cfg.get("use_tagged_mgmt_vlan") and sec_cfg.get("mgmt_vlan_ipv4"):
+            try:
+                vlan_if, server_ip = await ensure_secondary_pc_mgmt_vlan_ipv4(
+                    active, password
+                )
+                print(f"[testbed] secondary PC mgmt IPv4 {server_ip} on {vlan_if or '—'}")
+            except Exception as exc:
+                print(f"[testbed] WARNING: secondary PC mgmt IPv4 setup skipped: {exc}")
 
 
 async def _open_with_fallbacks(
