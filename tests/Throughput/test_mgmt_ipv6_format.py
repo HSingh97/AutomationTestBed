@@ -9,8 +9,13 @@ def test_format_mgmt_ipv6_display_bts():
             "2001:2002:2003:2004:2005:2006:2007:1111",
             prefix_len=120,
         )
-        == "BTS2001:2002:2003:2004:2005:2006:2007:1111/120"
+        == "2001:2002:2003:2004:2005:2006:2007:1111"
     )
+
+
+def test_format_mgmt_ipv6_display_ipv4_host_only():
+    assert format_mgmt_ipv6_display("SU1", "192.168.2.32", prefix_len=120) == "192.168.2.32"
+    assert format_mgmt_ipv6_display("SU1", "192.168.2.32/120") == "192.168.2.32"
 
 
 def test_format_mgmt_ipv6_display_rejects_uci_noise():
@@ -18,7 +23,7 @@ def test_format_mgmt_ipv6_display_rejects_uci_noise():
     assert format_mgmt_ipv6_display("BTS", "uci: Entry not found/120") == "—"
 
 
-def test_testbed_summary_ip_row_uses_compact_format():
+def test_testbed_summary_ip_row_uses_host_only():
     summary = {
         "ipv6_prefix_len": 120,
         "bts": {
@@ -34,12 +39,15 @@ def test_testbed_summary_ip_row_uses_compact_format():
                 "su_index": 1,
                 "model": "UBR620",
                 "fw_version": "2.4.1.0",
-                "ip": "2001:2002:2003:2004:2005:2006:2007:111b",
+                "ip": "192.168.2.32",
                 "vlan": "—",
                 "qos": "—",
             }
         ],
     }
     html = _render_testbed_summary_table(summary)
-    assert "BTS2001:2002:2003:2004:2005:2006:2007:1111/120" in html
-    assert "SU12001:2002:2003:2004:2005:2006:2007:111b/120" in html
+    assert "2001:2002:2003:2004:2005:2006:2007:1111" in html
+    assert "192.168.2.32" in html
+    assert "BTS2001:" not in html
+    assert "SU1192." not in html
+    assert "/120" not in html

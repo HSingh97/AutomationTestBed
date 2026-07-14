@@ -553,6 +553,76 @@ def _status_pill(status: str) -> str:
     return f'<span class="{css}">{text}</span>'
 
 
+def _bw_tone(bandwidth: str) -> str:
+    """CSS tone key for a bandwidth label (ht20, ht40, ht80, ht160, other)."""
+    digits = re.sub(r"[^0-9]", "", str(bandwidth or ""))
+    known = {"20": "ht20", "40": "ht40", "80": "ht80", "160": "ht160"}
+    return known.get(digits, "other")
+
+
+def _bw_chip(bandwidth: str) -> str:
+    tone = _bw_tone(bandwidth)
+    return f'<span class="bw-chip bw-{tone}">{escape(str(bandwidth or "—"))}</span>'
+
+
+def _render_iteration_log_rows(cells: list[dict[str, Any]]) -> list[str]:
+    """Build iteration-log rows with per-BW color and a group header between BWs."""
+    rows: list[str] = []
+    prev_bw: str | None = None
+    group_counts: dict[str, int] = {}
+    for cell in cells:
+        bw = str(cell.get("bandwidth") or "—")
+        group_counts[bw] = group_counts.get(bw, 0) + 1
+
+    for cell in cells:
+        bw = str(cell.get("bandwidth") or "—")
+        tone = _bw_tone(bw)
+        if prev_bw is None or bw != prev_bw:
+            n = group_counts.get(bw, 0)
+            rows.append(
+                f"<tr class='bw-group-sep bw-tone-{tone}'>"
+                f"<td colspan='9'>"
+                f"{_bw_chip(bw)}"
+                f"<span class='bw-group-meta'>{n} cell{'s' if n != 1 else ''}</span>"
+                f"</td></tr>"
+            )
+            prev_bw = bw
+        if cell.get("skipped"):
+            status = "SKIP"
+            row_status = "row-skip"
+        elif cell.get("passed"):
+            status = "PASS"
+            row_status = "row-pass"
+        else:
+            status = "FAIL"
+            row_status = "row-fail"
+        snr = cell.get("snr_summary") or "—"
+        rssi = cell.get("rssi_summary") or "—"
+        rssi_cell = (
+            "—"
+            if cell.get("skipped") or rssi == "—"
+            else (
+                f"{rssi} dBm"
+                if "/" in str(rssi) or str(rssi).startswith("-") or str(rssi)[0].isdigit()
+                else str(rssi)
+            )
+        )
+        rows.append(
+            f"<tr data-iter-key='{cell['iter_key']}' "
+            f"class='{row_status} bw-tone-{tone}'>"
+            f"<td>{_bw_chip(bw)}</td>"
+            f"<td>{escape(str(cell.get('mcs') or '—'))}</td>"
+            f"<td>{'—' if cell.get('skipped') else format(float(cell.get('tx_mbps') or 0), '.1f')}</td>"
+            f"<td>{'—' if cell.get('skipped') else format(float(cell.get('rx_mbps') or 0), '.1f')}</td>"
+            f"<td>{float(cell.get('target_mbps') or 0):.1f}</td>"
+            f"<td>{escape(str(snr))}</td>"
+            f"<td>{escape(rssi_cell)}</td>"
+            f"<td>{_status_pill(status)}</td>"
+            f"<td>{escape(str(cell.get('remark') or '—'))}</td></tr>"
+        )
+    return rows
+
+
 def _render_testbed_table(data: dict[str, Any]) -> str:
     bts = (data.get("testbed") or {}).get("bts") or {}
     devices = (data.get("testbed") or {}).get("devices") or []
@@ -658,13 +728,13 @@ def _render_coverage_matrix(data: dict[str, Any]) -> str:
 
 
 def _render_kpi_cards(data: dict[str, Any], *, passed: int, ran: int, total: int, peak_rx: float, pass_cls: str) -> str:
-    """Top stats — only unique info not already shown in hero / testbed / heatmap."""
-    del total  # coverage is visible in the heatmap itself
+    """Light overview metrics under the hero."""
+    del total
     peaks = data.get("peaks") or {}
     best_bw = max(peaks.items(), key=lambda item: float((item[1] or {}).get("rx_mbps") or 0))[0] if peaks else "—"
     mcs_rates = data.get("mcs_rates") or []
     bandwidths = data.get("bandwidths") or []
-    sweep = ""
+    sweep = "—"
     if bandwidths and mcs_rates:
         bw_txt = "+".join(str(b).replace("HT", "") for b in bandwidths)
         mcs_txt = ",".join(str(m).replace("MCS", "") for m in mcs_rates)
@@ -673,22 +743,21 @@ def _render_kpi_cards(data: dict[str, Any], *, passed: int, ran: int, total: int
     pct_vals = [float(c.get("pct") or 0) for c in cells if not c.get("skipped")]
     avg_pct = sum(pct_vals) / len(pct_vals) if pct_vals else 0.0
     return f"""
-    <div class="kpi-grid kpi-grid-2">
-      <article class="kpi-card accent-ok">
-        <div class="kpi-icon">⚡</div>
-        <div class="kpi-body">
-          <div class="kpi-label">Peak throughput</div>
-          <div class="kpi-value">{peak_rx:.0f}<span>Mbps</span></div>
-          <div class="kpi-sub">Best on {escape(best_bw)}</div>
-        </div>
+    <div class="overview-strip">
+      <article class="ov-card tone-{pass_cls}">
+        <div class="ov-label">Result</div>
+        <div class="ov-value">{passed}<span>/{ran}</span></div>
+        <div class="ov-sub">matrix cells passed</div>
       </article>
-      <article class="kpi-card accent-{pass_cls}">
-        <div class="kpi-icon">◎</div>
-        <div class="kpi-body">
-          <div class="kpi-label">Avg of target</div>
-          <div class="kpi-value">{avg_pct:.0f}<span>%</span></div>
-          <div class="kpi-sub">{escape(sweep) if sweep else f"{passed}/{ran} iterations"}</div>
-        </div>
+      <article class="ov-card">
+        <div class="ov-label">Peak throughput</div>
+        <div class="ov-value">{peak_rx:.0f}<span>Mbps</span></div>
+        <div class="ov-sub">Best on {escape(best_bw)}</div>
+      </article>
+      <article class="ov-card">
+        <div class="ov-label">Avg of target</div>
+        <div class="ov-value">{avg_pct:.0f}<span>%</span></div>
+        <div class="ov-sub">{escape(sweep)}</div>
       </article>
     </div>
     """
@@ -696,253 +765,283 @@ def _render_kpi_cards(data: dict[str, Any], *, passed: int, ran: int, total: int
 
 _REPORT_CSS = """
     :root {
-      --bg0: #f8fafc;
-      --bg1: #f1f5f9;
-      --panel: #ffffff;
-      --panel-border: #e2e8f0;
-      --text: #0f172a;
+      --bg: #f3f5f8;
+      --bg-accent: #e8eef5;
+      --surface: #ffffff;
+      --line: #e2e7ee;
+      --line-strong: #d3dae4;
+      --ink: #1e293b;
       --muted: #64748b;
-      --accent: #2563eb;
-      --accent2: #4f46e5;
-      --ok: #059669;
-      --warn: #d97706;
-      --bad: #dc2626;
-      --shadow: 0 4px 24px rgba(15, 23, 42, 0.06);
-      --radius: 14px;
+      --faint: #94a3b8;
+      --accent: #2f6fed;
+      --accent-soft: #edf3ff;
+      --ok: #1f7a55;
+      --ok-soft: #eaf6f0;
+      --ok-line: #bfe0cf;
+      --warn: #9a6b2f;
+      --warn-soft: #f8f1e6;
+      --warn-line: #e6d4b5;
+      --bad: #b42318;
+      --bad-soft: #fef3f2;
+      --bad-line: #f5c2c0;
+      --bts-soft: #f7f3ee;
+      --bts: #7a6448;
+      --su-soft: #eef3fa;
+      --su: #3f5f8a;
+      --ht20: #4f6f8f;
+      --ht20-soft: #eef3f7;
+      --ht20-line: #c5d3e0;
+      --ht40: #56648a;
+      --ht40-soft: #eff1f7;
+      --ht40-line: #c7cde0;
+      --ht80: #8a6b4a;
+      --ht80-soft: #f6f1eb;
+      --ht80-line: #dfd0be;
+      --ht160: #4d7460;
+      --ht160-soft: #eef5f1;
+      --ht160-line: #c5dbce;
+      --shadow-sm: 0 1px 2px rgba(30, 41, 59, 0.04);
+      --shadow: 0 1px 2px rgba(30, 41, 59, 0.04), 0 10px 28px rgba(30, 41, 59, 0.06);
+      --radius: 16px;
       --radius-sm: 10px;
     }
     * { box-sizing: border-box; }
     html { scroll-behavior: smooth; }
     body {
       margin: 0;
-      font-family: "Plus Jakarta Sans", Inter, system-ui, sans-serif;
-      color: var(--text);
+      font-family: "Figtree", "Source Sans 3", system-ui, sans-serif;
+      color: var(--ink);
       min-height: 100vh;
-      background: linear-gradient(180deg, var(--bg0), var(--bg1));
+      background:
+        radial-gradient(900px 420px at 12% -8%, rgba(47, 111, 237, 0.08), transparent 60%),
+        radial-gradient(700px 380px at 92% 0%, rgba(138, 107, 74, 0.07), transparent 55%),
+        linear-gradient(180deg, #f7f9fc 0%, var(--bg) 38%, #eef2f7 100%);
     }
+
     .hero {
-      position: relative;
-      padding: 28px 28px 24px;
-      border-bottom: 1px solid var(--panel-border);
-      background: linear-gradient(135deg, #ffffff 0%, #eff6ff 55%, #e0e7ff 100%);
-      overflow: hidden;
+      padding: 28px 20px 8px;
     }
-    .hero::after {
-      content: "";
-      position: absolute;
-      right: -60px;
-      top: -60px;
-      width: 220px;
-      height: 220px;
-      border-radius: 50%;
-      background: radial-gradient(circle, rgba(37,99,235,0.08), transparent 68%);
-      pointer-events: none;
-    }
-    .hero-inner {
+    .hero-shell {
       max-width: 1680px;
       margin: 0 auto;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .hero-top {
       display: flex;
       justify-content: space-between;
-      align-items: flex-end;
-      gap: 24px;
-      flex-wrap: wrap;
-      position: relative;
-      z-index: 1;
+      gap: 20px;
+      align-items: flex-start;
+      padding: 26px 28px 20px;
+      background:
+        linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
+      border-bottom: 1px solid var(--line);
     }
     .hero-brand {
       display: flex;
       align-items: center;
-      gap: 16px;
-      margin-bottom: 14px;
+      gap: 18px;
     }
     .hero-logo {
-      background: #ffffff;
-      border: 1px solid var(--panel-border);
-      border-radius: 12px;
-      padding: 10px 14px;
-      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px 16px;
+      box-shadow: var(--shadow-sm);
       display: flex;
       align-items: center;
-      justify-content: center;
     }
     .hero-logo img {
       display: block;
       height: 36px;
       width: auto;
     }
-    .hero-mark {
-      width: 48px;
-      height: 48px;
-      border-radius: 14px;
-      display: grid;
-      place-items: center;
-      font-weight: 800;
-      font-size: 14px;
-      letter-spacing: 0.04em;
-      color: #1d4ed8;
-      background: #ffffff;
-      border: 1px solid #bfdbfe;
-      box-shadow: 0 2px 8px rgba(37,99,235,0.12);
-    }
     .hero-eyebrow {
       font-size: 11px;
       text-transform: uppercase;
-      letter-spacing: 0.14em;
-      color: var(--muted);
+      letter-spacing: 0.16em;
+      color: var(--faint);
       font-weight: 700;
     }
     .hero h1 {
-      margin: 4px 0 0;
-      font-size: clamp(28px, 4vw, 38px);
-      font-weight: 800;
+      margin: 6px 0 0;
+      font-family: "Fraunces", "Figtree", Georgia, serif;
+      font-size: clamp(28px, 3.6vw, 40px);
+      font-weight: 600;
       letter-spacing: -0.03em;
       line-height: 1.05;
-      color: var(--text);
+      color: var(--ink);
     }
     .hero-meta {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      margin-top: 12px;
+      margin-top: 14px;
     }
     .meta-chip {
       padding: 6px 12px;
       border-radius: 999px;
       font-size: 12px;
       font-weight: 600;
-      color: #334155;
-      background: #ffffff;
-      border: 1px solid var(--panel-border);
+      color: #475569;
+      background: #f4f7fb;
+      border: 1px solid var(--line);
     }
     .hero-status {
       display: flex;
       flex-direction: column;
       align-items: flex-end;
-      gap: 10px;
+      gap: 8px;
+      padding-top: 4px;
     }
     .hero-badge {
-      padding: 12px 18px;
-      border-radius: 12px;
-      font-size: 14px;
+      padding: 10px 16px;
+      border-radius: 999px;
+      font-size: 13px;
       font-weight: 700;
-      background: #ffffff;
-      border: 1px solid var(--panel-border);
-      box-shadow: var(--shadow);
+      border: 1px solid var(--line);
+      background: #f8fafc;
+      color: var(--ink);
     }
-    .hero-badge.ok { border-color: #6ee7b7; color: #047857; background: #ecfdf5; }
-    .hero-badge.warn { border-color: #fcd34d; color: #b45309; background: #fffbeb; }
-    .hero-badge.bad { border-color: #fca5a5; color: #b91c1c; background: #fef2f2; }
-    .hero-time { font-size: 12px; color: var(--muted); }
+    .hero-badge.ok { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
+    .hero-badge.warn { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-line); }
+    .hero-badge.bad { color: var(--bad); background: var(--bad-soft); border-color: var(--bad-line); }
+    .hero-time {
+      font-size: 12px;
+      color: var(--faint);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .overview-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      padding: 18px 20px 20px;
+      background: linear-gradient(180deg, #f7f9fc, #f3f6fa);
+    }
+    .ov-card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px 18px;
+      box-shadow: var(--shadow-sm);
+      position: relative;
+      overflow: hidden;
+    }
+    .ov-card::before {
+      content: "";
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 3px;
+      background: #cbd5e1;
+    }
+    .ov-card.tone-ok::before { background: #5fad87; }
+    .ov-card.tone-warn::before { background: #c49a5a; }
+    .ov-card.tone-bad::before { background: #d57979; }
+    .ov-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--faint);
+      font-weight: 700;
+    }
+    .ov-value {
+      margin-top: 8px;
+      font-size: 30px;
+      font-weight: 700;
+      letter-spacing: -0.035em;
+      color: var(--ink);
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+    }
+    .ov-value span {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-left: 5px;
+    }
+    .ov-sub {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
 
     .grid {
       display: grid;
       grid-template-columns: repeat(12, 1fr);
       gap: 18px;
-      padding: 22px 18px 40px;
+      padding: 18px 20px 48px;
       max-width: 1680px;
       margin: 0 auto;
     }
     .panel {
-      background: var(--panel);
-      border: 1px solid var(--panel-border);
+      background: var(--surface);
+      border: 1px solid var(--line);
       border-radius: var(--radius);
       padding: 20px 22px;
-      box-shadow: var(--shadow);
+      box-shadow: var(--shadow-sm);
     }
     .panel-head {
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
       gap: 12px;
-      margin-bottom: 16px;
+      margin-bottom: 14px;
     }
     .panel h2 {
       margin: 0;
-      font-size: 13px;
-      font-weight: 800;
-      letter-spacing: 0.12em;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
-      color: #475569;
+      color: var(--muted);
     }
     .panel-desc {
       margin: 6px 0 0;
       font-size: 13px;
       line-height: 1.5;
-      color: var(--muted);
-      max-width: 62ch;
+      color: var(--faint);
+      max-width: 72ch;
     }
     .span-12 { grid-column: span 12; }
 
     .device-chip {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
+      gap: 7px;
       padding: 4px 10px;
       border-radius: 999px;
       font-size: 11px;
-      font-weight: 800;
-      letter-spacing: 0.06em;
+      font-weight: 700;
+      letter-spacing: 0.05em;
       text-transform: uppercase;
     }
     .device-chip .chip-dot {
-      width: 8px;
-      height: 8px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
       background: currentColor;
+      opacity: 0.75;
     }
-    .device-chip.bts { color: #b45309; background: #fffbeb; border: 1px solid #fde68a; }
-    .device-chip.su { color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; }
+    .device-chip.bts { color: var(--bts); background: var(--bts-soft); border: 1px solid #e6dccf; }
+    .device-chip.su { color: var(--su); background: var(--su-soft); border: 1px solid #d5e0ee; }
 
-    .kpi-grid {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 14px;
-    }
-    .kpi-grid-2 {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      max-width: 720px;
-    }
-    .kpi-card {
-      display: flex;
-      gap: 14px;
-      align-items: center;
-      padding: 16px 18px;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--panel-border);
-      background: #f8fafc;
-    }
-    .kpi-icon {
-      width: 44px;
-      height: 44px;
+    .heat-scroll {
+      overflow: auto;
       border-radius: 12px;
-      display: grid;
-      place-items: center;
-      font-size: 18px;
-      background: #eff6ff;
-      border: 1px solid #bfdbfe;
+      border: 1px solid var(--line);
+      background: #fafbfd;
+      padding: 6px;
     }
-    .kpi-card.accent-ok .kpi-icon { background: #ecfdf5; border-color: #6ee7b7; }
-    .kpi-card.accent-warn .kpi-icon { background: #fffbeb; border-color: #fcd34d; }
-    .kpi-card.accent-bad .kpi-icon { background: #fef2f2; border-color: #fca5a5; }
-    .kpi-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-weight: 700; }
-    .kpi-value {
-      margin-top: 4px;
-      font-size: 30px;
-      line-height: 1;
-      font-weight: 800;
-      letter-spacing: -0.03em;
-      color: var(--text);
-    }
-    .kpi-value span { font-size: 14px; color: var(--muted); font-weight: 600; margin-left: 4px; }
-    .kpi-sub { margin-top: 6px; font-size: 12px; color: var(--muted); }
-
-    .heat-scroll { overflow: auto; border-radius: var(--radius-sm); border: 1px solid var(--panel-border); }
     table.heat-table {
       width: 100%;
       border-collapse: separate;
-      border-spacing: 4px;
+      border-spacing: 6px;
       font-size: 12px;
-      background: #ffffff;
+      background: transparent;
       min-width: max-content;
     }
     table.heat-table th, table.heat-table td {
@@ -954,9 +1053,9 @@ _REPORT_CSS = """
       position: sticky;
       left: 0;
       z-index: 2;
-      background: #f8fafc;
+      background: #fafbfd;
       font-size: 11px;
-      font-weight: 800;
+      font-weight: 700;
       letter-spacing: 0.06em;
       text-transform: uppercase;
       color: var(--muted);
@@ -966,47 +1065,46 @@ _REPORT_CSS = """
     .heat-mcs {
       font-size: 10px;
       font-weight: 700;
-      color: var(--muted);
+      color: var(--faint);
       padding: 6px 4px !important;
-      min-width: 40px;
+      min-width: 48px;
     }
     .heat-cell {
       appearance: none;
       display: grid;
       place-items: center;
       width: 100%;
-      min-width: 40px;
-      height: 40px;
-      border-radius: 8px;
-      border: 1px solid var(--panel-border);
-      background: #f8fafc;
-      color: var(--text);
+      min-width: 48px;
+      height: 44px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #f1f4f8;
+      color: var(--ink);
       cursor: pointer;
-      font-weight: 800;
+      font-weight: 700;
       font-size: 12px;
       padding: 0;
-      transition: transform .12s ease, box-shadow .12s ease, outline-color .12s ease;
+      transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
     }
     .heat-cell:hover, .heat-cell.selected {
       transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgba(15,23,42,0.08);
-      outline: 2px solid var(--accent);
-      outline-offset: 1px;
+      border-color: #93b4f5;
+      box-shadow: 0 8px 18px rgba(47, 111, 237, 0.12);
     }
     td.heat-cell.heat-empty, .heat-empty {
       display: grid;
       place-items: center;
-      min-width: 40px;
-      height: 40px;
-      border-radius: 8px;
-      color: var(--muted);
-      background: #f1f5f9;
-      border: 1px dashed #cbd5e1;
+      min-width: 48px;
+      height: 44px;
+      border-radius: 10px;
+      color: var(--faint);
+      background: #eef2f6;
+      border: 1px dashed #c9d3e0;
       cursor: default;
     }
-    .heat-pass { background: #ecfdf5; border-color: #6ee7b7; color: #047857; }
-    .heat-fail { background: #fef2f2; border-color: #fca5a5; color: #b91c1c; }
-    .heat-skip { background: #fffbeb; border-color: #fcd34d; color: #b45309; }
+    .heat-pass { background: var(--ok-soft); border-color: var(--ok-line); color: var(--ok); }
+    .heat-fail { background: var(--bad-soft); border-color: var(--bad-line); color: var(--bad); }
+    .heat-skip { background: var(--warn-soft); border-color: var(--warn-line); color: var(--warn); }
     .heat-rx { line-height: 1; }
 
     .cov-legend {
@@ -1014,65 +1112,70 @@ _REPORT_CSS = """
       flex-wrap: wrap;
       gap: 14px;
       align-items: center;
-      margin-top: 14px;
+      margin-top: 12px;
       font-size: 12px;
       color: var(--muted);
     }
     .cov-legend i.lg {
       display: inline-block;
-      width: 10px;
-      height: 10px;
-      border-radius: 999px;
+      width: 9px;
+      height: 9px;
+      border-radius: 3px;
       margin-right: 6px;
       vertical-align: -1px;
     }
-    .legend-note { margin-left: auto; font-size: 11px; }
+    .legend-note { margin-left: auto; font-size: 11px; color: var(--faint); }
     i.lg.pass { background: var(--ok); }
     i.lg.fail { background: var(--bad); }
     i.lg.skip { background: var(--warn); }
-    i.lg.empty { background: #94a3b8; }
+    i.lg.empty { background: #9aa6b5; }
 
-    .chart-panel {
-      padding: 0;
-      overflow: hidden;
+    .chart-panel { padding: 0; overflow: hidden; }
+    .chart-head { padding: 18px 22px 0; }
+    .series-title {
+      font-family: "Fraunces", "Figtree", Georgia, serif;
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: var(--ink);
     }
-    .chart-head {
-      padding: 20px 22px 0;
-    }
-    .series-title { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; color: var(--text); }
-    .series-meta { font-size: 13px; color: var(--muted); margin-top: 6px; }
+    .series-meta { font-size: 13px; color: var(--muted); margin-top: 5px; }
     .chart-wrap {
-      padding: 8px 18px 16px;
+      padding: 8px 16px 14px;
       min-height: 280px;
-      background: #f8fafc;
+      background: linear-gradient(180deg, #fafbfd, #f4f7fb);
+      border-top: 1px solid #eef2f6;
+      border-bottom: 1px solid #eef2f6;
     }
-    .cell-rf {
-      padding: 0 18px 20px;
-    }
+    .cell-rf { padding: 0 18px 18px; }
     .cell-rf h3 {
-      margin: 0 0 10px;
-      font-size: 12px;
-      font-weight: 800;
+      margin: 14px 0 10px;
+      font-size: 11px;
+      font-weight: 700;
       letter-spacing: 0.1em;
       text-transform: uppercase;
-      color: #475569;
+      color: var(--muted);
     }
 
-    .table-scroll { overflow: auto; border-radius: var(--radius-sm); border: 1px solid var(--panel-border); }
+    .table-scroll {
+      overflow: auto;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+    }
     table.data-table {
       width: 100%;
       border-collapse: collapse;
       font-size: 13px;
-      background: #ffffff;
+      background: var(--surface);
     }
     table.data-table th, table.data-table td {
       padding: 11px 14px;
-      border-bottom: 1px solid #f1f5f9;
+      border-bottom: 1px solid #eef2f6;
       text-align: left;
       vertical-align: middle;
     }
     table.data-table td.mono {
-      font-family: ui-monospace, "Cascadia Code", monospace;
+      font-family: ui-monospace, "Cascadia Code", "SF Mono", monospace;
       font-size: 12px;
       color: #334155;
       word-break: break-all;
@@ -1083,54 +1186,100 @@ _REPORT_CSS = """
       position: sticky;
       top: 0;
       z-index: 1;
-      background: #f8fafc;
-      font-size: 11px;
+      background: #f7f9fc;
+      font-size: 10px;
       text-transform: uppercase;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.1em;
       color: var(--muted);
-      border-bottom: 1px solid var(--panel-border);
+      border-bottom: 1px solid var(--line);
       white-space: nowrap;
     }
     table.data-table tbody tr:hover { background: #f8fafc; }
-    table.data-table tbody tr.row-bts { background: #fffbeb; }
-    table.data-table tbody tr.row-bts:hover { background: #fef3c7; }
-    table.data-table tbody tr.row-pass { box-shadow: inset 3px 0 0 #34d399; }
-    table.data-table tbody tr.row-fail { box-shadow: inset 3px 0 0 #f87171; }
-    table.data-table tbody tr.row-skip { box-shadow: inset 3px 0 0 #fbbf24; }
+    table.data-table tbody tr.row-bts { background: var(--bts-soft); }
+    table.data-table tbody tr.row-bts:hover { background: #efe8df; }
+    table.data-table tbody tr.row-pass { box-shadow: inset 3px 0 0 #7db89a; }
+    table.data-table tbody tr.row-fail { box-shadow: inset 3px 0 0 #e0a0a0; }
+    table.data-table tbody tr.row-skip { box-shadow: inset 3px 0 0 #d4b88a; }
+
+    #iterLog tbody tr.bw-tone-ht20 > td { background: var(--ht20-soft); }
+    #iterLog tbody tr.bw-tone-ht40 > td { background: var(--ht40-soft); }
+    #iterLog tbody tr.bw-tone-ht80 > td { background: var(--ht80-soft); }
+    #iterLog tbody tr.bw-tone-ht160 > td { background: var(--ht160-soft); }
+    #iterLog tbody tr.bw-tone-other > td { background: #f5f7fa; }
+    #iterLog tbody tr.bw-tone-ht20 > td:first-child { box-shadow: inset 4px 0 0 var(--ht20); }
+    #iterLog tbody tr.bw-tone-ht40 > td:first-child { box-shadow: inset 4px 0 0 var(--ht40); }
+    #iterLog tbody tr.bw-tone-ht80 > td:first-child { box-shadow: inset 4px 0 0 var(--ht80); }
+    #iterLog tbody tr.bw-tone-ht160 > td:first-child { box-shadow: inset 4px 0 0 var(--ht160); }
+    #iterLog tbody tr.bw-tone-other > td:first-child { box-shadow: inset 4px 0 0 #7b8798; }
+    #iterLog tbody tr.bw-tone-ht20:hover > td { background: #e4ebf2; }
+    #iterLog tbody tr.bw-tone-ht40:hover > td { background: #e6e9f2; }
+    #iterLog tbody tr.bw-tone-ht80:hover > td { background: #efe7dd; }
+    #iterLog tbody tr.bw-tone-ht160:hover > td { background: #e3eee8; }
+    #iterLog tbody tr.bw-group-sep td {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #f7f9fc;
+      font-weight: 700;
+    }
+    #iterLog tbody tr.bw-group-sep.bw-tone-ht20 td { background: #e7eef4; }
+    #iterLog tbody tr.bw-group-sep.bw-tone-ht40 td { background: #e8ebf3; }
+    #iterLog tbody tr.bw-group-sep.bw-tone-ht80 td { background: #f1ebe4; }
+    #iterLog tbody tr.bw-group-sep.bw-tone-ht160 td { background: #e7f0eb; }
+    #iterLog tbody tr.bw-group-sep.bw-tone-other td { background: #eef1f5; }
+    .bw-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+    .bw-chip.bw-ht20 { color: var(--ht20); background: #dfe8f0; border-color: var(--ht20-line); }
+    .bw-chip.bw-ht40 { color: var(--ht40); background: #e0e4f0; border-color: var(--ht40-line); }
+    .bw-chip.bw-ht80 { color: var(--ht80); background: #ebe2d7; border-color: var(--ht80-line); }
+    .bw-chip.bw-ht160 { color: var(--ht160); background: #dfebe4; border-color: var(--ht160-line); }
+    .bw-chip.bw-other { color: #556274; background: #e5e9ef; border-color: #c9d1dc; }
+    .bw-group-meta {
+      margin-left: 10px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+    }
 
     .pill {
       display: inline-flex;
       align-items: center;
       padding: 4px 10px;
       border-radius: 999px;
-      font-size: 11px;
-      font-weight: 800;
+      font-size: 10px;
+      font-weight: 700;
       letter-spacing: 0.06em;
       text-transform: uppercase;
     }
-    .pill.pass { color: #047857; background: #ecfdf5; border: 1px solid #6ee7b7; }
-    .pill.fail { color: #b91c1c; background: #fef2f2; border: 1px solid #fca5a5; }
-    .pill.skip { color: #b45309; background: #fffbeb; border: 1px solid #fcd34d; }
-    .pill.neutral { color: #475569; background: #f1f5f9; border: 1px solid #e2e8f0; }
+    .pill.pass { color: var(--ok); background: var(--ok-soft); border: 1px solid var(--ok-line); }
+    .pill.fail { color: var(--bad); background: var(--bad-soft); border: 1px solid var(--bad-line); }
+    .pill.skip { color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn-line); }
+    .pill.neutral { color: var(--muted); background: #f1f5f9; border: 1px solid var(--line); }
 
     .empty-note {
       margin: 0;
-      padding: 18px;
+      padding: 16px;
       border-radius: var(--radius-sm);
-      border: 1px dashed #cbd5e1;
+      border: 1px dashed #c9d3e0;
       color: var(--muted);
-      background: #f8fafc;
+      background: #f7f9fc;
       font-size: 13px;
     }
 
-    @media (max-width: 1100px) {
-      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
-    @media (max-width: 720px) {
-      .kpi-grid { grid-template-columns: 1fr; }
+    @media (max-width: 860px) {
+      .hero-top { flex-direction: column; }
       .hero-status { align-items: flex-start; }
+      .overview-strip { grid-template-columns: 1fr; }
     }
-
 """
 
 
@@ -1163,30 +1312,7 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
     if "T" in generated and len(generated) > 18:
         generated = generated.replace("T", " · ").split("+")[0]
 
-    iter_rows = []
-    for cell in data.get("matrix_cells") or []:
-        if cell.get("skipped"):
-            status = "SKIP"
-        elif cell.get("passed"):
-            status = "PASS"
-        else:
-            status = "FAIL"
-        snr = cell.get("snr_summary") or "—"
-        rssi = cell.get("rssi_summary") or "—"
-        rssi_cell = "—" if cell.get("skipped") or rssi == "—" else (f"{rssi} dBm" if "/" in str(rssi) or str(rssi).startswith("-") or str(rssi)[0].isdigit() else str(rssi))
-        iter_rows.append(
-            f"<tr data-iter-key='{cell['iter_key']}' "
-            f"class='{'row-skip' if cell.get('skipped') else 'row-pass' if cell.get('passed') else 'row-fail'}'>"
-            f"<td><strong>{escape(cell['bandwidth'])}</strong></td>"
-            f"<td>{escape(cell['mcs'])}</td>"
-            f"<td>{'—' if cell.get('skipped') else format(float(cell.get('tx_mbps') or 0), '.1f')}</td>"
-            f"<td>{'—' if cell.get('skipped') else format(float(cell.get('rx_mbps') or 0), '.1f')}</td>"
-            f"<td>{float(cell.get('target_mbps') or 0):.1f}</td>"
-            f"<td>{escape(str(snr))}</td>"
-            f"<td>{escape(rssi_cell)}</td>"
-            f"<td>{_status_pill(status)}</td>"
-            f"<td>{escape(str(cell.get('remark') or '—'))}</td></tr>"
-        )
+    iter_rows = _render_iteration_log_rows(list(data.get("matrix_cells") or []))
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1195,33 +1321,36 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>UBR Performance Report #{report_id}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet"/>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>{_REPORT_CSS}</style>
 </head>
 <body>
   <header class="hero">
-    <div class="hero-inner">
-      <div>
-        <div class="hero-brand">
-          <div class="hero-logo">
-            <img src="{SENAO_LOGO_URL}" alt="Senao Networks"/>
+    <div class="hero-shell">
+      <div class="hero-top">
+        <div>
+          <div class="hero-brand">
+            <div class="hero-logo">
+              <img src="{SENAO_LOGO_URL}" alt="Senao Networks"/>
+            </div>
+            <div>
+              <div class="hero-eyebrow">Throughput matrix report</div>
+              <h1>Performance Run #{report_id}</h1>
+            </div>
           </div>
-          <div>
-            <div class="hero-eyebrow">Throughput matrix report</div>
-            <h1>Performance Run #{report_id}</h1>
+          <div class="hero-meta">
+            <span class="meta-chip">{escape(str(data.get('stand')))}</span>
+            <span class="meta-chip">{escape(str(data.get('profile')))}</span>
+            <span class="meta-chip">{int(data.get('su_count') or 0)} SU</span>
           </div>
         </div>
-        <div class="hero-meta">
-          <span class="meta-chip">{escape(str(data.get('stand')))}</span>
-          <span class="meta-chip">{escape(str(data.get('profile')))}</span>
-          <span class="meta-chip">{int(data.get('su_count') or 0)} SU</span>
+        <div class="hero-status">
+          <div class="hero-badge {pass_cls}">{passed}/{ran} passed</div>
+          <div class="hero-time">{generated}</div>
         </div>
       </div>
-      <div class="hero-status">
-        <div class="hero-badge {pass_cls}">{passed}/{ran} passed</div>
-        <div class="hero-time">{generated}</div>
-      </div>
+      {_render_kpi_cards(data, passed=passed, ran=ran, total=total, peak_rx=peak_rx, pass_cls=pass_cls)}
     </div>
   </header>
 
@@ -1237,14 +1366,10 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
     </section>
 
     <section class="panel span-12">
-      {_render_kpi_cards(data, passed=passed, ran=ran, total=total, peak_rx=peak_rx, pass_cls=pass_cls)}
-    </section>
-
-    <section class="panel span-12">
       <div class="panel-head">
         <div>
           <h2>Coverage matrix</h2>
-          <p class="panel-desc">Compact BW × MCS heatmap. Cell value is RX Mbps. Click a cell for live chart and per-SU RF (SNR/RSSI) from that iteration.</p>
+          <p class="panel-desc">BW × MCS heatmap. Cell value is RX Mbps. Click a cell for the live chart and per-SU RF from that iteration.</p>
         </div>
       </div>
       {_render_coverage_matrix(data)}
@@ -1336,23 +1461,23 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
         interaction: {{ mode: 'index', intersect: false }},
         plugins: {{
           legend: {{
-            labels: {{ color: '#334155', font: {{ family: 'Plus Jakarta Sans', size: 12, weight: '600' }} }}
+            labels: {{ color: '#64748b', font: {{ family: 'Figtree', size: 12, weight: '600' }} }}
           }},
           tooltip: {{
             backgroundColor: '#ffffff',
-            borderColor: '#e2e8f0',
+            borderColor: '#e2e7ee',
             borderWidth: 1,
-            titleColor: '#0f172a',
-            bodyColor: '#475569',
-            titleFont: {{ family: 'Plus Jakarta Sans', weight: '700' }},
-            bodyFont: {{ family: 'Plus Jakarta Sans' }},
+            titleColor: '#1e293b',
+            bodyColor: '#64748b',
+            titleFont: {{ family: 'Figtree', weight: '700' }},
+            bodyFont: {{ family: 'Figtree' }},
             padding: 12,
             cornerRadius: 10,
           }}
         }},
         scales: {{
           x: {{
-            ticks: {{ color: '#64748b', font: {{ family: 'Plus Jakarta Sans' }} }},
+            ticks: {{ color: '#64748b', font: {{ family: 'Figtree' }} }},
             grid: {{ color: gridColor }}
           }},
           y: {{
@@ -1362,8 +1487,8 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
           }},
           y1: {{
             type: 'linear', position: 'right',
-            title: {{ display: true, text: 'Packet loss %', color: '#d97706', font: {{ weight: '600' }} }},
-            ticks: {{ color: '#d97706' }}, grid: {{ drawOnChartArea: false }}, suggestedMin: 0
+            title: {{ display: true, text: 'Packet loss %', color: '#9a6b2f', font: {{ weight: '600' }} }},
+            ticks: {{ color: '#9a6b2f' }}, grid: {{ drawOnChartArea: false }}, suggestedMin: 0
           }}
         }}
       }}

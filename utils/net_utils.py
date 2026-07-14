@@ -42,7 +42,12 @@ def format_snmp_host(ip_text: str) -> str:
 
 
 def format_mgmt_ipv6_display(label: str, ipv6: str, *, prefix_len: int = 120) -> str:
-    """Compact testbed summary IP, e.g. ``BTS2001:...:1111/120``."""
+    """Mgmt IP for testbed tables — host only (Unit column already has BTS/SU).
+
+    ``label`` / ``prefix_len`` are kept for call-site compatibility; they are not
+    shown (avoids ``SU1192.168.2.32/120``-style glue).
+    """
+    _ = label, prefix_len
     raw = str(ipv6 or "").strip()
     lower = raw.lower()
     if (
@@ -57,14 +62,7 @@ def format_mgmt_ipv6_display(label: str, ipv6: str, *, prefix_len: int = 120) ->
     host = normalize_ip(raw.split("/")[0])
     if not host or host in {"—", "-"}:
         return "—"
-    plen = prefix_len
-    if "/" in raw:
-        try:
-            plen = int(raw.split("/", 1)[1])
-        except ValueError:
-            pass
-    tag = str(label or "").strip().upper() or "NODE"
-    return f"{tag}{host}/{plen}"
+    return host
 
 
 def format_luci_url(ip_text: str, *, scheme: str = "https") -> str:

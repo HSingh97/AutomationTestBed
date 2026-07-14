@@ -140,7 +140,7 @@ def test_enrich_matrix_payload_builds_coverage_cells():
     assert su["tx_mbps"] == "42.5"
     assert su["rx_mbps"] == "127.5"
     assert payload["matrix_cells"][1]["skipped"] is True
-    assert "BTS2001" in payload["testbed"]["bts"]["ip_display"]
+    assert payload["testbed"]["bts"]["ip_display"] == "2001:2002:2003:2004:2005:2006:2007:1111"
 
 
 def test_enrich_mismatch_remark_includes_actual_mcs_and_snr():
@@ -188,6 +188,9 @@ def test_write_matrix_grafana_html_smoke(tmp_path: Path):
     assert ">QoS<" not in html
     assert "Peak throughput" in html
     assert "Avg of target" in html
+    assert "overview-strip" in html
+    assert "bw-chip" in html
+    assert "bw-group-sep" in html
     assert "aa:bb:cc:dd:ee:01" in html
     assert "Cell detail" in html
     assert "timeSeriesChart" in html
