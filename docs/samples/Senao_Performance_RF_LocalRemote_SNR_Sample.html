@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>UBR Performance Report #rf-snr-rssi-sample</title>
+  <title>UBR Performance Report #rf-col-order</title>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -435,18 +435,18 @@
           <div class="hero-mark">UBR</div>
           <div>
             <div class="hero-eyebrow">Throughput matrix report</div>
-            <h1>Performance Run #rf-snr-rssi-sample</h1>
+            <h1>Performance Run #rf-col-order</h1>
           </div>
         </div>
         <div class="hero-meta">
-          <span class="meta-chip">test-qa-lab-01</span>
-          <span class="meta-chip">qa_lab_02</span>
-          <span class="meta-chip">6 test cells</span>
+          <span class="meta-chip">—</span>
+          <span class="meta-chip">—</span>
+          <span class="meta-chip">2 test cells</span>
         </div>
       </div>
       <div class="hero-status">
-        <div class="hero-badge ok">6/6 TRex passed</div>
-        <div class="hero-time">2026-07-14 03:44:48 U · C</div>
+        <div class="hero-badge ok">2/2 TRex passed</div>
+        <div class="hero-time">2026-07-14 04:38:48 U · C</div>
       </div>
     </div>
   </header>
@@ -468,7 +468,7 @@
             <th>Mgmt IPv6</th><th>VLAN</th><th>QoS</th>
           </tr>
         </thead>
-        <tbody><tr class='row-bts'><td><strong><span class="device-chip bts"><span class="chip-dot"></span>BTS</span></strong></td><td>UBR630</td><td>2.4.1</td><td class='mono'>—</td><td class='mono'>BTS2001:2002:2003:2004:2005:2006:2007:1111/120</td><td>—</td><td>—</td></tr><tr class=''><td><strong><span class="device-chip su"><span class="chip-dot"></span>SU1</span></strong></td><td>EOC650-C23</td><td>—</td><td class='mono'>aa:bb:cc:dd:ee:01</td><td class='mono'>SU12001:2002:2003:2004:2005:2006:2007:1101/120</td><td>—</td><td>—</td></tr><tr class=''><td><strong><span class="device-chip su"><span class="chip-dot"></span>SU2</span></strong></td><td>EOC650-C23</td><td>—</td><td class='mono'>aa:bb:cc:dd:ee:02</td><td class='mono'>SU22001:2002:2003:2004:2005:2006:2007:1102/120</td><td>—</td><td>—</td></tr><tr class=''><td><strong><span class="device-chip su"><span class="chip-dot"></span>SU3</span></strong></td><td>EOC650-C23</td><td>—</td><td class='mono'>aa:bb:cc:dd:ee:03</td><td class='mono'>SU32001:2002:2003:2004:2005:2006:2007:1103/120</td><td>—</td><td>—</td></tr></tbody>
+        <tbody><tr class=''><td><strong><span class="device-chip su"><span class="chip-dot"></span>SU1</span></strong></td><td>EOC650-C23</td><td>—</td><td class='mono'>aa:bb:cc:dd:ee:01</td><td class='mono'>SU12001:2002:2003:2004:2005:2006:2007:1101/120</td><td>—</td><td>—</td></tr><tr class=''><td><strong><span class="device-chip su"><span class="chip-dot"></span>SU2</span></strong></td><td>EOC650-C23</td><td>—</td><td class='mono'>aa:bb:cc:dd:ee:02</td><td class='mono'>SU22001:2002:2003:2004:2005:2006:2007:1102/120</td><td>—</td><td>—</td></tr><tr class=''><td><strong><span class="device-chip su"><span class="chip-dot"></span>SU3</span></strong></td><td>EOC650-C23</td><td>—</td><td class='mono'>aa:bb:cc:dd:ee:03</td><td class='mono'>SU32001:2002:2003:2004:2005:2006:2007:1103/120</td><td>—</td><td>—</td></tr></tbody>
       </table>
     </div>
     
@@ -481,7 +481,7 @@
         <div class="kpi-icon">◎</div>
         <div class="kpi-body">
           <div class="kpi-label">Matrix pass rate</div>
-          <div class="kpi-value">6<span>/ 6</span></div>
+          <div class="kpi-value">2<span>/ 2</span></div>
           <div class="kpi-sub">TRex iterations executed</div>
         </div>
       </article>
@@ -505,8 +505,8 @@
         <div class="kpi-icon">▦</div>
         <div class="kpi-body">
           <div class="kpi-label">Coverage</div>
-          <div class="kpi-value">6<span>cells</span></div>
-          <div class="kpi-sub">3 BW × 2 MCS</div>
+          <div class="kpi-value">2<span>cells</span></div>
+          <div class="kpi-sub">2 BW × 2 MCS</div>
         </div>
       </article>
     </div>
@@ -527,7 +527,7 @@
           <tr><th class="heat-corner">BW \ MCS</th><th class='heat-mcs'>22</th><th class='heat-mcs'>23</th></tr>
         </thead>
         <tbody>
-          <tr><th class='heat-bw'>HT20</th><td><button type='button' class='heat-cell heat-pass' data-iter-key='0' title='HT20 MCS22: 176 sent → 168 got (91% target) · SNR 50/54'><span class='heat-rx'>168</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='1' title='HT20 MCS23: 184 sent → 175 got (91% target) · SNR 50/54'><span class='heat-rx'>175</span></button></td></tr><tr><th class='heat-bw'>HT40</th><td><button type='button' class='heat-cell heat-pass' data-iter-key='2' title='HT40 MCS22: 357 sent → 340 got (91% target) · SNR 50/54'><span class='heat-rx'>340</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='3' title='HT40 MCS23: 373 sent → 355 got (91% target) · SNR 50/54'><span class='heat-rx'>355</span></button></td></tr><tr><th class='heat-bw'>HT80</th><td><button type='button' class='heat-cell heat-pass' data-iter-key='4' title='HT80 MCS22: 746 sent → 710 got (91% target) · SNR 50/54'><span class='heat-rx'>710</span></button></td><td><button type='button' class='heat-cell heat-pass' data-iter-key='5' title='HT80 MCS23: 785 sent → 748 got (91% target) · SNR 50/54'><span class='heat-rx'>748</span></button></td></tr>
+          <tr><th class='heat-bw'>HT40</th><td><button type='button' class='heat-cell heat-pass' data-iter-key='1' title='HT40 MCS22: 357 sent → 340 got (91% target) · SNR 50/54'><span class='heat-rx'>340</span></button></td><td class='heat-cell heat-empty'>—</td></tr><tr><th class='heat-bw'>HT80</th><td class='heat-cell heat-empty'>—</td><td><button type='button' class='heat-cell heat-pass' data-iter-key='0' title='HT80 MCS23: 785 sent → 748 got (91% target) · SNR 50/54'><span class='heat-rx'>748</span></button></td></tr>
         </tbody>
       </table>
     </div>
@@ -558,7 +558,7 @@
               <tr>
                 <th>Unit</th><th>MAC</th>
                 <th>Downlink rate</th><th>Uplink rate</th>
-                <th>Uplink Mbps</th><th>Downlink Mbps</th>
+                <th>Downlink Mbps</th><th>Uplink Mbps</th>
                 <th>Local SNR<br><span style="font-weight:500;opacity:.75">a1/a2</span></th>
                 <th>Remote SNR<br><span style="font-weight:500;opacity:.75">a1/a2</span></th>
                 <th>RSSI (combined)<br><span style="font-weight:500;opacity:.75">Local/Remote</span></th>
@@ -587,15 +587,15 @@
               <th>Remote SNR</th><th>RSSI L/R</th><th>Status</th><th>Remarks</th>
             </tr>
           </thead>
-          <tbody><tr data-iter-key='0' class='row-pass'><td><strong>HT20</strong></td><td>MCS22</td><td>176.4</td><td>168.0</td><td>184.8</td><td>50/54</td><td>-53/-55 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='1' class='row-pass'><td><strong>HT20</strong></td><td>MCS23</td><td>183.8</td><td>175.0</td><td>192.5</td><td>50/54</td><td>-53/-55 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='2' class='row-pass'><td><strong>HT40</strong></td><td>MCS22</td><td>357.0</td><td>340.0</td><td>374.0</td><td>50/54</td><td>-53/-55 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='3' class='row-pass'><td><strong>HT40</strong></td><td>MCS23</td><td>372.8</td><td>355.0</td><td>390.5</td><td>50/54</td><td>-53/-55 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='4' class='row-pass'><td><strong>HT80</strong></td><td>MCS22</td><td>745.5</td><td>710.0</td><td>781.0</td><td>50/54</td><td>-53/-55 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr><tr data-iter-key='5' class='row-pass'><td><strong>HT80</strong></td><td>MCS23</td><td>785.4</td><td>748.0</td><td>822.8</td><td>50/54</td><td>-53/-55 dBm</td><td><span class="pill pass">Pass</span></td><td>MCS mismatch — SU1: want MCS23 got MCS22 (SNR 59/52)</td></tr></tbody>
+          <tbody><tr data-iter-key='0' class='row-pass'><td><strong>HT80</strong></td><td>MCS23</td><td>785.4</td><td>748.0</td><td>822.8</td><td>50/54</td><td>-53/-55 dBm</td><td><span class="pill pass">Pass</span></td><td>MCS mismatch — SU1: want MCS23 got MCS22 (SNR 59/52)</td></tr><tr data-iter-key='1' class='row-pass'><td><strong>HT40</strong></td><td>MCS22</td><td>357.0</td><td>340.0</td><td>374.0</td><td>50/54</td><td>-53/-55 dBm</td><td><span class="pill pass">Pass</span></td><td>—</td></tr></tbody>
         </table>
       </div>
     </section>
   </main>
 
   <script>
-    const seriesData = {"0": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [151.2, 168.0], "loss_pct": [0.5, 0.2]}, "1": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [157.5, 175.0], "loss_pct": [0.5, 0.2]}, "2": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [306.0, 340.0], "loss_pct": [0.5, 0.2]}, "3": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [319.5, 355.0], "loss_pct": [0.5, 0.2]}, "4": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [639.0, 710.0], "loss_pct": [0.5, 0.2]}, "5": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [673.2, 748.0], "loss_pct": [0.5, 0.2]}};
-    const cellMeta = {"0": {"bandwidth": "HT20", "mcs": "MCS22", "tx_mbps": 176.4, "rx_mbps": 168.0, "target_mbps": 184.8, "snr_summary": "50/54", "rssi_summary": "-53/-55", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "tx_mbps": "14.0", "rx_mbps": "42.0", "local_snr": "57/54", "remote_snr": "59/52", "snr": "59/52", "rssi": "-51/-53", "rssi_local": "-51", "rssi_remote": "-53"}, {"label": "SU2", "mac": "aa:bb:cc:dd:ee:02", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "tx_mbps": "14.0", "rx_mbps": "42.0", "local_snr": "56/53", "remote_snr": "58/51", "snr": "58/51", "rssi": "-52/-54", "rssi_local": "-52", "rssi_remote": "-54"}, {"label": "SU3", "mac": "aa:bb:cc:dd:ee:03", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "tx_mbps": "14.0", "rx_mbps": "42.0", "local_snr": "55/52", "remote_snr": "57/50", "snr": "57/50", "rssi": "-53/-55", "rssi_local": "-53", "rssi_remote": "-55"}], "remark": "\u2014", "skipped": false}, "1": {"bandwidth": "HT20", "mcs": "MCS23", "tx_mbps": 183.75, "rx_mbps": 175.0, "target_mbps": 192.50000000000003, "snr_summary": "50/54", "rssi_summary": "-53/-55", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "23", "tx_mbps": "14.6", "rx_mbps": "43.8", "local_snr": "57/54", "remote_snr": "59/52", "snr": "59/52", "rssi": "-51/-53", "rssi_local": "-51", "rssi_remote": "-53"}, {"label": "SU2", "mac": "aa:bb:cc:dd:ee:02", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "23", "tx_mbps": "14.6", "rx_mbps": "43.8", "local_snr": "56/53", "remote_snr": "58/51", "snr": "58/51", "rssi": "-52/-54", "rssi_local": "-52", "rssi_remote": "-54"}, {"label": "SU3", "mac": "aa:bb:cc:dd:ee:03", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "23", "tx_mbps": "14.6", "rx_mbps": "43.8", "local_snr": "55/52", "remote_snr": "57/50", "snr": "57/50", "rssi": "-53/-55", "rssi_local": "-53", "rssi_remote": "-55"}], "remark": "\u2014", "skipped": false}, "2": {"bandwidth": "HT40", "mcs": "MCS22", "tx_mbps": 357.0, "rx_mbps": 340.0, "target_mbps": 374.00000000000006, "snr_summary": "50/54", "rssi_summary": "-53/-55", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "tx_mbps": "28.3", "rx_mbps": "85.0", "local_snr": "57/54", "remote_snr": "59/52", "snr": "59/52", "rssi": "-51/-53", "rssi_local": "-51", "rssi_remote": "-53"}, {"label": "SU2", "mac": "aa:bb:cc:dd:ee:02", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "tx_mbps": "28.3", "rx_mbps": "85.0", "local_snr": "56/53", "remote_snr": "58/51", "snr": "58/51", "rssi": "-52/-54", "rssi_local": "-52", "rssi_remote": "-54"}, {"label": "SU3", "mac": "aa:bb:cc:dd:ee:03", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "tx_mbps": "28.3", "rx_mbps": "85.0", "local_snr": "55/52", "remote_snr": "57/50", "snr": "57/50", "rssi": "-53/-55", "rssi_local": "-53", "rssi_remote": "-55"}], "remark": "\u2014", "skipped": false}, "3": {"bandwidth": "HT40", "mcs": "MCS23", "tx_mbps": 372.75, "rx_mbps": 355.0, "target_mbps": 390.50000000000006, "snr_summary": "50/54", "rssi_summary": "-53/-55", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "23", "tx_mbps": "29.6", "rx_mbps": "88.8", "local_snr": "57/54", "remote_snr": "59/52", "snr": "59/52", "rssi": "-51/-53", "rssi_local": "-51", "rssi_remote": "-53"}, {"label": "SU2", "mac": "aa:bb:cc:dd:ee:02", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "23", "tx_mbps": "29.6", "rx_mbps": "88.8", "local_snr": "56/53", "remote_snr": "58/51", "snr": "58/51", "rssi": "-52/-54", "rssi_local": "-52", "rssi_remote": "-54"}, {"label": "SU3", "mac": "aa:bb:cc:dd:ee:03", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "23", "tx_mbps": "29.6", "rx_mbps": "88.8", "local_snr": "55/52", "remote_snr": "57/50", "snr": "57/50", "rssi": "-53/-55", "rssi_local": "-53", "rssi_remote": "-55"}], "remark": "\u2014", "skipped": false}, "4": {"bandwidth": "HT80", "mcs": "MCS22", "tx_mbps": 745.5, "rx_mbps": 710.0, "target_mbps": 781.0000000000001, "snr_summary": "50/54", "rssi_summary": "-53/-55", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "tx_mbps": "59.2", "rx_mbps": "177.5", "local_snr": "57/54", "remote_snr": "59/52", "snr": "59/52", "rssi": "-51/-53", "rssi_local": "-51", "rssi_remote": "-53"}, {"label": "SU2", "mac": "aa:bb:cc:dd:ee:02", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "tx_mbps": "59.2", "rx_mbps": "177.5", "local_snr": "56/53", "remote_snr": "58/51", "snr": "58/51", "rssi": "-52/-54", "rssi_local": "-52", "rssi_remote": "-54"}, {"label": "SU3", "mac": "aa:bb:cc:dd:ee:03", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "tx_mbps": "59.2", "rx_mbps": "177.5", "local_snr": "55/52", "remote_snr": "57/50", "snr": "57/50", "rssi": "-53/-55", "rssi_local": "-53", "rssi_remote": "-55"}], "remark": "\u2014", "skipped": false}, "5": {"bandwidth": "HT80", "mcs": "MCS23", "tx_mbps": 785.4, "rx_mbps": 748.0, "target_mbps": 822.8000000000001, "snr_summary": "50/54", "rssi_summary": "-53/-55", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "tx_mbps": "62.3", "rx_mbps": "187.0", "local_snr": "57/54", "remote_snr": "59/52", "snr": "59/52", "rssi": "-51/-53", "rssi_local": "-51", "rssi_remote": "-53"}, {"label": "SU2", "mac": "aa:bb:cc:dd:ee:02", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "23", "tx_mbps": "62.3", "rx_mbps": "187.0", "local_snr": "56/53", "remote_snr": "58/51", "snr": "58/51", "rssi": "-52/-54", "rssi_local": "-52", "rssi_remote": "-54"}, {"label": "SU3", "mac": "aa:bb:cc:dd:ee:03", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "23", "tx_mbps": "62.3", "rx_mbps": "187.0", "local_snr": "55/52", "remote_snr": "57/50", "snr": "57/50", "rssi": "-53/-55", "rssi_local": "-53", "rssi_remote": "-55"}], "remark": "MCS mismatch \u2014 SU1: want MCS23 got MCS22 (SNR 59/52)", "skipped": false}};
+    const seriesData = {"0": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [673.2, 748.0], "loss_pct": [0.5, 0.2]}, "1": {"labels": ["12:00:01", "12:00:06"], "rx_mbps": [306.0, 340.0], "loss_pct": [0.5, 0.2]}};
+    const cellMeta = {"0": {"bandwidth": "HT80", "mcs": "MCS23", "tx_mbps": 785.4, "rx_mbps": 748.0, "target_mbps": 822.8000000000001, "snr_summary": "50/54", "rssi_summary": "-53/-55", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "tx_mbps": "62.3", "rx_mbps": "187.0", "local_snr": "57/54", "remote_snr": "59/52", "snr": "59/52", "rssi": "-51/-53", "rssi_local": "-51", "rssi_remote": "-53"}, {"label": "SU2", "mac": "aa:bb:cc:dd:ee:02", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "23", "tx_mbps": "62.3", "rx_mbps": "187.0", "local_snr": "56/53", "remote_snr": "58/51", "snr": "58/51", "rssi": "-52/-54", "rssi_local": "-52", "rssi_remote": "-54"}, {"label": "SU3", "mac": "aa:bb:cc:dd:ee:03", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "23", "tx_mbps": "62.3", "rx_mbps": "187.0", "local_snr": "55/52", "remote_snr": "57/50", "snr": "57/50", "rssi": "-53/-55", "rssi_local": "-53", "rssi_remote": "-55"}], "remark": "MCS mismatch \u2014 SU1: want MCS23 got MCS22 (SNR 59/52)", "skipped": false}, "1": {"bandwidth": "HT40", "mcs": "MCS22", "tx_mbps": 357.0, "rx_mbps": 340.0, "target_mbps": 374.00000000000006, "snr_summary": "50/54", "rssi_summary": "-53/-55", "su_rf": [{"label": "SU1", "mac": "aa:bb:cc:dd:ee:01", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "tx_mbps": "28.3", "rx_mbps": "85.0", "local_snr": "57/54", "remote_snr": "59/52", "snr": "59/52", "rssi": "-51/-53", "rssi_local": "-51", "rssi_remote": "-53"}, {"label": "SU2", "mac": "aa:bb:cc:dd:ee:02", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "tx_mbps": "28.3", "rx_mbps": "85.0", "local_snr": "56/53", "remote_snr": "58/51", "snr": "58/51", "rssi": "-52/-54", "rssi_local": "-52", "rssi_remote": "-54"}, {"label": "SU3", "mac": "aa:bb:cc:dd:ee:03", "tx_rate": "258 (22)", "rx_rate": "258 (22)", "rx_mcs": "22", "tx_mbps": "28.3", "rx_mbps": "85.0", "local_snr": "55/52", "remote_snr": "57/50", "snr": "57/50", "rssi": "-53/-55", "rssi_local": "-53", "rssi_remote": "-55"}], "remark": "\u2014", "skipped": false}};
     let activeKey = "0";
     const gridColor = 'rgba(148,163,184,0.25)';
     const chartEl = document.getElementById('timeSeriesChart');
@@ -658,8 +658,8 @@
           <td class="mono">${row.mac || '—'}</td>
           <td>${row.tx_rate || '—'}</td>
           <td>${row.rx_rate || '—'}</td>
-          <td>${row.tx_mbps || '—'}</td>
           <td>${row.rx_mbps || '—'}</td>
+          <td>${row.tx_mbps || '—'}</td>
           <td>${row.local_snr || '—'}</td>
           <td>${row.remote_snr || row.snr || '—'}</td>
           <td>${row.rssi && row.rssi !== '—' ? row.rssi + ' dBm' : '—'}</td>

@@ -1250,7 +1250,7 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
               <tr>
                 <th>Unit</th><th>MAC</th>
                 <th>Downlink rate</th><th>Uplink rate</th>
-                <th>Uplink Mbps</th><th>Downlink Mbps</th>
+                <th>Downlink Mbps</th><th>Uplink Mbps</th>
                 <th>Local SNR<br><span style="font-weight:500;opacity:.75">a1/a2</span></th>
                 <th>Remote SNR<br><span style="font-weight:500;opacity:.75">a1/a2</span></th>
                 <th>RSSI (combined)<br><span style="font-weight:500;opacity:.75">Local/Remote</span></th>
@@ -1364,8 +1364,8 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
           <td class="mono">${{row.mac || '—'}}</td>
           <td>${{row.tx_rate || '—'}}</td>
           <td>${{row.rx_rate || '—'}}</td>
-          <td>${{row.tx_mbps || '—'}}</td>
           <td>${{row.rx_mbps || '—'}}</td>
+          <td>${{row.tx_mbps || '—'}}</td>
           <td>${{row.local_snr || '—'}}</td>
           <td>${{row.remote_snr || row.snr || '—'}}</td>
           <td>${{row.rssi && row.rssi !== '—' ? row.rssi + ' dBm' : '—'}}</td>

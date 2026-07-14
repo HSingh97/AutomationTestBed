@@ -163,10 +163,17 @@ def test_write_matrix_grafana_html_smoke(tmp_path: Path):
     assert "heat-cell" in html
     assert "cov-card" not in html
     assert "cellRfTable" in html
-    assert "Uplink Mbps" in html
-    assert "Downlink Mbps" in html
     assert "Downlink rate" in html
     assert "Uplink rate" in html
+    assert "Downlink Mbps" in html
+    assert "Uplink Mbps" in html
+    # Column order: downlink rate, uplink rate, downlink mbps, uplink mbps
+    assert html.index("Downlink rate") < html.index("Uplink rate")
+    assert html.index("Uplink rate") < html.index("Downlink Mbps")
+    assert html.index("Downlink Mbps") < html.index("Uplink Mbps")
+    # Prefer the RF-table Mbps headings (avoid matching iteration-log TX/RX)
+    rf_hdr = html[html.index("cellRfTable"): html.index("cellRfBody")]
+    assert rf_hdr.index("Downlink Mbps") < rf_hdr.index("Uplink Mbps")
     assert "Local SNR" in html
     assert "Remote SNR" in html
     assert "RSSI (combined)" in html
