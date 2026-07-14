@@ -100,12 +100,49 @@ def _testbed_devices(
     return bts, devices
 
 
+def _chain_pair(a1: Any, a2: Any) -> str:
+    """Format antenna-chain pair as ``a1/a2`` (em-dash when missing)."""
+    left = str(a1 or "").strip() or "—"
+    right = str(a2 or "").strip() or "—"
+    if left in {"-", "0"}:
+        left = "—"
+    if right in {"-", "0"}:
+        right = "—"
+    return f"{left}/{right}"
+
+
+def _client_local_snr(client: dict[str, Any]) -> str:
+    return _chain_pair(client.get("l_snr1"), client.get("l_snr2"))
+
+
+def _client_remote_snr(client: dict[str, Any]) -> str:
+    return _chain_pair(client.get("r_snr1"), client.get("r_snr2"))
+
+
 def _client_snr(client: dict[str, Any]) -> str:
-    return f"{client.get('r_snr1') or '—'}/{client.get('r_snr2') or '—'}"
+    """Backward-compatible remote SNR a1/a2 (primary RF quality signal)."""
+    return _client_remote_snr(client)
+
+
+def _client_rssi_combined(client: dict[str, Any]) -> str:
+    """Combined RSSI as Local/Remote (comb_rssi / r_comb_rssi)."""
+    local = str(client.get("l_rssi1") or "").strip() or "—"
+    remote = str(client.get("r_rssi1") or "").strip() or "—"
+    if local in {"-", "0"}:
+        local = "—"
+    if remote in {"-", "0"}:
+        remote = "—"
+    return f"{local}/{remote}"
 
 
 def _client_rssi(client: dict[str, Any]) -> str:
-    return str(client.get("r_rssi1") or client.get("l_rssi1") or "—")
+    """Backward-compatible single RSSI — prefer remote, else local."""
+    remote = str(client.get("r_rssi1") or "").strip()
+    local = str(client.get("l_rssi1") or "").strip()
+    for value in (remote, local):
+        if value and value not in {"-", "0", "—"}:
+            return value
+    return "—"
 
 
 def _client_rx_mcs(client: dict[str, Any]) -> str:
@@ -179,33 +216,56 @@ def _su_rf_rows(
                 "rx_mcs": _client_rx_mcs(client),
                 "tx_mbps": _fmt_su_mbps(trex_dev.get("avg_tx_mbps")),
                 "rx_mbps": _fmt_su_mbps(trex_dev.get("avg_rx_mbps")),
-                "snr": _client_snr(client),
-                "rssi": _client_rssi(client),
+                "local_snr": _client_local_snr(client),
+                "remote_snr": _client_remote_snr(client),
+                "snr": _client_remote_snr(client),
+                "rssi": _client_rssi_combined(client),
+                "rssi_local": str(client.get("l_rssi1") or "—"),
+                "rssi_remote": str(client.get("r_rssi1") or "—"),
             }
         )
     return rows
 
 
 def _snr_rssi_summaries(su_rf: list[dict[str, Any]]) -> tuple[str, str]:
-    """Return (snr_summary, rssi_summary) across SUs — min chain SNR and worst RSSI."""
+    """Return (snr_summary, rssi_summary) — remote SNR min/avg and RSSI Local/Remote worst."""
     snr_mins: list[float] = []
     snr_avgs: list[float] = []
-    rssi_vals: list[float] = []
+    local_rssi: list[float] = []
+    remote_rssi: list[float] = []
     for row in su_rf:
-        parts = [p for p in str(row.get("snr") or "").split("/") if p and p != "—"]
+        parts = [
+            p
+            for p in str(row.get("remote_snr") or row.get("snr") or "").split("/")
+            if p and p != "—"
+        ]
         nums = [_parse_float(p) for p in parts]
         nums = [n for n in nums if n is not None]
         if nums:
             snr_mins.append(min(nums))
             snr_avgs.append(sum(nums) / len(nums))
-        rssi = _parse_float(row.get("rssi"))
-        if rssi is not None:
-            rssi_vals.append(rssi)
+        rssi_text = str(row.get("rssi") or "")
+        if "/" in rssi_text:
+            left, right = rssi_text.split("/", 1)
+            local = _parse_float(left)
+            remote = _parse_float(right)
+        else:
+            local = _parse_float(row.get("rssi_local"))
+            remote = _parse_float(row.get("rssi_remote") or row.get("rssi"))
+        if local is not None:
+            local_rssi.append(local)
+        if remote is not None:
+            remote_rssi.append(remote)
     if snr_mins:
         snr_summary = f"{min(snr_mins):.0f}/{sum(snr_avgs) / len(snr_avgs):.0f}"
     else:
         snr_summary = "—"
-    rssi_summary = f"{min(rssi_vals):.0f}" if rssi_vals else "—"
+    if local_rssi or remote_rssi:
+        local_part = f"{min(local_rssi):.0f}" if local_rssi else "—"
+        remote_part = f"{min(remote_rssi):.0f}" if remote_rssi else "—"
+        rssi_summary = f"{local_part}/{remote_part}"
+    else:
+        rssi_summary = "—"
     return snr_summary, rssi_summary
 
 
@@ -290,8 +350,10 @@ def _link_device_rows(link_clients: list[dict[str, Any]], *, prefix_len: int = 1
                 "ip_display": format_mgmt_ipv6_display(label, ipv6, prefix_len=prefix_len),
                 "tx_rate": str(client.get("tx_rate") or client.get("out_rate") or "—"),
                 "rx_rate": str(client.get("rx_rate") or client.get("in_rate") or "—"),
-                "snr": _client_snr(client),
-                "rssi": _client_rssi(client),
+                "local_snr": _client_local_snr(client),
+                "remote_snr": _client_remote_snr(client),
+                "snr": _client_remote_snr(client),
+                "rssi": _client_rssi_combined(client),
             }
         )
     return rows
@@ -1096,7 +1158,7 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
             status = "FAIL"
         snr = cell.get("snr_summary") or "—"
         rssi = cell.get("rssi_summary") or "—"
-        rssi_cell = "—" if cell.get("skipped") or rssi == "—" else f"{rssi} dBm"
+        rssi_cell = "—" if cell.get("skipped") or rssi == "—" else (f"{rssi} dBm" if "/" in str(rssi) or str(rssi).startswith("-") or str(rssi)[0].isdigit() else str(rssi))
         iter_rows.append(
             f"<tr data-iter-key='{cell['iter_key']}' "
             f"class='{'row-skip' if cell.get('skipped') else 'row-pass' if cell.get('passed') else 'row-fail'}'>"
@@ -1186,12 +1248,16 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
           <table class="data-table" id="cellRfTable">
             <thead>
               <tr>
-                <th>Unit</th><th>MAC</th><th>Tx rate</th><th>Rx rate</th>
-                <th>TX Mbps</th><th>RX Mbps</th><th>SNR</th><th>RSSI</th>
+                <th>Unit</th><th>MAC</th>
+                <th>Downlink rate</th><th>Uplink rate</th>
+                <th>Uplink Mbps</th><th>Downlink Mbps</th>
+                <th>Local SNR<br><span style="font-weight:500;opacity:.75">a1/a2</span></th>
+                <th>Remote SNR<br><span style="font-weight:500;opacity:.75">a1/a2</span></th>
+                <th>RSSI (combined)<br><span style="font-weight:500;opacity:.75">Local/Remote</span></th>
               </tr>
             </thead>
             <tbody id="cellRfBody">
-              <tr><td colspan="8" class="empty-note" style="border:none">Select a cell to load per-SU RF.</td></tr>
+              <tr><td colspan="9" class="empty-note" style="border:none">Select a cell to load per-SU RF.</td></tr>
             </tbody>
           </table>
         </div>
@@ -1210,7 +1276,7 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
           <thead>
             <tr>
               <th>BW</th><th>MCS</th><th>TX Mbps</th><th>RX Mbps</th><th>Target</th>
-              <th>SNR</th><th>RSSI</th><th>Status</th><th>Remarks</th>
+              <th>Remote SNR</th><th>RSSI L/R</th><th>Status</th><th>Remarks</th>
             </tr>
           </thead>
           <tbody>{''.join(iter_rows)}</tbody>
@@ -1289,7 +1355,7 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
     function renderRfTable(suRf) {{
       const body = document.getElementById('cellRfBody');
       if (!suRf || !suRf.length) {{
-        body.innerHTML = '<tr><td colspan="8"><p class="empty-note" style="border:none;margin:0">No RF snapshot for this cell.</p></td></tr>';
+        body.innerHTML = '<tr><td colspan="9"><p class="empty-note" style="border:none;margin:0">No RF snapshot for this cell.</p></td></tr>';
         return;
       }}
       body.innerHTML = suRf.map(row => `
@@ -1300,7 +1366,8 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
           <td>${{row.rx_rate || '—'}}</td>
           <td>${{row.tx_mbps || '—'}}</td>
           <td>${{row.rx_mbps || '—'}}</td>
-          <td>${{row.snr || '—'}}</td>
+          <td>${{row.local_snr || '—'}}</td>
+          <td>${{row.remote_snr || row.snr || '—'}}</td>
           <td>${{row.rssi && row.rssi !== '—' ? row.rssi + ' dBm' : '—'}}</td>
         </tr>`).join('');
     }}
@@ -1317,7 +1384,7 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
         `${{meta.bandwidth || '—'}} · ${{meta.mcs || '—'}} · ${{(meta.tx_mbps || 0).toFixed(1)}} sent → ${{(meta.rx_mbps || 0).toFixed(1)}} Mbps got`;
       document.getElementById('seriesMeta').textContent =
         meta.skipped ? (meta.remark || 'TRex not run') :
-        `${{series.labels.length}} live samples · SNR ${{meta.snr_summary || '—'}} · RSSI ${{meta.rssi_summary && meta.rssi_summary !== '—' ? meta.rssi_summary + ' dBm' : '—'}} · loss from DUT avg_rtx or TX/RX PPS delta`;
+        `${{series.labels.length}} live samples · Remote SNR ${{meta.snr_summary || '—'}} · RSSI ${{meta.rssi_summary && meta.rssi_summary !== '—' ? meta.rssi_summary + ' dBm' : '—'}} · loss from DUT avg_rtx or TX/RX PPS delta`;
       renderRfTable(meta.su_rf || []);
       chart.data.labels = series.labels;
       chart.data.datasets = [
