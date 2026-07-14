@@ -2,9 +2,9 @@
 # Trigger Jenkins: Automation Framework / Throughput Test - Trex
 #
 # Examples:
-#   TARGET_STAND=test-qa-lab-02 ./jenkins/trigger-throughput.sh
-#   TARGET_STAND=test-qa-lab-02 ./jenkins/trigger-throughput.sh --mcs MCS22 --wait
-#   TARGET_STAND=test-harman2 ./jenkins/trigger-throughput.sh --bandwidth HT80 --mcs MCS23
+#   ./jenkins/trigger-throughput.sh
+#   ./jenkins/trigger-throughput.sh --mcs MCS23 --bandwidth HT80
+#   ./jenkins/trigger-throughput.sh --stand test-qa-lab-02 --wait
 #
 # Auth: same as jenkins/trigger-build.sh (JENKINS_USER + ~/.jenkins-api-token)
 
@@ -14,49 +14,29 @@ JENKINS_URL="${JENKINS_URL:-http://127.0.0.1:8081}"
 JENKINS_USER="${JENKINS_USER:-harman}"
 JOB_PATH="job/Automation%20Framework/job/Throughput%20Test%20-%20Trex"
 
-TARGET_STAND="${TARGET_STAND:-test-qa-lab-02}"
-BANDWIDTH="${BANDWIDTH:-HT20,HT40,HT80}"
-MCS="${MCS:-MCS22,MCS23}"
+TARGET_STAND="${TARGET_STAND:-test-qa-lab-01}"
+BANDWIDTH="${BANDWIDTH:-all}"
+MCS="${MCS:-all}"
 RATIO="${RATIO:-75:25}"
 DURATION="${DURATION:-30}"
 PACKET_SIZE="${PACKET_SIZE:-1500}"
-PROFILE="${PROFILE:-}"
 SU_COUNT="${SU_COUNT:-6}"
-TREX_SERVER="${TREX_SERVER:-}"
-TREX_SU_SERVER="${TREX_SU_SERVER:-}"
-BTS_IP="${BTS_IP:-}"
-CPE_IP="${CPE_IP:-}"
 WAIT="${WAIT:-false}"
 POLL_SECONDS="${POLL_SECONDS:-20}"
-VLAN_DEBUG="${VLAN_DEBUG:-false}"
-CAMPAIGN_ITERATIONS="${CAMPAIGN_ITERATIONS:-3}"
-SU_LINK_WAIT="${SU_LINK_WAIT:-240}"
-BW_APPLY_WAIT="${BW_APPLY_WAIT:-90}"
-BW_RUNNING_WAIT="${BW_RUNNING_WAIT:-180}"
 
 usage() {
   cat <<'EOF'
 Usage: trigger-throughput.sh [OPTIONS]
 
 Options:
-  --stand STAND       TARGET_STAND / agent label (default: qa-lab-02)
-  --bandwidth LIST    Comma-separated htmode (default: HT80)
-  --mcs LIST          Comma-separated MCS (default: MCS22)
+  --stand STAND       TARGET_STAND / agent label (default: test-qa-lab-01)
+  --bandwidth LIST    htmode list or all (default: all → HT20,HT40,HT80)
+  --mcs LIST          MCS list or all (default: all → MCS0..MCS23)
   --ratio RATIO       DL:UL ratio (default: 75:25)
   --time SECONDS      Per-iteration duration (default: 30)
   --packet-size N     Frame size bytes (default: 1500)
-  --profile NAME      Override profile (default: from benches.yaml)
-  --su-count N        TRex SU count override
-  --trex-server IP    BSU TRex host override
-  --trex-su-server IP SU TRex host override
-  --bts-ip IP         BTS IPv6 override
-  --cpe-ip IP         CPE IPv6 override
+  --su-count N        Number of SUs (default: 6)
   --wait              Poll until build completes
-  --vlan-debug        Run QinQ vs transparent link-recovery campaign
-  --iterations N      Campaign runs per VLAN mode (default: 3)
-  --su-link-wait SEC  SU ping wait after BW apply (default: 240)
-  --bw-apply-wait SEC BTS hold after ucidyn apply (default: 90)
-  --bw-running-wait SEC  cfg80211tool poll timeout (default: 180)
   -h, --help          Show help
 EOF
 }
@@ -69,20 +49,12 @@ while [[ $# -gt 0 ]]; do
     --ratio) RATIO="$2"; shift 2 ;;
     --time) DURATION="$2"; shift 2 ;;
     --packet-size) PACKET_SIZE="$2"; shift 2 ;;
-    --profile) PROFILE="$2"; shift 2 ;;
     --su-count) SU_COUNT="$2"; shift 2 ;;
-    --trex-server) TREX_SERVER="$2"; shift 2 ;;
-    --trex-su-server) TREX_SU_SERVER="$2"; shift 2 ;;
-    --bts-ip) BTS_IP="$2"; shift 2 ;;
-    --cpe-ip) CPE_IP="$2"; shift 2 ;;
     --wait) WAIT=true; shift ;;
-    --vlan-debug) VLAN_DEBUG=true; shift ;;
-    --iterations) CAMPAIGN_ITERATIONS="$2"; shift 2 ;;
-    --su-link-wait) SU_LINK_WAIT="$2"; shift 2 ;;
-    --bw-apply-wait) BW_APPLY_WAIT="$2"; shift 2 ;;
-    --bw-running-wait) BW_RUNNING_WAIT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
-    *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
+    --) shift; break ;;
+    -*) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
+    *) echo "Unexpected argument: $1" >&2; exit 1 ;;
   esac
 done
 
@@ -106,21 +78,11 @@ POST_DATA=(
   --data-urlencode "DL:UL Ratio=${RATIO}"
   --data-urlencode "Throughput Test Time=${DURATION}"
   --data-urlencode "Packet Size=${PACKET_SIZE}"
-  --data-urlencode "VLAN_DEBUG_CAMPAIGN=${VLAN_DEBUG}"
-  --data-urlencode "Campaign Iterations=${CAMPAIGN_ITERATIONS}"
-  --data-urlencode "SU Link Wait (s)=${SU_LINK_WAIT}"
-  --data-urlencode "BW Apply Wait (s)=${BW_APPLY_WAIT}"
-  --data-urlencode "BW Running Wait (s)=${BW_RUNNING_WAIT}"
+  --data-urlencode "No of SU=${SU_COUNT}"
 )
-[[ -n "$PROFILE" ]] && POST_DATA+=(--data-urlencode "PROFILE=${PROFILE}")
-POST_DATA+=(--data-urlencode "SU Count=${SU_COUNT}")
-[[ -n "$TREX_SERVER" ]] && POST_DATA+=(--data-urlencode "TRex Server=${TREX_SERVER}")
-[[ -n "$TREX_SU_SERVER" ]] && POST_DATA+=(--data-urlencode "TRex SU Server=${TREX_SU_SERVER}")
-[[ -n "$BTS_IP" ]] && POST_DATA+=(--data-urlencode "BTS IP=${BTS_IP}")
-[[ -n "$CPE_IP" ]] && POST_DATA+=(--data-urlencode "CPE IP=${CPE_IP}")
 
 echo "[jenkins] Triggering Throughput Test - Trex on stand=${TARGET_STAND}"
-HTTP="$(curl -s -o /tmp/trigger-throughput.out -w "%{http_code}" \
+HTTP="$(curl -s -D /tmp/trigger-throughput.hdr -o /tmp/trigger-throughput.out -w "%{http_code}" \
   -u "${JENKINS_USER}:${JENKINS_TOKEN}" -X POST \
   -H "${CRUMB_FIELD}: ${CRUMB}" \
   "${JENKINS_URL}/${JOB_PATH}/buildWithParameters" \
@@ -132,7 +94,7 @@ if [[ "$HTTP" != "201" && "$HTTP" != "200" && "$HTTP" != "302" ]]; then
   exit 1
 fi
 
-QUEUE_URL="$(grep -i '^Location:' /tmp/trigger-throughput.out | awk '{print $2}' | tr -d '\r' || true)"
+QUEUE_URL="$(grep -i '^Location:' /tmp/trigger-throughput.hdr | awk '{print $2}' | tr -d '\r' || true)"
 echo "[jenkins] Queued: ${QUEUE_URL:-'(see Jenkins UI)'}"
 
 if [[ "$WAIT" != "true" ]]; then
@@ -145,7 +107,7 @@ for _ in $(seq 1 60); do
   sleep 2
   BUILD_NUM="$(curl -fsS -u "${JENKINS_USER}:${JENKINS_TOKEN}" \
     "${JENKINS_URL}/${JOB_PATH}/lastBuild/api/json?tree=number,building" | \
-    python3 -c "import json,sys; d=json.load(sys.stdin); print(d['number'] if d.get('building') else '')")"
+    python3 -c "import json,sys; d=json.load(sys.stdin); print(d['number'] if d.get('building') else '')" 2>/dev/null || true)"
   [[ -n "$BUILD_NUM" ]] && break
 done
 

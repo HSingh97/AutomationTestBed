@@ -11,6 +11,22 @@ def archiveBuildArtifacts(pattern, allowEmpty = false) {
     ])
 }
 
+def expandBandwidths(raw) {
+    def text = (raw ?: '').trim()
+    if (!text || text.equalsIgnoreCase('all')) {
+        return 'HT20,HT40,HT80'
+    }
+    return text
+}
+
+def expandMcs(raw) {
+    def text = (raw ?: '').trim()
+    if (!text || text.equalsIgnoreCase('all')) {
+        return (0..23).collect { "MCS${it}" }.join(',')
+    }
+    return text
+}
+
 pipeline {
     agent { node { label "${TARGET_STAND}" } }
 
@@ -18,87 +34,37 @@ pipeline {
         choice(
             name: 'TARGET_STAND',
             choices: ['test-qa-lab-01', 'test-qa-lab-02', 'test-harman2', 'test-puneet'],
-            description: 'Jenkins agent label / bench (maps to config/benches.yaml → profile)'
-        )
-        string(
-            name: 'BTS IP',
-            defaultValue: '',
-            description: 'BTS (local DUT) IPv4/IPv6. Leave empty to use profile default (profiles/default.yaml)'
-        )
-        string(
-            name: 'CPE IP',
-            defaultValue: '',
-            description: 'CPE (remote SU) IPv4/IPv6. Leave empty to use profile default'
+            description: 'Jenkins agent / lab stand'
         )
         string(
             name: 'Bandwidth',
-            defaultValue: 'HT20,HT40,HT80',
-            description: 'Comma-separated htmode values (e.g. HT20,HT40,HT80)'
+            defaultValue: 'all',
+            description: 'htmode list (e.g. HT80) or all → HT20,HT40,HT80'
         )
         string(
             name: 'MCS',
-            defaultValue: 'MCS22,MCS23',
-            description: 'Comma-separated MCS values (e.g. MCS19,MCS23)'
+            defaultValue: 'all',
+            description: 'MCS list (e.g. MCS22,MCS23) or all → MCS0..MCS23'
         )
         string(
             name: 'Packet Size',
             defaultValue: '1500',
-            description: 'TRex frame size in bytes (default 1500 from config/defaults.py)'
+            description: 'TRex frame size in bytes'
         )
         string(
             name: 'DL:UL Ratio',
             defaultValue: '75:25',
-            description: 'Bidirectional DL:UL ratio for throughput run (default 75:25)'
+            description: 'Bidirectional DL:UL ratio'
         )
         string(
             name: 'Throughput Test Time',
             defaultValue: '30',
-            description: 'TRex measurement duration per iteration (seconds)'
+            description: 'TRex duration per iteration (seconds)'
         )
         string(
-            name: 'TRex Server',
-            defaultValue: '',
-            description: 'TRex BSU server IP (empty = profile default; qa_lab_02 uses 192.168.1.1)'
-        )
-        string(
-            name: 'TRex SU Server',
-            defaultValue: '',
-            description: 'TRex SU server IP (empty = profile default; qa_lab_02 uses 192.168.1.2 for CPE 4-6)'
-        )
-        string(
-            name: 'PROFILE',
-            defaultValue: '',
-            description: 'Profile name (profiles/<name>.yaml). Empty = resolve from TARGET_STAND via config/benches.yaml'
-        )
-        string(
-            name: 'SU Count',
+            name: 'No of SU',
             defaultValue: '6',
-            description: 'TRex SU count (empty = profile default; qa_lab_02 uses 6)'
-        )
-        booleanParam(
-            name: 'VLAN_DEBUG_CAMPAIGN',
-            defaultValue: false,
-            description: 'Run QinQ vs transparent link-recovery campaign (multiple iterations + debug JSON)'
-        )
-        string(
-            name: 'Campaign Iterations',
-            defaultValue: '3',
-            description: 'Matrix runs per VLAN mode when VLAN_DEBUG_CAMPAIGN is enabled'
-        )
-        string(
-            name: 'SU Link Wait (s)',
-            defaultValue: '240',
-            description: 'SU ping wait after bandwidth apply (campaign / extended timeouts)'
-        )
-        string(
-            name: 'BW Apply Wait (s)',
-            defaultValue: '90',
-            description: 'BTS hold time after ucidyn bandwidth apply'
-        )
-        string(
-            name: 'BW Running Wait (s)',
-            defaultValue: '180',
-            description: 'cfg80211tool running htmode poll timeout'
+            description: 'TRex SU count (capped to live-associated SUs at runtime)'
         )
     }
 
@@ -106,20 +72,17 @@ pipeline {
         stage('Prepare Testbed') {
             steps {
                 script {
+                    def bandwidths = expandBandwidths(params.Bandwidth)
+                    def mcsList = expandMcs(params.MCS)
                     echo '------------------------------------------'
                     echo 'UBR Performance Throughput (TRex matrix)'
                     echo "--- TARGET STAND: ${TARGET_STAND}"
-                    echo "BTS IP:     ${params['BTS IP'] ?: '(profile default)'}"
-                    echo "CPE IP:     ${params['CPE IP'] ?: '(profile default)'}"
-                    echo "Bandwidth:  ${params.Bandwidth}"
-                    echo "MCS:        ${params.MCS}"
+                    echo "Bandwidth:  ${params.Bandwidth} → ${bandwidths}"
+                    echo "MCS:        ${params.MCS} → ${mcsList}"
                     echo "Packet:     ${params['Packet Size']}"
                     echo "Ratio:      ${params['DL:UL Ratio']}"
                     echo "Duration:   ${params['Throughput Test Time']}s"
-                    echo "TRex:       ${params['TRex Server']}"
-                    echo "Profile:    ${params.PROFILE ?: "(from TARGET_STAND / benches.yaml)"}"
-                    echo "SU count:   ${params['SU Count'] ?: '(profile default)'}"
-                    echo "VLAN debug: ${params.VLAN_DEBUG_CAMPAIGN}"
+                    echo "No of SU:   ${params['No of SU']}"
                     echo '------------------------------------------'
                 }
             }
@@ -140,101 +103,43 @@ pipeline {
         stage('Run Performance Matrix') {
             steps {
                 script {
-                    def btsIp = (params['BTS IP'] ?: '').trim()
-                    def cpeIp = (params['CPE IP'] ?: '').trim()
-                    def bandwidths = (params.Bandwidth ?: 'HT80').trim()
-                    def mcsList = (params.MCS ?: 'MCS23').trim()
+                    def bandwidths = expandBandwidths(params.Bandwidth)
+                    def mcsList = expandMcs(params.MCS)
                     def ratio = (params['DL:UL Ratio'] ?: '75:25').trim()
                     def testTime = (params['Throughput Test Time'] ?: '30').trim()
-                    def trexServer = (params['TRex Server'] ?: '').trim()
-                    def trexSuServer = (params['TRex SU Server'] ?: '').trim()
-                    def profileName = (params.PROFILE ?: '').trim()
-                    def suCount = (params['SU Count'] ?: '').trim()
+                    def suCount = (params['No of SU'] ?: '6').trim()
                     def packetRaw = (params['Packet Size'] ?: '1500').trim()
-                    def vlanDebug = params.VLAN_DEBUG_CAMPAIGN
-                    def campaignIterations = (params['Campaign Iterations'] ?: '3').trim()
-                    def suLinkWait = (params['SU Link Wait (s)'] ?: '240').trim()
-                    def bwApplyWait = (params['BW Apply Wait (s)'] ?: '90').trim()
-                    def bwRunningWait = (params['BW Running Wait (s)'] ?: '180').trim()
+                    // Internal timeouts (not exposed in UI)
+                    def suLinkWait = '240'
+                    def bwApplyWait = '90'
+                    def bwRunningWait = '180'
+
                     if (!(packetRaw ==~ /^\d+$/)) {
                         error("Packet Size must be numeric bytes (e.g. 1500), got: ${packetRaw}")
                     }
-
-                    if (vlanDebug) {
-                        sh 'rm -rf reports/link_debug_campaign/* || true'
-                    } else {
-                        sh 'rm -rf reports/artifacts/performance_* reports/artifacts/Performance_Report_*.html Senao_Performance_*.html || true'
+                    if (!(suCount ==~ /^\d+$/)) {
+                        error("No of SU must be numeric (e.g. 6), got: ${suCount}")
                     }
 
-                    def cmd
-                    if (vlanDebug) {
-                        cmd = new StringBuilder('PYTHONPATH=. venv/bin/python scripts/vlan_link_debug_campaign.py')
-                        cmd.append(" --stand '${TARGET_STAND}'")
-                        cmd.append(" --bandwidths '${bandwidths}'")
-                        cmd.append(" --mcs '${mcsList}'")
-                        cmd.append(" --iterations ${campaignIterations}")
-                        cmd.append(" --duration-s ${testTime}")
-                        cmd.append(" --su-link-wait-s ${suLinkWait}")
-                        cmd.append(" --bandwidth-apply-wait-s ${bwApplyWait}")
-                        cmd.append(" --bandwidth-running-wait-s ${bwRunningWait}")
-                        if (profileName) {
-                            cmd.append(" --profile '${profileName}'")
-                        }
-                        if (suCount ==~ /^\d+$/) {
-                            cmd.append(" --su-count ${suCount}")
-                        }
-                    } else {
-                        cmd = new StringBuilder('PYTHONPATH=. venv/bin/python traffic/performance_matrix.py')
-                        cmd.append(" --bandwidths '${bandwidths}'")
-                        cmd.append(" --mcs '${mcsList}'")
-                        cmd.append(" --ratios '${ratio}'")
-                        cmd.append(' --ratios-only')
-                        cmd.append(' --no-fail-on-rate-mismatch')
-                        cmd.append(" --time ${testTime}")
-                        cmd.append(" --packet-size ${packetRaw}")
-                        cmd.append(" --su-link-wait-s ${suLinkWait}")
-                        cmd.append(" --bandwidth-apply-wait-s ${bwApplyWait}")
-                        cmd.append(" --bandwidth-running-wait-s ${bwRunningWait}")
-                        if (trexServer) {
-                            cmd.append(" --trex-server '${trexServer}'")
-                        }
-                        if (trexSuServer) {
-                            cmd.append(" --trex-server-su '${trexSuServer}'")
-                        }
-                        cmd.append(' --deploy-client-script')
-                        cmd.append(" --stand '${TARGET_STAND}'")
-                        if (profileName) {
-                            cmd.append(" --profile '${profileName}'")
-                        }
-                        if (suCount ==~ /^\d+$/) {
-                            cmd.append(" --su-count ${suCount}")
-                        }
-                        if (btsIp) {
-                            cmd.append(" --local-ip '${btsIp}'")
-                        }
-                        if (cpeIp) {
-                            cmd.append(" --cpe-ip '${cpeIp}'")
-                        }
-                    }
+                    sh 'rm -rf reports/artifacts/performance_* reports/artifacts/Performance_Report_*.html Senao_Performance_*.html || true'
+
+                    def cmd = new StringBuilder('PYTHONPATH=. venv/bin/python traffic/performance_matrix.py')
+                    cmd.append(" --bandwidths '${bandwidths}'")
+                    cmd.append(" --mcs '${mcsList}'")
+                    cmd.append(" --ratios '${ratio}'")
+                    cmd.append(' --ratios-only')
+                    cmd.append(' --no-fail-on-rate-mismatch')
+                    cmd.append(" --time ${testTime}")
+                    cmd.append(" --packet-size ${packetRaw}")
+                    cmd.append(" --su-link-wait-s ${suLinkWait}")
+                    cmd.append(" --bandwidth-apply-wait-s ${bwApplyWait}")
+                    cmd.append(" --bandwidth-running-wait-s ${bwRunningWait}")
+                    cmd.append(' --deploy-client-script')
+                    cmd.append(" --stand '${TARGET_STAND}'")
+                    cmd.append(" --su-count ${suCount}")
 
                     def exitCode = sh(script: cmd.toString(), returnStatus: true)
                     env.PERF_MATRIX_EXIT = "${exitCode}"
-
-                    if (vlanDebug) {
-                        def summaryPath = sh(
-                            script: 'ls -t reports/link_debug_campaign/*/campaign_summary.json 2>/dev/null | head -1',
-                            returnStdout: true
-                        ).trim()
-                        if (!summaryPath) {
-                            error('VLAN debug campaign finished but campaign_summary.json was not found')
-                        }
-                        env.CAMPAIGN_SUMMARY = summaryPath
-                        echo "Campaign summary: ${summaryPath}"
-                        if (exitCode != 0) {
-                            unstable("VLAN debug campaign completed with matrix failures (exit ${exitCode})")
-                        }
-                        return
-                    }
 
                     def reportPath = sh(
                         script: 'ls -t reports/artifacts/Performance_Report_*.html 2>/dev/null | head -1',
@@ -253,9 +158,6 @@ pipeline {
         }
 
         stage('Finalize Report') {
-            when {
-                expression { return !params.VLAN_DEBUG_CAMPAIGN }
-            }
             steps {
                 script {
                     def senao = load 'jenkins/jenkins-common.groovy'
@@ -270,13 +172,9 @@ pipeline {
         stage('Archive Report') {
             steps {
                 script {
-                    if (params.VLAN_DEBUG_CAMPAIGN) {
-                        archiveBuildArtifacts('reports/link_debug_campaign/**', true)
-                    } else {
-                        archiveBuildArtifacts('Senao_Performance_*.html')
-                        archiveBuildArtifacts('reports/artifacts/Performance_Report_*.html', true)
-                        archiveBuildArtifacts('reports/artifacts/performance_*/**', true)
-                    }
+                    archiveBuildArtifacts('Senao_Performance_*.html')
+                    archiveBuildArtifacts('reports/artifacts/Performance_Report_*.html', true)
+                    archiveBuildArtifacts('reports/artifacts/performance_*/**', true)
                 }
             }
         }
@@ -285,13 +183,6 @@ pipeline {
     post {
         always {
             script {
-                if (params.VLAN_DEBUG_CAMPAIGN) {
-                    echo '-----------------------------------------'
-                    echo 'VLAN debug campaign complete.'
-                    echo "Summary: ${env.CAMPAIGN_SUMMARY ?: 'see archived reports/link_debug_campaign/'}"
-                    echo '-----------------------------------------'
-                    return
-                }
                 def senao = load 'jenkins/jenkins-common.groovy'
                 def reportFile = env.PERFORMANCE_REPORT ?: "${senao.standardReportBasename('Senao_Performance')}.html"
                 def hasReport = fileExists(reportFile)
@@ -301,14 +192,13 @@ pipeline {
                 }
 
                 def detailsHtml = """\
-                    <p><strong>BTS IP:</strong> ${params['BTS IP'] ?: '(profile default)'}</p>
-                    <p><strong>CPE IP:</strong> ${params['CPE IP'] ?: '(profile default)'}</p>
+                    <p><strong>Stand:</strong> ${params.TARGET_STAND}</p>
                     <p><strong>Bandwidth:</strong> ${params.Bandwidth}</p>
                     <p><strong>MCS:</strong> ${params.MCS}</p>
                     <p><strong>Packet size:</strong> ${params['Packet Size']} bytes</p>
                     <p><strong>DL:UL ratio:</strong> ${params['DL:UL Ratio']}</p>
                     <p><strong>Duration:</strong> ${params['Throughput Test Time']}s per iteration</p>
-                    <p><strong>TRex server:</strong> ${params['TRex Server']}</p>
+                    <p><strong>No of SU:</strong> ${params['No of SU']}</p>
                 """
 
                 try {
