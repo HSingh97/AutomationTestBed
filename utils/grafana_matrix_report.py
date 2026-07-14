@@ -12,6 +12,10 @@ from typing import Any
 from traffic.operating_rate_table import lookup_spec
 from utils.net_utils import format_mgmt_ipv6_display
 
+SENAO_LOGO_URL = (
+    "https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png"
+)
+
 
 def _pct(observed: float, target: float) -> float:
     if target <= 0:
@@ -572,7 +576,6 @@ def _render_testbed_table(data: dict[str, Any]) -> str:
             f"<td class='mono'>{escape(str(unit.get('mac') or '—'))}</td>"
             f"<td class='mono'>{escape(str(unit.get('ip_display') or unit.get('ip') or '—'))}</td>"
             f"<td>{escape(str(unit.get('vlan') or '—'))}</td>"
-            f"<td>{escape(str(unit.get('qos') or '—'))}</td>"
             f"</tr>"
         )
     return f"""
@@ -581,7 +584,7 @@ def _render_testbed_table(data: dict[str, Any]) -> str:
         <thead>
           <tr>
             <th>Unit</th><th>Model</th><th>Firmware</th><th>MAC</th>
-            <th>Mgmt IPv6</th><th>VLAN</th><th>QoS</th>
+            <th>Mgmt IP</th><th>VLAN</th>
           </tr>
         </thead>
         <tbody>{''.join(rows)}</tbody>
@@ -655,21 +658,22 @@ def _render_coverage_matrix(data: dict[str, Any]) -> str:
 
 
 def _render_kpi_cards(data: dict[str, Any], *, passed: int, ran: int, total: int, peak_rx: float, pass_cls: str) -> str:
+    """Top stats — only unique info not already shown in hero / testbed / heatmap."""
+    del total  # coverage is visible in the heatmap itself
     peaks = data.get("peaks") or {}
     best_bw = max(peaks.items(), key=lambda item: float((item[1] or {}).get("rx_mbps") or 0))[0] if peaks else "—"
     mcs_rates = data.get("mcs_rates") or []
     bandwidths = data.get("bandwidths") or []
-    coverage_sub = f"{len(bandwidths)} BW × {len(mcs_rates)} MCS" if mcs_rates else "matrix cells"
+    sweep = ""
+    if bandwidths and mcs_rates:
+        bw_txt = "+".join(str(b).replace("HT", "") for b in bandwidths)
+        mcs_txt = ",".join(str(m).replace("MCS", "") for m in mcs_rates)
+        sweep = f"HT{bw_txt} · MCS{mcs_txt}"
+    cells = data.get("matrix_cells") or []
+    pct_vals = [float(c.get("pct") or 0) for c in cells if not c.get("skipped")]
+    avg_pct = sum(pct_vals) / len(pct_vals) if pct_vals else 0.0
     return f"""
-    <div class="kpi-grid">
-      <article class="kpi-card accent-{pass_cls}">
-        <div class="kpi-icon">◎</div>
-        <div class="kpi-body">
-          <div class="kpi-label">Matrix pass rate</div>
-          <div class="kpi-value">{passed}<span>/ {ran}</span></div>
-          <div class="kpi-sub">TRex iterations executed</div>
-        </div>
-      </article>
+    <div class="kpi-grid kpi-grid-2">
       <article class="kpi-card accent-ok">
         <div class="kpi-icon">⚡</div>
         <div class="kpi-body">
@@ -678,20 +682,12 @@ def _render_kpi_cards(data: dict[str, Any], *, passed: int, ran: int, total: int
           <div class="kpi-sub">Best on {escape(best_bw)}</div>
         </div>
       </article>
-      <article class="kpi-card accent-ok">
-        <div class="kpi-icon">⬡</div>
+      <article class="kpi-card accent-{pass_cls}">
+        <div class="kpi-icon">◎</div>
         <div class="kpi-body">
-          <div class="kpi-label">Connected SUs</div>
-          <div class="kpi-value">{int(data.get('su_count') or 0)}</div>
-          <div class="kpi-sub">From testbed inventory</div>
-        </div>
-      </article>
-      <article class="kpi-card accent-neutral">
-        <div class="kpi-icon">▦</div>
-        <div class="kpi-body">
-          <div class="kpi-label">Coverage</div>
-          <div class="kpi-value">{total}<span>cells</span></div>
-          <div class="kpi-sub">{escape(coverage_sub)}</div>
+          <div class="kpi-label">Avg of target</div>
+          <div class="kpi-value">{avg_pct:.0f}<span>%</span></div>
+          <div class="kpi-sub">{escape(sweep) if sweep else f"{passed}/{ran} iterations"}</div>
         </div>
       </article>
     </div>
@@ -758,6 +754,21 @@ _REPORT_CSS = """
       align-items: center;
       gap: 16px;
       margin-bottom: 14px;
+    }
+    .hero-logo {
+      background: #ffffff;
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 10px 14px;
+      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .hero-logo img {
+      display: block;
+      height: 36px;
+      width: auto;
     }
     .hero-mark {
       width: 48px;
@@ -886,6 +897,10 @@ _REPORT_CSS = """
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 14px;
+    }
+    .kpi-grid-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      max-width: 720px;
     }
     .kpi-card {
       display: flex;
@@ -1189,7 +1204,9 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
     <div class="hero-inner">
       <div>
         <div class="hero-brand">
-          <div class="hero-mark">UBR</div>
+          <div class="hero-logo">
+            <img src="{SENAO_LOGO_URL}" alt="Senao Networks"/>
+          </div>
           <div>
             <div class="hero-eyebrow">Throughput matrix report</div>
             <h1>Performance Run #{report_id}</h1>
@@ -1198,11 +1215,11 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
         <div class="hero-meta">
           <span class="meta-chip">{escape(str(data.get('stand')))}</span>
           <span class="meta-chip">{escape(str(data.get('profile')))}</span>
-          <span class="meta-chip">{total} test cells</span>
+          <span class="meta-chip">{int(data.get('su_count') or 0)} SU</span>
         </div>
       </div>
       <div class="hero-status">
-        <div class="hero-badge {pass_cls}">{passed}/{ran} TRex passed</div>
+        <div class="hero-badge {pass_cls}">{passed}/{ran} passed</div>
         <div class="hero-time">{generated}</div>
       </div>
     </div>
@@ -1213,7 +1230,7 @@ def write_matrix_grafana_html(path: str | Path, data: dict[str, Any]) -> Path:
       <div class="panel-head">
         <div>
           <h2>Testbed summary</h2>
-          <p class="panel-desc">BTS and SU inventory — model, firmware, MAC, and management IPv6 (/120).</p>
+          <p class="panel-desc">BTS and associated SUs — model, firmware, MAC, management IP, VLAN.</p>
         </div>
       </div>
       {_render_testbed_table(data)}

@@ -171,13 +171,23 @@ async def collect_device_summary(host: str, password: str, *, fallback_ip: str =
         fw_raw = str((await ssh.send_command(RootCommands.GET_SW_VERSION)).result or "")
         model = _parse_ademodel(model_raw)
         fw_version = _sanitize_fw(fw_raw)
-        ip = ssh_scalar((await ssh.send_command(RootCommands.GET_IPv6)).result) or fallback_ip or host
+        ip = ssh_scalar((await ssh.send_command(RootCommands.GET_IPv6)).result) or ""
+        ip_lower = ip.lower()
+        if (
+            not ip
+            or "uci:" in ip_lower
+            or "entry not found" in ip_lower
+            or ip_lower in {"none", "n/a", "unknown", "-"}
+        ):
+            ip = str(fallback_ip or host or "").strip()
+        if ip and ("uci:" in ip.lower() or "entry not found" in ip.lower()):
+            ip = "—"
         vlan = await asyncio.to_thread(fetch_vlan_label, host)
         qos = await _fetch_qos_label(ssh, host)
         return DeviceSummary(
             model=model,
             fw_version=fw_version,
-            ip=ip,
+            ip=ip or "—",
             vlan=vlan or "—",
             qos=qos or "—",
         )

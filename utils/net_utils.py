@@ -44,9 +44,19 @@ def format_snmp_host(ip_text: str) -> str:
 def format_mgmt_ipv6_display(label: str, ipv6: str, *, prefix_len: int = 120) -> str:
     """Compact testbed summary IP, e.g. ``BTS2001:...:1111/120``."""
     raw = str(ipv6 or "").strip()
-    if not raw or raw in {"—", "-", "N/A", "n/a"}:
+    lower = raw.lower()
+    if (
+        not raw
+        or raw in {"—", "-", "N/A", "n/a"}
+        or "uci:" in lower
+        or "entry not found" in lower
+        or "sshpass" in lower
+        or "/bin/sh:" in lower
+    ):
         return "—"
     host = normalize_ip(raw.split("/")[0])
+    if not host or host in {"—", "-"}:
+        return "—"
     plen = prefix_len
     if "/" in raw:
         try:

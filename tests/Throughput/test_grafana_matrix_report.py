@@ -174,6 +174,7 @@ def test_write_matrix_grafana_html_smoke(tmp_path: Path):
     # Prefer the RF-table Mbps headings (avoid matching iteration-log TX/RX)
     rf_hdr = html[html.index("cellRfTable"): html.index("cellRfBody")]
     assert rf_hdr.index("Downlink Mbps") < rf_hdr.index("Uplink Mbps")
+    assert "Senao Networks" in html or "Senao-Networks-logo" in html
     assert "Local SNR" in html
     assert "Remote SNR" in html
     assert "RSSI (combined)" in html
@@ -182,6 +183,11 @@ def test_write_matrix_grafana_html_smoke(tmp_path: Path):
     assert "Rx MCS" not in html
     assert "Tx rate" not in html
     assert "Rx rate" not in html
+    assert "Connected SUs" not in html
+    assert "Matrix pass rate" not in html
+    assert ">QoS<" not in html
+    assert "Peak throughput" in html
+    assert "Avg of target" in html
     assert "aa:bb:cc:dd:ee:01" in html
     assert "Cell detail" in html
     assert "timeSeriesChart" in html

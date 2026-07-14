@@ -13,6 +13,11 @@ def test_format_mgmt_ipv6_display_bts():
     )
 
 
+def test_format_mgmt_ipv6_display_rejects_uci_noise():
+    assert format_mgmt_ipv6_display("BTS", "uci: Entry not found") == "—"
+    assert format_mgmt_ipv6_display("BTS", "uci: Entry not found/120") == "—"
+
+
 def test_testbed_summary_ip_row_uses_compact_format():
     summary = {
         "ipv6_prefix_len": 120,
