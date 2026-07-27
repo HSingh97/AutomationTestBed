@@ -28,6 +28,9 @@ def parseMarkerList(String raw) {
             if (u == 'PROCESSMONITOR') {
                 return 'ProcessMonitor'
             }
+            if (u == 'QOS') {
+                return 'QOS'
+            }
             return u
         }
 }
@@ -79,7 +82,7 @@ pipeline {
         string(
             name: 'TEST_MARKERS',
             defaultValue: 'GUI',
-            description: 'Comma-separated pytest suites: GUI, IP, IPv4, IPv6, Regression, JumboFrames, ProcessMonitor (e.g. ProcessMonitor or GUI,IP)'
+            description: 'Comma-separated pytest suites: GUI, IP, IPv4, IPv6, Regression, JumboFrames, ProcessMonitor, QoS (e.g. QoS or GUI,IP)'
         )
         string(
             name: 'TEST_FILTER',
@@ -169,12 +172,18 @@ pipeline {
                         extraFlags << '--allow-process-monitor'
                         extraFlags << '--allow-destructive-process'
                     }
+                    if (markers.contains('QOS')) {
+                        paths << 'tests/QoS/'
+                        mParts << 'QoS'
+                        extraFlags << '--allow-qos-lab'
+                        extraFlags << '--allow-qos-destructive'
+                    }
 
                     def unknown = markers.findAll { m ->
-                        !['GUI', 'IP', 'IPv4', 'IPv6', 'REGRESSION', 'JUMBOFRAMES', 'ProcessMonitor'].contains(m)
+                        !['GUI', 'IP', 'IPv4', 'IPv6', 'REGRESSION', 'JUMBOFRAMES', 'ProcessMonitor', 'QOS'].contains(m)
                     }
                     if (!unknown.isEmpty()) {
-                        error("Unknown TEST_MARKERS: ${unknown.join(', ')}. Use GUI, IP, IPv4, IPv6, Regression, JumboFrames, ProcessMonitor")
+                        error("Unknown TEST_MARKERS: ${unknown.join(', ')}. Use GUI, IP, IPv4, IPv6, Regression, JumboFrames, ProcessMonitor, QoS")
                     }
 
                     def kParts = (params.TEST_FILTER ?: '').split(',')
@@ -266,7 +275,8 @@ pipeline {
                                       !markers.contains('GUI') &&
                                       !markersIncludeIpSuite(markers) &&
                                       !markers.contains('REGRESSION') &&
-                                      !markers.contains('JUMBOFRAMES')
+                                      !markers.contains('JUMBOFRAMES') &&
+                                      !markers.contains('QOS')
                     def fallbackIp = procMonOnly ? '192.168.2.1' : (params.FALLBACK_IP ?: '10.0.0.1').trim()
                     if (procMonOnly && (params.FALLBACK_IP ?: '').trim() && (params.FALLBACK_IP ?: '').trim() != '192.168.2.1') {
                         echo "[procmon] FALLBACK_IP=${params.FALLBACK_IP} noted — suite still tries 192.168.2.1 then 10.0.0.1"
@@ -349,6 +359,7 @@ pipeline {
                     archiveBuildArtifacts('reports/artifacts/testbed_summary.json', true)
                     archiveBuildArtifacts('reports/artifacts/jumbo_captures/**/*', true)
                     archiveBuildArtifacts('reports/artifacts/jumbo_captures_index.json', true)
+                    archiveBuildArtifacts('reports/artifacts/sua*_queue_stats_*.csv', true)
                 }
             }
         }
@@ -375,7 +386,7 @@ pipeline {
                     <p><strong>Remote IPv6:</strong> ${params['Remote IPv6 Address'] ?: '(profile default)'}</p>
                     <p><strong>Profile:</strong> ${env.PROFILE_NAME ?: 'default'} (auto)</p>
                     <p><strong>Recovery profile:</strong> ${params.RECOVERY_PROFILE_NAME}</p>
-                    <p><strong>Destructive cases:</strong> enabled when IP / JumboFrames / ProcessMonitor markers are selected</p>
+                    <p><strong>Destructive cases:</strong> enabled when IP / JumboFrames / ProcessMonitor / QoS markers are selected</p>
                 """
 
                 try {

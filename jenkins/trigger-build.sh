@@ -88,11 +88,15 @@ is_process_monitor_markers() {
   echo ",${TEST_MARKERS}," | grep -qi ',ProcessMonitor,'
 }
 
+is_qos_markers() {
+  echo ",${TEST_MARKERS}," | grep -qi ',QoS,'
+}
+
 if [[ -z "${TEST_FILTER}" ]]; then
-  if is_process_monitor_markers; then
+  if is_process_monitor_markers || is_qos_markers; then
     TEST_FILTER=""
   else
-    echo "TEST_FILTER is required (e.g. JMB_04 or --filter JMB_04). For ProcessMonitor use --markers ProcessMonitor." >&2
+    echo "TEST_FILTER is required (e.g. JMB_04 or --filter JMB_04). For ProcessMonitor use --markers ProcessMonitor. For QoS use --markers QoS." >&2
     usage >&2
     exit 1
   fi
@@ -105,6 +109,8 @@ elif [[ "${TEST_MARKERS}" == "JumboFrames" && "${TEST_FILTER}" =~ ^IP_ ]]; then
   TEST_MARKERS="IP"
 elif [[ "${TEST_MARKERS}" == "JumboFrames" && "${TEST_FILTER}" =~ ^PROCESS ]]; then
   TEST_MARKERS="ProcessMonitor"
+elif [[ "${TEST_MARKERS}" == "JumboFrames" && "${TEST_FILTER}" =~ ^[Qq]o[Ss] ]]; then
+  TEST_MARKERS="QoS"
 fi
 
 resolve_auth() {

@@ -122,7 +122,7 @@ def collect_automation_index() -> list[dict]:
                 if mark != "asyncio":
                     pending.append(mark)
                 continue
-            fn_match = re.match(r"async def (test_\w+)\s*\(", stripped)
+            fn_match = re.match(r"(?:async )?def (test_\w+)\s*\(", stripped)
             if not fn_match:
                 continue
             func_name = fn_match.group(1)
@@ -131,7 +131,10 @@ def collect_automation_index() -> list[dict]:
             pending = []
 
             helper = ""
-            helper_m = re.search(rf"async def {func_name}\(.*?\n\s+await (\w+)\(", text)
+            helper_m = re.search(
+                rf"(?:async )?def {func_name}\(.*?\n\s+(?:await )?(\w+)\(",
+                text,
+            )
             if helper_m:
                 helper = helper_m.group(1)
             impl_module = ""

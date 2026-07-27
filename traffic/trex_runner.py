@@ -561,6 +561,8 @@ BUNDLED_CLIENT_SCRIPT = (
     Path(__file__).resolve().parent / "scripts" / "master_script_extended_16SU.py"
 )
 BUNDLED_QINQ_TAGS = Path(__file__).resolve().parent / "scripts" / "qinq_tags.py"
+BUNDLED_QOS_CLASSES = Path(__file__).resolve().parent / "scripts" / "qos_classes.py"
+BUNDLED_SCRIPT_COMPANIONS = (BUNDLED_QINQ_TAGS, BUNDLED_QOS_CLASSES)
 
 
 def _parse_uci_int_value(text: str) -> int | None:
@@ -713,23 +715,31 @@ def deploy_trex_client_script(
             f"Failed to deploy TRex client script to {trex_server}: "
             f"{(result.stderr or result.stdout).strip()}"
         )
-    if BUNDLED_QINQ_TAGS.is_file():
-        qinq_remote = (
-            "~/qinq_tags.py"
+    for companion in BUNDLED_SCRIPT_COMPANIONS:
+        if not companion.is_file():
+            continue
+        companion_remote = (
+            f"~/{companion.name}"
             if remote_dir == "~"
-            else f"{remote_dir.rstrip('/')}/qinq_tags.py"
+            else f"{remote_dir.rstrip('/')}/{companion.name}"
         )
-        qinq_result = subprocess.run(
-            _build_scp_command(trex_server, trex_user, trex_password, str(BUNDLED_QINQ_TAGS), qinq_remote),
+        companion_result = subprocess.run(
+            _build_scp_command(
+                trex_server,
+                trex_user,
+                trex_password,
+                str(companion),
+                companion_remote,
+            ),
             capture_output=True,
             text=True,
             timeout=60,
             check=False,
         )
-        if qinq_result.returncode != 0:
+        if companion_result.returncode != 0:
             raise RuntimeError(
-                f"Failed to deploy qinq_tags.py to {trex_server}: "
-                f"{(qinq_result.stderr or qinq_result.stdout).strip()}"
+                f"Failed to deploy {companion.name} to {trex_server}: "
+                f"{(companion_result.stderr or companion_result.stdout).strip()}"
             )
     _run_remote_command(
         trex_server,

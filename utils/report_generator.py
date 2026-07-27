@@ -24,6 +24,48 @@ SENAO_LOGO_URL = (
 )
 ARTIFACTS_DIR = Path("reports/artifacts")
 
+QOS_TRAFFIC_REPORT_CSS = """
+            .qos-traffic-details { margin-top: 12px; }
+            .qos-traffic-details > summary {
+              cursor: pointer; list-style: none; font-size: 12px; font-weight: 600;
+              color: #1d4ed8; padding: 6px 0; user-select: none;
+            }
+            .qos-traffic-details > summary::-webkit-details-marker { display: none; }
+            .qos-traffic-details > summary::before { content: "▸ "; }
+            .qos-traffic-details[open] > summary::before { content: "▾ "; }
+            .qos-table-scroll {
+              margin-top: 8px; overflow-x: auto; border-radius: 8px;
+              border: 1px solid #e2e8f0;
+            }
+            table.qos-traffic-table { width: 100%; border-collapse: collapse; font-size: 12px; background: #fff; }
+            table.qos-traffic-table th, table.qos-traffic-table td {
+              padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: left;
+              vertical-align: middle; text-transform: none; letter-spacing: 0;
+            }
+            table.qos-traffic-table thead th {
+              background: #f1f5f9; color: #475569; font-size: 11px; font-weight: 700;
+            }
+            table.qos-traffic-table .qos-q { font-weight: 700; color: #0f172a; width: 40px; }
+            table.qos-traffic-table .qos-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+            table.qos-traffic-table .qos-class { font-weight: 600; color: #1e293b; }
+            table.qos-traffic-table .qos-note { font-weight: 400; font-size: 11px; color: #64748b; margin-top: 2px; }
+            table.qos-traffic-table .qos-pir { color: #64748b; font-size: 11px; max-width: 180px; }
+            table.qos-traffic-table .qos-status {
+              display: inline-block; padding: 2px 8px; border-radius: 999px;
+              font-size: 10px; font-weight: 700; background: #f1f5f9; color: #475569;
+            }
+            table.qos-traffic-table tr.qos-row-active { background: #f0fdf4; }
+            table.qos-traffic-table tr.qos-row-active .qos-status { background: #d1fae5; color: #065f46; }
+            table.qos-traffic-table tr.qos-row-quiet { background: #fffbeb; }
+            table.qos-traffic-table tr.qos-row-quiet .qos-status { background: #fef3c7; color: #92400e; }
+            table.qos-traffic-table tr.qos-row-idle { background: #fff; color: #94a3b8; }
+            table.qos-traffic-table tr.qos-row-idle .qos-class,
+            table.qos-traffic-table tr.qos-row-idle .qos-pir { color: #94a3b8; font-weight: 500; }
+            .module-name-cell { max-width: 280px; }
+            .module-name-short { font-weight: 500; color: #334155; line-height: 1.45; }
+            tr.test-row td { padding-top: 18px; padding-bottom: 18px; }
+"""
+
 
 def _humanize_module_name(nodeid: str, test_id: str) -> str:
     """Human-readable module name without repeating the Module ID prefix (e.g. JMB_01)."""
@@ -37,6 +79,10 @@ def _humanize_module_name(nodeid: str, test_id: str) -> str:
     if re.match(r"PROCESS_\d+", test_id, re.I):
         raw = re.sub(r"^process_\d+_?", "", raw, flags=re.I)
         return raw.replace("_", " ").strip().title()
+
+    if re.match(r"QOS_\d+", test_id, re.I):
+        raw = re.sub(r"^qos_\d+_?", "", raw, flags=re.I)
+        return raw.replace("_", " ").strip().title() or test_id
 
     return raw.replace("_", " ").strip().title()
 
@@ -60,6 +106,8 @@ def get_group_marker(keywords):
                 return "JumboFrames"
             if re.match(r"PROCESS_\d+", kw, re.I):
                 return "ProcessMonitor"
+            if re.match(r"QOS_\d+", kw, re.I) or kw.lower() == "qos":
+                return "QoS"
             if kw.lower() in ("processmonitor", "process_monitor"):
                 return "ProcessMonitor"
             return kw.capitalize()
@@ -240,6 +288,17 @@ def _effective_outcome_for_report(test: dict) -> str:
     return raw
 
 
+def extract_qos_traffic_table_html(test_data: dict) -> str:
+    """Pull embedded QoS traffic table HTML from pytest stdout."""
+    stdout = str((test_data.get("call") or {}).get("stdout") or "")
+    chunks = re.findall(
+        r"\[QOS_TRAFFIC_TABLE_HTML\](.*?)\[/QOS_TRAFFIC_TABLE_HTML\]",
+        stdout,
+        flags=re.DOTALL,
+    )
+    return "".join(chunks)
+
+
 def extract_validated_parameters(test_data):
     """
     Extracts the parameter names from the captured stdout of the test.
@@ -255,6 +314,36 @@ def extract_validated_parameters(test_data):
             params.append(param_name)
 
     return params
+
+
+def _skip_reason_text(test: dict) -> str:
+    """Best-effort skip message from pytest-json-report fields / stdout."""
+    chunks: list[str] = []
+    for phase in ("setup", "call"):
+        data = test.get(phase) or {}
+        for key in ("longrepr", "stdout", "stderr"):
+            val = data.get(key)
+            if val:
+                chunks.append(str(val))
+    blob = "\n".join(chunks).strip()
+    m = re.search(r"(?:Skipped|skipped)[:\s]+['\"]?(.*?)['\"]?\s*$", blob, re.I | re.M)
+    if m:
+        return m.group(1).strip()
+    for line in blob.splitlines():
+        line = line.strip().strip("'\"")
+        if line and line.lower() not in ("skipped",):
+            return line
+    return blob or "Test execution was bypassed."
+
+
+def _is_not_available_skip(reason: str) -> bool:
+    r = (reason or "").lower()
+    return "not available" in r or "not_available" in r
+
+
+def _is_manual_skip(reason: str) -> bool:
+    r = (reason or "").lower()
+    return "to be tested manually" in r or r.startswith("manual:")
 
 
 def clean_failure_message(raw_failure):
@@ -387,18 +476,41 @@ def generate():
                 test_id = jmb_id
                 test_name = _humanize_module_name(nodeid, test_id)
             else:
-                match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
-                if match:
-                    test_id = match.group(1).upper()
-                    raw_name = match.group(2)
-                    parts = raw_name.split('_')
-                    if len(parts) >= 2 and parts[0] == 'summary':
-                        test_name = '-'.join(p.capitalize() for p in parts[::-1])
+                qos_kw = next(
+                    (
+                        str(k)
+                        for k in test.get("keywords", [])
+                        if re.match(r"QoS_\d+", str(k), re.I)
+                    ),
+                    None,
+                )
+                qos_fn = re.search(r"test_qos_(\d+)\b", nodeid, re.I)
+                if qos_kw or qos_fn:
+                    if qos_kw:
+                        # Preserve plan casing: QoS_01
+                        m = re.match(r"QoS_(\d+)", qos_kw, re.I)
+                        test_id = f"QoS_{int(m.group(1)):02d}" if m else qos_kw
                     else:
-                        test_name = '-'.join(p.capitalize() for p in parts)
+                        test_id = f"QoS_{int(qos_fn.group(1)):02d}"
+                    try:
+                        from config.qos_test_cases import case_by_id
+
+                        test_name = case_by_id(test_id).get("title") or test_id
+                    except Exception:
+                        test_name = _humanize_module_name(nodeid, test_id)
                 else:
-                    test_id = "N/A"
-                    test_name = nodeid.split('::')[-1]
+                    match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
+                    if match:
+                        test_id = match.group(1).upper()
+                        raw_name = match.group(2)
+                        parts = raw_name.split('_')
+                        if len(parts) >= 2 and parts[0] == 'summary':
+                            test_name = '-'.join(p.capitalize() for p in parts[::-1])
+                        else:
+                            test_name = '-'.join(p.capitalize() for p in parts)
+                    else:
+                        test_id = "N/A"
+                        test_name = nodeid.split('::')[-1]
 
         group_name = get_group_marker(test.get('keywords', []))
         outcome = _effective_outcome_for_report(test).upper()
@@ -406,6 +518,8 @@ def generate():
         reason_csv = ""
 
         validated_params = extract_validated_parameters(test)
+        qos_table_html = extract_qos_traffic_table_html(test)
+        is_qos_case = bool(re.match(r"QoS_\d+", str(test_id), re.I)) or group_name == "QoS"
 
         if outcome == 'PASSED':
             stats['passed'] += 1
@@ -415,7 +529,20 @@ def generate():
                 if _is_process_monitor_test(test)
                 else ""
             )
-            if proc_summary:
+            if is_qos_case and validated_params:
+                pills = "".join([f"<span class='param-pill'>{p}</span>" for p in validated_params])
+                reason_html = (
+                    f"<div class='reason-title'>Successfully Verified ({len(validated_params)} parameters):</div>"
+                    f"<div class='param-container'>{pills}</div>"
+                )
+                reason_csv = (
+                    f"Successfully Verified ({len(validated_params)} parameters):\n"
+                    + ", ".join(validated_params)
+                )
+            elif is_qos_case:
+                reason_html = ""
+                reason_csv = "Passed"
+            elif proc_summary:
                 reason_html = (
                     f"<div class='reason-title'>Outcome:</div>"
                     f"<div class='failure-list'><div class='failure-item'>{proc_summary}</div></div>"
@@ -492,11 +619,34 @@ def generate():
                 color = "#ef4444"
                 bg = "#fef2f2"
         elif outcome == "SKIPPED":
-            status = "SKIPPED"
-            reason_html = "Test execution was bypassed."
-            reason_csv = reason_html
-            color = "#64748b"
-            bg = "#f8fafc"
+            skip_reason = _skip_reason_text(test)
+            if _is_not_available_skip(skip_reason):
+                status = "Not available"
+                reason_html = (
+                    f"<div class='reason-title' style='color:#64748b;'>Not available:</div>"
+                    f"<div class='failure-list'><div class='failure-item'>{skip_reason}</div></div>"
+                )
+                reason_csv = f"Not available:\n- {skip_reason}"
+                color = "#64748b"
+                bg = "#f1f5f9"
+            elif _is_manual_skip(skip_reason):
+                status = "Manual"
+                reason_html = (
+                    f"<div class='reason-title' style='color:#64748b;'>To be tested manually:</div>"
+                    f"<div class='failure-list'><div class='failure-item'>{skip_reason}</div></div>"
+                )
+                reason_csv = f"To be tested manually:\n- {skip_reason}"
+                color = "#475569"
+                bg = "#e2e8f0"
+            else:
+                status = "SKIPPED"
+                reason_html = (
+                    f"<div class='reason-title' style='color:#64748b;'>Skipped:</div>"
+                    f"<div class='failure-list'><div class='failure-item'>{skip_reason}</div></div>"
+                )
+                reason_csv = f"Skipped:\n- {skip_reason}"
+                color = "#64748b"
+                bg = "#f8fafc"
         else:
             stats['failed'] += 1
             status = "FAILED"
@@ -511,6 +661,22 @@ def generate():
             reason_csv = f"Critical Execution Error:\n- {err_line}"
             color = "#ef4444"
             bg = "#fef2f2"
+
+        if qos_table_html:
+            reason_html = f"{reason_html}{qos_table_html}" if reason_html else qos_table_html
+            ascii_table = ""
+            stdout = str((test.get("call") or {}).get("stdout") or "")
+            for line in stdout.splitlines():
+                if (
+                    line.startswith("QoS traffic table")
+                    or re.match(r"^\s*\d\s+\w", line)
+                    or line.startswith("Q ")
+                    or set(line.strip()) <= {"-"}
+                    or "AvgTX" in line
+                ):
+                    ascii_table += line + "\n"
+            if ascii_table.strip():
+                reason_csv = f"{reason_csv}\n\n{ascii_table.strip()}".strip()
 
         capture_html, capture_csv = render_jumbo_capture_evidence_html(test_id, jumbo_capture_index)
         if capture_html:
@@ -650,6 +816,7 @@ def generate():
             .proc-bullet-list {{ margin: 4px 0 8px 18px; padding-left: 18px; }}
             .proc-bullet-list li {{ margin: 2px 0; font-family: 'Consolas', monospace; font-size: 12px; color: #334155; list-style-type: disc; }}
             {JUMBO_CAPTURE_REPORT_CSS}
+            {QOS_TRAFFIC_REPORT_CSS}
         </style>
         <script>
             let currentStatus = 'ALL';
@@ -748,13 +915,13 @@ def generate():
                     </div>
                 </div>
 
-                <table>
+                <table class="results-table">
                     <thead>
                         <tr>
-                            <th width="12%">Module ID</th>
-                            <th width="20%">Module Name</th>
-                            <th width="12%">Status</th>
-                            <th width="56%">Execution Details</th>
+                            <th style="width:10%">Module ID</th>
+                            <th style="width:26%">Module Name</th>
+                            <th style="width:10%">Status</th>
+                            <th style="width:54%">Execution Details</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -767,10 +934,15 @@ def generate():
                         </tr>
         """
         for r in records:
+            name = str(r["name"] or "")
+            if len(name) > 110:
+                name_html = f'<div class="module-name-short" title="{name.replace(chr(34), "&quot;")}">{name[:107]}…</div>'
+            else:
+                name_html = f'<div class="module-name-short">{name}</div>'
             html += f"""
                             <tr class="test-row" data-group="{group_name}" data-status="{r['status']}">
-                                <td style="font-weight: 600; color: #0f172a;">{r['id']}</td>
-                                <td style="font-weight: 500; color: #334155;">{r['name']}</td>
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">{r['id']}</td>
+                                <td class="module-name-cell">{name_html}</td>
                                 <td><span class="badge" style="background-color: {r['bg']}; color: {r['color']}; border: 1px solid {r['color']}40;">{r['status']}</span></td>
                                 <td class="reason-cell">{r['reason']}</td>
                             </tr>

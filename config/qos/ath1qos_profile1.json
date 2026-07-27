@@ -1,0 +1,31 @@
+{
+  "source": "config/qos/ath1qos.conf",
+  "device_path": "/etc/config/ath1qos",
+  "luci": "Wireless → QOS → SFC List / PIR List",
+  "active_profile": "Profile1",
+  "notes": [
+    "SFC↔PIR mapping follows the LuCI SFC List (DL), not the first anonymous sfclist block order alone.",
+    "PIR sections are UCI @pirlist[0..6] as shown by `uci show ath1qos`.",
+    "SFC priority 8 has no PIR in LuCI ('-'). TRex stream 'unassigned' uses Voice DSCP 18 so all eight DSCPs remain profile tags."
+  ],
+  "pirlist": [
+    {"pirindex": 0, "name": "ALL", "dscps": [0]},
+    {"pirindex": 1, "name": "Control&Signaling", "dscps": [46, 20]},
+    {"pirindex": 2, "name": "Voice_DelayCriticalApplication5G", "dscps": [34, 18, 42, 44, 16]},
+    {"pirindex": 3, "name": "OAM", "dscps": [28, 4]},
+    {"pirindex": 4, "name": "Gold4G_FWA5G_eMBB5G", "dscps": [32, 8, 30, 6, 10]},
+    {"pirindex": 5, "name": "ARVR5G_5GKeyEnterprise", "dscps": [40, 14, 12]},
+    {"pirindex": 6, "name": "Bronze4G", "dscps": [22, 24, 26]}
+  ],
+  "sfc_list_dl": [
+    {"priority": 1, "mir": 100, "pirindex": 1, "pir_name": "Control&Signaling", "stream_dscp": 46, "stream_name": "control"},
+    {"priority": 2, "mir": 100, "pirindex": 2, "pir_name": "Voice_DelayCriticalApplication5G", "stream_dscp": 34, "stream_name": "voice"},
+    {"priority": 3, "mir": 5, "pirindex": 3, "pir_name": "OAM", "stream_dscp": 28, "stream_name": "oam"},
+    {"priority": 4, "mir": 10, "pirindex": 5, "pir_name": "ARVR5G_5GKeyEnterprise", "stream_dscp": 40, "stream_name": "arvr"},
+    {"priority": 5, "mir": 45, "pirindex": 4, "pir_name": "Gold4G_FWA5G_eMBB5G", "stream_dscp": 32, "stream_name": "gold"},
+    {"priority": 6, "mir": 33, "pirindex": 6, "pir_name": "Bronze4G", "stream_dscp": 22, "stream_name": "bronze"},
+    {"priority": 7, "mir": 100, "pirindex": 0, "pir_name": "ALL", "stream_dscp": 0, "stream_name": "best_effort"},
+    {"priority": 8, "mir": 2, "pirindex": null, "pir_name": null, "stream_dscp": 18, "stream_name": "unassigned", "pir_missing": true}
+  ],
+  "trex_stream_dscps": [46, 34, 28, 40, 32, 22, 0, 18]
+}

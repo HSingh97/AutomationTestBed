@@ -159,6 +159,18 @@ def pytest_addoption(parser):
         help="Run lab tests that drive Vaunix LDA-602 attenuators (RF path).",
     )
     group.addoption(
+        "--allow-qos-lab",
+        action="store_true",
+        default=False,
+        help="Run QoS DSCP/TRex lab cases (tests/QoS/) with live queue_stats capture.",
+    )
+    group.addoption(
+        "--allow-qos-destructive",
+        action="store_true",
+        default=False,
+        help="Allow QoS cases that reboot the BTS (e.g. QoS_21 retention).",
+    )
+    group.addoption(
         "--attenuator-backend",
         action="store",
         default="auto",
