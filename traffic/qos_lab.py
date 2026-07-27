@@ -192,6 +192,38 @@ def escape_html(value: Any) -> str:
     )
 
 
+def write_qos_case_evidence(
+    case_id: str,
+    *,
+    params: list[str] | None = None,
+    table_text: str = "",
+    table_html: str = "",
+) -> Path | None:
+    """Persist QoS report evidence (pytest ``-s`` leaves json-report stdout empty)."""
+    cid = (case_id or "").strip()
+    if not cid:
+        return None
+    import json
+
+    artifacts = REPO_ROOT / "reports" / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    path = artifacts / f"qos_{cid}_evidence.json"
+    payload: dict[str, Any] = {"case_id": cid, "params": [], "table_text": "", "table_html": ""}
+    if path.is_file():
+        try:
+            payload.update(json.loads(path.read_text(encoding="utf-8")))
+        except (json.JSONDecodeError, OSError):
+            pass
+    if params is not None:
+        payload["params"] = list(params)
+    if table_text:
+        payload["table_text"] = table_text
+    if table_html:
+        payload["table_html"] = table_html
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
 def emit_qos_traffic_table(
     result: QoSLabRunResult | list[QoSLabRunResult],
     *,
@@ -200,6 +232,8 @@ def emit_qos_traffic_table(
 ) -> None:
     """Print traffic table to stdout (console + pytest-json / Jenkins report)."""
     results = result if isinstance(result, list) else [result]
+    combined_text: list[str] = []
+    combined_html: list[str] = []
     for idx, run in enumerate(results, start=1):
         label = case_id if len(results) == 1 else f"{case_id} run{idx}"
         text, html = format_queue_traffic_table(
@@ -207,6 +241,14 @@ def emit_qos_traffic_table(
         )
         print(text)
         print(f"[QOS_TRAFFIC_TABLE_HTML]{html}[/QOS_TRAFFIC_TABLE_HTML]")
+        combined_text.append(text)
+        combined_html.append(html)
+    if case_id:
+        write_qos_case_evidence(
+            case_id,
+            table_text="\n\n".join(combined_text),
+            table_html="".join(combined_html),
+        )
 
 
 def _ssh(host: str, password: str, remote: str, *, timeout_s: int = 30) -> subprocess.CompletedProcess[str]:
@@ -844,74 +886,109 @@ def wait_for_sua_ready(
     sua: str | None = None,
     timeout_s: float | None = None,
     poll_s: float = 5.0,
+    prefer_any_associated: bool = False,
 ) -> str:
     """Poll until ``suaN`` queue_stats exists and the SU looks associated.
 
     Used after reboot: mgmt SSH returns before RF/SUA is ready, so traffic
     assertions would see 0 Mbps TX if we did not wait for the link.
+
+    When ``prefer_any_associated`` is set (and no explicit ``sua``), ignore a
+    stale ``QOS_SUA`` env and accept the first associated SUA after reboot.
     """
-    prefer = (sua or os.environ.get("QOS_SUA") or "sua4").strip()
+    explicit = (sua or "").strip()
+    if prefer_any_associated and not explicit:
+        prefer = ""
+        target_label = "any associated SUA"
+    else:
+        prefer = (explicit or os.environ.get("QOS_SUA") or "sua4").strip()
+        target_label = prefer
     timeout = float(timeout_s if timeout_s is not None else os.environ.get("QOS_REBOOT_LINK_TIMEOUT_S", "300"))
     deadline = time.monotonic() + max(timeout, 30.0)
     print(
-        f"[QoS] Waiting for {prefer} link (queue_stats + association) "
+        f"[QoS] Waiting for {target_label} link (queue_stats + association) "
         f"up to {timeout:.0f}s after reboot…"
     )
     last_detail = "not checked yet"
+    from traffic.kwn_sua_statistics import is_sua_associated
+
     while time.monotonic() < deadline:
-        remote = (
-            f"qs=/sys/class/kwn/{prefer}/queue_stats; "
-            f"st=/sys/class/kwn/{prefer}/statistics; "
-            f'if [ ! -d "$qs" ]; then echo "NO_QS"; exit 0; fi; '
-            f'mac=$(cat "$st/mac" 2>/dev/null || true); '
-            f'ipv6=$(cat "$st/ipv6" 2>/dev/null || true); '
-            f'ip=$(cat "$st/ip" 2>/dev/null || true); '
-            f'assoc=$(cat "$st/associd" 2>/dev/null || true); '
-            f'rx=$(cat "$st/rx_rate" 2>/dev/null || true); '
-            f'tx=$(cat "$st/tx_rate" 2>/dev/null || true); '
-            f'echo "QS_OK mac=$mac ipv6=$ipv6 ip=$ip assoc=$assoc rx=$rx tx=$tx"'
-        )
-        try:
-            result = _ssh(dut_host, dut_password, remote, timeout_s=20)
-            out = (result.stdout or "").strip().splitlines()
-            line = out[-1] if out else ""
-        except Exception as exc:
-            last_detail = f"ssh error: {exc}"
-            time.sleep(poll_s)
-            continue
-
-        if not line.startswith("QS_OK"):
-            last_detail = line or "queue_stats missing"
-            time.sleep(poll_s)
-            continue
-
-        # Parse mac=/ipv6=/… fields from the probe line.
-        fields: dict[str, str] = {}
-        for token in line.split()[1:]:
-            if "=" in token:
-                key, val = token.split("=", 1)
-                fields[key] = val
-
-        from traffic.kwn_sua_statistics import is_sua_associated
-
-        if is_sua_associated(fields):
-            detail = (
-                f"mac={fields.get('mac', '-')}, "
-                f"assoc={fields.get('assoc', '-')}, "
-                f"rx={fields.get('rx', '-')}"
+        if prefer:
+            candidates = [prefer]
+        else:
+            # Enumerate sua* with queue_stats; discover_active_sua also works once linked.
+            list_script = (
+                'for s in /sys/class/kwn/sua*; do '
+                '[ -d "$s/queue_stats" ] || continue; '
+                'echo "$(basename "$s")"; '
+                "done"
             )
-            print(f"[QoS] {prefer} ready — {detail}")
-            return prefer
+            try:
+                listed = _ssh(dut_host, dut_password, list_script, timeout_s=20)
+                candidates = [
+                    ln.strip()
+                    for ln in (listed.stdout or "").splitlines()
+                    if ln.strip().startswith("sua")
+                ]
+            except Exception as exc:
+                last_detail = f"ssh list error: {exc}"
+                time.sleep(poll_s)
+                continue
+            if not candidates:
+                last_detail = "no sua*/queue_stats yet"
+                time.sleep(poll_s)
+                continue
 
-        last_detail = (
-            f"queue_stats present but not associated yet "
-            f"(mac={fields.get('mac', '-')}, ipv6={fields.get('ipv6', '-')}, "
-            f"assoc={fields.get('assoc', '-')})"
-        )
+        for cand in candidates:
+            remote = (
+                f"qs=/sys/class/kwn/{cand}/queue_stats; "
+                f"st=/sys/class/kwn/{cand}/statistics; "
+                f'if [ ! -d "$qs" ]; then echo "NO_QS"; exit 0; fi; '
+                f'mac=$(cat "$st/mac" 2>/dev/null || true); '
+                f'ipv6=$(cat "$st/ipv6" 2>/dev/null || true); '
+                f'ip=$(cat "$st/ip" 2>/dev/null || true); '
+                f'assoc=$(cat "$st/associd" 2>/dev/null || true); '
+                f'rx=$(cat "$st/rx_rate" 2>/dev/null || true); '
+                f'tx=$(cat "$st/tx_rate" 2>/dev/null || true); '
+                f'echo "QS_OK mac=$mac ipv6=$ipv6 ip=$ip assoc=$assoc rx=$rx tx=$tx"'
+            )
+            try:
+                result = _ssh(dut_host, dut_password, remote, timeout_s=20)
+                out = (result.stdout or "").strip().splitlines()
+                line = out[-1] if out else ""
+            except Exception as exc:
+                last_detail = f"ssh error ({cand}): {exc}"
+                continue
+
+            if not line.startswith("QS_OK"):
+                last_detail = f"{cand}: {line or 'queue_stats missing'}"
+                continue
+
+            fields: dict[str, str] = {}
+            for token in line.split()[1:]:
+                if "=" in token:
+                    key, val = token.split("=", 1)
+                    fields[key] = val
+
+            if is_sua_associated(fields):
+                detail = (
+                    f"mac={fields.get('mac', '-')}, "
+                    f"assoc={fields.get('assoc', '-')}, "
+                    f"rx={fields.get('rx', '-')}"
+                )
+                print(f"[QoS] {cand} ready — {detail}")
+                return cand
+
+            last_detail = (
+                f"{cand}: queue_stats present but not associated yet "
+                f"(mac={fields.get('mac', '-')}, ipv6={fields.get('ipv6', '-')}, "
+                f"assoc={fields.get('assoc', '-')})"
+            )
+
         time.sleep(poll_s)
 
     raise TimeoutError(
-        f"{prefer} did not associate within {timeout:.0f}s after reboot "
+        f"{target_label} did not associate within {timeout:.0f}s after reboot "
         f"(last: {last_detail})"
     )
 

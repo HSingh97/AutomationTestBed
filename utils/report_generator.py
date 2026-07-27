@@ -299,6 +299,31 @@ def extract_qos_traffic_table_html(test_data: dict) -> str:
     return "".join(chunks)
 
 
+def load_qos_case_evidence(case_id: str) -> dict:
+    """Load sidecar written by QoS runs (needed when pytest ``-s`` blanks json stdout)."""
+    path = ARTIFACTS_DIR / f"qos_{case_id}_evidence.json"
+    if not path.is_file():
+        return {}
+    try:
+        with path.open(encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def qos_verified_params_fallback(case_id: str) -> list[str]:
+    """Catalog params for a QoS case when stdout/evidence has no pills."""
+    try:
+        from config.qos_test_cases import case_by_id
+        from utils.qos_flows import _MODE_VERIFIED_PARAMS
+
+        mode = str(case_by_id(case_id).get("mode") or "")
+        return list(_MODE_VERIFIED_PARAMS.get(mode, []))
+    except Exception:
+        return []
+
+
 def extract_validated_parameters(test_data):
     """
     Extracts the parameter names from the captured stdout of the test.
@@ -307,7 +332,7 @@ def extract_validated_parameters(test_data):
     stdout += test_data.get('setup', {}).get('stdout', '')
 
     params = []
-    matches = re.finditer(r'->\s+(.*?):\s+(PASSED|FAILED|NO INFORMATION)', stdout)
+    matches = re.finditer(r'->\s+(.*?):\s+(PASSED|FAILED|NO INFORMATION)', stdout or "")
     for match in matches:
         param_name = match.group(1).strip()
         if param_name not in params:
@@ -434,7 +459,14 @@ def generate():
         sys.exit(1)
 
     groups = {}
-    stats = {'total': 0, 'passed': 0, 'partial': 0, 'failed': 0}
+    stats = {
+        'total': 0,
+        'passed': 0,
+        'partial': 0,
+        'failed': 0,
+        'not_available': 0,
+        'not_tested': 0,
+    }
     jumbo_capture_index = load_jumbo_capture_index()
 
     for test in data.get('tests', []):
@@ -519,7 +551,19 @@ def generate():
 
         validated_params = extract_validated_parameters(test)
         qos_table_html = extract_qos_traffic_table_html(test)
+        qos_table_csv = ""
         is_qos_case = bool(re.match(r"QoS_\d+", str(test_id), re.I)) or group_name == "QoS"
+        if is_qos_case:
+            evidence = load_qos_case_evidence(str(test_id))
+            if not validated_params:
+                evidence_params = evidence.get("params") or []
+                if isinstance(evidence_params, list) and evidence_params:
+                    validated_params = [str(p) for p in evidence_params]
+                else:
+                    validated_params = qos_verified_params_fallback(str(test_id))
+            if not qos_table_html:
+                qos_table_html = str(evidence.get("table_html") or "")
+            qos_table_csv = str(evidence.get("table_text") or "")
 
         if outcome == 'PASSED':
             stats['passed'] += 1
@@ -540,7 +584,10 @@ def generate():
                     + ", ".join(validated_params)
                 )
             elif is_qos_case:
-                reason_html = ""
+                reason_html = (
+                    "<div class='reason-title'>Outcome:</div>"
+                    "<div class='failure-list'><div class='failure-item'>Test passed.</div></div>"
+                )
                 reason_csv = "Passed"
             elif proc_summary:
                 reason_html = (
@@ -614,13 +661,24 @@ def generate():
                 status = "FAILED"
                 lines = longrepr.strip().split('\n')
                 err = lines[-1] if lines else "Unknown Exception"
-                reason_html = f"<div class='reason-title' style='color:#991b1b;'>Critical Execution Error:</div><div class='failure-list'><div class='failure-item'>{err}</div></div>"
+                # Still show verified-so-far pills for QoS when available.
+                if is_qos_case and validated_params:
+                    pills = "".join([f"<span class='param-pill'>{p}</span>" for p in validated_params])
+                    reason_html = (
+                        f"<div class='reason-title' style='color:#991b1b;'>Critical Execution Error:</div>"
+                        f"<div class='failure-list'><div class='failure-item'>{err}</div></div>"
+                        f"<div class='reason-title' style='margin-top:10px;'>Expected checks:</div>"
+                        f"<div class='param-container'>{pills}</div>"
+                    )
+                else:
+                    reason_html = f"<div class='reason-title' style='color:#991b1b;'>Critical Execution Error:</div><div class='failure-list'><div class='failure-item'>{err}</div></div>"
                 reason_csv = f"Critical Execution Error:\n- {err}"
                 color = "#ef4444"
                 bg = "#fef2f2"
         elif outcome == "SKIPPED":
             skip_reason = _skip_reason_text(test)
             if _is_not_available_skip(skip_reason):
+                stats['not_available'] += 1
                 status = "Not available"
                 reason_html = (
                     f"<div class='reason-title' style='color:#64748b;'>Not available:</div>"
@@ -629,24 +687,22 @@ def generate():
                 reason_csv = f"Not available:\n- {skip_reason}"
                 color = "#64748b"
                 bg = "#f1f5f9"
-            elif _is_manual_skip(skip_reason):
-                status = "Manual"
+            else:
+                # Manual plan cases and other skips → Not tested (actionable backlog).
+                stats['not_tested'] += 1
+                status = "Not tested"
+                title = (
+                    "To be tested manually:"
+                    if _is_manual_skip(skip_reason)
+                    else "Not tested:"
+                )
                 reason_html = (
-                    f"<div class='reason-title' style='color:#64748b;'>To be tested manually:</div>"
+                    f"<div class='reason-title' style='color:#475569;'>{title}</div>"
                     f"<div class='failure-list'><div class='failure-item'>{skip_reason}</div></div>"
                 )
-                reason_csv = f"To be tested manually:\n- {skip_reason}"
+                reason_csv = f"{title}\n- {skip_reason}"
                 color = "#475569"
                 bg = "#e2e8f0"
-            else:
-                status = "SKIPPED"
-                reason_html = (
-                    f"<div class='reason-title' style='color:#64748b;'>Skipped:</div>"
-                    f"<div class='failure-list'><div class='failure-item'>{skip_reason}</div></div>"
-                )
-                reason_csv = f"Skipped:\n- {skip_reason}"
-                color = "#64748b"
-                bg = "#f8fafc"
         else:
             stats['failed'] += 1
             status = "FAILED"
@@ -664,17 +720,18 @@ def generate():
 
         if qos_table_html:
             reason_html = f"{reason_html}{qos_table_html}" if reason_html else qos_table_html
-            ascii_table = ""
-            stdout = str((test.get("call") or {}).get("stdout") or "")
-            for line in stdout.splitlines():
-                if (
-                    line.startswith("QoS traffic table")
-                    or re.match(r"^\s*\d\s+\w", line)
-                    or line.startswith("Q ")
-                    or set(line.strip()) <= {"-"}
-                    or "AvgTX" in line
-                ):
-                    ascii_table += line + "\n"
+            ascii_table = qos_table_csv
+            if not ascii_table.strip():
+                stdout = str((test.get("call") or {}).get("stdout") or "")
+                for line in stdout.splitlines():
+                    if (
+                        line.startswith("QoS traffic table")
+                        or re.match(r"^\s*\d\s+\w", line)
+                        or line.startswith("Q ")
+                        or set(line.strip()) <= {"-"}
+                        or "AvgTX" in line
+                    ):
+                        ascii_table += line + "\n"
             if ascii_table.strip():
                 reason_csv = f"{reason_csv}\n\n{ascii_table.strip()}".strip()
 
@@ -783,8 +840,8 @@ def generate():
               font-size: 13px; font-weight: 600; padding-left: 14px;
             }}
 
-            .summary-cards {{ display: flex; padding: 30px 40px; gap: 20px; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
-            .card {{ flex: 1; padding: 20px; border-radius: 10px; text-align: center; border: 1px solid #e2e8f0; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.02); cursor: pointer; transition: all 0.2s ease; }}
+            .summary-cards {{ display: flex; flex-wrap: wrap; padding: 30px 40px; gap: 16px; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
+            .card {{ flex: 1 1 140px; min-width: 120px; padding: 18px 12px; border-radius: 10px; text-align: center; border: 1px solid #e2e8f0; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.02); cursor: pointer; transition: all 0.2s ease; }}
             .card:hover {{ transform: translateY(-3px); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }}
             .card.active {{ border-width: 2px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.05); transform: scale(0.98); }}
             .card h3 {{ margin: 0; font-size: 32px; font-weight: 700; color: #0f172a; pointer-events: none; }}
@@ -891,16 +948,22 @@ def generate():
 
             <div class="summary-cards">
                 <div class="card active" style="border-bottom: 4px solid #64748b;" onclick="setStatusFilter('ALL', this)">
-                    <h3>{stats['total']}</h3><p>Total Executed</p>
+                    <h3>{stats['total']}</h3><p>Total</p>
                 </div>
                 <div class="card" style="border-bottom: 4px solid #10b981;" onclick="setStatusFilter('PASSED', this)">
-                    <h3>{stats['passed']}</h3><p style="color: #10b981;">Fully Passed</p>
+                    <h3>{stats['passed']}</h3><p style="color: #10b981;">Pass</p>
                 </div>
                 <div class="card" style="border-bottom: 4px solid #f59e0b;" onclick="setStatusFilter('PARTIAL', this)">
-                    <h3>{stats['partial']}</h3><p style="color: #f59e0b;">Partial (Mismatches)</p>
+                    <h3>{stats['partial']}</h3><p style="color: #f59e0b;">Partial</p>
                 </div>
                 <div class="card" style="border-bottom: 4px solid #ef4444;" onclick="setStatusFilter('FAILED', this)">
-                    <h3>{stats['failed']}</h3><p style="color: #ef4444;">Critical Failures</p>
+                    <h3>{stats['failed']}</h3><p style="color: #ef4444;">Fail</p>
+                </div>
+                <div class="card" style="border-bottom: 4px solid #94a3b8;" onclick="setStatusFilter('Not available', this)">
+                    <h3>{stats['not_available']}</h3><p style="color: #64748b;">Not available</p>
+                </div>
+                <div class="card" style="border-bottom: 4px solid #475569;" onclick="setStatusFilter('Not tested', this)">
+                    <h3>{stats['not_tested']}</h3><p style="color: #475569;">Not tested</p>
                 </div>
             </div>
 

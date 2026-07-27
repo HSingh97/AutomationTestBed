@@ -17,6 +17,7 @@ from traffic.qos_lab import (
     run_qos_lab,
     snapshot_ath1qos,
     wait_for_sua_ready,
+    write_qos_case_evidence,
 )
 
 
@@ -44,6 +45,7 @@ def run_case_traffic(
     ul_bw: str = "50M",
     packet_size: int = 1500,
     equal_share: bool = True,
+    **extra,
 ) -> QoSLabRunResult:
     return run_qos_lab(
         **_lab_kwargs(
@@ -53,6 +55,7 @@ def run_case_traffic(
             ul_bw=ul_bw,
             packet_size=packet_size,
             equal_share=equal_share,
+            **extra,
         )
     )
 
@@ -332,7 +335,8 @@ def _mode_realtime_vs_nonrealtime(case: dict[str, Any]) -> QoSLabRunResult:
     _require_trex(result)
     assert_queues_active(result.capture, ["voice", "arvr"], min_avg_tx_mbps=1.5)
     assert_priority_above(result.capture, "voice", "bronze", min_ratio=0.9)
-    assert_priority_above(result.capture, "arvr", "best_effort", min_ratio=0.9)
+    # ARVR MIR=10% vs BestEffort MIR=100% — do not require arvr TX > BE.
+    assert_near_mir_share(result.capture, "arvr", mir_pct=10.0, min_frac_of_mir=0.35, max_frac_of_peak=0.25)
     return result
 
 
@@ -428,6 +432,33 @@ def _mode_metrics_high_load(case: dict[str, Any]) -> QoSLabRunResult:
     return result
 
 
+def _normalize_uci_snapshot(text: str) -> str:
+    """Stable compare key for ath1qos UCI (ignore blank/order noise)."""
+    lines = sorted({ln.strip() for ln in (text or "").splitlines() if ln.strip()})
+    return "\n".join(lines)
+
+
+def _wait_ath1qos_stable(
+    *,
+    dut_host: str,
+    dut_password: str,
+    polls: int = 12,
+    interval_s: float = 5.0,
+) -> str:
+    """Poll UCI until two consecutive normalized snapshots match."""
+    import time
+
+    last = ""
+    for i in range(max(polls, 2)):
+        cur = snapshot_ath1qos(dut_host=dut_host, dut_password=dut_password)
+        if last and _normalize_uci_snapshot(last) == _normalize_uci_snapshot(cur):
+            print(f"[QoS] ath1qos UCI stable after reboot (poll {i + 1})")
+            return cur
+        last = cur
+        time.sleep(interval_s)
+    return last
+
+
 def _mode_setup_covered(case: dict[str, Any]) -> None:
     """Explicit pass — lab topology already exercises wired backhaul and wireless SU QoS."""
     note = case.get("note") or case.get("title") or case.get("id")
@@ -436,7 +467,7 @@ def _mode_setup_covered(case: dict[str, Any]) -> None:
 
 
 def _mode_reboot_retention(case: dict[str, Any]) -> QoSLabRunResult:
-    """Snapshot ath1qos → reboot BTS → compare UCI → short traffic verify."""
+    """Snapshot ath1qos → reboot BTS → compare UCI → wait for SUA → traffic verify."""
     overrides = env_overrides()
     dut_host = overrides.get("dut_host") or "10.0.0.1"
     dut_password = overrides.get("dut_password") or "Sen@0ubRNwk$"
@@ -444,23 +475,32 @@ def _mode_reboot_retention(case: dict[str, Any]) -> QoSLabRunResult:
     before = snapshot_ath1qos(dut_host=dut_host, dut_password=dut_password)
     print(f"[QoS][{case.get('id')}] ath1qos snapshot before reboot: {len(before.splitlines())} lines")
     reboot_dut_and_wait(dut_host=dut_host, dut_password=dut_password)
-    after = snapshot_ath1qos(dut_host=dut_host, dut_password=dut_password)
-    assert before == after, (
-        "ath1qos UCI changed across reboot\n"
-        f"--- before ({len(before)} chars) ---\n{before[:1500]}\n"
-        f"--- after ({len(after)} chars) ---\n{after[:1500]}"
-    )
-    print(f"[QoS][{case.get('id')}] ath1qos UCI identical after reboot")
+    after = _wait_ath1qos_stable(dut_host=dut_host, dut_password=dut_password)
+    before_n = _normalize_uci_snapshot(before)
+    after_n = _normalize_uci_snapshot(after)
+    if before_n != after_n:
+        before_lines = set(before_n.splitlines())
+        after_lines = set(after_n.splitlines())
+        only_before = sorted(before_lines - after_lines)[:12]
+        only_after = sorted(after_lines - before_lines)[:12]
+        raise AssertionError(
+            "ath1qos UCI changed across reboot\n"
+            f"only_before ({len(before_lines - after_lines)}):\n"
+            + "\n".join(only_before)
+            + f"\nonly_after ({len(after_lines - before_lines)}):\n"
+            + "\n".join(only_after)
+        )
+    print(f"[QoS][{case.get('id')}] ath1qos UCI retained after reboot (normalized match)")
 
-    # SSH returns before RF/SUA — wait for the air link, then verify traffic.
-    wait_for_sua_ready(
+    # Do not force a stale QOS_SUA — reassociation may move suaN after reboot.
+    ready_sua = wait_for_sua_ready(
         dut_host=dut_host,
         dut_password=dut_password,
-        sua=overrides.get("sua"),
+        sua=None,
+        prefer_any_associated=True,
     )
 
-    # Policies still classify traffic post-reboot.
-    result = _traffic_from_case(case)
+    result = _traffic_from_case(case, sua=ready_sua)
     _require_trex(result)
     assert_queues_active(result.capture, ["voice"], min_avg_tx_mbps=1.5, use_max=True)
     assert_priority_above(result.capture, "voice", "bronze", min_ratio=0.9)
@@ -581,7 +621,7 @@ _MODE_VERIFIED_PARAMS: dict[str, list[str]] = {
     "realtime_vs_nonrealtime": [
         "Realtime Voice and ARVR queues active",
         "Voice prioritized vs Bronze",
-        "ARVR prioritized vs BestEffort",
+        "ARVR TX consistent with Profile1 MIR 10%",
     ],
     "p2p_control": [
         "Voice active under P2P/bronze contention",
@@ -657,8 +697,15 @@ def execute_qos_case(case_id: str):
     if not mode or mode not in _MODE_HANDLERS:
         raise RuntimeError(f"{case_id} has unknown mode: {mode!r}")
     result = _MODE_HANDLERS[mode](case)
-    for param in _MODE_VERIFIED_PARAMS.get(mode, []):
+    verified = list(_MODE_VERIFIED_PARAMS.get(mode, []))
+    for param in verified:
         print(f"-> {param}: PASSED")
+    # Sidecar evidence so Jenkins HTML still has details when pytest -s
+    # leaves json-report stdout empty.
+    try:
+        write_qos_case_evidence(case_id, params=verified)
+    except Exception as exc:
+        print(f"[QoS][{case_id}] evidence write skipped: {exc}")
     if result is None:
         return None
     try:
