@@ -296,7 +296,8 @@ pipeline {
                     '''
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                        def qosEnv = markers.contains('QOS') ? 'export QOS_SUA="${QOS_SUA:-sua4}"; ' : ''
+                        // Optional override only — do not hardcode sua4 (lab SUA index can move).
+                        def qosEnv = markers.contains('QOS') && env.QOS_SUA ? "export QOS_SUA=\"${env.QOS_SUA}\"; " : ''
                         sh """
                             export PYTHONUNBUFFERED=1
                             export PYTHONPATH=.

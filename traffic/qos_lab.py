@@ -306,7 +306,7 @@ done
         ) or (assoc and assoc not in {"-", "0"}):
             associated.append(name)
 
-    # Prefer configured SUA when it has meaningful traffic.
+    # Prefer configured/preferred SUA when it has meaningful traffic.
     if scores.get(prefer, 0) >= min_meaningful_bps:
         print(f"[QoS] Using preferred {prefer} (queue activity {scores[prefer]} bps)")
         return prefer
@@ -318,13 +318,20 @@ done
             print(f"[QoS] Using {best_name} (queue activity {best_sum} bps)")
             return best_name
 
-    # Idle lab: prefer associated preferred SUA, else first associated, else prefer.
+    # Idle lab: use an associated SUA. Prefer configured name only if it is associated.
     if prefer in associated:
         print(f"[QoS] Queues idle — using associated preferred {prefer}")
         return prefer
     if associated:
-        print(f"[QoS] Queues idle — using associated {associated[0]} (prefer={prefer})")
-        return associated[0]
+        # Sort suaN numerically so selection is stable (e.g. sua1 before sua10).
+        def _sua_key(name: str) -> int:
+            try:
+                return int(name.replace("sua", ""))
+            except ValueError:
+                return 999
+        chosen = sorted(associated, key=_sua_key)[0]
+        print(f"[QoS] Queues idle — using associated {chosen} (prefer={prefer} not linked)")
+        return chosen
     print(f"[QoS] Queues idle / no association — falling back to {prefer}")
     return prefer
 
