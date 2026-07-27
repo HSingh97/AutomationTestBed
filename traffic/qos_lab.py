@@ -283,7 +283,10 @@ done
     if prefer in scores and scores[prefer] > 0:
         return prefer
     if scores:
-        return max(scores.items(), key=lambda item: item[1])[0]
+        best = max(scores.items(), key=lambda item: item[1])
+        if best[1] > 0:
+            return best[0]
+    # All idle or no queue_stats found — stick with preferred SUA.
     return prefer
 
 
