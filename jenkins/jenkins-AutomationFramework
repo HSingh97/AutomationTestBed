@@ -177,6 +177,8 @@ pipeline {
                         mParts << 'QoS'
                         extraFlags << '--allow-qos-lab'
                         extraFlags << '--allow-qos-destructive'
+                        // QoS is long-running; fail fast to avoid wasting lab time.
+                        extraFlags << '--maxfail=1'
                     }
 
                     def unknown = markers.findAll { m ->
