@@ -296,8 +296,16 @@ pipeline {
                     '''
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                        // Optional override only — do not hardcode sua4 (lab SUA index can move).
-                        def qosEnv = markers.contains('QOS') && env.QOS_SUA ? "export QOS_SUA=\"${env.QOS_SUA}\"; " : ''
+                        def qosEnv = ''
+                        if (markers.contains('QOS')) {
+                            // Align TRex tagging with profiles/default.yaml (override via job env).
+                            def sv = env.QOS_SVLAN ?: '100'
+                            def cv = env.QOS_CVLAN ?: '101'
+                            qosEnv = "export QOS_SVLAN=\"${sv}\" QOS_CVLAN=\"${cv}\" PROFILE_NAME=\"${profileName}\"; "
+                            if (env.QOS_SUA) {
+                                qosEnv += "export QOS_SUA=\"${env.QOS_SUA}\"; "
+                            }
+                        }
                         sh """
                             export PYTHONUNBUFFERED=1
                             export PYTHONPATH=.

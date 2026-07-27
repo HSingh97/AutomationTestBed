@@ -468,6 +468,33 @@ def stop_trex(
     )
 
 
+def _resolve_qos_qinq() -> tuple[int | None, int | None]:
+    """QinQ tags for QoS TRex streams (env override, else profile testbed.qinq)."""
+    env_s = os.environ.get("QOS_SVLAN")
+    env_c = os.environ.get("QOS_CVLAN")
+    if env_s and env_c:
+        return int(env_s), int(env_c)
+    try:
+        import yaml
+        from utils.vlan_uci import qinq_tags_from_profile
+
+        profile = (
+            os.environ.get("QOS_PROFILE")
+            or os.environ.get("PROFILE_NAME")
+            or "default"
+        )
+        path = REPO_ROOT / "profiles" / f"{profile}.yaml"
+        if path.is_file():
+            data = yaml.safe_load(path.read_text()) or {}
+            svlan, cvlan = qinq_tags_from_profile(data.get("testbed") or {})
+            if svlan is not None and cvlan is not None:
+                return svlan, cvlan
+    except Exception as exc:
+        print(f"[QoS] QinQ profile resolve skipped: {exc}")
+    # Match profiles/default.yaml lab tags.
+    return 100, 101
+
+
 def deploy_qos_scripts(
     *,
     trex_host: str = DEFAULT_TREX_HOST,
@@ -496,6 +523,8 @@ def _build_trex_client_cmd(
     equal_share: bool,
     direction: str,
     proto: str,
+    svlan: int | None = None,
+    cvlan: int | None = None,
 ) -> str:
     args = [
         "python3",
@@ -524,6 +553,8 @@ def _build_trex_client_cmd(
     if classes:
         args.append("--classes")
         args.extend(classes)
+    if svlan is not None and cvlan is not None:
+        args.extend(["--svlan", str(svlan), "--cvlan", str(cvlan)])
     return " ".join(shlex.quote(a) for a in args)
 
 
@@ -655,6 +686,12 @@ def _run_qos_lab_unlocked(
     deploy_qos_scripts(trex_host=trex_host, trex_password=trex_password)
     start_trex_server(trex_host=trex_host, trex_password=trex_password)
 
+    svlan, cvlan = _resolve_qos_qinq()
+    if svlan is not None and cvlan is not None:
+        print(f"[QoS] TRex QinQ tags svlan={svlan} cvlan={cvlan}")
+    else:
+        print("[QoS] TRex streams untagged (no QinQ resolved)")
+
     client_cmd = _build_trex_client_cmd(
         duration_s=duration_s,
         dl_bw=dl_bw,
@@ -665,6 +702,8 @@ def _run_qos_lab_unlocked(
         equal_share=equal_share,
         direction=direction,
         proto=proto,
+        svlan=svlan,
+        cvlan=cvlan,
     )
     remote_traffic = (
         f"export PYTHONPATH={shlex.quote(trex_pythonpath)}; "
