@@ -296,9 +296,11 @@ pipeline {
                     '''
 
                     catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                        def qosEnv = markers.contains('QOS') ? 'export QOS_SUA="${QOS_SUA:-sua4}"; ' : ''
                         sh """
                             export PYTHONUNBUFFERED=1
                             export PYTHONPATH=.
+                            ${qosEnv}
                             stdbuf -oL -eL venv/bin/python -u -m pytest ${env.TEST_PATHS} -v \
                             ${env.TEST_M_EXPR} \
                             ${env.TEST_K_FILTER} \

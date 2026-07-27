@@ -255,9 +255,16 @@ def discover_active_sua(
     dut_password: str = DEFAULT_DUT_PASSWORD,
     prefer: str = "sua4",
 ) -> str:
-    """Return suaN with non-zero queue activity, preferring ``prefer`` when tied."""
+    """Return the active suaN for queue_stats capture.
+
+    Prefers ``prefer`` (or ``QOS_SUA``) unless another SUA clearly has meaningful
+    traffic. Tiny residual counters (a few kbps) must not steal selection away
+    from the lab SU before TRex starts.
+    """
+    prefer = (os.environ.get("QOS_SUA") or prefer or "sua4").strip()
+    # sysfs rx/tx_tput are in bps; ignore noise below ~0.1 Mbps.
+    min_meaningful_bps = int(os.environ.get("QOS_SUA_MIN_BPS", "100000"))
     script = r"""
-best=""; best_sum=-1
 for s in /sys/class/kwn/sua*; do
   [ -d "$s/queue_stats" ] || continue
   name=$(basename "$s")
@@ -267,26 +274,58 @@ for s in /sys/class/kwn/sua*; do
     tx=$(cat "$s/queue_stats/queue$q/tx_tput" 2>/dev/null || echo 0)
     sum=$((sum + rx + tx))
   done
-  echo "$name $sum"
+  mac=$(cat "$s/statistics/mac" 2>/dev/null || true)
+  ipv6=$(cat "$s/statistics/ipv6" 2>/dev/null || true)
+  assoc=$(cat "$s/statistics/associd" 2>/dev/null || true)
+  echo "$name $sum mac=${mac:-} ipv6=${ipv6:-} assoc=${assoc:-}"
 done
 """
     result = _ssh(dut_host, dut_password, script, timeout_s=40)
     lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
     scores: dict[str, int] = {}
+    associated: list[str] = []
     for line in lines:
         parts = line.split()
-        if len(parts) >= 2 and parts[0].startswith("sua"):
-            try:
-                scores[parts[0]] = int(parts[1])
-            except ValueError:
-                continue
-    if prefer in scores and scores[prefer] > 0:
+        if len(parts) < 2 or not parts[0].startswith("sua"):
+            continue
+        name = parts[0]
+        try:
+            scores[name] = int(parts[1])
+        except ValueError:
+            continue
+        fields = {}
+        for token in parts[2:]:
+            if "=" in token:
+                k, v = token.split("=", 1)
+                fields[k] = v
+        mac = fields.get("mac", "").strip()
+        ipv6 = fields.get("ipv6", "").strip()
+        assoc = fields.get("assoc", "").strip()
+        if (mac and mac not in {"-", "00:00:00:00:00:00"}) or (
+            ipv6 and ipv6 not in {"-", "::", "0"}
+        ) or (assoc and assoc not in {"-", "0"}):
+            associated.append(name)
+
+    # Prefer configured SUA when it has meaningful traffic.
+    if scores.get(prefer, 0) >= min_meaningful_bps:
+        print(f"[QoS] Using preferred {prefer} (queue activity {scores[prefer]} bps)")
         return prefer
+
+    # Otherwise pick the busiest SUA only if activity is clearly real traffic.
     if scores:
-        best = max(scores.items(), key=lambda item: item[1])
-        if best[1] > 0:
-            return best[0]
-    # All idle or no queue_stats found — stick with preferred SUA.
+        best_name, best_sum = max(scores.items(), key=lambda item: item[1])
+        if best_sum >= min_meaningful_bps:
+            print(f"[QoS] Using {best_name} (queue activity {best_sum} bps)")
+            return best_name
+
+    # Idle lab: prefer associated preferred SUA, else first associated, else prefer.
+    if prefer in associated:
+        print(f"[QoS] Queues idle — using associated preferred {prefer}")
+        return prefer
+    if associated:
+        print(f"[QoS] Queues idle — using associated {associated[0]} (prefer={prefer})")
+        return associated[0]
+    print(f"[QoS] Queues idle / no association — falling back to {prefer}")
     return prefer
 
 
