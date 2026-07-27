@@ -34,7 +34,10 @@ QOS_TEST_CASES: list[dict[str, Any]] = [
         'status': 'implemented',
         'mode': 'video_priority',
         'classes': ['arvr', 'bronze', 'best_effort'],
-        'note': 'Profile1 maps video/streaming to ARVR PIR (queue3).',
+        'note': (
+            'Profile1 maps video/streaming to ARVR PIR (queue3, MIR 10%). '
+            'Do not assert ARVR TX > Bronze — Bronze MIR is 33%.'
+        ),
     },
     {
         'id': 'QoS_03',
