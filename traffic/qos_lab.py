@@ -726,9 +726,9 @@ def _run_qos_lab_unlocked(
     sua: str | None,
     artifact_dir: Path,
 ) -> QoSLabRunResult:
+    # Initial guess before TRex starts (may be stale/idle in some lab states).
     active_sua = sua or discover_active_sua(dut_host=dut_host, dut_password=dut_password)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    csv_path = artifact_dir / f"{active_sua}_queue_stats_{stamp}.csv"
 
     deploy_qos_scripts(trex_host=trex_host, trex_password=trex_password)
     start_trex_server(trex_host=trex_host, trex_password=trex_password)
@@ -781,6 +781,17 @@ def _run_qos_lab_unlocked(
     # Short ramp so 15s runs still leave enough capture window.
     ramp_s = 2 if duration_s <= 20 else 5
     time.sleep(ramp_s)
+
+    # If SUA was not explicitly provided, re-discover after TRex starts.
+    # This prevents capturing the wrong SUA when "idle association" differs
+    # from the SUA that actually carries the newly generated traffic.
+    if sua is None:
+        after_start_sua = discover_active_sua(dut_host=dut_host, dut_password=dut_password)
+        if after_start_sua and after_start_sua != active_sua:
+            print(f"[QoS] SUA switched after TRex start: {active_sua} -> {after_start_sua}")
+            active_sua = after_start_sua
+
+    csv_path = artifact_dir / f"{active_sua}_queue_stats_{stamp}.csv"
     try:
         capture_queue_stats(
             dut_host=dut_host,

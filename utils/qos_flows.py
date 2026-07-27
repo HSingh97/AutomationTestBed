@@ -492,15 +492,17 @@ def _mode_reboot_retention(case: dict[str, Any]) -> QoSLabRunResult:
         )
     print(f"[QoS][{case.get('id')}] ath1qos UCI retained after reboot (normalized match)")
 
-    # Do not force a stale QOS_SUA — reassociation may move suaN after reboot.
-    ready_sua = wait_for_sua_ready(
+    # Ensure at least one SUA is associated after reboot, but don't lock the
+    # capture SUA. Traffic may land on a different SUA than the first one we
+    # detect as associated.
+    wait_for_sua_ready(
         dut_host=dut_host,
         dut_password=dut_password,
         sua=None,
         prefer_any_associated=True,
     )
 
-    result = _traffic_from_case(case, sua=ready_sua)
+    result = _traffic_from_case(case)
     _require_trex(result)
     assert_queues_active(result.capture, ["voice"], min_avg_tx_mbps=1.5, use_max=True)
     assert_priority_above(result.capture, "voice", "bronze", min_ratio=0.9)
