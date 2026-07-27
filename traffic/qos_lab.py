@@ -581,8 +581,13 @@ def capture_queue_stats(
                 f"tx=$(cat /sys/class/kwn/{sua}/queue_stats/queue$q/tx_tput 2>/dev/null || echo 0); "
                 f"printf '%s %s ' \"$rx\" \"$tx\"; done; echo"
             )
-            result = _ssh(dut_host, dut_password, remote, timeout_s=15)
-            parts = (result.stdout or "").strip().split()
+            try:
+                result = _ssh(dut_host, dut_password, remote, timeout_s=30)
+                parts = (result.stdout or "").strip().split()
+            except subprocess.TimeoutExpired:
+                # DUT can briefly stall under TRex load; keep sampling instead of aborting.
+                print(f"[QoS] queue_stats SSH timeout on {sua} — writing zero sample")
+                parts = []
             values: list[str] = []
             for i in range(0, min(len(parts), 16), 2):
                 values.extend([parts[i], parts[i + 1] if i + 1 < len(parts) else "0"])
