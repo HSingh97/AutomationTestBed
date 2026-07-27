@@ -555,10 +555,28 @@ def _write_testbed_summary(config) -> None:
         from utils.regression_device_info import collect_testbed_summary
 
         bsu_host, cpe_hosts, password = _resolve_testbed_hosts(config)
-        summary = asyncio.run(collect_testbed_summary(bsu_host, cpe_hosts, password))
-        with _artifact_path("testbed_summary.json").open("w", encoding="utf-8") as handle:
-            json.dump(summary, handle, indent=2)
-        print(f"\n[report] Testbed summary written (BTS={bsu_host}, CPE={cpe_hosts[:1] or ['—']})")
+        attempts = [(bsu_host, cpe_hosts)]
+        # When profile IPv6 is unreachable (common with --skip-testbed-bootstrap / QoS),
+        # fall back to the CLI / lab IPv4 management address.
+        fallback = (config.getoption("--fallback-ip") or "").strip()
+        qos_dut = (os.environ.get("QOS_DUT_HOST") or "").strip()
+        for host in (qos_dut, fallback, "10.0.0.1"):
+            if host and normalize_ip(host) != normalize_ip(str(bsu_host or "")):
+                attempts.append((normalize_ip(host), [normalize_ip(host)]))
+
+        last_exc: Exception | None = None
+        for host, cpes in attempts:
+            try:
+                summary = asyncio.run(collect_testbed_summary(host, cpes, password))
+                with _artifact_path("testbed_summary.json").open("w", encoding="utf-8") as handle:
+                    json.dump(summary, handle, indent=2)
+                print(f"\n[report] Testbed summary written (BTS={host}, CPE={cpes[:1] or ['—']})")
+                return
+            except Exception as exc:
+                last_exc = exc
+                print(f"\n[report] Testbed summary via {host} failed: {exc}")
+        if last_exc:
+            print(f"\n[report] Testbed summary collection skipped: {last_exc}")
     except Exception as exc:
         print(f"\n[report] Testbed summary collection skipped: {exc}")
 

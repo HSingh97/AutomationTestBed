@@ -407,21 +407,50 @@ def _load_testbed_summary(profile_name: str | None, local_ip: str) -> dict:
         return {}
 
     try:
+        import os
+
         from utils.net_utils import normalize_ip
         from utils.profile_manager import load_profile_bundle
         from utils.regression_device_info import collect_testbed_summary
 
         bundle = load_profile_bundle(profile_name=profile_name, local_ip=local_ip or None)
         dut = bundle.active["dut"]
+        rec = bundle.active.get("recovery") or {}
         password = str(dut.get("password") or "")
+
+        attempts: list[tuple[str, list[str]]] = []
         if dut.get("ip_mode") == "ipv6" or dut.get("strict_ipv6"):
-            bsu_host = normalize_ip(str(dut["local_ipv6"]))
-            cpe_hosts = [normalize_ip(str(ip)) for ip in dut.get("remote_ipv6s", []) if str(ip).strip()]
-        else:
-            bsu_host = normalize_ip(str(dut.get("local_ip") or local_ip))
-            cpe_hosts = [normalize_ip(str(ip)) for ip in dut.get("remote_ips", []) if str(ip).strip()]
-        print(f"Collecting testbed summary (BTS={bsu_host})...")
-        return asyncio.run(collect_testbed_summary(bsu_host, cpe_hosts, password))
+            bsu_v6 = normalize_ip(str(dut["local_ipv6"]))
+            cpe_v6 = [normalize_ip(str(ip)) for ip in dut.get("remote_ipv6s", []) if str(ip).strip()]
+            attempts.append((bsu_v6, cpe_v6))
+
+        # QoS / skip-bootstrap lab often has no reachable profile IPv6 — use IPv4 mgmt.
+        ipv4_candidates = []
+        for raw in (
+            os.environ.get("QOS_DUT_HOST"),
+            rec.get("bts_fallback_ipv4"),
+            dut.get("cpe_fallback_ip"),
+            dut.get("local_ip"),
+            local_ip if local_ip and any(ch.isdigit() for ch in local_ip) and ":" not in local_ip and local_ip != "profile-default" else "",
+            "10.0.0.1",
+        ):
+            host = str(raw or "").strip()
+            if host and host not in ipv4_candidates:
+                ipv4_candidates.append(host)
+        for host in ipv4_candidates:
+            attempts.append((normalize_ip(host), [normalize_ip(host)]))
+
+        last_exc: Exception | None = None
+        for bsu_host, cpe_hosts in attempts:
+            try:
+                print(f"Collecting testbed summary (BTS={bsu_host})...")
+                return asyncio.run(collect_testbed_summary(bsu_host, cpe_hosts, password))
+            except Exception as exc:
+                last_exc = exc
+                print(f"Warning: testbed summary via {bsu_host} failed: {exc}")
+        if last_exc:
+            print(f"Warning: testbed summary collection failed: {last_exc}")
+        return {}
     except Exception as exc:
         print(f"Warning: testbed summary collection failed: {exc}")
         return {}

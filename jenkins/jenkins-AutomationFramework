@@ -328,7 +328,11 @@ pipeline {
             steps {
                 script {
                     def senao = load 'jenkins/jenkins-common.groovy'
-                    def localIP = (params['Local IPv6 Address'] ?: 'profile-default').trim()
+                    def localIP = (params['Local IPv6 Address'] ?: '').trim()
+                    if (!localIP) {
+                        // Prefer a reachable mgmt address for report metadata / summary fallback.
+                        localIP = (params.FALLBACK_IP ?: '10.0.0.1').trim()
+                    }
                     def basename = senao.standardReportBasename('Senao_UBR')
                     def htmlFile = "reports/artifacts/${basename}.html"
                     def csvFile = "reports/artifacts/${basename}.csv"
