@@ -299,10 +299,9 @@ pipeline {
                             // Align TRex tagging with profiles/default.yaml (override via job env).
                             def sv = env.QOS_SVLAN ?: '100'
                             def cv = env.QOS_CVLAN ?: '101'
-                            qosEnv = "export QOS_SVLAN=\"${sv}\" QOS_CVLAN=\"${cv}\" PROFILE_NAME=\"${profileName}\"; "
-                            if (env.QOS_SUA) {
-                                qosEnv += "export QOS_SUA=\"${env.QOS_SUA}\"; "
-                            }
+                            // Lab pin: always capture sua4 unless job overrides QOS_SUA.
+                            def sua = env.QOS_SUA ?: 'sua4'
+                            qosEnv = "export QOS_SVLAN=\"${sv}\" QOS_CVLAN=\"${cv}\" QOS_SUA=\"${sua}\" PROFILE_NAME=\"${profileName}\"; "
                         }
                         sh """
                             export PYTHONUNBUFFERED=1

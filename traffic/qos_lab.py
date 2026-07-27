@@ -297,85 +297,16 @@ def discover_active_sua(
     dut_password: str = DEFAULT_DUT_PASSWORD,
     prefer: str = "sua4",
 ) -> str:
-    """Return the active suaN for queue_stats capture.
+    """Return the SUA used for queue_stats capture.
 
-    Prefers ``prefer`` (or ``QOS_SUA``) unless another SUA clearly has meaningful
-    traffic. Tiny residual counters (a few kbps) must not steal selection away
-    from the lab SU before TRex starts.
+    Lab convention: always use ``sua4`` (override with ``QOS_SUA``). Do not steal
+    selection based on residual counters on other SUAs — that caused false
+    zero-TX failures when ``sua1`` had noise but traffic landed on ``sua4``.
     """
-    prefer = (os.environ.get("QOS_SUA") or prefer or "sua4").strip()
-    # sysfs rx/tx_tput are in bps; ignore noise below ~0.1 Mbps.
-    min_meaningful_bps = int(os.environ.get("QOS_SUA_MIN_BPS", "100000"))
-    script = r"""
-for s in /sys/class/kwn/sua*; do
-  [ -d "$s/queue_stats" ] || continue
-  name=$(basename "$s")
-  sum=0
-  for q in 0 1 2 3 4 5 6 7; do
-    rx=$(cat "$s/queue_stats/queue$q/rx_tput" 2>/dev/null || echo 0)
-    tx=$(cat "$s/queue_stats/queue$q/tx_tput" 2>/dev/null || echo 0)
-    sum=$((sum + rx + tx))
-  done
-  mac=$(cat "$s/statistics/mac" 2>/dev/null || true)
-  ipv6=$(cat "$s/statistics/ipv6" 2>/dev/null || true)
-  assoc=$(cat "$s/statistics/associd" 2>/dev/null || true)
-  echo "$name $sum mac=${mac:-} ipv6=${ipv6:-} assoc=${assoc:-}"
-done
-"""
-    result = _ssh(dut_host, dut_password, script, timeout_s=40)
-    lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
-    scores: dict[str, int] = {}
-    associated: list[str] = []
-    for line in lines:
-        parts = line.split()
-        if len(parts) < 2 or not parts[0].startswith("sua"):
-            continue
-        name = parts[0]
-        try:
-            scores[name] = int(parts[1])
-        except ValueError:
-            continue
-        fields = {}
-        for token in parts[2:]:
-            if "=" in token:
-                k, v = token.split("=", 1)
-                fields[k] = v
-        mac = fields.get("mac", "").strip()
-        ipv6 = fields.get("ipv6", "").strip()
-        assoc = fields.get("assoc", "").strip()
-        if (mac and mac not in {"-", "00:00:00:00:00:00"}) or (
-            ipv6 and ipv6 not in {"-", "::", "0"}
-        ) or (assoc and assoc not in {"-", "0"}):
-            associated.append(name)
-
-    # Prefer configured/preferred SUA when it has meaningful traffic.
-    if scores.get(prefer, 0) >= min_meaningful_bps:
-        print(f"[QoS] Using preferred {prefer} (queue activity {scores[prefer]} bps)")
-        return prefer
-
-    # Otherwise pick the busiest SUA only if activity is clearly real traffic.
-    if scores:
-        best_name, best_sum = max(scores.items(), key=lambda item: item[1])
-        if best_sum >= min_meaningful_bps:
-            print(f"[QoS] Using {best_name} (queue activity {best_sum} bps)")
-            return best_name
-
-    # Idle lab: use an associated SUA. Prefer configured name only if it is associated.
-    if prefer in associated:
-        print(f"[QoS] Queues idle — using associated preferred {prefer}")
-        return prefer
-    if associated:
-        # Sort suaN numerically so selection is stable (e.g. sua1 before sua10).
-        def _sua_key(name: str) -> int:
-            try:
-                return int(name.replace("sua", ""))
-            except ValueError:
-                return 999
-        chosen = sorted(associated, key=_sua_key)[0]
-        print(f"[QoS] Queues idle — using associated {chosen} (prefer={prefer} not linked)")
-        return chosen
-    print(f"[QoS] Queues idle / no association — falling back to {prefer}")
-    return prefer
+    _ = (dut_host, dut_password)  # reserved for future association checks/logging
+    chosen = (os.environ.get("QOS_SUA") or prefer or "sua4").strip() or "sua4"
+    print(f"[QoS] Using fixed SUA {chosen} for queue_stats capture")
+    return chosen
 
 
 def parse_queue_capture_csv(csv_path: Path | str) -> QueueCaptureResult:
@@ -726,9 +657,10 @@ def _run_qos_lab_unlocked(
     sua: str | None,
     artifact_dir: Path,
 ) -> QoSLabRunResult:
-    # Initial guess before TRex starts (may be stale/idle in some lab states).
+    # Lab pin: always sua4 unless caller / QOS_SUA overrides.
     active_sua = sua or discover_active_sua(dut_host=dut_host, dut_password=dut_password)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    csv_path = artifact_dir / f"{active_sua}_queue_stats_{stamp}.csv"
 
     deploy_qos_scripts(trex_host=trex_host, trex_password=trex_password)
     start_trex_server(trex_host=trex_host, trex_password=trex_password)
@@ -781,17 +713,6 @@ def _run_qos_lab_unlocked(
     # Short ramp so 15s runs still leave enough capture window.
     ramp_s = 2 if duration_s <= 20 else 5
     time.sleep(ramp_s)
-
-    # If SUA was not explicitly provided, re-discover after TRex starts.
-    # This prevents capturing the wrong SUA when "idle association" differs
-    # from the SUA that actually carries the newly generated traffic.
-    if sua is None:
-        after_start_sua = discover_active_sua(dut_host=dut_host, dut_password=dut_password)
-        if after_start_sua and after_start_sua != active_sua:
-            print(f"[QoS] SUA switched after TRex start: {active_sua} -> {after_start_sua}")
-            active_sua = after_start_sua
-
-    csv_path = artifact_dir / f"{active_sua}_queue_stats_{stamp}.csv"
     try:
         capture_queue_stats(
             dut_host=dut_host,

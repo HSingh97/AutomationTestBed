@@ -432,10 +432,24 @@ def _mode_metrics_high_load(case: dict[str, Any]) -> QoSLabRunResult:
     return result
 
 
+# Firmware rewrites these on boot / air-link bring-up; not QoS policy retention.
+_VOLATILE_ATH1QOS_KEYS = (
+    "ath1qos.qoscfg.burst=",
+    "ath1qos.qoscfg.dlulratio=",
+)
+
+
 def _normalize_uci_snapshot(text: str) -> str:
-    """Stable compare key for ath1qos UCI (ignore blank/order noise)."""
-    lines = sorted({ln.strip() for ln in (text or "").splitlines() if ln.strip()})
-    return "\n".join(lines)
+    """Stable compare key for ath1qos UCI (ignore blank/order + volatile knobs)."""
+    lines = []
+    for ln in (text or "").splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        if any(s.startswith(k) for k in _VOLATILE_ATH1QOS_KEYS):
+            continue
+        lines.append(s)
+    return "\n".join(sorted(set(lines)))
 
 
 def _wait_ath1qos_stable(
@@ -492,17 +506,15 @@ def _mode_reboot_retention(case: dict[str, Any]) -> QoSLabRunResult:
         )
     print(f"[QoS][{case.get('id')}] ath1qos UCI retained after reboot (normalized match)")
 
-    # Ensure at least one SUA is associated after reboot, but don't lock the
-    # capture SUA. Traffic may land on a different SUA than the first one we
-    # detect as associated.
+    # Lab pin: wait for sua4 (override via QOS_SUA) before post-reboot traffic.
     wait_for_sua_ready(
         dut_host=dut_host,
         dut_password=dut_password,
-        sua=None,
-        prefer_any_associated=True,
+        sua=overrides.get("sua") or "sua4",
+        prefer_any_associated=False,
     )
 
-    result = _traffic_from_case(case)
+    result = _traffic_from_case(case, sua=overrides.get("sua") or "sua4")
     _require_trex(result)
     assert_queues_active(result.capture, ["voice"], min_avg_tx_mbps=1.5, use_max=True)
     assert_priority_above(result.capture, "voice", "bronze", min_ratio=0.9)
