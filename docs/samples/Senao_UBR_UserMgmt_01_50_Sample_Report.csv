@@ -1,0 +1,101 @@
+Test Group,Module ID,Module Name,Status,Execution Details
+UserMgmt,UM_01,Admin login with default password,PASSED,"Successfully Verified (2 parameters):
+Role credentials accepted, Post-login landing matches role"
+UserMgmt,UM_02,User login with default password,PASSED,"Successfully Verified (2 parameters):
+Role credentials accepted, Post-login landing matches role"
+UserMgmt,UM_03,Installer login with default password,PASSED,"Successfully Verified (2 parameters):
+Role credentials accepted, Post-login landing matches role"
+UserMgmt,UM_04,Admin changes User password,PASSED,"Successfully Verified (2 parameters):
+Admin opened password settings, User password field reachable"
+UserMgmt,UM_05,User attempts to change password,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_06,Installer attempts to change password,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_07,Admin modifies wireless configuration,PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_08,User attempts to modify SSID,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_09,Installer modifies Quick Start IP,PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_10,Admin initiates reboot,PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_11,User attempts reboot,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_12,Installer attempts reboot,FAILED,"Known product defect:
+- Installer still sees Reboot"
+UserMgmt,UM_13,Admin upgrades firmware,PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_14,User attempts firmware upgrade,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_15,Installer attempts firmware upgrade,FAILED,"Known product defect:
+- Firmware upload UI still present for denied role"
+UserMgmt,UM_16,Admin downloads configuration file,PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_17,User attempts config download,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_18,Installer attempts config download,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_19,Admin initiates factory reset,PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_20,User attempts factory reset,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_21,Installer attempts factory reset,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_22,Admin runs link test tool,PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_23,User attempts link test,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_24,Installer attempts link test,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_25,Admin views logs,PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_26,User views logs,PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_27,Installer views logs,FAILED,"Critical Execution Error:
+- Monitor menu not visible — cannot view System Logs"
+UserMgmt,UM_28,Admin runs diagnostics (Ping/Traceroute),PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_29,User runs diagnostics (Ping/Traceroute),PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_30,Installer runs diagnostics (Ping/Traceroute),PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_31,Admin login with wrong password,PASSED,"Successfully Verified (2 parameters):
+Wrong password rejected, Login form still shown"
+UserMgmt,UM_32,User login with wrong password,PASSED,"Successfully Verified (2 parameters):
+Wrong password rejected, Login form still shown"
+UserMgmt,UM_33,Installer login with wrong password,PASSED,"Successfully Verified (2 parameters):
+Wrong password rejected, Login form still shown"
+UserMgmt,UM_34,Admin session timeout,PASSED,"Successfully Verified (2 parameters):
+Idle wait completed, Session expired to login form"
+UserMgmt,UM_35,User session timeout,PASSED,"Successfully Verified (2 parameters):
+Idle wait completed, Session expired to login form"
+UserMgmt,UM_36,Installer session timeout,PASSED,"Successfully Verified (2 parameters):
+Idle wait completed, Session expired to login form"
+UserMgmt,UM_37,Admin attempts simultaneous login,PASSED,"Successfully Verified (3 parameters):
+First session logged in, Second concurrent session logged in, Logins tracked in System Logs → Users"
+UserMgmt,UM_38,User attempts simultaneous login,PASSED,"Successfully Verified (3 parameters):
+First session logged in, Second concurrent session logged in, Logins tracked in System Logs → Users"
+UserMgmt,UM_39,Installer attempts simultaneous login,PASSED,"Successfully Verified (3 parameters):
+First session logged in, Second concurrent session logged in, Logins tracked in System Logs → Users"
+UserMgmt,UM_40,Admin disconnects wireless link,PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_41,User attempts disconnect wireless link,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_42,Installer attempts disconnect wireless link,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_43,Admin changes encryption type,PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_44,User attempts encryption change,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_45,Installer attempts encryption change,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_46,Admin modifies VLAN ID,PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_47,User attempts VLAN modification,PASSED,"Successfully Verified (1 parameters):
+Sensitive control absent or disabled for role"
+UserMgmt,UM_48,Installer modifies VLAN ID,PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_49,Admin views site survey,PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"
+UserMgmt,UM_50,Installer views site survey,PASSED,"Successfully Verified (1 parameters):
+Role can open and use the target feature"

@@ -91,28 +91,34 @@ def get_group_marker(keywords):
     """
     Extracts the logical group name from pytest markers.
     """
-    ignore_list = {'pytestmark', 'asyncio', 'usefixtures', 'parametrize', 'filterwarnings'}
+    ignore_list = {'pytestmark', 'asyncio', 'usefixtures', 'parametrize', 'filterwarnings',
+                   'functional', 'destructive', 'smoke'}
 
     if isinstance(keywords, dict):
-        kw_list = keywords.keys()
+        kw_list = list(keywords.keys())
     else:
-        kw_list = keywords
+        kw_list = list(keywords or [])
+
+    # Prefer suite identity over generic markers like Functional.
+    for kw in kw_list:
+        low = str(kw).lower()
+        if re.match(r"IP_\d+", str(kw), re.I) or low == "ip":
+            return "IP"
+        if re.match(r"JMB_\d+", str(kw), re.I) or low in ("jumboframes", "jumbo"):
+            return "JumboFrames"
+        if re.match(r"PROCESS_\d+", str(kw), re.I) or low in ("processmonitor", "process_monitor"):
+            return "ProcessMonitor"
+        if re.match(r"QOS_\d+", str(kw), re.I) or low == "qos":
+            return "QoS"
+        if re.match(r"UM_\d+", str(kw), re.I) or low in ("usermgmt", "user_mgmt"):
+            return "UserMgmt"
 
     for kw in kw_list:
-        if kw not in ignore_list and not kw.startswith('GUI_') and not kw.startswith('test_') and '.py' not in kw:
-            if re.match(r"IP_\d+", kw, re.I):
-                return "IP"
-            if re.match(r"JMB_\d+", kw, re.I):
-                return "JumboFrames"
-            if re.match(r"PROCESS_\d+", kw, re.I):
-                return "ProcessMonitor"
-            if re.match(r"QOS_\d+", kw, re.I) or kw.lower() == "qos":
-                return "QoS"
-            if re.match(r"UM_\d+", kw, re.I) or kw.lower() in ("usermgmt", "user_mgmt"):
-                return "UserMgmt"
-            if kw.lower() in ("processmonitor", "process_monitor"):
-                return "ProcessMonitor"
-            return kw.capitalize()
+        if kw in ignore_list or str(kw).startswith('GUI_') or str(kw).startswith('test_') or '.py' in str(kw):
+            continue
+        if str(kw).lower() in ignore_list:
+            continue
+        return str(kw).capitalize()
 
     return "Ungrouped"
 
@@ -124,16 +130,52 @@ PROC_FAILED_MARKER = "[PROC_FAILED]"
 OFFICIAL_PROCESS_REPORT_ORDER: tuple[int, ...] = tuple(range(1, 20))
 
 
-def _process_case_number(test_id: str) -> int | None:
-    match = re.match(r"PROCESS_(\d+)", str(test_id), re.I)
+def _suite_case_number(test_id: str, prefix: str) -> int | None:
+    match = re.match(rf"{re.escape(prefix)}_(\d+)", str(test_id), re.I)
     return int(match.group(1)) if match else None
+
+
+def _sort_numbered_suite_records(records: list[dict], prefix: str) -> list[dict]:
+    """Order suite rows by case number (UM_01…UM_50), not pytest run order."""
+
+    def sort_key(record: dict) -> tuple[int, int]:
+        num = _suite_case_number(record.get("id", ""), prefix)
+        if num is None:
+            return (1, 0)
+        return (0, num)
+
+    return sorted(records, key=sort_key)
+
+
+def _customer_error_message(raw: str) -> str:
+    """Strip pytest/automation noise from customer-facing failure text."""
+    err = str(raw or "").strip()
+    err = re.sub(r"^E\s+", "", err)
+    err = re.sub(r"^_pytest\.outcomes\.XFailed:\s*", "", err)
+    err = re.sub(r"^XFailed:\s*", "", err, flags=re.I)
+    err = re.sub(r"^AssertionError:\s*", "", err)
+    err = re.sub(r"^Product defect:\s*", "", err, flags=re.I)
+    # Drop trailing parenthetical notes: (plan expects deny; file input may be CSS-hidden)
+    while True:
+        cleaned = re.sub(
+            r"\s*\([^)]*(?:plan expects|CSS-hidden|xfail|Phase\s*\d|denied role|file input)[^)]*\)\s*$",
+            "",
+            err,
+            flags=re.I,
+        )
+        if cleaned == err:
+            break
+        err = cleaned.strip()
+    # Also drop any remaining trailing (...) footnotes
+    err = re.sub(r"\s*\([^)]{8,}\)\s*$", "", err).strip()
+    return err or "Unknown error"
 
 
 def _sort_process_monitor_records(records: list[dict]) -> list[dict]:
     """Present ProcessMonitor rows as PROCESS_01 … PROCESS_19, not pytest run order."""
 
     def sort_key(record: dict) -> tuple[int, int]:
-        num = _process_case_number(record.get("id", ""))
+        num = _suite_case_number(record.get("id", ""), "PROCESS")
         if num is None:
             return (2, 0)
         try:
@@ -680,8 +722,10 @@ def generate():
             color = "#10b981"
             bg = "#ecfdf5"
 
-        elif outcome == 'FAILED':
-            longrepr = test.get('call', {}).get('longrepr', '')
+        elif outcome in ("FAILED", "XFAILED"):
+            longrepr = str(test.get("call", {}).get("longrepr", "") or "")
+            # pytest-json-report uses outcome=xfailed for expected product defects.
+            is_xfail = outcome == "XFAILED" or "XFailed:" in longrepr or "_pytest.outcomes.XFailed" in longrepr
 
             proc_verdict = _process_monitor_case_reason(test, longrepr) if _is_process_monitor_test(test) else None
             if proc_verdict:
@@ -727,20 +771,31 @@ def generate():
             else:
                 stats['failed'] += 1
                 status = "FAILED"
-                lines = longrepr.strip().split('\n')
+                lines = [ln.strip() for ln in longrepr.strip().split("\n") if ln.strip()]
                 err = lines[-1] if lines else "Unknown Exception"
-                # Still show verified-so-far pills for QoS when available.
-                if is_qos_case and validated_params:
+                # Prefer the human XFailed / AssertionError message when present.
+                for ln in reversed(lines):
+                    if ln.startswith("E ") or "XFailed:" in ln or "AssertionError:" in ln:
+                        err = ln[2:].strip() if ln.startswith("E ") else ln
+                        break
+                err = re.sub(r"^_pytest\.outcomes\.XFailed:\s*", "", err)
+                err = re.sub(r"^XFailed:\s*", "", err, flags=re.I)
+                err = _customer_error_message(err)
+                title = "Known product defect:" if is_xfail else "Critical Execution Error:"
+                if (is_um_case or is_qos_case) and validated_params:
                     pills = "".join([f"<span class='param-pill'>{p}</span>" for p in validated_params])
                     reason_html = (
-                        f"<div class='reason-title' style='color:#991b1b;'>Critical Execution Error:</div>"
+                        f"<div class='reason-title' style='color:#991b1b;'>{title}</div>"
                         f"<div class='failure-list'><div class='failure-item'>{err}</div></div>"
                         f"<div class='reason-title' style='margin-top:10px;'>Expected checks:</div>"
                         f"<div class='param-container'>{pills}</div>"
                     )
                 else:
-                    reason_html = f"<div class='reason-title' style='color:#991b1b;'>Critical Execution Error:</div><div class='failure-list'><div class='failure-item'>{err}</div></div>"
-                reason_csv = f"Critical Execution Error:\n- {err}"
+                    reason_html = (
+                        f"<div class='reason-title' style='color:#991b1b;'>{title}</div>"
+                        f"<div class='failure-list'><div class='failure-item'>{err}</div></div>"
+                    )
+                reason_csv = f"{title}\n- {err}"
                 color = "#ef4444"
                 bg = "#fef2f2"
         elif outcome == "SKIPPED":
@@ -825,6 +880,14 @@ def generate():
     for group_name, records in groups.items():
         if group_name == "ProcessMonitor":
             groups[group_name] = _sort_process_monitor_records(records)
+        elif group_name == "UserMgmt":
+            groups[group_name] = _sort_numbered_suite_records(records, "UM")
+        elif group_name == "QoS":
+            groups[group_name] = _sort_numbered_suite_records(records, "QoS")
+        elif group_name == "IP":
+            groups[group_name] = _sort_numbered_suite_records(records, "IP")
+        elif group_name == "JumboFrames":
+            groups[group_name] = _sort_numbered_suite_records(records, "JMB")
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     html_filename = ARTIFACTS_DIR / f"{output_prefix}_{build_no}_Report_{date_str}.html"

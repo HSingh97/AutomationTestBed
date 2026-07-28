@@ -198,7 +198,7 @@ UM_TEST_CASES: list[dict[str, Any]] = [
         "mode": "action_denied",
         "role": "installer",
         "action": "firmware",
-        "note": "Plan expected deny; sheet notes installer still sees firmware (defect)",
+        "note": "Plan expected deny; installer may still see Upgrade/Reset (xfail if upload UI present)",
     },
     {
         "id": "UM_16",
@@ -346,7 +346,7 @@ UM_TEST_CASES: list[dict[str, Any]] = [
         "mode": "action_allowed",
         "role": "installer",
         "action": "view_logs",
-        "note": "Plan expected logs; sheet notes installer cannot see logs (defect)",
+        "note": "Plan expected logs displayed; installer has no Monitor menu (should FAIL)",
     },
     {
         "id": "UM_28",
@@ -464,7 +464,7 @@ UM_TEST_CASES: list[dict[str, Any]] = [
         "status": "implemented",
         "mode": "dual_login",
         "role": "admin",
-        "note": "Phase 3: dual Playwright contexts",
+        "note": "Dual Playwright contexts + System Logs → Users login entries",
     },
     {
         "id": "UM_38",
@@ -476,7 +476,7 @@ UM_TEST_CASES: list[dict[str, Any]] = [
         "status": "implemented",
         "mode": "dual_login",
         "role": "user",
-        "note": "Phase 3",
+        "note": "Dual contexts + System Logs → Users",
     },
     {
         "id": "UM_39",
@@ -488,7 +488,7 @@ UM_TEST_CASES: list[dict[str, Any]] = [
         "status": "implemented",
         "mode": "dual_login",
         "role": "installer",
-        "note": "Phase 3",
+        "note": "Dual contexts + System Logs → Users (admin reads log)",
     },
     {
         "id": "UM_40",
@@ -551,7 +551,7 @@ UM_TEST_CASES: list[dict[str, Any]] = [
         "mode": "action_denied",
         "role": "user",
         "action": "encryption_edit",
-        "note": "Plan expects deny; product may still show editable encryption (xfail)",
+        "note": "Denied if control missing/disabled or select rejects change",
     },
     {
         "id": "UM_45",
@@ -564,7 +564,7 @@ UM_TEST_CASES: list[dict[str, Any]] = [
         "mode": "action_denied",
         "role": "installer",
         "action": "encryption_edit",
-        "note": "Plan expects deny; product may still show editable encryption (xfail)",
+        "note": "Pass when Wireless menu hidden or encryption UI not visible/editable",
     },
     {
         "id": "UM_46",

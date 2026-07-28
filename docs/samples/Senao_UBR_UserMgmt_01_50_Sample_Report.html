@@ -1,0 +1,663 @@
+
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <title>Senao Quality Assurance Report</title>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+            body { font-family: 'Inter', sans-serif; background-color: #eef2f7; color: #334155; margin: 0; padding: 28px 18px; }
+            .wrap { max-width: min(1600px, 96vw); margin: 0 auto; }
+            .hero {
+              background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #2563eb 100%);
+              color: #fff; border-radius: 14px; padding: 22px 26px; margin-bottom: 18px;
+              display: flex; justify-content: space-between; align-items: center; gap: 20px;
+            }
+            .hero-main { flex: 1; min-width: 0; }
+            .hero h1 { margin: 0 0 8px; font-size: 24px; }
+            .hero-date { margin: 0; font-size: 14px; opacity: 0.92; font-weight: 500; }
+            .hero-logo {
+              flex-shrink: 0; background: #fff; border-radius: 10px; padding: 10px 14px;
+              box-shadow: 0 2px 8px rgba(15,23,42,0.15);
+            }
+            .hero-logo img { display: block; height: 42px; width: auto; }
+            .container { background: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03); overflow: hidden; border: 1px solid #cbd5e1; }
+            .panel-top { padding: 20px 40px; border-bottom: 1px solid #e2e8f0; background: #fff; }
+            .panel-top h2 { margin: 0 0 12px; font-size: 17px; color: #0f172a; }
+            .run-meta { display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; color: #475569; margin-top: 14px; }
+            .run-meta strong { color: #0f172a; }
+            .panel-top h3 { margin: 18px 0 12px; font-size: 15px; color: #0f172a; }
+            table.summary-top { max-width: 100%; margin-bottom: 0; }
+            .ip-cell { white-space: nowrap; font-family: Consolas, Monaco, monospace; font-size: 12px; }
+            table.matrix {
+              width: 100%; max-width: 100%; border-collapse: collapse; background: #fff;
+              border: 2px solid #cbd5e1; border-radius: 8px; overflow: hidden;
+              box-shadow: 0 1px 3px rgba(15,23,42,0.06);
+            }
+            table.matrix th, table.matrix td {
+              border: 1px solid #cbd5e1; padding: 12px 16px; text-align: center;
+            }
+            table.matrix thead th {
+              background: #f8fafc; color: #1e3a8a; font-size: 13px; font-weight: 700;
+              text-transform: uppercase; letter-spacing: 0.5px;
+            }
+            table.matrix th.corner { background: #f1f5f9; width: 100px; }
+            table.matrix th.row-label {
+              text-align: left; background: #f8fafc; color: #0f172a;
+              font-size: 13px; font-weight: 600; padding-left: 14px;
+            }
+
+            .summary-cards { display: flex; flex-wrap: wrap; padding: 30px 40px; gap: 16px; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0; }
+            .card { flex: 1 1 140px; min-width: 120px; padding: 18px 12px; border-radius: 10px; text-align: center; border: 1px solid #e2e8f0; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.02); cursor: pointer; transition: all 0.2s ease; }
+            .card:hover { transform: translateY(-3px); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+            .card.active { border-width: 2px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.05); transform: scale(0.98); }
+            .card h3 { margin: 0; font-size: 32px; font-weight: 700; color: #0f172a; pointer-events: none; }
+            .card p { margin: 8px 0 0 0; font-size: 12px; color: #64748b; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; pointer-events: none; }
+
+            .content { padding: 0 40px 40px 40px; }
+            .controls { display: flex; justify-content: space-between; align-items: center; margin: 25px 0 15px 0; }
+            .filter-group select { padding: 8px 12px; border-radius: 6px; border: 1px solid #cbd5e1; font-family: 'Inter', sans-serif; font-size: 13px; color: #334155; outline: none; cursor: pointer; }
+            .filter-group label { font-weight: 600; font-size: 13px; color: #475569; margin-right: 10px; }
+
+            table { width: 100%; border-collapse: collapse; }
+            th, td { padding: 16px 20px; text-align: left; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+            th { background-color: #ffffff; color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px; border-bottom: 2px solid #e2e8f0; }
+            tr:hover { background-color: #f8fafc; transition: background-color 0.2s ease; }
+            .group-header { background-color: #f1f5f9 !important; color: #334155; font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; padding-top: 24px; border-bottom: 2px solid #cbd5e1; }
+
+            .badge { padding: 6px 12px; border-radius: 6px; font-size: 11px; font-weight: 700; text-align: center; display: inline-block; letter-spacing: 0.5px; text-transform: uppercase; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+
+            /* New CSS for Parameters and Failures */
+            .reason-cell { font-size: 13px; color: #475569; line-height: 1.6; word-break: break-word; }
+            .reason-title { font-weight: 600; color: #0f172a; margin-bottom: 10px; }
+            .param-container { display: flex; flex-wrap: wrap; gap: 8px; }
+            .param-pill { background-color: #f1f5f9; color: #334155; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-family: 'Consolas', monospace; border: 1px solid #cbd5e1; }
+
+            .failure-list { margin-top: 6px; }
+            .failure-item { position: relative; padding-left: 14px; margin-bottom: 8px; }
+            .failure-item::before { content: "•"; position: absolute; left: 0; color: #ef4444; font-weight: bold; }
+            .failure-item b { color: #0f172a; }
+            .proc-bullet-list { margin: 4px 0 8px 18px; padding-left: 18px; }
+            .proc-bullet-list li { margin: 2px 0; font-family: 'Consolas', monospace; font-size: 12px; color: #334155; list-style-type: disc; }
+            
+            .jumbo-capture-block { margin-top: 14px; padding: 0; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
+            .capture-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 11px 16px; cursor: pointer; user-select: none; list-style: none; background: #f1f5f9; }
+            .capture-summary::-webkit-details-marker { display: none; }
+            .capture-summary::before { content: '\25B8'; color: #2563eb; font-size: 12px; transition: transform 0.15s ease; }
+            details[open] > .capture-summary::before { transform: rotate(90deg); }
+            details[open] > .capture-summary { border-bottom: 1px solid #e2e8f0; }
+            .capture-summary:hover { background: #e2e8f0; }
+            .capture-summary-title { font-weight: 700; font-size: 12px; color: #1e3a8a; }
+            .capture-summary-gist { font-size: 11px; color: #475569; }
+            .capture-summary-hint { margin-left: auto; font-size: 10px; color: #94a3b8; font-style: italic; }
+            details[open] > .capture-summary .capture-summary-hint { display: none; }
+            .jumbo-capture-block .capture-run { padding: 12px 16px; }
+            .capture-run + .capture-run { margin-top: 16px; padding-top: 14px; border-top: 1px dashed #cbd5e1; }
+            .capture-meta { margin: 0 0 8px; font-size: 12px; color: #475569; }
+            .capture-links { margin: 0 0 10px; font-size: 12px; }
+            .capture-link { color: #2563eb; font-weight: 600; text-decoration: none; }
+            .capture-link:hover { text-decoration: underline; }
+            .capture-table-wrap { overflow-x: auto; margin: 8px 0 10px; }
+            .capture-table { width: 100%; border-collapse: collapse; font-size: 11px; font-family: Consolas, Monaco, monospace; }
+            .capture-table th, .capture-table td { border: 1px solid #e2e8f0; padding: 4px 10px; text-align: left; white-space: nowrap; }
+            .capture-table th { background: #f1f5f9; color: #1e3a8a; }
+            .capture-svg-wrap { margin-top: 10px; overflow-x: auto; background: #1e1e1e; border-radius: 6px; border: 1px solid #334155; }
+            .capture-svg-wrap svg { display: block; max-width: 100%; height: auto; }
+            .capture-pre { margin: 8px 0 0; padding: 8px; background: #0f172a; color: #e2e8f0; border-radius: 6px; font-size: 11px; overflow-x: auto; }
+            .capture-muted { margin: 6px 0 0; font-size: 12px; color: #64748b; }
+            .capture-note { margin: 0 0 10px; font-size: 12px; color: #92400e; background: #fffbeb; border-left: 3px solid #f59e0b; padding: 8px 10px; border-radius: 4px; }
+            .capture-warn { color: #b45309; font-weight: 600; }
+
+            
+            .qos-traffic-details { margin-top: 12px; }
+            .qos-traffic-details > summary {
+              cursor: pointer; list-style: none; font-size: 12px; font-weight: 600;
+              color: #1d4ed8; padding: 6px 0; user-select: none;
+            }
+            .qos-traffic-details > summary::-webkit-details-marker { display: none; }
+            .qos-traffic-details > summary::before { content: "▸ "; }
+            .qos-traffic-details[open] > summary::before { content: "▾ "; }
+            .qos-table-scroll {
+              margin-top: 8px; overflow-x: auto; border-radius: 8px;
+              border: 1px solid #e2e8f0;
+            }
+            table.qos-traffic-table { width: 100%; border-collapse: collapse; font-size: 12px; background: #fff; }
+            table.qos-traffic-table th, table.qos-traffic-table td {
+              padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: left;
+              vertical-align: middle; text-transform: none; letter-spacing: 0;
+            }
+            table.qos-traffic-table thead th {
+              background: #f1f5f9; color: #475569; font-size: 11px; font-weight: 700;
+            }
+            table.qos-traffic-table .qos-q { font-weight: 700; color: #0f172a; width: 40px; }
+            table.qos-traffic-table .qos-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+            table.qos-traffic-table .qos-class { font-weight: 600; color: #1e293b; }
+            table.qos-traffic-table .qos-note { font-weight: 400; font-size: 11px; color: #64748b; margin-top: 2px; }
+            table.qos-traffic-table .qos-pir { color: #64748b; font-size: 11px; max-width: 180px; }
+            table.qos-traffic-table .qos-status {
+              display: inline-block; padding: 2px 8px; border-radius: 999px;
+              font-size: 10px; font-weight: 700; background: #f1f5f9; color: #475569;
+            }
+            table.qos-traffic-table tr.qos-row-active { background: #f0fdf4; }
+            table.qos-traffic-table tr.qos-row-active .qos-status { background: #d1fae5; color: #065f46; }
+            table.qos-traffic-table tr.qos-row-quiet { background: #fffbeb; }
+            table.qos-traffic-table tr.qos-row-quiet .qos-status { background: #fef3c7; color: #92400e; }
+            table.qos-traffic-table tr.qos-row-idle { background: #fff; color: #94a3b8; }
+            table.qos-traffic-table tr.qos-row-idle .qos-class,
+            table.qos-traffic-table tr.qos-row-idle .qos-pir { color: #94a3b8; font-weight: 500; }
+            .module-name-cell { max-width: 280px; }
+            .module-name-short { font-weight: 500; color: #334155; line-height: 1.45; }
+            tr.test-row td { padding-top: 18px; padding-bottom: 18px; }
+
+        </style>
+        <script>
+            let currentStatus = 'ALL';
+            let currentGroup = 'ALL';
+
+            function setStatusFilter(status, element) {
+                currentStatus = status;
+
+                document.querySelectorAll('.card').forEach(c => c.classList.remove('active'));
+                element.classList.add('active');
+
+                applyFilters();
+            }
+
+            function setGroupFilter(group) {
+                currentGroup = group;
+                applyFilters();
+            }
+
+            function applyFilters() {
+                const testRows = document.querySelectorAll('.test-row');
+                const groupHeaders = document.querySelectorAll('.group-header-row');
+
+                let groupVisibility = {};
+                groupHeaders.forEach(h => groupVisibility[h.dataset.group] = 0);
+
+                testRows.forEach(row => {
+                    const statusMatch = currentStatus === 'ALL' || row.dataset.status === currentStatus;
+                    const groupMatch = currentGroup === 'ALL' || row.dataset.group === currentGroup;
+
+                    if (statusMatch && groupMatch) {
+                        row.style.display = '';
+                        groupVisibility[row.dataset.group]++;
+                    } else {
+                        row.style.display = 'none';
+                    }
+                });
+
+                groupHeaders.forEach(header => {
+                    if (groupVisibility[header.dataset.group] > 0) {
+                        header.style.display = '';
+                    } else {
+                        header.style.display = 'none';
+                    }
+                });
+            }
+        </script>
+    </head>
+    <body>
+        <div class="wrap">
+            <header class="hero">
+                <div class="hero-main">
+                    <h1>Senao UBR Validation Execution Report</h1>
+                    <p class="hero-date">2026-07-28 17:46:04</p>
+                </div>
+                <div class="hero-logo">
+                    <img src="https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png" alt="Senao Networks"/>
+                </div>
+            </header>
+            
+
+            <div class="container">
+            <section class="panel-top">
+                <h2>Testbed Summary</h2>
+                
+    
+    <div class="testbed-scroll">
+      <table class="data-table summary-top summary-multi">
+        <thead>
+          <tr>
+            <th class="corner"></th>
+            <th class='device-head'><span class='device-name'>BTS</span></th><th class='device-head'><span class='device-name'>SU1</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          
+            <tr>
+              <th class="row-label">Model</th>
+              <td>UBR655</td><td>—</td>
+            </tr>
+            
+            <tr>
+              <th class="row-label">FW Version</th>
+              <td>0.0.0.842</td><td>—</td>
+            </tr>
+            
+            <tr>
+              <th class="row-label">IP</th>
+              <td><span class='ip-cell'>10.0.0.1</span></td><td><span class='ip-cell'>10.0.0.2</span></td>
+            </tr>
+            
+            <tr>
+              <th class="row-label">Vlan</th>
+              <td>Enabled ( Transparent )</td><td>—</td>
+            </tr>
+            
+        </tbody>
+      </table>
+    </div>
+    
+                <h3>Run Summary</h3>
+                <div class="run-meta">
+                    <span><strong>Build release:</strong> #UMFULL</span>
+                    <span><strong>Target device:</strong> 10.0.0.1</span>
+                </div>
+            </section>
+
+            <div class="summary-cards">
+                <div class="card active" style="border-bottom: 4px solid #64748b;" onclick="setStatusFilter('ALL', this)">
+                    <h3>50</h3><p>Total</p>
+                </div>
+                <div class="card" style="border-bottom: 4px solid #10b981;" onclick="setStatusFilter('PASSED', this)">
+                    <h3>47</h3><p style="color: #10b981;">Pass</p>
+                </div>
+                <div class="card" style="border-bottom: 4px solid #f59e0b;" onclick="setStatusFilter('PARTIAL', this)">
+                    <h3>0</h3><p style="color: #f59e0b;">Partial</p>
+                </div>
+                <div class="card" style="border-bottom: 4px solid #ef4444;" onclick="setStatusFilter('FAILED', this)">
+                    <h3>3</h3><p style="color: #ef4444;">Fail</p>
+                </div>
+                <div class="card" style="border-bottom: 4px solid #94a3b8;" onclick="setStatusFilter('Not available', this)">
+                    <h3>0</h3><p style="color: #64748b;">Not available</p>
+                </div>
+                <div class="card" style="border-bottom: 4px solid #475569;" onclick="setStatusFilter('Not tested', this)">
+                    <h3>0</h3><p style="color: #475569;">Not tested</p>
+                </div>
+            </div>
+
+            <div class="content">
+                <div class="controls">
+                    <div class="filter-group">
+                        <label for="groupFilter">Filter by Test Group:</label>
+                        <select id="groupFilter" onchange="setGroupFilter(this.value)">
+                            <option value="ALL">All Groups</option>
+                            <option value="UserMgmt">UserMgmt</option>
+
+                        </select>
+                    </div>
+                </div>
+
+                <table class="results-table">
+                    <thead>
+                        <tr>
+                            <th style="width:10%">Module ID</th>
+                            <th style="width:26%">Module Name</th>
+                            <th style="width:10%">Status</th>
+                            <th style="width:54%">Execution Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+    
+                        <tr class="group-header-row" data-group="UserMgmt">
+                            <td colspan="4" class="group-header">↳ Test Group: UserMgmt</td>
+                        </tr>
+        
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_01</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin login with default password</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (2 parameters):</div><div class='param-container'><span class='param-pill'>Role credentials accepted</span><span class='param-pill'>Post-login landing matches role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_02</td>
+                                <td class="module-name-cell"><div class="module-name-short">User login with default password</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (2 parameters):</div><div class='param-container'><span class='param-pill'>Role credentials accepted</span><span class='param-pill'>Post-login landing matches role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_03</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer login with default password</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (2 parameters):</div><div class='param-container'><span class='param-pill'>Role credentials accepted</span><span class='param-pill'>Post-login landing matches role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_04</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin changes User password</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (2 parameters):</div><div class='param-container'><span class='param-pill'>Admin opened password settings</span><span class='param-pill'>User password field reachable</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_05</td>
+                                <td class="module-name-cell"><div class="module-name-short">User attempts to change password</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_06</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer attempts to change password</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_07</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin modifies wireless configuration</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_08</td>
+                                <td class="module-name-cell"><div class="module-name-short">User attempts to modify SSID</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_09</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer modifies Quick Start IP</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_10</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin initiates reboot</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_11</td>
+                                <td class="module-name-cell"><div class="module-name-short">User attempts reboot</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="FAILED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_12</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer attempts reboot</div></td>
+                                <td><span class="badge" style="background-color: #fef2f2; color: #ef4444; border: 1px solid #ef444440;">FAILED</span></td>
+                                <td class="reason-cell"><div class='reason-title' style='color:#991b1b;'>Known product defect:</div><div class='failure-list'><div class='failure-item'>Installer still sees Reboot</div></div><div class='reason-title' style='margin-top:10px;'>Expected checks:</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_13</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin upgrades firmware</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_14</td>
+                                <td class="module-name-cell"><div class="module-name-short">User attempts firmware upgrade</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="FAILED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_15</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer attempts firmware upgrade</div></td>
+                                <td><span class="badge" style="background-color: #fef2f2; color: #ef4444; border: 1px solid #ef444440;">FAILED</span></td>
+                                <td class="reason-cell"><div class='reason-title' style='color:#991b1b;'>Known product defect:</div><div class='failure-list'><div class='failure-item'>Firmware upload UI still present for denied role</div></div><div class='reason-title' style='margin-top:10px;'>Expected checks:</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_16</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin downloads configuration file</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_17</td>
+                                <td class="module-name-cell"><div class="module-name-short">User attempts config download</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_18</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer attempts config download</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_19</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin initiates factory reset</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_20</td>
+                                <td class="module-name-cell"><div class="module-name-short">User attempts factory reset</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_21</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer attempts factory reset</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_22</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin runs link test tool</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_23</td>
+                                <td class="module-name-cell"><div class="module-name-short">User attempts link test</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_24</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer attempts link test</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_25</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin views logs</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_26</td>
+                                <td class="module-name-cell"><div class="module-name-short">User views logs</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="FAILED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_27</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer views logs</div></td>
+                                <td><span class="badge" style="background-color: #fef2f2; color: #ef4444; border: 1px solid #ef444440;">FAILED</span></td>
+                                <td class="reason-cell"><div class='reason-title' style='color:#991b1b;'>Critical Execution Error:</div><div class='failure-list'><div class='failure-item'>Monitor menu not visible — cannot view System Logs</div></div><div class='reason-title' style='margin-top:10px;'>Expected checks:</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_28</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin runs diagnostics (Ping/Traceroute)</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_29</td>
+                                <td class="module-name-cell"><div class="module-name-short">User runs diagnostics (Ping/Traceroute)</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_30</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer runs diagnostics (Ping/Traceroute)</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_31</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin login with wrong password</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (2 parameters):</div><div class='param-container'><span class='param-pill'>Wrong password rejected</span><span class='param-pill'>Login form still shown</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_32</td>
+                                <td class="module-name-cell"><div class="module-name-short">User login with wrong password</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (2 parameters):</div><div class='param-container'><span class='param-pill'>Wrong password rejected</span><span class='param-pill'>Login form still shown</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_33</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer login with wrong password</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (2 parameters):</div><div class='param-container'><span class='param-pill'>Wrong password rejected</span><span class='param-pill'>Login form still shown</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_34</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin session timeout</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (2 parameters):</div><div class='param-container'><span class='param-pill'>Idle wait completed</span><span class='param-pill'>Session expired to login form</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_35</td>
+                                <td class="module-name-cell"><div class="module-name-short">User session timeout</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (2 parameters):</div><div class='param-container'><span class='param-pill'>Idle wait completed</span><span class='param-pill'>Session expired to login form</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_36</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer session timeout</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (2 parameters):</div><div class='param-container'><span class='param-pill'>Idle wait completed</span><span class='param-pill'>Session expired to login form</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_37</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin attempts simultaneous login</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (3 parameters):</div><div class='param-container'><span class='param-pill'>First session logged in</span><span class='param-pill'>Second concurrent session logged in</span><span class='param-pill'>Logins tracked in System Logs → Users</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_38</td>
+                                <td class="module-name-cell"><div class="module-name-short">User attempts simultaneous login</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (3 parameters):</div><div class='param-container'><span class='param-pill'>First session logged in</span><span class='param-pill'>Second concurrent session logged in</span><span class='param-pill'>Logins tracked in System Logs → Users</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_39</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer attempts simultaneous login</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (3 parameters):</div><div class='param-container'><span class='param-pill'>First session logged in</span><span class='param-pill'>Second concurrent session logged in</span><span class='param-pill'>Logins tracked in System Logs → Users</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_40</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin disconnects wireless link</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_41</td>
+                                <td class="module-name-cell"><div class="module-name-short">User attempts disconnect wireless link</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_42</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer attempts disconnect wireless link</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_43</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin changes encryption type</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_44</td>
+                                <td class="module-name-cell"><div class="module-name-short">User attempts encryption change</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_45</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer attempts encryption change</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_46</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin modifies VLAN ID</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_47</td>
+                                <td class="module-name-cell"><div class="module-name-short">User attempts VLAN modification</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Sensitive control absent or disabled for role</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_48</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer modifies VLAN ID</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_49</td>
+                                <td class="module-name-cell"><div class="module-name-short">Admin views site survey</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                            <tr class="test-row" data-group="UserMgmt" data-status="PASSED">
+                                <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">UM_50</td>
+                                <td class="module-name-cell"><div class="module-name-short">Installer views site survey</div></td>
+                                <td><span class="badge" style="background-color: #ecfdf5; color: #10b981; border: 1px solid #10b98140;">PASSED</span></td>
+                                <td class="reason-cell"><div class='reason-title'>Successfully Verified (1 parameters):</div><div class='param-container'><span class='param-pill'>Role can open and use the target feature</span></div></td>
+                            </tr>
+            
+                    </tbody>
+                </table>
+            </div>
+            </div>
+        </div>
+    </body>
+    </html>
+    

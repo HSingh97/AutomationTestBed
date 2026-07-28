@@ -360,6 +360,8 @@ class MonitorLocators:
     LOG_DEVICE_TAB = "li#Device > a"
     LOG_TEMPERATURE_TAB = "li#Temperature > a"
     LOG_SYSTEM_TAB = "li#System > a"
+    # UI label is "Users"; LuCI id/onclick use Sessions (get_logs('Sessions')).
+    LOG_USERS_TAB = "li#Sessions > a"
     LOG_REFRESH_BUTTON = "input.cbi-button[value='Refresh']"
     LOG_CLEAR_BUTTON = "#clr_button"
     LOG_TEXTAREA = "#result"
