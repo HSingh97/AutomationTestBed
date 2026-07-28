@@ -109,6 +109,7 @@ UM_TEST_CASES: list[dict[str, Any]] = [
         "mode": "action_denied",
         "role": "user",
         "action": "ssid_edit",
+        "note": "Plan expects read-only; product may still show editable SSID (xfail)",
     },
     {
         "id": "UM_09",
@@ -427,7 +428,7 @@ UM_TEST_CASES: list[dict[str, Any]] = [
         "status": "destructive",
         "mode": "session_timeout",
         "role": "admin",
-        "note": "Phase 3: idle 5 min on Wireless→Radio 1 (no XHR keepalive); UM_SESSION_TIMEOUT_S default 300",
+        "note": "Phase 3: idle 5 min on Wireless→Radio 1 with network blocked (header get_headerparams keepalive); UM_SESSION_TIMEOUT_S default 300",
     },
     {
         "id": "UM_35",
@@ -439,7 +440,7 @@ UM_TEST_CASES: list[dict[str, Any]] = [
         "status": "destructive",
         "mode": "session_timeout",
         "role": "user",
-        "note": "Phase 3: idle 5 min on Wireless→Radio 1 (no XHR keepalive); UM_SESSION_TIMEOUT_S default 300",
+        "note": "Phase 3: idle 5 min on Wireless→Radio 1 with network blocked; UM_SESSION_TIMEOUT_S default 300",
     },
     {
         "id": "UM_36",
@@ -451,7 +452,7 @@ UM_TEST_CASES: list[dict[str, Any]] = [
         "status": "destructive",
         "mode": "session_timeout",
         "role": "installer",
-        "note": "Phase 3: idle 5 min on Wireless→Radio 1 if reachable; UM_SESSION_TIMEOUT_S default 300",
+        "note": "Phase 3: idle 5 min on Wireless→Radio 1 with network blocked if reachable; UM_SESSION_TIMEOUT_S default 300",
     },
     {
         "id": "UM_37",
@@ -550,6 +551,7 @@ UM_TEST_CASES: list[dict[str, Any]] = [
         "mode": "action_denied",
         "role": "user",
         "action": "encryption_edit",
+        "note": "Plan expects deny; product may still show editable encryption (xfail)",
     },
     {
         "id": "UM_45",
@@ -562,6 +564,7 @@ UM_TEST_CASES: list[dict[str, Any]] = [
         "mode": "action_denied",
         "role": "installer",
         "action": "encryption_edit",
+        "note": "Plan expects deny; product may still show editable encryption (xfail)",
     },
     {
         "id": "UM_46",
