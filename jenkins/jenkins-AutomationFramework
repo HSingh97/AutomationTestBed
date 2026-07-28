@@ -31,6 +31,9 @@ def parseMarkerList(String raw) {
             if (u == 'QOS') {
                 return 'QOS'
             }
+            if (u == 'USERMGMT' || u == 'USER_MGMT') {
+                return 'UserMgmt'
+            }
             return u
         }
 }
@@ -82,7 +85,7 @@ pipeline {
         string(
             name: 'TEST_MARKERS',
             defaultValue: 'GUI',
-            description: 'Comma-separated pytest suites: GUI, IP, IPv4, IPv6, Regression, JumboFrames, ProcessMonitor, QoS (e.g. QoS or GUI,IP)'
+            description: 'Comma-separated pytest suites: GUI, IP, IPv4, IPv6, Regression, JumboFrames, ProcessMonitor, QoS, UserMgmt (e.g. UserMgmt or GUI,IP)'
         )
         string(
             name: 'TEST_FILTER',
@@ -178,21 +181,27 @@ pipeline {
                         extraFlags << '--allow-qos-lab'
                         extraFlags << '--allow-qos-destructive'
                     }
+                    if (markers.contains('UserMgmt')) {
+                        paths << 'tests/UserMgmt/'
+                        mParts << 'UserMgmt'
+                        extraFlags << '--allow-um-lab'
+                        extraFlags << '--allow-um-destructive'
+                    }
 
                     def unknown = markers.findAll { m ->
-                        !['GUI', 'IP', 'IPv4', 'IPv6', 'REGRESSION', 'JUMBOFRAMES', 'ProcessMonitor', 'QOS'].contains(m)
+                        !['GUI', 'IP', 'IPv4', 'IPv6', 'REGRESSION', 'JUMBOFRAMES', 'ProcessMonitor', 'QOS', 'UserMgmt'].contains(m)
                     }
                     if (!unknown.isEmpty()) {
-                        error("Unknown TEST_MARKERS: ${unknown.join(', ')}. Use GUI, IP, IPv4, IPv6, Regression, JumboFrames, ProcessMonitor, QoS")
+                        error("Unknown TEST_MARKERS: ${unknown.join(', ')}. Use GUI, IP, IPv4, IPv6, Regression, JumboFrames, ProcessMonitor, QoS, UserMgmt")
                     }
 
                     def kParts = (params.TEST_FILTER ?: '').split(',')
                         .collect { it.trim() }
                         .findAll { it }
-                    // ProcessMonitor-only: do not apply GUI default -k filter.
-                    if (markers.contains('ProcessMonitor') && !markers.contains('GUI') && !markersIncludeIpSuite(markers)) {
+                    // ProcessMonitor / QoS / UserMgmt-only: do not apply GUI default -k filter.
+                    if ((markers.contains('ProcessMonitor') || markers.contains('QOS') || markers.contains('UserMgmt')) && !markers.contains('GUI') && !markersIncludeIpSuite(markers)) {
                         def guiDefault = ['Summary', 'TopPanel', 'WirelessProperties']
-                        if (kParts.isEmpty() || kParts == guiDefault || kParts == ['ProcessMonitor']) {
+                        if (kParts.isEmpty() || kParts == guiDefault || kParts == ['ProcessMonitor'] || kParts == ['QoS'] || kParts == ['UserMgmt']) {
                             kParts = []
                         }
                     }
@@ -400,7 +409,7 @@ pipeline {
                     <p><strong>Remote IPv6:</strong> ${params['Remote IPv6 Address'] ?: '(profile default)'}</p>
                     <p><strong>Profile:</strong> ${env.PROFILE_NAME ?: 'default'} (auto)</p>
                     <p><strong>Recovery profile:</strong> ${params.RECOVERY_PROFILE_NAME}</p>
-                    <p><strong>Destructive cases:</strong> enabled when IP / JumboFrames / ProcessMonitor / QoS markers are selected</p>
+                    <p><strong>Destructive cases:</strong> enabled when IP / JumboFrames / ProcessMonitor / QoS / UserMgmt markers are selected</p>
                 """
 
                 try {

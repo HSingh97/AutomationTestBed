@@ -171,6 +171,18 @@ def pytest_addoption(parser):
         help="Allow QoS cases that reboot the BTS (e.g. QoS_21 retention).",
     )
     group.addoption(
+        "--allow-um-lab",
+        action="store_true",
+        default=False,
+        help="Run User Management lab cases (tests/UserMgmt/) against live LuCI GUI.",
+    )
+    group.addoption(
+        "--allow-um-destructive",
+        action="store_true",
+        default=False,
+        help="Allow UM cases that reboot, upgrade firmware, factory-reset, or dual-login.",
+    )
+    group.addoption(
         "--attenuator-backend",
         action="store",
         default="auto",
@@ -850,6 +862,20 @@ def pytest_configure(config):
         "markers",
         "IPv6: IP suite — IPv6 stack cases (pytest -m IPv6)",
     )
+    config.addinivalue_line(
+        "markers",
+        "UserMgmt: User Management suite (tests/UserMgmt/) — UM_01–UM_50",
+    )
+    try:
+        from config.um_test_cases import UM_TEST_CASES
+
+        for um_case in UM_TEST_CASES:
+            config.addinivalue_line(
+                "markers",
+                f"{um_case['id']}: {um_case.get('title', um_case['id'])}",
+            )
+    except Exception:
+        pass
 
     if config.getoption("--allow-ip-suite") and not config.getoption("--no-ip-stop-on-first-fail"):
         profile_name = config.getoption("--profile") or "default"

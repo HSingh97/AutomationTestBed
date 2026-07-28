@@ -108,6 +108,8 @@ def get_group_marker(keywords):
                 return "ProcessMonitor"
             if re.match(r"QOS_\d+", kw, re.I) or kw.lower() == "qos":
                 return "QoS"
+            if re.match(r"UM_\d+", kw, re.I) or kw.lower() in ("usermgmt", "user_mgmt"):
+                return "UserMgmt"
             if kw.lower() in ("processmonitor", "process_monitor"):
                 return "ProcessMonitor"
             return kw.capitalize()
@@ -317,6 +319,18 @@ def qos_verified_params_fallback(case_id: str) -> list[str]:
     try:
         from config.qos_test_cases import case_by_id
         from utils.qos_flows import _MODE_VERIFIED_PARAMS
+
+        mode = str(case_by_id(case_id).get("mode") or "")
+        return list(_MODE_VERIFIED_PARAMS.get(mode, []))
+    except Exception:
+        return []
+
+
+def um_verified_params_fallback(case_id: str) -> list[str]:
+    """Catalog params for a UM case when stdout has no pills."""
+    try:
+        from config.um_test_cases import case_by_id
+        from utils.um_flows import _MODE_VERIFIED_PARAMS
 
         mode = str(case_by_id(case_id).get("mode") or "")
         return list(_MODE_VERIFIED_PARAMS.get(mode, []))
@@ -560,18 +574,40 @@ def generate():
                     except Exception:
                         test_name = _humanize_module_name(nodeid, test_id)
                 else:
-                    match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
-                    if match:
-                        test_id = match.group(1).upper()
-                        raw_name = match.group(2)
-                        parts = raw_name.split('_')
-                        if len(parts) >= 2 and parts[0] == 'summary':
-                            test_name = '-'.join(p.capitalize() for p in parts[::-1])
+                    um_kw = next(
+                        (
+                            str(k)
+                            for k in test.get("keywords", [])
+                            if re.match(r"UM_\d+", str(k), re.I)
+                        ),
+                        None,
+                    )
+                    um_fn = re.search(r"test_um_(\d+)\b", nodeid, re.I)
+                    if um_kw or um_fn:
+                        if um_kw:
+                            m = re.match(r"UM_(\d+)", um_kw, re.I)
+                            test_id = f"UM_{int(m.group(1)):02d}" if m else um_kw
                         else:
-                            test_name = '-'.join(p.capitalize() for p in parts)
+                            test_id = f"UM_{int(um_fn.group(1)):02d}"
+                        try:
+                            from config.um_test_cases import case_by_id
+
+                            test_name = case_by_id(test_id).get("title") or test_id
+                        except Exception:
+                            test_name = _humanize_module_name(nodeid, test_id)
                     else:
-                        test_id = "N/A"
-                        test_name = nodeid.split('::')[-1]
+                        match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
+                        if match:
+                            test_id = match.group(1).upper()
+                            raw_name = match.group(2)
+                            parts = raw_name.split('_')
+                            if len(parts) >= 2 and parts[0] == 'summary':
+                                test_name = '-'.join(p.capitalize() for p in parts[::-1])
+                            else:
+                                test_name = '-'.join(p.capitalize() for p in parts)
+                        else:
+                            test_id = "N/A"
+                            test_name = nodeid.split('::')[-1]
 
         group_name = get_group_marker(test.get('keywords', []))
         outcome = _effective_outcome_for_report(test).upper()
@@ -582,6 +618,7 @@ def generate():
         qos_table_html = extract_qos_traffic_table_html(test)
         qos_table_csv = ""
         is_qos_case = bool(re.match(r"QoS_\d+", str(test_id), re.I)) or group_name == "QoS"
+        is_um_case = bool(re.match(r"UM_\d+", str(test_id), re.I)) or group_name == "UserMgmt"
         if is_qos_case:
             evidence = load_qos_case_evidence(str(test_id))
             if not validated_params:
@@ -593,6 +630,8 @@ def generate():
             if not qos_table_html:
                 qos_table_html = str(evidence.get("table_html") or "")
             qos_table_csv = str(evidence.get("table_text") or "")
+        elif is_um_case and not validated_params:
+            validated_params = um_verified_params_fallback(str(test_id))
 
         if outcome == 'PASSED':
             stats['passed'] += 1

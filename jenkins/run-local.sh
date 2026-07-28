@@ -9,6 +9,8 @@
 #   TEST_MARKERS=IPv6 ./jenkins/run-local.sh
 #   TEST_MARKERS=IP TEST_FILTER=IP_01 or IP_02 ./jenkins/run-local.sh
 #   TEST_MARKERS=ProcessMonitor ./jenkins/run-local.sh
+#   TEST_MARKERS=QoS ./jenkins/run-local.sh
+#   TEST_MARKERS=UserMgmt SKIP_TESTBED_BOOTSTRAP=true FALLBACK_IP=10.0.0.1 ./jenkins/run-local.sh
 #   TEST_MARKERS=ProcessMonitor SKIP_TESTBED_BOOTSTRAP=true FALLBACK_IP=192.168.2.1 ./jenkins/run-local.sh
 
 set -euo pipefail
@@ -44,6 +46,8 @@ normalize_marker() {
     IPV4) echo "IPv4" ;;
     IPV6) echo "IPv6" ;;
     PROCESSMONITOR) echo "ProcessMonitor" ;;
+    QOS) echo "QoS" ;;
+    USERMGMT|USER_MGMT) echo "UserMgmt" ;;
     *) echo "$u" ;;
   esac
 }
@@ -56,7 +60,7 @@ for m in "${MARKER_ARR[@]}"; do
   [[ -n "$m" ]] && MARKERS+=("$m")
 done
 if [[ ${#MARKERS[@]} -eq 0 ]]; then
-  echo "TEST_MARKERS is empty. Use GUI, IP, IPv4, IPv6, Regression, JumboFrames, and/or ProcessMonitor." >&2
+  echo "TEST_MARKERS is empty. Use GUI, IP, IPv4, IPv6, Regression, JumboFrames, ProcessMonitor, QoS, and/or UserMgmt." >&2
   exit 1
 fi
 
@@ -84,8 +88,8 @@ markers_include_ip_suite() {
   has_marker IP || has_marker IPv4 || has_marker IPv6
 }
 
-# ProcessMonitor-only runs must not inherit the GUI default -k filter.
-if has_marker ProcessMonitor && ! has_marker GUI && ! markers_include_ip_suite; then
+# ProcessMonitor / QoS / UserMgmt-only runs must not inherit the GUI default -k filter.
+if (has_marker ProcessMonitor || has_marker QoS || has_marker UserMgmt) && ! has_marker GUI && ! markers_include_ip_suite; then
   if [[ -z "${TEST_FILTER+x}" ]] || [[ "${TEST_FILTER}" == "Summary, TopPanel, WirelessProperties" ]]; then
     TEST_FILTER=""
   fi
@@ -161,10 +165,20 @@ if has_marker ProcessMonitor; then
   M_PARTS+=("ProcessMonitor")
   EXTRA_FLAGS+=("--allow-process-monitor" "--allow-destructive-process")
 fi
+if has_marker QOS || has_marker QoS; then
+  TEST_PATHS+=("tests/QoS/")
+  M_PARTS+=("QoS")
+  EXTRA_FLAGS+=("--allow-qos-lab" "--allow-qos-destructive")
+fi
+if has_marker UserMgmt; then
+  TEST_PATHS+=("tests/UserMgmt/")
+  M_PARTS+=("UserMgmt")
+  EXTRA_FLAGS+=("--allow-um-lab" "--allow-um-destructive")
+fi
 
 for m in "${MARKERS[@]}"; do
   case "$m" in
-    GUI|IP|IPv4|IPv6|REGRESSION|JUMBOFRAMES|ProcessMonitor) ;;
+    GUI|IP|IPv4|IPv6|REGRESSION|JUMBOFRAMES|ProcessMonitor|QoS|UserMgmt) ;;
     *) echo "Unknown TEST_MARKERS entry: $m" >&2; exit 1 ;;
   esac
 done

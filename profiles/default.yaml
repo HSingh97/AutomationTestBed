@@ -221,6 +221,17 @@ ip_tests:
   static_route_gateway: ""
   static_route_ping_target: ""
 
+# User Management (UM_01–UM_50) LuCI role credentials. Env UM_* overrides these.
+um:
+  admin_user: admin
+  admin_password: "admin1234"
+  factory_admin_user: admin
+  factory_admin_password: "admin1234"
+  user_user: user
+  user_password: senao
+  installer_user: installer
+  installer_password: senao123
+
 capture:
   enabled: true
   username: root

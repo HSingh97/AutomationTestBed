@@ -7,6 +7,7 @@
 #   ./jenkins/trigger-build.sh --filter IP_18 --markers IP
 #   ./jenkins/trigger-build.sh --markers ProcessMonitor --filter ProcessMonitor
 #   ./jenkins/trigger-build.sh --markers ProcessMonitor --skip-bootstrap
+#   ./jenkins/trigger-build.sh --markers UserMgmt --skip-bootstrap
 #
 # Auth (pick one):
 #   export JENKINS_USER=harman JENKINS_TOKEN=<api-token>
@@ -92,11 +93,15 @@ is_qos_markers() {
   echo ",${TEST_MARKERS}," | grep -qi ',QoS,'
 }
 
+is_usermgmt_markers() {
+  echo ",${TEST_MARKERS}," | grep -qiE ',UserMgmt,|,User_Mgmt,'
+}
+
 if [[ -z "${TEST_FILTER}" ]]; then
-  if is_process_monitor_markers || is_qos_markers; then
+  if is_process_monitor_markers || is_qos_markers || is_usermgmt_markers; then
     TEST_FILTER=""
   else
-    echo "TEST_FILTER is required (e.g. JMB_04 or --filter JMB_04). For ProcessMonitor use --markers ProcessMonitor. For QoS use --markers QoS." >&2
+    echo "TEST_FILTER is required (e.g. JMB_04 or --filter JMB_04). For ProcessMonitor use --markers ProcessMonitor. For QoS use --markers QoS. For UserMgmt use --markers UserMgmt." >&2
     usage >&2
     exit 1
   fi
@@ -111,6 +116,8 @@ elif [[ "${TEST_MARKERS}" == "JumboFrames" && "${TEST_FILTER}" =~ ^PROCESS ]]; t
   TEST_MARKERS="ProcessMonitor"
 elif [[ "${TEST_MARKERS}" == "JumboFrames" && "${TEST_FILTER}" =~ ^[Qq]o[Ss] ]]; then
   TEST_MARKERS="QoS"
+elif [[ "${TEST_MARKERS}" == "JumboFrames" && "${TEST_FILTER}" =~ ^UM_ ]]; then
+  TEST_MARKERS="UserMgmt"
 fi
 
 resolve_auth() {

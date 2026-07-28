@@ -30,3 +30,9 @@ tests/HTTPS/__pycache__
 tests/SMTP/__pycache__
 tests/POP3/__pycache__
 tests/IMAP/__pycache__
+docs/samples/Senao_UBR_QoS_01_10_Sample_Report.csv
+docs/samples/Senao_UBR_QoS_01_10_Sample_Report.html
+docs/samples/Senao_UBR_QoS_01_40_Full_Report.csv
+docs/samples/Senao_UBR_QoS_01_40_Full_Report.html
+docs/samples/Senao_UBR_QoS_11_20_Sample_Report.csv
+docs/samples/Senao_UBR_QoS_11_20_Sample_Report.html

@@ -277,6 +277,15 @@ class ManagementLocators:
     LOCATION_PHONE_XPATH = '//*[@id="cusphone"]/div/input'
     LOCATION_DISTANCE_XPATH = '//*[@id="maincontent"]/div/div[1]/fieldset/form/div[8]/div/select'
 
+    # Management → Services → Passwords
+    SUBMENU_SERVICES = "ul.dropdown-menu a[href*='/system/services']"
+    SERVICES_PATH = "/admin/system/services"
+    TAB_PASSWORDS = "ul.cbi-tabmenu a:has-text('Passwords')"
+    ADMIN_PASSWORD_INPUT = "#adminpass_input, input[name='uhttpd.main.adminpwd']"
+    USER_PASSWORD_INPUT = "#userpass_input, input[name='uhttpd.main.userpwd']"
+    INSTALLER_PASSWORD_INPUT = "#installerpass_input, input[name='uhttpd.main.installerpwd']"
+    PASSWORDS_APPLY = "input.cbi-button[value='Apply'], #apply_button, button:has-text('Apply')"
+
 
 class MonitorLocators:
     MENU_MONITOR = CommonLocators.MENU_MONITOR
