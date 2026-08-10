@@ -27,7 +27,7 @@ testbed:
   configure_vlan_modes: true
   strict_ipv6: true
   recovery:
-    bts_fallback_ipv4: "10.0.0.1"
+    bts_fallback_ipv4: "10.0.0.120"
   factory_defaults:
     bts_vlan_mode: transparent
     cpe_vlan_mode: transparent

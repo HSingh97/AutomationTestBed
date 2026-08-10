@@ -310,7 +310,9 @@ pipeline {
                             def cv = env.QOS_CVLAN ?: '101'
                             // Lab pin: always capture sua4 unless job overrides QOS_SUA.
                             def sua = env.QOS_SUA ?: 'sua4'
-                            qosEnv = "export QOS_SVLAN=\"${sv}\" QOS_CVLAN=\"${cv}\" QOS_SUA=\"${sua}\" PROFILE_NAME=\"${profileName}\"; "
+                            // Prefer job QOS_DUT_HOST; otherwise use FALLBACK_IP (BTS IPv4).
+                            def qosDut = (env.QOS_DUT_HOST ?: fallbackIp ?: '10.0.0.1').trim()
+                            qosEnv = "export QOS_DUT_HOST=\"${qosDut}\" QOS_SVLAN=\"${sv}\" QOS_CVLAN=\"${cv}\" QOS_SUA=\"${sua}\" PROFILE_NAME=\"${profileName}\"; "
                         }
                         sh """
                             export PYTHONUNBUFFERED=1
