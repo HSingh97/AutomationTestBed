@@ -23,7 +23,13 @@ from utils.net_utils import format_ssh_host, is_ipv6_literal, normalize_ip
 
 
 def ratio_to_uci_dl_percent(ratio: str) -> str:
-    """Map DL:UL (e.g. 75:25) to ath*qos dlulratio UCI value (downlink percent)."""
+    """Map DL:UL (e.g. 75:25) to ath*qos dlulratio UCI value (downlink percent).
+
+    ``auto`` (case-insensitive) maps to UCI ``0`` — DUT automatic DL/UL.
+    """
+    clean = str(ratio or "").strip().lower()
+    if clean in {"auto", "0", "0:0"}:
+        return "0"
     dl_part, ul_part = ratio.split(":")
     dl_val = float(dl_part)
     ul_val = float(ul_part)

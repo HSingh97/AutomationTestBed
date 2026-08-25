@@ -234,7 +234,13 @@ def lab_pc_vlan_plan(profile_tb: dict[str, Any], *, side: str) -> dict[str, Any]
     cpe_pc = pc_tag.get("cpe", {}) or {}
 
     if side == "bts":
-        mode = str(bts_pc.get("mode", "qinq"))
+        mode = str(bts_pc.get("mode", "qinq")).lower()
+        if mode in ("untagged", "native") or bts_pc.get("untagged"):
+            return {
+                "mode": "untagged",
+                "vlan_id": 0,
+                "untagged": True,
+            }
         if mode == "single":
             return {
                 "mode": "single",

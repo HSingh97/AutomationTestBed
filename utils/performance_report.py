@@ -559,7 +559,8 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
     if not records:
         return ""
 
-    col_count = 18
+    # Bandwidth..Duration(7) + Unit(1) + SNR(2) + Tx/Rx rate(2) + Total(1) = 13
+    col_count = 13
     bandwidths = _unique_bandwidths(records)
     body_rows: list[str] = []
     for rec_idx, record in enumerate(records):
@@ -583,10 +584,8 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
 
         if row["skipped"]:
             total_cell = "<span class='muted'>—</span>"
-            remarks = escape(row["error"][:120] if row["error"] else "Skipped")
         else:
             total_cell = _throughput_cell(row["bidi_mbps"], row["bidi_target"])
-            remarks = _record_remarks_cell(record)
 
         for idx, unit in enumerate(units):
             shared = ""
@@ -604,7 +603,6 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
             if idx == 0:
                 trailing = f"""
             <td rowspan="{row_span}" class="total-cell">{total_cell}</td>
-            <td rowspan="{row_span}" class="remarks-cell">{remarks}</td>
                 """
             body_rows.append(
                 f"""
@@ -613,12 +611,8 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
             <td class="unit-cell">{unit['unit_ip']}</td>
             <td>{escape(str(unit['snr_local']))}</td>
             <td>{escape(str(unit['snr_remote']))}</td>
-            <td>{escape(str(unit['rssi_local']))}</td>
-            <td>{escape(str(unit['rssi_remote']))}</td>
             <td>{unit['tx_rate']}</td>
             <td>{unit['rx_rate']}</td>
-            <td>{escape(str(unit['tx_traffic']))}</td>
-            <td>{escape(str(unit['rx_traffic']))}</td>
             {trailing}
           </tr>
                 """
@@ -640,9 +634,9 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
           <colgroup>
             <col class="col-bw"/><col class="col-mimo"/><col class="col-pkt"/><col class="col-mcs-group"/>
             <col class="col-ratio"/><col class="col-noise"/><col class="col-dur"/><col class="col-unit"/>
-            <col class="col-snr"/><col class="col-snr"/><col class="col-rssi"/><col class="col-rssi"/>
-            <col class="col-rate"/><col class="col-rate"/><col class="col-tput"/><col class="col-tput"/>
-            <col class="col-total"/><col class="col-remarks"/>
+            <col class="col-snr"/><col class="col-snr"/>
+            <col class="col-rate"/><col class="col-rate"/>
+            <col class="col-total"/>
           </colgroup>
           <thead>
             <tr>
@@ -655,17 +649,11 @@ def _render_throughput_matrix(records: list[dict[str, Any]]) -> str:
               <th rowspan="2">Duration<br/><span class="muted">s</span></th>
               <th rowspan="2">Unit / IP</th>
               <th colspan="2">SNR</th>
-              <th colspan="2">RSSI</th>
               <th rowspan="2">Tx Data Rate<br/><span class="muted">Mb/s</span></th>
               <th rowspan="2">Rx Data Rate<br/><span class="muted">Mb/s</span></th>
-              <th rowspan="2">Tx Traffic<br/><span class="muted">Mb/s</span></th>
-              <th rowspan="2">Rx Traffic<br/><span class="muted">Mb/s</span></th>
               <th rowspan="2">Total Throughput<br/><span class="muted">Mb/s</span></th>
-              <th rowspan="2">Remarks</th>
             </tr>
             <tr>
-              <th>Local A1/A2</th>
-              <th>Remote A1/A2</th>
               <th>Local A1/A2</th>
               <th>Remote A1/A2</th>
             </tr>
@@ -929,12 +917,10 @@ def write_html_report(
     table.throughput-sheet col.col-noise {{ width: 5%; }}
     table.throughput-sheet col.col-dur {{ width: 4%; }}
     table.throughput-sheet col.col-unit {{ width: 18%; }}
-    table.throughput-sheet col.col-snr {{ width: 5%; }}
-    table.throughput-sheet col.col-rssi {{ width: 5%; }}
-    table.throughput-sheet col.col-rate {{ width: 7%; }}
-    table.throughput-sheet col.col-tput {{ width: 5%; }}
-    table.throughput-sheet col.col-total {{ width: 9%; }}
-    table.throughput-sheet col.col-remarks {{ width: 6%; }}
+    table.throughput-sheet col.col-snr {{ width: 7%; }}
+    table.throughput-sheet col.col-rate {{ width: 9%; }}
+    table.throughput-sheet col.col-total {{ width: 12%; }}
+
     table.throughput-sheet th,
     table.throughput-sheet td {{
       padding: 6px 5px;
@@ -973,7 +959,6 @@ def write_html_report(
       padding: 1px 5px; border-radius: 3px; display: inline-block;
     }}
     table.throughput-sheet .total-cell {{ font-size: 11px; }}
-    table.throughput-sheet .remarks-cell {{ font-size: 11px; }}
     table.throughput-sheet tr.mcs-spacer td {{
       height: 14px; padding: 0; border: none; background: var(--bg);
     }}

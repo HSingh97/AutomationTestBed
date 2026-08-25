@@ -254,15 +254,18 @@ if [[ -n "${IP_SMOKE_FILTER}" ]]; then
 fi
 
 TEST_M_EXPR=""
+TEST_M_VALUE=""
 LEGACY_GUI_IP=false
 if has_marker GUI && has_marker IP && ! has_marker IPv4 && ! has_marker IPv6; then
   LEGACY_GUI_IP=true
 fi
 if ! $LEGACY_GUI_IP; then
   if [[ ${#M_PARTS[@]} -eq 1 ]]; then
-    TEST_M_EXPR="-m ${M_PARTS[0]}"
+    TEST_M_VALUE="${M_PARTS[0]}"
+    TEST_M_EXPR="-m ${TEST_M_VALUE}"
   elif [[ ${#M_PARTS[@]} -gt 1 ]]; then
-    TEST_M_EXPR="-m $(join_or "${M_PARTS[@]}")"
+    TEST_M_VALUE="$(join_or "${M_PARTS[@]}")"
+    TEST_M_EXPR="-m ${TEST_M_VALUE}"
   fi
 fi
 
@@ -319,7 +322,7 @@ export PYTHONPATH=.
 PYTEST_ARGS=(
   -u -m pytest "${TEST_PATHS[@]}" -v
 )
-[[ -n "${TEST_M_EXPR}" ]] && PYTEST_ARGS+=(${TEST_M_EXPR})
+[[ -n "${TEST_M_VALUE}" ]] && PYTEST_ARGS+=(-m "${TEST_M_VALUE}")
 [[ -n "${K_EXPR}" ]] && PYTEST_ARGS+=(-k "${K_EXPR}")
 PYTEST_ARGS+=(
   --profile "${PROFILE_NAME}"

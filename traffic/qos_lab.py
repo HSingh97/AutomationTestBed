@@ -369,10 +369,24 @@ def start_trex_server(
     trex_host: str = DEFAULT_TREX_HOST,
     trex_password: str = DEFAULT_TREX_PASSWORD,
     trex_dir: str = DEFAULT_TREX_DIR,
+    hugepages: int = 1024,
 ) -> None:
-    """Start TRex daemon and wait until RPC port 4501 is listening."""
+    """Start TRex daemon and wait until RPC port 4501 is listening.
+
+    Always (re)enables 2MB hugepages first — same as ``trex_runner`` / QA lab
+    scripts. Without this, DPDK exits with ``Cannot get hugepage information``.
+    """
     remote = f"""
 set -e
+# Enable HugePages (required by DPDK/TRex; often reset after reboot)
+echo {int(hugepages)} > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+HP=$(cat /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages 2>/dev/null || echo 0)
+echo "HUGEPAGES=$HP"
+if [ "$HP" -lt 64 ]; then
+  echo "TREX_FAIL"
+  echo "Hugepages not allocated (nr_hugepages=$HP)"
+  exit 1
+fi
 pkill -f '_t-rex-64' 2>/dev/null || true
 pkill -f 't-rex-64' 2>/dev/null || true
 sleep 2

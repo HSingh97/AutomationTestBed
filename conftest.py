@@ -255,12 +255,182 @@ def pytest_addoption(parser):
 # =====================================================================
 # 2. PARAMETER FIXTURES
 # =====================================================================
+
+def _strip_ip_prefix(raw: str) -> str:
+    text = str(raw or "").strip()
+    if "/" in text:
+        text = text.split("/", 1)[0].strip()
+    return text
+
+
+async def _refresh_operating_ips_from_fallback(request, profile_bundle, device_creds) -> None:
+    """Prefer live BTS/CPE mgmt IPv6 learned via fallback IPv4 SSH.
+
+    Order:
+      1) CLI ``--local-ipv6`` / ``--remote-ipv6`` (explicit override)
+      2) SSH to ``--fallback-ip`` and read ``network.lan.ip6addr``
+      3) Discover CPE IPv6 from BTS sua sysfs when possible
+    """
+    from pages.commands import RootCommands
+    from utils.ip_test_flows import _wait_ssh_any
+    from utils.parsers import ssh_scalar
+    from utils.regression_device_info import fetch_su_ipv6_from_bts_sysfs
+
+    active = profile_bundle.active
+    dut = active.setdefault("dut", {})
+    tb = active.setdefault("testbed", {})
+    rec = tb.setdefault("recovery", {})
+    mgmt = tb.setdefault("mgmt_vlan", {})
+
+    cli_local = _strip_ip_prefix(request.config.getoption("--local-ipv6") or "")
+    cli_remote = request.config.getoption("--remote-ipv6") or ""
+    cli_remotes = [
+        normalize_ip(_strip_ip_prefix(part))
+        for part in str(cli_remote).split(",")
+        if _strip_ip_prefix(part)
+    ]
+
+    fallback = (
+        request.config.getoption("--fallback-ip")
+        or rec.get("bts_fallback_ipv4")
+        or dut.get("local_ip")
+        or "10.0.0.1"
+    )
+    fallback = normalize_ip(str(fallback))
+    password = device_creds.get("pass") or ""
+
+    live_bts = ""
+    live_cpes: list[str] = []
+    try:
+        conn, effective = await _wait_ssh_any(
+            [fallback],
+            password,
+            timeout_s=45,
+            interval_s=4,
+            mtu_recovery_profile=active,
+        )
+        try:
+            raw = ssh_scalar((await conn.send_command(RootCommands.GET_IPv6, timeout_ops=20)).result)
+            live_bts = normalize_ip(_strip_ip_prefix(raw)) if raw else ""
+            if live_bts:
+                print(f"[testbed] Operating BTS IPv6 via fallback {effective}: {live_bts}")
+            try:
+                live_cpes = [
+                    ip
+                    for ip in fetch_su_ipv6_from_bts_sysfs(
+                        effective,
+                        password,
+                        su_count=max(1, len(dut.get("remote_ipv6s") or []) or 1),
+                    )
+                    if ip
+                ]
+                if live_cpes:
+                    print(f"[testbed] Operating CPE IPv6 via BTS sysfs: {live_cpes}")
+            except Exception as exc:
+                print(f"[testbed] CPE IPv6 discover via BTS skipped: {exc}")
+        finally:
+            await conn.close()
+    except Exception as exc:
+        print(f"[testbed] Fallback operating-IP refresh skipped ({fallback}): {exc}")
+
+    bts_ip = normalize_ip(cli_local) if cli_local else (live_bts or normalize_ip(str(dut.get("local_ipv6") or "")))
+    if cli_remotes:
+        cpe_list = cli_remotes
+    elif live_cpes:
+        cpe_list = live_cpes
+    else:
+        cpe_list = [normalize_ip(_strip_ip_prefix(ip)) for ip in (dut.get("remote_ipv6s") or []) if str(ip).strip()]
+
+    if bts_ip:
+        dut["local_ipv6"] = bts_ip
+        mgmt["ipv6_bts"] = bts_ip
+    if cpe_list:
+        dut["remote_ipv6s"] = cpe_list
+        mgmt["ipv6_cpe"] = cpe_list[0]
+    print(f"[testbed] Active operating IPs → BTS={dut.get('local_ipv6')} CPE={dut.get('remote_ipv6s')}")
+
+    # Backend lab PCs need an address in the same prefix for ping + LuCI web access.
+    await _ensure_backend_pcs_for_operating_ips(active, password)
+
+
+async def _ensure_backend_pcs_for_operating_ips(profile: dict, password: str) -> None:
+    """Assign backend-PC IPv6 (BTS-side + CPE-side) so ping/web to DUT mgmt works."""
+    from utils.lab_pc_net import configure_mgmt_interface, ensure_fallback_subnet
+    from utils.vlan_uci import lab_pc_vlan_plan
+
+    tb = profile.get("testbed", {}) or {}
+    dut = profile.get("dut", {}) or {}
+    mgmt = tb.get("mgmt_vlan", {}) or {}
+    prefix_len = int(mgmt.get("prefix_len", 64) or 64)
+
+    bts_pc = normalize_ip(
+        _strip_ip_prefix(str(dut.get("bts_pc_ipv6") or mgmt.get("ipv6_bts_pc") or ""))
+    )
+    cpe_pc = normalize_ip(
+        _strip_ip_prefix(str(dut.get("cpe_pc_ipv6") or mgmt.get("ipv6_cpe_pc") or ""))
+    )
+    if not bts_pc and dut.get("local_ipv6"):
+        # Derive a stable host in the same /64 as BTS (::d200).
+        bts_pc = "fd22:2222:222:112::d200"
+        dut["bts_pc_ipv6"] = bts_pc
+        mgmt["ipv6_bts_pc"] = bts_pc
+    if not cpe_pc and dut.get("remote_ipv6s"):
+        cpe_pc = "fd22:2222:222:112::d201"
+        dut["cpe_pc_ipv6"] = cpe_pc
+        mgmt["ipv6_cpe_pc"] = cpe_pc
+
+    primary = dict(tb.get("primary_pc", {}) or {})
+    primary.setdefault("local", not str(primary.get("ssh", "")).strip())
+    primary.setdefault("fallback_ipv4", "10.0.0.10")
+    try:
+        await ensure_fallback_subnet(primary, password)
+    except Exception as exc:
+        print(f"[testbed] primary PC fallback IPv4 ensure skipped: {exc}")
+    if bts_pc:
+        ok = await configure_mgmt_interface(
+            primary,
+            ipv6_address=f"{bts_pc}/{prefix_len}",
+            prefix_len=prefix_len,
+            password=password,
+            vlan_id=int(mgmt.get("lab_pc_vlan_id") or 0),
+            tagging=lab_pc_vlan_plan(tb, side="bts"),
+        )
+        print(
+            f"[testbed] Backend BTS-PC IPv6 {bts_pc}/{prefix_len} "
+            f"({'ok' if ok else 'FAILED'}) — needed for ping/web to {dut.get('local_ipv6')}"
+        )
+
+    secondary = dict(tb.get("secondary_pc", {}) or {})
+    if secondary.get("enabled", True) and cpe_pc:
+        sec_pass = str(secondary.get("password") or password)
+        secondary.setdefault("fallback_ipv4", "10.0.0.11")
+        try:
+            await ensure_fallback_subnet(secondary, sec_pass)
+        except Exception as exc:
+            print(f"[testbed] secondary PC fallback IPv4 ensure skipped: {exc}")
+        ok = await configure_mgmt_interface(
+            secondary,
+            ipv6_address=f"{cpe_pc}/{prefix_len}",
+            prefix_len=prefix_len,
+            password=sec_pass,
+            vlan_id=0,
+            tagging=lab_pc_vlan_plan(tb, side="cpe"),
+        )
+        print(
+            f"[testbed] Backend CPE-PC IPv6 {cpe_pc}/{prefix_len} "
+            f"({'ok' if ok else 'FAILED'}) — needed for ping/web to CPE"
+        )
+
+
 @pytest.fixture(scope="session")
 async def testbed_ready(request, profile_bundle, device_creds):
     """
     Configure lab for mgmt VLAN-only access:
     BTS QinQ, CPE transparent, mgmt addresses, CPE IP from BTS DHCP (SSH only).
     """
+    # Always refresh live mgmt IPv6 from fallback (or CLI) before bootstrap/skip path.
+    await _refresh_operating_ips_from_fallback(request, profile_bundle, device_creds)
+
     tb = profile_bundle.active.get("testbed", {}) or {}
     if request.config.getoption("--skip-testbed-bootstrap") or not tb.get("bootstrap_on_start", True):
         return profile_bundle

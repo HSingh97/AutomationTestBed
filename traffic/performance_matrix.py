@@ -30,8 +30,11 @@ from pathlib import Path
 
 from config.defaults import PERFORMANCE_DEFAULTS, TRAFFIC_DEFAULTS
 
-# Throughput matrix always runs bidirectional 75:25 (DL:UL).
+# Default bidirectional split when --ratios is unset.
 FIXED_DL_UL_RATIO = "75:25"
+# DUT "Auto" DL/UL (UCI dlulratio=0). TRex offer uses equal 50:50 share.
+AUTO_DL_UL_RATIO = "auto"
+AUTO_TREX_TRAFFIC_RATIO = "50:50"
 from traffic.dut_radio_config import (
     configure_bandwidth_profile,
     configure_mcs_profile,
@@ -150,11 +153,22 @@ def _parse_csv_list(raw: str) -> list[str]:
 
 
 def _parse_ratio(ratio: str) -> tuple[float, float]:
+    clean = str(ratio or "").strip().lower()
+    if clean in {"auto", "0", "0:0"}:
+        return _parse_ratio(AUTO_TREX_TRAFFIC_RATIO)
     try:
         dl_part, ul_part = ratio.split(":")
         return float(dl_part), float(ul_part)
     except Exception as exc:
-        raise ValueError(f"Invalid ratio '{ratio}', expected DL:UL (e.g. 80:20)") from exc
+        raise ValueError(f"Invalid ratio '{ratio}', expected DL:UL (e.g. 80:20) or auto") from exc
+
+
+def _trex_offer_ratio(ratio: str) -> str:
+    """Ratio used for TRex DL/UL offer sizing (auto → equal 50:50)."""
+    clean = str(ratio or "").strip().lower()
+    if clean in {"auto", "0", "0:0"}:
+        return AUTO_TREX_TRAFFIC_RATIO
+    return str(ratio).strip()
 
 
 def _traffic_profiles(ratios: list[str], *, include_directional: bool = True) -> list[dict[str, str]]:
@@ -232,6 +246,7 @@ def _resolve_traffic_targets(
     su_count: int | None = None,
     link_validation: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    offer_ratio = _trex_offer_ratio(ratio)
     if args.use_dynamic_target:
         operating_rate = _operating_rate_for_traffic(
             bandwidth=bandwidth,
@@ -239,10 +254,10 @@ def _resolve_traffic_targets(
             spatial_stream=int(args.spatial_stream),
             link_validation=link_validation,
         )
-        return compute_traffic_targets(
+        targets = compute_traffic_targets(
             bandwidth=bandwidth,
             mcs=mcs,
-            ratio=ratio,
+            ratio=offer_ratio,
             efficiency_factor=args.efficiency,
             target_ceiling_mbps=args.target if args.target > 0 else None,
             phy_overrides=phy_overrides,
@@ -251,8 +266,10 @@ def _resolve_traffic_targets(
             su_count=su_count,
             operating_rate_mbps=operating_rate,
         )
+        targets["ratio"] = ratio  # preserve auto label in records
+        return targets
 
-    dl_ratio, ul_ratio = _parse_ratio(ratio)
+    dl_ratio, ul_ratio = _parse_ratio(offer_ratio)
     total = dl_ratio + ul_ratio
     cap = legacy_mcs_caps.get(mcs.upper())
     effective = min(args.target, float(cap)) if cap is not None else args.target
@@ -361,6 +378,93 @@ def _resolve_logs_paths(output_dir_arg: str) -> tuple[Path, Path, str]:
     html_path = logs_root / f"Performance_Report_{timestamp}.html"
     executed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return output_dir, html_path, executed_at
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
+def _refresh_live_reports(
+    *,
+    records: list[dict[str, object]],
+    output_dir: Path,
+    html_path: Path,
+    jenkins_html_path: Path,
+    run_meta: dict[str, object],
+    testbed_summary: dict[str, object],
+    started_at: str,
+    bidir_ratios: list[str],
+    bandwidths: list[str],
+    mcs_rates: list[str],
+    args: argparse.Namespace,
+    qinq_svlan: int | None,
+    qinq_cvlan: int | None,
+) -> None:
+    """Rewrite CSV/JSON/HTML after each MCS so the report stays current on failure."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    passed_count = sum(1 for row in records if row.get("passed"))
+    summary = {
+        "started_at": started_at,
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "total_iterations": len(records),
+        "passed": passed_count,
+        "failed": len(records) - passed_count,
+        "in_progress": True,
+        "output_dir": str(output_dir),
+        "html_report": str(html_path),
+        "jenkins_html_report": str(jenkins_html_path),
+        "records": records,
+    }
+    summary_path = output_dir / "performance_matrix_summary.json"
+    _atomic_write_text(summary_path, json.dumps(summary, indent=2))
+    csv_path = output_dir / "performance_matrix_summary.csv"
+    write_summary_csv(records, csv_path)
+
+    meta = dict(run_meta)
+    meta.setdefault("Bandwidths", ", ".join(bandwidths))
+    meta.setdefault("MCS Rates", ", ".join(mcs_rates))
+    meta.setdefault("Ratios", ", ".join(bidir_ratios))
+    meta.setdefault("Duration (s)", str(args.time))
+    meta["Completed"] = f"{len(records)} iteration(s)"
+    trex_cmd_record = next((row for row in records if row.get("trex_dl_bw")), None)
+    if trex_cmd_record:
+        meta["TRex client command"] = build_trex_client_command(
+            trex_client_script=args.trex_client_script,
+            trex_pythonpath=args.trex_pythonpath,
+            trex_ports=args.trex_ports,
+            trex_server_su=args.trex_server_su or None,
+            trex_server_su2=args.trex_server_su2 or None,
+            trex_server_su3=args.trex_server_su3 or None,
+            trex_server_su4=args.trex_server_su4 or None,
+            trex_su_count=args.su_count,
+            trex_dl_bw=str(trex_cmd_record.get("trex_dl_bw")),
+            trex_ul_bw=str(trex_cmd_record.get("trex_ul_bw")),
+            trex_packet_size=args.packet_size,
+            duration_s=args.time,
+            trex_direction=str(trex_cmd_record.get("trex_direction") or "bidi"),
+            trex_protocol=args.trex_proto,
+            trex_svlan=qinq_svlan,
+            trex_cvlan=qinq_cvlan,
+        )
+    write_html_report(
+        records=records,
+        run_meta=meta,
+        path=html_path,
+        testbed_summary=testbed_summary,
+    )
+    try:
+        jenkins_html_path.write_bytes(html_path.read_bytes())
+        csv_jenkins = jenkins_html_path.with_suffix(".csv")
+        if csv_path.is_file():
+            csv_jenkins.write_bytes(csv_path.read_bytes())
+    except Exception as exc:
+        print(f"[WARN] Jenkins-style report copy failed: {exc}")
+    print(
+        f"[REPORT] Updated HTML ({len(records)} done, {passed_count} passed): {html_path}"
+    )
 
 
 def _fetch_link_validation(
@@ -648,6 +752,7 @@ def _append_skipped_iteration(
     mcs_config: dict[str, object] | None = None,
     link_validation: dict[str, object] | None = None,
     noise_dbm: str,
+    on_append=None,
 ) -> None:
     records.append(
         {
@@ -666,6 +771,8 @@ def _append_skipped_iteration(
             "noise_dbm": noise_dbm,
         }
     )
+    if on_append is not None:
+        on_append()
 
 
 async def _ensure_dut_ready(recovery_manager: RecoveryManager, dut_ip: str) -> None:
@@ -680,8 +787,20 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
 
     bandwidths = _parse_csv_list(args.bandwidths)
     mcs_rates = [mcs.upper() for mcs in _parse_csv_list(args.mcs)]
-    bidir_ratios = [FIXED_DL_UL_RATIO]
-    traffic_profiles = [{"name": "Bidirectional", "ratio": FIXED_DL_UL_RATIO}]
+    raw_ratios = _parse_csv_list(args.ratios) or [FIXED_DL_UL_RATIO]
+    # Bidirectional only — honor auto / explicit ratios (no 100:0 / 0:100 unless requested).
+    bidir_ratios = []
+    for item in raw_ratios:
+        clean = item.strip()
+        if not clean:
+            continue
+        if clean.lower() in {"auto", "0", "0:0"}:
+            bidir_ratios.append(AUTO_DL_UL_RATIO)
+        else:
+            bidir_ratios.append(clean)
+    if not bidir_ratios:
+        bidir_ratios = [FIXED_DL_UL_RATIO]
+    traffic_profiles = [{"name": "Bidirectional", "ratio": r} for r in bidir_ratios]
     mcs_caps = {key.upper(): float(value) for key, value in perf_defaults["mcs_traffic_cap_mbps"].items()}
     phy_overrides = perf_defaults.get("phy_max_rate_mbps") or {}
 
@@ -698,6 +817,12 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     dut = profile_bundle.active["dut"]
     dut_ip = _resolve_dut_ip(profile_bundle)
     dut_ssh_ip = _resolve_dut_ssh_ip(profile_bundle, dut_ip)
+    # Prefer explicit --local-ip for SSH when IPv6 mgmt is unreachable from the lab PC.
+    if str(args.local_ip or "").strip():
+        override = normalize_ip(str(args.local_ip).strip())
+        if override and override != dut_ssh_ip:
+            print(f"[DUT] SSH override via --local-ip: {override} (mgmt was {dut_ssh_ip})")
+            dut_ssh_ip = override
     dut_user = args.dut_user or dut["username"]
     dut_password = args.dut_password or dut["password"]
     if dut_password and shutil.which("sshpass") is None:
@@ -725,6 +850,18 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     output_dir, html_path, executed_at = _resolve_logs_paths(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     testbed_summary: dict[str, object] = {}
+    day_stamp = datetime.now().strftime("%Y%m%d")
+    jenkins_html_path = Path("reports/artifacts") / f"Senao_UBR_localPerf_full_Report_{day_stamp}.html"
+    live_run_meta: dict[str, object] = {
+        "executed_at": executed_at,
+        "Bandwidths": ", ".join(bandwidths),
+        "MCS Rates": ", ".join(mcs_rates),
+        "Ratios": ", ".join(bidir_ratios),
+        "Duration (s)": str(args.time),
+        "BTS": args.local_ip or "",
+        "CPE": args.cpe_ip or "",
+        "QinQ": "disabled" if not args.trex_qinq else "enabled",
+    }
 
     total_iterations = len(bandwidths) * len(mcs_rates) * len(traffic_profiles)
     print("\n" + "=" * 72)
@@ -752,7 +889,20 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     print(f"Duration:         {args.time}s")
     print(f"Output directory: {output_dir}")
     print(f"HTML report:      {html_path}")
+    print(f"Jenkins HTML:     {jenkins_html_path}")
     print("=" * 72 + "\n")
+    # Seed empty report so the HTML path exists immediately.
+    try:
+        write_html_report(
+            records=[],
+            run_meta=live_run_meta,
+            path=html_path,
+            testbed_summary={},
+        )
+        jenkins_html_path.write_bytes(html_path.read_bytes())
+        print(f"[REPORT] Seeded live HTML: {html_path}")
+    except Exception as exc:
+        print(f"[WARN] Could not seed HTML report: {exc}")
 
     if args.dry_run:
         iteration = 0
@@ -854,6 +1004,26 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     iteration = 0
     started_at = datetime.now(timezone.utc).isoformat()
 
+    def _note_record() -> None:
+        try:
+            _refresh_live_reports(
+                records=records,
+                output_dir=output_dir,
+                html_path=html_path,
+                jenkins_html_path=jenkins_html_path,
+                run_meta=live_run_meta,
+                testbed_summary=testbed_summary,
+                started_at=started_at,
+                bidir_ratios=bidir_ratios,
+                bandwidths=bandwidths,
+                mcs_rates=mcs_rates,
+                args=args,
+                qinq_svlan=qinq_svlan,
+                qinq_cvlan=qinq_cvlan,
+            )
+        except Exception as exc:
+            print(f"[WARN] Live report refresh failed: {exc}")
+
     try:
         for bandwidth in bandwidths:
             bandwidth_group_ok = True
@@ -919,6 +1089,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             error=bw_group_error,
                             mcs_config=mcs_config,
                             noise_dbm=args.noise_dbm,
+                            on_append=_note_record,
                         )
                         continue
                     else:
@@ -982,6 +1153,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                     mcs_config=mcs_config,
                                     link_validation=pre_trex_link_validation,
                                     noise_dbm=args.noise_dbm,
+                                    on_append=_note_record,
                                 )
                                 continue
                             print(
@@ -1032,6 +1204,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                     "noise_dbm": args.noise_dbm,
                                 }
                             )
+                            _note_record()
                             continue
                     targets = _resolve_traffic_targets(
                         bandwidth=bandwidth,
@@ -1290,6 +1463,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             print(f"Result: FAIL | {exc}")
     
                     records.append(record)
+                    _note_record()
                     if args.pause_s > 0:
                         time.sleep(args.pause_s)
     finally:
@@ -1318,8 +1492,10 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         "total_iterations": len(records),
         "passed": passed_count,
         "failed": len(records) - passed_count,
+        "in_progress": False,
         "output_dir": str(output_dir),
         "html_report": str(html_path),
+        "jenkins_html_report": str(jenkins_html_path),
         "records": records,
     }
     summary_path = output_dir / "performance_matrix_summary.json"
@@ -1334,6 +1510,10 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         "MCS Rates": ", ".join(mcs_rates),
         "Ratios": ", ".join(bidir_ratios),
         "Duration (s)": str(args.time),
+        "BTS": args.local_ip or "",
+        "CPE": args.cpe_ip or "",
+        "QinQ": "disabled" if not args.trex_qinq else "enabled",
+        "Completed": f"{len(records)} iteration(s)",
     }
     if trex_cmd_record:
         run_meta["TRex client command"] = build_trex_client_command(
@@ -1361,6 +1541,11 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         path=html_path,
         testbed_summary=testbed_summary,
     )
+    try:
+        jenkins_html_path.write_bytes(html_path.read_bytes())
+        jenkins_html_path.with_suffix(".csv").write_bytes(csv_path.read_bytes())
+    except Exception as exc:
+        print(f"[WARN] Jenkins-style report copy failed: {exc}")
     grafana_path = html_path.with_name(html_path.stem + "_Grafana.html")
     try:
         report_id = html_path.stem.replace("Performance_Report_", "")
@@ -1385,6 +1570,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     print(f"Summary JSON: {summary_path}")
     print(f"Summary CSV:  {csv_path}")
     print(f"HTML report:  {html_path}")
+    print(f"Jenkins HTML: {jenkins_html_path}")
     print("=" * 72 + "\n")
     return summary
 
@@ -1423,7 +1609,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ratios",
         default=FIXED_DL_UL_RATIO,
-        help=f"Ignored — matrix always uses fixed DL:UL ratio {FIXED_DL_UL_RATIO}",
+        help=(
+            "Bidirectional DL:UL ratio(s), comma-separated. "
+            f"Use 'auto' for DUT Auto (UCI dlulratio=0) with TRex 50:50 offer "
+            f"(default: {FIXED_DL_UL_RATIO})"
+        ),
     )
     parser.add_argument(
         "--target",
