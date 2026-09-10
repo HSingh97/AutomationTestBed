@@ -34,8 +34,17 @@ benches:
     profile: qa_lab_02
     recovery_profile: link_formation
 
-  qa-lab-01:
-    description: Alias → use TARGET_STAND=test-qa-lab-01 for Jenkins
-    ssh: root@10.0.150.104
-    profile: qa_lab_02
+  test-a60-lab:
+    description: >
+      A60/A61 alpha — BTS 10.0.0.120, CPE-side PC 10.0.0.121, single SU TRex.
+    ssh: root@10.0.0.120
+    profile: a60_lab
     recovery_profile: link_formation
+
+  # Alias
+  a60-lab:
+    description: Alias → TARGET_STAND=test-a60-lab
+    ssh: root@10.0.0.120
+    profile: a60_lab
+    recovery_profile: link_formation
+

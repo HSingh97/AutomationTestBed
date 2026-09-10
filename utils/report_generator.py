@@ -61,14 +61,16 @@ QOS_TRAFFIC_REPORT_CSS = """
             table.qos-traffic-table tr.qos-row-idle { background: #fff; color: #94a3b8; }
             table.qos-traffic-table tr.qos-row-idle .qos-class,
             table.qos-traffic-table tr.qos-row-idle .qos-pir { color: #94a3b8; font-weight: 500; }
-            .module-name-cell { max-width: 280px; }
+            .module-name-cell { max-width: 240px; }
             .module-name-short { font-weight: 500; color: #334155; line-height: 1.45; }
+            .test-steps-cell { max-width: 360px; font-size: 12px; color: #475569; line-height: 1.45; text-align: left; }
+            .test-steps-text { white-space: pre-wrap; word-break: break-word; }
             tr.test-row td { padding-top: 18px; padding-bottom: 18px; }
 """
 
 
 def _humanize_module_name(nodeid: str, test_id: str) -> str:
-    """Human-readable module name without repeating the Module ID prefix (e.g. JMB_01)."""
+    """Human-readable description without repeating the case ID prefix (e.g. JMB_01)."""
     fn = nodeid.split("::")[-1]
     raw = re.sub(r"^test_", "", fn, flags=re.I)
 
@@ -85,6 +87,47 @@ def _humanize_module_name(nodeid: str, test_id: str) -> str:
         return raw.replace("_", " ").strip().title() or test_id
 
     return raw.replace("_", " ").strip().title()
+
+
+def _escape_html(text: str) -> str:
+    return (
+        str(text or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _catalog_case_meta(test_id: str) -> dict[str, str]:
+    """Title / steps / note from suite catalogs when available."""
+    tid = str(test_id or "").strip()
+    meta = {"title": "", "steps": "", "note": ""}
+    try:
+        if re.match(r"VLAN_\d+", tid, re.I):
+            from config.vlan_test_cases import case_by_id
+
+            c = case_by_id(tid)
+            meta["title"] = str(c.get("title") or "")
+            meta["steps"] = str(c.get("steps") or "")
+            meta["note"] = str(c.get("note") or "")
+        elif re.match(r"QoS_\d+", tid, re.I):
+            from config.qos_test_cases import case_by_id
+
+            c = case_by_id(tid)
+            meta["title"] = str(c.get("title") or "")
+            meta["steps"] = str(c.get("steps") or c.get("procedure") or "")
+            meta["note"] = str(c.get("note") or "")
+        elif re.match(r"UM_\d+", tid, re.I):
+            from config.um_test_cases import case_by_id
+
+            c = case_by_id(tid)
+            meta["title"] = str(c.get("title") or "")
+            meta["steps"] = str(c.get("steps") or "")
+            meta["note"] = str(c.get("note") or "")
+    except Exception:
+        pass
+    return meta
 
 
 def get_group_marker(keywords):
@@ -104,6 +147,8 @@ def get_group_marker(keywords):
         low = str(kw).lower()
         if re.match(r"IP_\d+", str(kw), re.I) or low == "ip":
             return "IP"
+        if re.match(r"VLAN_\d+", str(kw), re.I) or low == "vlan":
+            return "VLAN"
         if re.match(r"JMB_\d+", str(kw), re.I) or low in ("jumboframes", "jumbo"):
             return "JumboFrames"
         if re.match(r"PROCESS_\d+", str(kw), re.I) or low in ("processmonitor", "process_monitor"):
@@ -419,7 +464,12 @@ def _skip_reason_text(test: dict) -> str:
 
 def _is_not_available_skip(reason: str) -> bool:
     r = (reason or "").lower()
-    return "not available" in r or "not_available" in r
+    return (
+        "not available" in r
+        or "not_available" in r
+        or "not implemented" in r
+        or "not applicable" in r
+    )
 
 
 def _is_manual_skip(reason: str) -> bool:
@@ -638,23 +688,50 @@ def generate():
                         except Exception:
                             test_name = _humanize_module_name(nodeid, test_id)
                     else:
-                        match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
-                        if match:
-                            test_id = match.group(1).upper()
-                            raw_name = match.group(2)
-                            parts = raw_name.split('_')
-                            if len(parts) >= 2 and parts[0] == 'summary':
-                                test_name = '-'.join(p.capitalize() for p in parts[::-1])
-                            else:
-                                test_name = '-'.join(p.capitalize() for p in parts)
+                        vlan_kw = next(
+                            (
+                                str(k)
+                                for k in test.get("keywords", [])
+                                if re.match(r"VLAN_\d+", str(k), re.I)
+                            ),
+                            None,
+                        )
+                        vlan_fn = re.search(r"test_vlan\[(VLAN_\d+)\]", nodeid, re.I)
+                        vlan_fn2 = re.search(r"(VLAN_\d+)", nodeid, re.I)
+                        if vlan_kw or vlan_fn or vlan_fn2:
+                            raw = vlan_kw or (vlan_fn.group(1) if vlan_fn else vlan_fn2.group(1))
+                            m = re.match(r"VLAN_(\d+)", str(raw), re.I)
+                            test_id = f"VLAN_{int(m.group(1)):02d}" if m else str(raw).upper()
+                            try:
+                                from config.vlan_test_cases import case_by_id
+
+                                c = case_by_id(test_id) or {}
+                                test_name = c.get("title") or c.get("note") or test_id
+                            except Exception:
+                                test_name = _humanize_module_name(nodeid, test_id)
                         else:
-                            test_id = "N/A"
-                            test_name = nodeid.split('::')[-1]
+                            match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
+                            if match:
+                                test_id = match.group(1).upper()
+                                raw_name = match.group(2)
+                                parts = raw_name.split('_')
+                                if len(parts) >= 2 and parts[0] == 'summary':
+                                    test_name = '-'.join(p.capitalize() for p in parts[::-1])
+                                else:
+                                    test_name = '-'.join(p.capitalize() for p in parts)
+                            else:
+                                test_id = "N/A"
+                                test_name = nodeid.split('::')[-1]
 
         group_name = get_group_marker(test.get('keywords', []))
         outcome = _effective_outcome_for_report(test).upper()
         reason_html = ""
         reason_csv = ""
+
+        catalog = _catalog_case_meta(str(test_id))
+        if catalog.get("title"):
+            test_name = catalog["title"]
+        test_steps = catalog.get("steps") or ""
 
         validated_params = extract_validated_parameters(test)
         qos_table_html = extract_qos_traffic_table_html(test)
@@ -866,6 +943,7 @@ def generate():
         record = {
             'id': test_id,
             'name': test_name,
+            'steps': test_steps,
             'status': status,
             'reason': reason_html,
             'reason_csv': reason_csv,
@@ -886,6 +964,8 @@ def generate():
             groups[group_name] = _sort_numbered_suite_records(records, "QoS")
         elif group_name == "IP":
             groups[group_name] = _sort_numbered_suite_records(records, "IP")
+        elif group_name == "VLAN":
+            groups[group_name] = _sort_numbered_suite_records(records, "VLAN")
         elif group_name == "JumboFrames":
             groups[group_name] = _sort_numbered_suite_records(records, "JMB")
 
@@ -896,10 +976,17 @@ def generate():
     # Generate CSV
     with csv_filename.open('w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['Test Group', 'Module ID', 'Module Name', 'Status', 'Execution Details'])
+        writer.writerow(['Test Group', 'Case ID', 'Test Description', 'Test Steps', 'Status', 'Execution Details'])
         for group_name, records in groups.items():
             for r in records:
-                writer.writerow([group_name, r['id'], r['name'], r['status'], r['reason_csv']])
+                writer.writerow([
+                    group_name,
+                    r['id'],
+                    r['name'],
+                    r.get('steps') or '',
+                    r['status'],
+                    r['reason_csv'],
+                ])
 
     # Generate Group Filter Options
     group_options = ""
@@ -1112,10 +1199,11 @@ def generate():
                 <table class="results-table">
                     <thead>
                         <tr>
-                            <th style="width:10%">Module ID</th>
-                            <th style="width:26%">Module Name</th>
+                            <th style="width:8%">Case ID</th>
+                            <th style="width:18%">Test Description</th>
+                            <th style="width:28%">Test Steps</th>
                             <th style="width:10%">Status</th>
-                            <th style="width:54%">Execution Details</th>
+                            <th style="width:36%">Execution Details</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -1124,19 +1212,26 @@ def generate():
     for group_name, records in groups.items():
         html += f"""
                         <tr class="group-header-row" data-group="{group_name}">
-                            <td colspan="4" class="group-header">↳ Test Group: {group_name}</td>
+                            <td colspan="5" class="group-header">↳ Test Group: {group_name}</td>
                         </tr>
         """
         for r in records:
             name = str(r["name"] or "")
+            steps = str(r.get("steps") or "").strip()
+            name_esc = _escape_html(name)
             if len(name) > 110:
-                name_html = f'<div class="module-name-short" title="{name.replace(chr(34), "&quot;")}">{name[:107]}…</div>'
+                name_html = f'<div class="module-name-short" title="{name_esc}">{_escape_html(name[:107])}…</div>'
             else:
-                name_html = f'<div class="module-name-short">{name}</div>'
+                name_html = f'<div class="module-name-short">{name_esc}</div>'
+            if steps:
+                steps_html = f'<div class="test-steps-text">{_escape_html(steps)}</div>'
+            else:
+                steps_html = '<span style="color:#94a3b8;">—</span>'
             html += f"""
                             <tr class="test-row" data-group="{group_name}" data-status="{r['status']}">
                                 <td style="font-weight: 600; color: #0f172a; white-space: nowrap;">{r['id']}</td>
                                 <td class="module-name-cell">{name_html}</td>
+                                <td class="test-steps-cell">{steps_html}</td>
                                 <td><span class="badge" style="background-color: {r['bg']}; color: {r['color']}; border: 1px solid {r['color']}40;">{r['status']}</span></td>
                                 <td class="reason-cell">{r['reason']}</td>
                             </tr>

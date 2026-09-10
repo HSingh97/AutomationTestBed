@@ -51,12 +51,26 @@ KWN_SUA_STAT_FIELDS: tuple[str, ...] = (
 ReadFieldFn = Callable[[str], str]
 
 
-def _run_shell(cmd: str) -> str:
+def _run_shell(cmd: str, *, timeout_s: float = 20.0) -> str:
+    """Run a shell command with a hard timeout (never hang the suite on stuck SSH)."""
     try:
-        return subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, text=True).strip()
+        return subprocess.check_output(
+            cmd,
+            shell=True,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=max(5.0, float(timeout_s)),
+        ).strip()
+    except subprocess.TimeoutExpired as exc:
+        output = (exc.output or b"") if isinstance(exc.output, (bytes, bytearray)) else (exc.output or "")
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="replace")
+        return (str(output).strip() + f"\n[timeout after {timeout_s:.0f}s]").strip()
     except Exception as exc:
         output = getattr(exc, "output", None) or ""
-        return str(output).strip()
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="replace")
+        return str(output or exc).strip()
 
 
 def _is_ssh_noise(text: str) -> bool:
@@ -101,14 +115,19 @@ def ssh_read_sysfs_field(
     if not ssh_password:
         return "-"
     pw = shlex.quote(ssh_password)
-    ssh_host = shlex.quote(host)
+    host_clean = normalize_ip(host)
     ssh_user_q = shlex.quote(ssh_user)
+    if is_ipv6_literal(host_clean):
+        dest = f"-6 -l {ssh_user_q} {shlex.quote(host_clean)}"
+    else:
+        dest = f"{ssh_user_q}@{shlex.quote(host_clean)}"
     cmd = (
         f"sshpass -p {pw} ssh -o LogLevel=ERROR -o StrictHostKeyChecking=no "
-        f"-o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 {ssh_user_q}@{ssh_host} "
+        f"-o UserKnownHostsFile=/dev/null "
+        f"-o ConnectTimeout=5 -o ConnectionAttempts=1 {dest} "
         f"\"cat {shlex.quote(path)} 2>/dev/null || echo -\""
     )
-    return clean_sysfs_value(_run_shell(cmd))
+    return clean_sysfs_value(_run_shell(cmd, timeout_s=12.0))
 
 
 def resolve_sua_display_ip(*, ipv4: str = "", ipv6: str = "") -> str:
@@ -352,14 +371,19 @@ def ssh_read_kwn_sysfs_bulk(
         f"done; echo ---; done"
     )
     pw = shlex.quote(ssh_password)
-    ssh_host = shlex.quote(host)
+    host_clean = normalize_ip(host)
     ssh_user_q = shlex.quote(ssh_user)
+    if is_ipv6_literal(host_clean):
+        dest = f"-6 -l {ssh_user_q} {shlex.quote(host_clean)}"
+    else:
+        dest = f"{ssh_user_q}@{shlex.quote(host_clean)}"
     cmd = (
         f"sshpass -p {pw} ssh -o LogLevel=ERROR -o StrictHostKeyChecking=no "
-        f"-o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 {ssh_user_q}@{ssh_host} "
+        f"-o UserKnownHostsFile=/dev/null "
+        f"-o ConnectTimeout=5 -o ConnectionAttempts=1 {dest} "
         f"{shlex.quote(inner)}"
     )
-    text = _run_shell(cmd).strip()
+    text = _run_shell(cmd, timeout_s=15.0).strip()
     if not text or _is_ssh_noise(text):
         return {}
     return _parse_bulk_kwn_output(text)
@@ -374,7 +398,11 @@ def fetch_kwn_sua_statistics(
     cpe_hosts: list[str] | None = None,
     read_field: ReadFieldFn | None = None,
 ) -> list[dict[str, Any]]:
-    """Return normalized link rows for associated ``sua1`` … ``sua{max_sua}`` slots."""
+    """Return normalized link rows for associated ``sua1`` … ``sua{max_sua}`` slots.
+
+    Remote SSH uses a single bulk session. If that fails, do **not** fall back to
+    hundreds of per-field SSHs (that hangs the suite when IPv6 has no route).
+    """
     if not ssh_password and read_field is None:
         return []
 
@@ -386,6 +414,9 @@ def fetch_kwn_sua_statistics(
             ssh_password=ssh_password,
             max_sua=max_sua,
         )
+        if not bulk:
+            # Host unreachable / SSH noise — abort immediately (no per-field storm).
+            return []
 
     def _read(path: str) -> str:
         if read_field is not None:
@@ -395,12 +426,8 @@ def fetch_kwn_sua_statistics(
             sua_idx = int(match.group(1))
             field = match.group(2)
             return bulk.get(sua_idx, {}).get(field, "-")
-        return ssh_read_sysfs_field(
-            host=dut_ip,
-            path=path,
-            ssh_user=ssh_user,
-            ssh_password=ssh_password,
-        )
+        # No remote per-field SSH fallback — that path multiplies ConnectTimeout.
+        return "-"
 
     clients: list[dict[str, Any]] = []
     for sua_idx in range(1, max_sua + 1):

@@ -325,7 +325,7 @@ async def preflight_step3_lab_mgmt_ipv6(ctx) -> None:
         format_ipv6_cidr,
     )
     from utils.lab_pc_net import configure_mgmt_interface, ensure_fallback_subnet
-    from utils.vlan_uci import lab_pc_vlan_plan
+    from utils.vlan_uci import mgmt_access_vlan_plan
 
     profile = ctx.cfg.get("_profile") or {}
     tb = _tb(profile)
@@ -349,7 +349,7 @@ async def preflight_step3_lab_mgmt_ipv6(ctx) -> None:
         prefix_len=prefix_len,
         password=password,
         vlan_id=vlan_id,
-        tagging=lab_pc_vlan_plan(tb, side="bts"),
+        tagging=mgmt_access_vlan_plan(tb),
     )
     if not ok:
         pytest.fail(f"preflight step 3v6: lab PC mgmt IPv6 {pc_cidr} not configured")

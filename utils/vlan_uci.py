@@ -4,6 +4,32 @@ from __future__ import annotations
 
 from typing import Any
 
+# Firmware expects numeric vlan.ath1.mode:
+#   0=transparent, 1=access, 2=trunk, 3=qinq
+VLAN_MODE_NUMERIC = {
+    "transparent": "0",
+    "untagged": "0",
+    "0": "0",
+    "access": "1",
+    "1": "1",
+    "trunk": "2",
+    "2": "2",
+    "qinq": "3",
+    "q-in-q": "3",
+    "qin-q": "3",
+    "3": "3",
+}
+
+
+def resolve_vlan_mode_uci(mode: str | int | None, *, default: str = "0") -> str:
+    """Map name/alias → UCI numeric mode string (``0``/``1``/``2``/``3``)."""
+    if mode is None:
+        return default
+    raw = str(mode).strip().lower().replace(" ", "").replace("_", "-")
+    if "qinq" in raw or raw in {"q-in-q", "qin-q"}:
+        return "3"
+    return VLAN_MODE_NUMERIC.get(raw, default)
+
 
 def _vlan_uci(profile_tb: dict[str, Any]) -> dict[str, Any]:
     return profile_tb.get("vlan_uci", {}) or {}
@@ -31,7 +57,8 @@ def _iface_keys(profile_tb: dict[str, Any], role: str) -> dict[str, str]:
 
 
 def build_uci_set(key: str, value: str | int) -> str:
-    return f"uci set {key}='{value}'"
+    # Numeric mode and VLAN IDs: uci set vlan.ath1.mode=0 (no quotes needed).
+    return f"uci set {key}={value}"
 
 
 def build_uci_delete(key: str) -> str:
@@ -46,7 +73,12 @@ def build_bts_qinq_commands(profile_tb: dict[str, Any]) -> list[str]:
     svlan = int(qinq.get("svlan", 100))
     cvlan = int(qinq.get("cvlan", 101))
     mgmt_val = int(mgmt.get("uci_value", cvlan))
-    mode_val = str(_vlan_uci(profile_tb).get("bts", {}).get("mode_value", "qinq"))
+    mode_val = resolve_vlan_mode_uci(
+        _vlan_uci(profile_tb).get("bts", {}).get("mode_value", "3"),
+        default="3",
+    )
+    if mode_val != "3":
+        mode_val = "3"
 
     cmds = [
         build_uci_set(keys["mode"], mode_val),
@@ -65,7 +97,13 @@ def build_bts_transparent_mgmt_commands(profile_tb: dict[str, Any]) -> list[str]
     keys = _iface_keys(profile_tb, "bts")
     mgmt = _mgmt(profile_tb)
     mgmt_val = int(mgmt.get("uci_value", _qinq(profile_tb).get("cvlan", 101)))
-    mode_val = str(_vlan_uci(profile_tb).get("bts", {}).get("mode_value", "transparent"))
+    mode_val = resolve_vlan_mode_uci(
+        _vlan_uci(profile_tb).get("bts", {}).get("mode_value", "0"),
+        default="0",
+    )
+    if mode_val != "0":
+        # This helper is transparent-only; ignore profile leftovers like qinq=3.
+        mode_val = "0"
     cmds = [
         build_uci_set(keys["mode"], mode_val),
         build_uci_delete(keys["svlan"]),
@@ -78,10 +116,30 @@ def build_bts_transparent_mgmt_commands(profile_tb: dict[str, Any]) -> list[str]
     return cmds + extra
 
 
+def build_bts_trunk_commands(profile_tb: dict[str, Any]) -> list[str]:
+    """BTS: trunk mode (vlan.ath1.mode=2)."""
+    keys = _iface_keys(profile_tb, "bts")
+    mgmt = _mgmt(profile_tb)
+    mgmt_val = int(mgmt.get("uci_value", _qinq(profile_tb).get("cvlan", 101)))
+    cmds = [
+        build_uci_set(keys["mode"], "2"),
+        build_uci_set(keys["mgmtvlan"], mgmt_val),
+        "uci commit vlan",
+        "/etc/init.d/network reload 2>/dev/null || true",
+    ]
+    extra = list(_vlan_uci(profile_tb).get("bts", {}).get("extra_commands") or [])
+    return cmds + extra
+
+
 def build_cpe_untagged_commands(profile_tb: dict[str, Any]) -> list[str]:
     """CPE: transparent / untagged — no double tagging on RF."""
     keys = _iface_keys(profile_tb, "cpe")
-    mode_val = str(_vlan_uci(profile_tb).get("cpe", {}).get("mode_value", "transparent"))
+    mode_val = resolve_vlan_mode_uci(
+        _vlan_uci(profile_tb).get("cpe", {}).get("mode_value", "0"),
+        default="0",
+    )
+    if mode_val != "0":
+        mode_val = "0"
 
     cmds = [
         build_uci_set(keys["mode"], mode_val),
@@ -107,9 +165,8 @@ def build_cpe_mgmtvlan_only_commands(profile_tb: dict[str, Any]) -> list[str]:
     keys = _iface_keys(profile_tb, "cpe")
     mgmt = _mgmt(profile_tb)
     mgmt_val = int(mgmt.get("uci_value", _qinq(profile_tb).get("cvlan", 101)))
-    mode_val = str(_vlan_uci(profile_tb).get("cpe", {}).get("mode_value", "transparent"))
     return [
-        build_uci_set(keys["mode"], mode_val),
+        build_uci_set(keys["mode"], "0"),
         build_uci_delete(keys["svlan"]),
         build_uci_delete(keys["cvlan"]),
         build_uci_set(keys["mgmtvlan"], mgmt_val),
@@ -208,7 +265,7 @@ def expected_bts_qinq_text(profile_tb: dict[str, Any]) -> dict[str, str]:
     qinq = _qinq(profile_tb)
     mgmt = _mgmt(profile_tb)
     return {
-        "mode": "qinq",
+        "mode": "3",  # firmware numeric QinQ
         "svlan": str(int(qinq.get("svlan", 100))),
         "cvlan": str(int(qinq.get("cvlan", 101))),
         "mgmtvlan": str(int(mgmt.get("uci_value", qinq.get("cvlan", 101)))),
@@ -216,14 +273,32 @@ def expected_bts_qinq_text(profile_tb: dict[str, Any]) -> dict[str, str]:
 
 
 def expected_cpe_untagged_text(profile_tb: dict[str, Any]) -> dict[str, str]:
-    return {"mode": "transparent"}
+    return {"mode": "0"}  # transparent
+
+
+def mgmt_access_vlan_plan(profile_tb: dict[str, Any]) -> dict[str, Any]:
+    """
+    Tagging for DUT management access on the operating lab-PC interface.
+
+    When ``mgmt_vlan.uci_value`` / ``lab_pc_vlan_id`` is set, management traffic
+    is VLAN-tagged — create ``<iface>.<vid>`` even if ``lab_pc_tagging`` is
+    untagged for the transparent data path.
+    """
+    mgmt = _mgmt(profile_tb)
+    vid = int(mgmt.get("lab_pc_vlan_id") or mgmt.get("uci_value") or 0)
+    if vid <= 0:
+        return {"mode": "untagged", "vlan_id": 0, "untagged": True}
+    return {"mode": "single", "vlan_id": vid, "untagged": False}
 
 
 def lab_pc_vlan_plan(profile_tb: dict[str, Any], *, side: str) -> dict[str, Any]:
     """
-    Lab switch port tagging toward devices.
+    Lab switch port tagging toward devices (data-path / capture).
     BTS side: QinQ stacked subinterfaces (svlan then cvlan).
     CPE side: untagged (native) — no VLAN subinterface.
+
+    For management IPv6 access when mgmtvlan is configured, use
+    :func:`mgmt_access_vlan_plan` instead.
     """
     qinq = _qinq(profile_tb)
     mgmt = _mgmt(profile_tb)

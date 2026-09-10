@@ -34,7 +34,7 @@ from utils.reachability import (
 )
 from utils.regression_flows import _open_root_ssh, _wait_for_ssh
 from utils.vlan_control import ensure_vlan_mode_ssh
-from utils.vlan_uci import build_cpe_untagged_commands, lab_pc_vlan_plan
+from utils.vlan_uci import build_cpe_untagged_commands, mgmt_access_vlan_plan
 from utils.wifi_lab import connect_wifi_24
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -190,8 +190,8 @@ async def _setup_lab_pcs(
     mgmt = _mgmt(active)
     ip_cfg = active.get("ip", {}) or {}
     prefix_len = int(mgmt.get("prefix_len", 120))
-    bts_pc_tag = lab_pc_vlan_plan(tb, side="bts")
-    cpe_pc_tag = lab_pc_vlan_plan(tb, side="cpe")
+    bts_pc_tag = mgmt_access_vlan_plan(tb)
+    cpe_pc_tag = mgmt_access_vlan_plan(tb)
 
     primary_pc = dict(tb.get("primary_pc", {}) or {})
     internet_ssh = str(primary_pc.get("internet_ssh", "")).strip()

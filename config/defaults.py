@@ -409,14 +409,14 @@ TESTBED_DEFAULTS = {
         "cpe_radio": "ath1",
         "bts": {
             "mode_key": "vlan.ath1.mode",
-            "mode_value": "qinq",
+            "mode_value": "3",
             "svlan_key": "vlan.ath1.svlan",
             "cvlan_key": "vlan.ath1.cvlan",
             "mgmtvlan_key": "vlan.ath1.mgmtvlan",
         },
         "cpe": {
             "mode_key": "vlan.ath1.mode",
-            "mode_value": "transparent",
+            "mode_value": "0",
         },
     },
     "lab_pc_tagging": {

@@ -80,14 +80,29 @@ def _outcome_to_pytest(outcome: str) -> str:
     clean = str(outcome or "").strip().lower()
     if clean in ("passed", "failed", "skipped", "error"):
         return clean
+    # Suite progress uses "Not implemented" for catalog N/A/manual.
+    if "not implemented" in clean or clean in ("not available", "not_available", "n/a"):
+        return "skipped"
     return "failed"
+
+
+def _keywords_for_nodeid(nodeid: str, case_id: str) -> list[str]:
+    nid = str(nodeid or "")
+    cid = str(case_id or "").upper()
+    if "VLAN" in cid or "/VLAN/" in nid or "test_vlan" in nid:
+        return ["VLAN", cid or "VLAN"]
+    if "IP" in cid or "/IP/" in nid or "test_ip" in nid:
+        return ["IP", cid or "IP"]
+    if cid:
+        return [cid.split("_")[0], cid]
+    return ["Ungrouped"]
 
 
 def synthesize_from_ip_progress(
     progress_path: Path = IP_PROGRESS_PATH,
     output_path: Path = DEFAULT_REPORT_PATH,
 ) -> bool:
-    """Build a minimal report.json from persisted IP suite progress."""
+    """Build a minimal report.json from persisted IP/VLAN suite progress."""
     if not progress_path.is_file():
         return False
     try:
@@ -103,7 +118,8 @@ def synthesize_from_ip_progress(
     tests: list[dict[str, Any]] = []
     summary: dict[str, int] = {"passed": 0, "failed": 0, "skipped": 0, "error": 0, "total": 0}
     for row in rows:
-        outcome = _outcome_to_pytest(str(row.get("outcome", "")))
+        raw_outcome = str(row.get("outcome", "") or "")
+        outcome = _outcome_to_pytest(raw_outcome)
         if outcome == "passed":
             summary["passed"] += 1
         elif outcome == "skipped":
@@ -115,12 +131,17 @@ def synthesize_from_ip_progress(
         summary["total"] += 1
 
         nodeid = str(row.get("nodeid", ""))
-        case_id = str(row.get("case_id", "IP"))
-        keywords = ["IP", case_id]
+        case_id = str(row.get("case_id", "") or "")
+        keywords = _keywords_for_nodeid(nodeid, case_id)
         duration = float(row.get("duration_s", 0.0) or 0.0)
-        longrepr = ""
-        if outcome != "passed":
-            longrepr = str(row.get("longrepr") or "Test run aborted or incomplete before full pytest report")
+        longrepr = str(row.get("longrepr") or "").strip()
+        if not longrepr:
+            if "not implemented" in raw_outcome.lower():
+                longrepr = f"Skipped: Not implemented: {case_id}"
+            elif outcome == "skipped":
+                longrepr = f"Skipped: {case_id}"
+            elif outcome != "passed":
+                longrepr = f"{case_id}: {raw_outcome or 'failed'}"
 
         tests.append(
             {
@@ -128,6 +149,7 @@ def synthesize_from_ip_progress(
                 "lineno": 0,
                 "outcome": outcome,
                 "keywords": keywords,
+                "setup": {"duration": 0.0, "outcome": "passed"},
                 "call": {
                     "duration": duration,
                     "outcome": outcome,
@@ -139,12 +161,17 @@ def synthesize_from_ip_progress(
     report = {
         "created": time.time(),
         "duration": float(progress.get("elapsed_s", 0.0) or 0.0),
-        "exitcode": int(progress.get("exitcode", 130)),
+        "exitcode": int(progress.get("exitcode", 1 if summary["failed"] else 0)),
         "root": str(_REPO_ROOT),
         "environment": {},
-        "summary": {**summary, "partial": True, "recovered_from": "ip_suite_progress"},
+        "summary": {
+            **summary,
+            "collected": summary["total"],
+            "partial": bool(progress.get("partial")),
+            "recovered_from": "ip_suite_progress",
+        },
         "tests": tests,
-        "partial": True,
+        "partial": bool(progress.get("partial")),
         "recovered_from": "ip_suite_progress",
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)

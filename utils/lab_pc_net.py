@@ -85,6 +85,9 @@ def _build_pc_link_commands(
     if mode == "single":
         vlan_id = int(tagging.get("vlan_id", tagging.get("cvlan", 101)))
         vlan_if = f"{iface}.{vlan_id}"
+        # Keep mgmt IPv6 ONLY on the tagged iface. A leftover global on the parent
+        # makes the kernel prefer untagged egress (lower metric) → "No route to host"
+        # when DUT mgmtvlan expects tagged frames.
         cmds = [
             *cleanup_known_vlan_globals,
             f"ip -6 addr flush dev {shlex.quote(iface)} 2>/dev/null || true",
@@ -93,6 +96,9 @@ def _build_pc_link_commands(
             f"ip -6 addr add {shlex.quote(cidr)} dev {shlex.quote(vlan_if)} 2>/dev/null || true",
             f"ip link set {shlex.quote(vlan_if)} up",
             f"ip link set {shlex.quote(iface)} up",
+            # Re-flush parent in case something re-added the same prefix untagged.
+            f"ip -6 addr flush dev {shlex.quote(iface)} scope global 2>/dev/null || true",
+            f"ip -6 route replace {shlex.quote(cidr)} dev {shlex.quote(vlan_if)} metric 50 2>/dev/null || true",
         ]
         return " && ".join(cmds), vlan_if
 
@@ -118,22 +124,38 @@ def _build_pc_link_commands(
 
 
 def build_restore_untagged_commands(iface: str) -> str:
-    """Remove QinQ subifs; keep native enp3s0 up (IPv4 10.0.0.xx for fallback stays)."""
+    """
+    Remove VLAN / QinQ subifs on ``iface``; keep the native parent up.
+
+    IPv4 on the parent (e.g. 10.0.0.12/8 → DUT 10.0.0.120) is preserved.
+    Also deletes single-tag ``.<vid>`` (e.g. enp1s0.101) left from mgmt tagging.
+    """
     iface_q = shlex.quote(iface)
-    return " && ".join(
-        [
-            f"ip link set {iface_q}.200.201 down 2>/dev/null || true",
-            f"ip link del {iface_q}.200.201 2>/dev/null || true",
-            f"ip link set {iface_q}.200 down 2>/dev/null || true",
-            f"ip link del {iface_q}.200 2>/dev/null || true",
-            f"ip link set {iface_q}.100.101 down 2>/dev/null || true",
-            f"ip link del {iface_q}.100.101 2>/dev/null || true",
-            f"ip link set {iface_q}.100 down 2>/dev/null || true",
-            f"ip link del {iface_q}.100 2>/dev/null || true",
-            f"ip -6 addr flush dev {iface_q} 2>/dev/null || true",
-            f"ip link set {iface_q} up",
-        ]
+    # Known stacked + single-tag leftovers from this lab.
+    known = [
+        f"{iface}.200.201",
+        f"{iface}.200",
+        f"{iface}.100.101",
+        f"{iface}.100",
+        f"{iface}.201",
+        f"{iface}.101",
+    ]
+    cmds: list[str] = []
+    for name in known:
+        nq = shlex.quote(name)
+        cmds.append(f"ip link set {nq} down 2>/dev/null || true")
+        cmds.append(f"ip link del {nq} 2>/dev/null || true")
+    # Catch any other VLAN children of this parent (e.g. enp1s0.50).
+    cmds.append(
+        "for _v in $(ip -o link show type vlan 2>/dev/null "
+        "| awk -F': ' '{print $2}' | cut -d'@' -f1); do "
+        f'case "$_v" in {iface}.*) '
+        'ip link set "$_v" down 2>/dev/null || true; '
+        'ip link del "$_v" 2>/dev/null || true;; esac; done'
     )
+    cmds.append(f"ip -6 addr flush dev {iface_q} scope global 2>/dev/null || true")
+    cmds.append(f"ip link set {iface_q} up")
+    return " && ".join(cmds)
 
 
 def build_fallback_ipv4_commands(iface: str, ipv4_cidr: str) -> str:
@@ -188,6 +210,41 @@ async def restore_untagged_lab_pc(pc_cfg: dict[str, Any], password: str) -> bool
     iface = str(pc_cfg.get("mgmt_interface", "enp3s0"))
     joined = build_restore_untagged_commands(iface)
     return await _run_pc_network_command(pc_cfg, password, joined, label=f"restored untagged {iface}")
+
+
+def build_ethernet_flap_commands(iface: str, *, vlan_id: int = 0, settle_s: float = 2.0) -> str:
+    """
+    One-shot carrier flap on the lab-PC parent NIC.
+
+    After creating/removing a mgmt VLAN subif, a single down/up often restores
+    IPv6 neighbor discovery / switch learning so DUT ping/SSH works again.
+    """
+    iface_q = shlex.quote(iface)
+    settle = max(0.5, float(settle_s))
+    cmds = [
+        f"ip link set {iface_q} down 2>/dev/null || true",
+        "sleep 1",
+        f"ip link set {iface_q} up 2>/dev/null || true",
+    ]
+    if int(vlan_id or 0) > 1:
+        vlan_q = shlex.quote(f"{iface}.{int(vlan_id)}")
+        cmds.append(f"ip link set {vlan_q} up 2>/dev/null || true")
+    cmds.append(f"sleep {settle}")
+    return " && ".join(cmds)
+
+
+async def flap_lab_pc_ethernet(
+    pc_cfg: dict[str, Any],
+    password: str,
+    *,
+    vlan_id: int = 0,
+    settle_s: float = 2.0,
+) -> bool:
+    """Flap parent mgmt NIC once (optionally bring tagged child back up)."""
+    iface = str(pc_cfg.get("mgmt_interface", "enp3s0"))
+    joined = build_ethernet_flap_commands(iface, vlan_id=vlan_id, settle_s=settle_s)
+    label = f"flap {iface}" + (f" (+.{int(vlan_id)})" if int(vlan_id or 0) > 1 else "")
+    return await _run_pc_network_command(pc_cfg, password, joined, label=label)
 
 
 async def ensure_fallback_ethernet(pc_cfg: dict[str, Any], password: str) -> bool:

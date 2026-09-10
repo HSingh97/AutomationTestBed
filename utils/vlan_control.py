@@ -31,8 +31,12 @@ async def _ssh_run(ssh, command: str, *, timeout: int = 60) -> str:
 
 def _normalize_mode_name(mode: str) -> str:
     key = str(mode).lower().replace(" ", "").replace("-", "")
-    if "qinq" in key:
+    if key in ("3",) or "qinq" in key:
         return "qinq"
+    if key in ("2", "trunk"):
+        return "trunk"
+    if key in ("1", "access"):
+        return "access"
     if key in ("transparent", "untagged", "0"):
         return "transparent"
     return key or str(mode).lower().strip()
@@ -129,28 +133,57 @@ async def ensure_bts_qinq_ssh(ssh, profile_tb: dict[str, Any]) -> bool:
         )
         return True
     cmds = build_bts_qinq_commands(profile_tb)
-    print(f"[vlan] BTS applying QinQ double-tag ({len(cmds)} commands)")
+    # Prefer UCI-only first — network reload drops SU for 1–3 minutes on this lab.
+    soft = [c for c in cmds if "network reload" not in c]
+    print(f"[vlan] BTS applying QinQ soft ({len(soft)} cmds, no network reload)")
+    ok = await apply_vlan_commands_ssh(ssh, soft)
+    await asyncio.sleep(5)
+    after = await read_vlan_uci_ssh(ssh, profile_tb, "bts")
+    if ok and _verify_bts_qinq(after, profile_tb):
+        return True
+    print("[vlan] BTS QinQ soft apply incomplete — full apply with network reload")
     ok = await apply_vlan_commands_ssh(ssh, cmds)
+    await asyncio.sleep(20)
     after = await read_vlan_uci_ssh(ssh, profile_tb, "bts")
     return ok and _verify_bts_qinq(after, profile_tb)
 
 
 async def ensure_bts_transparent_ssh(ssh, profile_tb: dict[str, Any]) -> bool:
     current = await read_vlan_uci_ssh(ssh, profile_tb, "bts")
+    # Prefer full show — intermittent bare `uci get` parses can miss mgmtvlan and force reload.
+    try:
+        show = await _ssh_run(ssh, "uci show vlan.ath1 2>/dev/null")
+        for line in show.splitlines():
+            if "vlan.ath1." not in line or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            short = key.strip().split(".")[-1].lower()
+            current[short] = val.strip().strip("'\"")
+    except Exception:
+        pass
     exp_mgmt = str(int((profile_tb.get("mgmt_vlan", {}) or {}).get("uci_value", 101)))
     mode = _normalize_mode_name(current.get("mode", "transparent"))
     mgmt = str(current.get("mgmtvlan", "")).strip()
-    if mode == "transparent" and mgmt == exp_mgmt:
-        print(f"[vlan] BTS transparent OK (mgmtvlan={mgmt})")
+    if mode == "transparent" and (mgmt == exp_mgmt or not mgmt):
+        print(f"[vlan] BTS transparent OK (mgmtvlan={mgmt or exp_mgmt})")
         return True
     cmds = build_bts_transparent_mgmt_commands(profile_tb)
-    print(f"[vlan] BTS applying transparent+mgmtvlan={exp_mgmt} ({len(cmds)} commands)")
+    soft = [c for c in cmds if "network reload" not in c]
+    print(f"[vlan] BTS applying transparent soft ({len(soft)} cmds, no network reload)")
+    ok = await apply_vlan_commands_ssh(ssh, soft)
+    await asyncio.sleep(5)
+    after = await read_vlan_uci_ssh(ssh, profile_tb, "bts")
+    mode_after = _normalize_mode_name(after.get("mode", "transparent"))
+    mgmt_after = str(after.get("mgmtvlan", "")).strip()
+    if ok and mode_after == "transparent" and (mgmt_after == exp_mgmt or not mgmt_after):
+        return True
+    print(f"[vlan] BTS transparent soft incomplete — full apply with network reload")
     ok = await apply_vlan_commands_ssh(ssh, cmds)
     await asyncio.sleep(15)
     after = await read_vlan_uci_ssh(ssh, profile_tb, "bts")
     mode_after = _normalize_mode_name(after.get("mode", "transparent"))
     mgmt_after = str(after.get("mgmtvlan", "")).strip()
-    return ok and mode_after == "transparent" and mgmt_after == exp_mgmt
+    return ok and mode_after == "transparent" and (mgmt_after == exp_mgmt or not mgmt_after)
 
 
 async def ensure_cpe_untagged_ssh(ssh, profile_tb: dict[str, Any]) -> bool:

@@ -159,6 +159,18 @@ def pytest_addoption(parser):
         help="Run lab tests that drive Vaunix LDA-602 attenuators (RF path).",
     )
     group.addoption(
+        "--allow-vlan-lab",
+        action="store_true",
+        default=False,
+        help="Run VLAN TRex/ping lab cases (tests/VLAN/) with live VLAN apply on BTS/CPE.",
+    )
+    group.addoption(
+        "--allow-vlan-destructive",
+        action="store_true",
+        default=False,
+        help="Allow VLAN cases that reboot BTS or CPE under load (VLAN_25–28).",
+    )
+    group.addoption(
         "--allow-qos-lab",
         action="store_true",
         default=False,
@@ -356,7 +368,7 @@ async def _refresh_operating_ips_from_fallback(request, profile_bundle, device_c
 async def _ensure_backend_pcs_for_operating_ips(profile: dict, password: str) -> None:
     """Assign backend-PC IPv6 (BTS-side + CPE-side) so ping/web to DUT mgmt works."""
     from utils.lab_pc_net import configure_mgmt_interface, ensure_fallback_subnet
-    from utils.vlan_uci import lab_pc_vlan_plan
+    from utils.vlan_uci import mgmt_access_vlan_plan
 
     tb = profile.get("testbed", {}) or {}
     dut = profile.get("dut", {}) or {}
@@ -386,14 +398,15 @@ async def _ensure_backend_pcs_for_operating_ips(profile: dict, password: str) ->
         await ensure_fallback_subnet(primary, password)
     except Exception as exc:
         print(f"[testbed] primary PC fallback IPv4 ensure skipped: {exc}")
+    mgmt_tag = mgmt_access_vlan_plan(tb)
     if bts_pc:
         ok = await configure_mgmt_interface(
             primary,
             ipv6_address=f"{bts_pc}/{prefix_len}",
             prefix_len=prefix_len,
             password=password,
-            vlan_id=int(mgmt.get("lab_pc_vlan_id") or 0),
-            tagging=lab_pc_vlan_plan(tb, side="bts"),
+            vlan_id=int(mgmt.get("lab_pc_vlan_id") or mgmt_tag.get("vlan_id") or 0),
+            tagging=mgmt_tag,
         )
         print(
             f"[testbed] Backend BTS-PC IPv6 {bts_pc}/{prefix_len} "
@@ -413,8 +426,8 @@ async def _ensure_backend_pcs_for_operating_ips(profile: dict, password: str) ->
             ipv6_address=f"{cpe_pc}/{prefix_len}",
             prefix_len=prefix_len,
             password=sec_pass,
-            vlan_id=0,
-            tagging=lab_pc_vlan_plan(tb, side="cpe"),
+            vlan_id=int(mgmt.get("lab_pc_vlan_id") or mgmt_tag.get("vlan_id") or 0),
+            tagging=mgmt_tag,
         )
         print(
             f"[testbed] Backend CPE-PC IPv6 {cpe_pc}/{prefix_len} "
@@ -509,6 +522,31 @@ def _apply_ip_stack_markers(items) -> None:
             item.add_marker(getattr(pytest.mark, name))
 
 
+def _apply_vlan_case_markers(items) -> None:
+    """Tag VLAN parametrized tests with plan TESTCASE-ID markers."""
+    for item in items:
+        if "tests/vlan/" not in item.nodeid.lower():
+            continue
+        callspec = getattr(item, "callspec", None)
+        if callspec is None or "case_id" not in callspec.params:
+            continue
+        case_id = str(callspec.params["case_id"])
+        if case_id.startswith("VLAN_"):
+            item.add_marker(getattr(pytest.mark, case_id, pytest.mark.VLAN))
+        case = None
+        try:
+            from config.vlan_test_cases import case_by_id
+
+            case = case_by_id(case_id)
+        except KeyError:
+            pass
+        if case and case.get("type"):
+            t = str(case["type"]).replace(" ", "")
+            for name in ("Functional", "Negative", "Validation", "Stress"):
+                if name.lower() in case["type"].lower():
+                    item.add_marker(getattr(pytest.mark, name))
+
+
 def pytest_collection_modifyitems(config, items):
     if config.getoption("--bootstrap-only"):
         selected = [
@@ -525,6 +563,7 @@ def pytest_collection_modifyitems(config, items):
         items[:] = [item for item in items if not _is_ip_cpe_test_item(item)]
 
     _apply_ip_stack_markers(items)
+    _apply_vlan_case_markers(items)
 
 
 @pytest.fixture(scope="session")

@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from prettytable import PrettyTable
 from trex_stl_lib.api import *
+from scapy.layers.inet6 import IPv6
 
 from qinq_tags import apply_downlink_tags, apply_uplink_tags, format_vlan_label, header_sizes
 
@@ -46,8 +47,24 @@ def _format_vlan_label(vlan_id, svlan_id, cvlan_id) -> str:
     return format_vlan_label(vlan_id, svlan_id, cvlan_id)
 
 
-def _header_sizes(vlan_id, svlan_id, cvlan_id) -> tuple[int, int]:
-    return header_sizes(vlan_id, svlan_id, cvlan_id)
+def _header_sizes(vlan_id, svlan_id, cvlan_id, *, ipv6: bool = False) -> tuple[int, int]:
+    return header_sizes(vlan_id, svlan_id, cvlan_id, ipv6=ipv6)
+
+
+def _ip_layer(*, ipv6: bool, src: str | None = None, dst: str | None = None):
+    if ipv6:
+        kwargs = {}
+        if src:
+            kwargs["src"] = src
+        if dst:
+            kwargs["dst"] = dst
+        return IPv6(**kwargs)
+    kwargs = {}
+    if src:
+        kwargs["src"] = src
+    if dst:
+        kwargs["dst"] = dst
+    return IP(**kwargs)
 
 
 def _apply_downlink_tags(l2_header, vlan_id, svlan_id, cvlan_id):
@@ -388,6 +405,9 @@ def run_multi_server_test(
     cvlan_id,
     enable_debug,
     ports_spec=None,
+    use_ipv6=False,
+    src_ipv6=None,
+    dst_ipv6=None,
 ):
     allowed_bsu_ports = resolve_ports_spec(ports_spec)
     is_imix_test_run = "IMIX" in sizes_to_test
@@ -593,7 +613,9 @@ def run_multi_server_test(
                 l4_layer = TCP(sport=8000, dport=8080, flags="PA")
             else:
                 l4_layer = UDP(sport=1025, dport=1234)
-            dl_header_size, ul_header_size = _header_sizes(vlan_id, svlan_id, cvlan_id)
+            dl_header_size, ul_header_size = _header_sizes(
+                vlan_id, svlan_id, cvlan_id, ipv6=bool(use_ipv6)
+            )
 
             for size in sizes_to_test:
                 current_size = size
@@ -639,7 +661,12 @@ def run_multi_server_test(
                                 for item in IMIX_PROFILE:
                                     bw = downlink_bw_per_su_mbps * (item["percent"] / 100.0)
                                     pps = (bw * 1_000_000) / (item["size"] * 8) if item["size"] > 0 else 0
-                                    packet = l2_header / IP() / l4_layer / item["dl_pad"]
+                                    packet = (
+                                        l2_header
+                                        / _ip_layer(ipv6=bool(use_ipv6), src=src_ipv6, dst=dst_ipv6)
+                                        / l4_layer
+                                        / item["dl_pad"]
+                                    )
                                     clients["bsu"].add_streams(
                                         STLStream(packet=STLPktBuilder(pkt=packet), mode=STLTXCont(pps=pps)),
                                         ports=[bsu_port_id],
@@ -647,7 +674,12 @@ def run_multi_server_test(
                             else:
                                 pps = (downlink_bw_per_su_mbps * 1_000_000) / (size * 8)
                                 pad = "x" * max(0, size - dl_header_size)
-                                packet = l2_header / IP() / l4_layer / pad
+                                packet = (
+                                    l2_header
+                                    / _ip_layer(ipv6=bool(use_ipv6), src=src_ipv6, dst=dst_ipv6)
+                                    / l4_layer
+                                    / pad
+                                )
                                 clients["bsu"].add_streams(
                                     STLStream(packet=STLPktBuilder(pkt=packet), mode=STLTXCont(pps=pps)),
                                     ports=[bsu_port_id],
@@ -669,7 +701,12 @@ def run_multi_server_test(
                                 for item in IMIX_PROFILE:
                                     bw = uplink_bw_per_su_mbps * (item["percent"] / 100.0)
                                     pps = (bw * 1_000_000) / (item["size"] * 8) if item["size"] > 0 else 0
-                                    packet = l2_header / IP() / l4_layer / item["ul_pad"]
+                                    packet = (
+                                        l2_header
+                                        / _ip_layer(ipv6=bool(use_ipv6), src=dst_ipv6, dst=src_ipv6)
+                                        / l4_layer
+                                        / item["ul_pad"]
+                                    )
                                     client.add_streams(
                                         STLStream(packet=STLPktBuilder(pkt=packet), mode=STLTXCont(pps=pps)),
                                         ports=[port["port_id"]],
@@ -677,7 +714,12 @@ def run_multi_server_test(
                             else:
                                 pps = (uplink_bw_per_su_mbps * 1_000_000) / (size * 8)
                                 pad = "x" * max(0, size - ul_header_size)
-                                packet = l2_header / IP() / l4_layer / pad
+                                packet = (
+                                    l2_header
+                                    / _ip_layer(ipv6=bool(use_ipv6), src=dst_ipv6, dst=src_ipv6)
+                                    / l4_layer
+                                    / pad
+                                )
                                 client.add_streams(
                                     STLStream(packet=STLPktBuilder(pkt=packet), mode=STLTXCont(pps=pps)),
                                     ports=[port["port_id"]],
@@ -893,6 +935,24 @@ def main():
     parser.add_argument("--vlan", type=int, default=None, help="Optional single 802.1Q VLAN ID (mutually exclusive with QinQ).")
     parser.add_argument("--svlan", type=int, default=None, help="Outer S-VLAN for QinQ double-tag (requires --cvlan).")
     parser.add_argument("--cvlan", type=int, default=None, help="Inner C-VLAN for QinQ double-tag (requires --svlan).")
+    parser.add_argument(
+        "--ipv6",
+        action="store_true",
+        default=False,
+        help="Build IPv6 L3 traffic (default: IPv4).",
+    )
+    parser.add_argument(
+        "--src-ipv6",
+        type=str,
+        default=None,
+        help="Optional IPv6 source for downlink (BTS→CPE); uplink uses as destination.",
+    )
+    parser.add_argument(
+        "--dst-ipv6",
+        type=str,
+        default=None,
+        help="Optional IPv6 destination for downlink (CPE); uplink uses as source.",
+    )
     parser.add_argument("--debug", action="store_true", help="Enable verbose live stats during the test.")
     parser.add_argument(
         "--ports",
@@ -928,6 +988,9 @@ def main():
         args.cvlan,
         args.debug,
         ports_spec=args.ports,
+        use_ipv6=bool(args.ipv6),
+        src_ipv6=args.src_ipv6,
+        dst_ipv6=args.dst_ipv6,
     )
 
 

@@ -309,14 +309,36 @@ def _check_trex_ports_via_api(
             "import sys",
             "from trex.stl.api import STLClient",
             f"ports = [{port_literal}]",
+            "def _truthy_up(val):",
+            "    if isinstance(val, bool):",
+            "        return val",
+            "    if isinstance(val, (int, float)):",
+            "        return int(val) == 1",
+            "    text = str(val).strip().upper()",
+            "    if text in ('1', 'TRUE', 'YES', 'UP', 'LINK_UP', 'LINK UP'):",
+            "        return True",
+            "    if text in ('0', 'FALSE', 'NO', 'DOWN', 'LINK_DOWN', 'LINK DOWN'):",
+            "        return False",
+            "    if 'DOWN' in text:",
+            "        return False",
+            "    if 'UP' in text:",
+            "        return True",
+            "    return None",
             "def _link_state(info):",
             "    if isinstance(info, list):",
             "        info = info[0] if info else {}",
-            "    if isinstance(info, dict):",
-            "        text = str(info.get('link', info.get('status', 'down'))).upper()",
-            "    else:",
-            "        text = str(info).upper()",
-            "    return 'UP' if 'UP' in text else 'DOWN'",
+            "    if not isinstance(info, dict):",
+            "        parsed = _truthy_up(info)",
+            "        return 'UP' if parsed is True else ('DOWN' if parsed is False else 'UNKNOWN')",
+            "    for key in ('is_link_up', 'link_up', 'link', 'Link', 'status'):",
+            "        if key not in info:",
+            "            continue",
+            "        parsed = _truthy_up(info.get(key))",
+            "        if parsed is True:",
+            "            return 'UP'",
+            "        if parsed is False:",
+            "            return 'DOWN'",
+            "    return 'UNKNOWN'",
             "states = {}",
             "client = STLClient(server='127.0.0.1')",
             "try:",
@@ -394,13 +416,21 @@ def wait_for_trex_ports_link_up(
     server_output_getter: Callable[[], str] | None = None,
     timeout_s: float = 90.0,
     poll_s: float = 3.0,
+    allow_unknown: bool = True,
 ) -> None:
-    """Poll until requested TRex NIC ports report link UP (server RPC may need time after start)."""
+    """Poll until requested TRex NIC ports report link UP (server RPC may need time after start).
+
+    When ``allow_unknown`` is True (default), ports that stay UNKNOWN (API cannot
+    report link) are treated as OK if none are explicitly DOWN — NICs may be up
+    and blinking while TRex still reports UNKNOWN.
+    """
     required = [int(item.strip()) for item in trex_ports.split(",") if item.strip()]
     deadline = time.time() + timeout_s
     attempt = 0
     last_api_debug = ""
     api_warned = False
+    readable = ", ".join(f"{port}=UNKNOWN" for port in required)
+    states: dict[int, str] = {}
 
     while time.time() < deadline:
         attempt += 1
@@ -420,14 +450,22 @@ def wait_for_trex_ports_link_up(
             states.update(api_states)
 
         readable = ", ".join(f"{port}={states.get(port, 'UNKNOWN')}" for port in required)
-        down_ports = [port for port in required if states.get(port) != "UP"]
-        if not down_ports:
+        not_up = [port for port in required if states.get(port) != "UP"]
+        if not not_up:
             print(f"[TRex] Port link check passed: {readable}")
             return
 
         if attempt == 1 or attempt % 5 == 0:
             print(f"[TRex] Waiting for port link UP (attempt {attempt}): {readable}")
         time.sleep(poll_s)
+
+    down_ports = [port for port in required if states.get(port) == "DOWN"]
+    if allow_unknown and not down_ports:
+        print(
+            f"[TRex][WARN] Port link state not confirmed UP ({readable}); "
+            "continuing — NIC may be UP while API reports UNKNOWN."
+        )
+        return
 
     detail = ""
     if last_api_debug.strip():
@@ -530,7 +568,7 @@ def _has_running_trex_server(
         trex_server,
         trex_user,
         trex_password,
-        "ps -eo pid=,args= | grep -E '[/_]t-rex-64 -i' | grep -v grep || true",
+        "ps -eo pid=,args= | grep -E '[/_]?t-rex-64' | grep -v grep || true",
         timeout_s=15,
         check=False,
     )
@@ -1021,6 +1059,9 @@ def build_trex_client_command(
     trex_svlan: int | None = None,
     trex_cvlan: int | None = None,
     trex_enable_graph: bool = False,
+    trex_ipv6: bool = False,
+    trex_src_ipv6: str | None = None,
+    trex_dst_ipv6: str | None = None,
 ) -> str:
     """Return the shell snippet run on the BSU TRex host to launch the client."""
     client_dir, client_name = _normalize_client_script(trex_client_script)
@@ -1060,6 +1101,12 @@ def build_trex_client_command(
         client_args.extend(["--svlan", str(trex_svlan), "--cvlan", str(trex_cvlan)])
     elif trex_vlan is not None:
         client_args.extend(["--vlan", str(trex_vlan)])
+    if trex_ipv6:
+        client_args.append("--ipv6")
+        if trex_src_ipv6:
+            client_args.extend(["--src-ipv6", str(trex_src_ipv6)])
+        if trex_dst_ipv6:
+            client_args.extend(["--dst-ipv6", str(trex_dst_ipv6)])
     if trex_enable_graph:
         client_args.append("--graph")
     return "\n".join(
@@ -1105,6 +1152,9 @@ def run_trex_stats_check(
     trex_qinq_host: str | None = None,
     profile_tb: dict | None = None,
     trex_enable_graph: bool = False,
+    trex_ipv6: bool = False,
+    trex_src_ipv6: str | None = None,
+    trex_dst_ipv6: str | None = None,
     run_mode: str = "max_throughput",
     dut_host: str | None = None,
     dut_user: str = "root",
@@ -1178,6 +1228,9 @@ def run_trex_stats_check(
         trex_svlan=resolved_svlan,
         trex_cvlan=resolved_cvlan,
         trex_enable_graph=trex_enable_graph,
+        trex_ipv6=trex_ipv6,
+        trex_src_ipv6=trex_src_ipv6,
+        trex_dst_ipv6=trex_dst_ipv6,
     )
     client_script = "\n".join(["set -euo pipefail", client_script])
 
@@ -1200,7 +1253,7 @@ def run_trex_stats_check(
                 trex_pythonpath=trex_pythonpath,
                 trex_ports=trex_ports,
                 server_output="",
-                timeout_s=60.0,
+                timeout_s=20.0,
             )
             for idx, su_host in enumerate(su_hosts):
                 wait_for_trex_ports_link_up(
@@ -1210,7 +1263,7 @@ def run_trex_stats_check(
                     trex_pythonpath=trex_pythonpath,
                     trex_ports=su_server_port_specs[idx] if idx < len(su_server_port_specs) else "0",
                     server_output="",
-                    timeout_s=60.0,
+                    timeout_s=20.0,
                 )
         else:
             stop_remote_trex_servers(
@@ -1236,43 +1289,67 @@ def run_trex_stats_check(
                 extra_server_handles.append((su_host, su_process, su_collector))
             time.sleep(max(1, trex_server_startup_s))
             if server_process.poll() is not None:
-                raise RuntimeError(
-                    f"TRex server exited early on {trex_server} "
-                    f"(rc={server_process.returncode}): "
-                    f"{server_collector.tail() or server_collector.text()[:800]}"
-                )
-            for su_host, su_process, su_collector in extra_server_handles:
-                if su_process.poll() is not None:
-                    raise RuntimeError(
-                        f"TRex server exited early on {su_host} "
-                        f"(rc={su_process.returncode}): "
-                        f"{su_collector.tail() or su_collector.text()[:800]}"
+                early = server_collector.tail() or server_collector.text()[:800]
+                # Another instance still owns the NICs — reuse it instead of aborting.
+                if "ports are bound" in early.lower() or "already" in early.lower():
+                    print(
+                        f"[TRex] Start raced with existing server on {trex_server} "
+                        f"(ports bound) — reusing existing instance"
                     )
-            if su_hosts:
-                print(
-                    f"[TRex] Started TRex on BSU {trex_server} + SU host(s): "
-                    f"{', '.join(su_hosts)}"
-                )
-            wait_for_trex_ports_link_up(
-                trex_server=trex_server,
-                trex_user=trex_user,
-                trex_password=trex_password,
-                trex_pythonpath=trex_pythonpath,
-                trex_ports=trex_ports,
-                server_output=server_collector.text(),
-                server_output_getter=server_collector.text,
-                timeout_s=max(90.0, float(trex_server_startup_s) + 60.0),
-            )
-            for idx, su_host in enumerate(su_hosts):
+                    server_reused = True
+                    server_process = None
+                    server_collector = None
+                    extra_server_handles = []
+                    wait_for_trex_ports_link_up(
+                        trex_server=trex_server,
+                        trex_user=trex_user,
+                        trex_password=trex_password,
+                        trex_pythonpath=trex_pythonpath,
+                        trex_ports=trex_ports,
+                        server_output="",
+                        timeout_s=60.0,
+                    )
+                else:
+                    raise RuntimeError(
+                        f"TRex server exited early on {trex_server} "
+                        f"(rc={server_process.returncode}): {early}"
+                    )
+            if not server_reused:
+                for su_host, su_process, su_collector in extra_server_handles:
+                    if su_process.poll() is not None:
+                        early = su_collector.tail() or su_collector.text()[:800]
+                        if "ports are bound" in early.lower() or "already" in early.lower():
+                            print(f"[TRex] SU server on {su_host} already bound — continuing")
+                            continue
+                        raise RuntimeError(
+                            f"TRex server exited early on {su_host} "
+                            f"(rc={su_process.returncode}): {early}"
+                        )
+                if su_hosts:
+                    print(
+                        f"[TRex] Started TRex on BSU {trex_server} + SU host(s): "
+                        f"{', '.join(su_hosts)}"
+                    )
                 wait_for_trex_ports_link_up(
-                    trex_server=su_host,
+                    trex_server=trex_server,
                     trex_user=trex_user,
                     trex_password=trex_password,
                     trex_pythonpath=trex_pythonpath,
-                    trex_ports=su_server_port_specs[idx] if idx < len(su_server_port_specs) else "0",
-                    server_output="",
-                    timeout_s=max(60.0, float(trex_server_startup_s) + 30.0),
+                    trex_ports=trex_ports,
+                    server_output=server_collector.text(),
+                    server_output_getter=server_collector.text,
+                    timeout_s=max(90.0, float(trex_server_startup_s) + 60.0),
                 )
+                for idx, su_host in enumerate(su_hosts):
+                    wait_for_trex_ports_link_up(
+                        trex_server=su_host,
+                        trex_user=trex_user,
+                        trex_password=trex_password,
+                        trex_pythonpath=trex_pythonpath,
+                        trex_ports=su_server_port_specs[idx] if idx < len(su_server_port_specs) else "0",
+                        server_output="",
+                        timeout_s=max(60.0, float(trex_server_startup_s) + 30.0),
+                    )
 
         dut_counters["pre"] = _sample_dut_counters(
             dut_host=dut_host,
