@@ -165,6 +165,18 @@ def pytest_addoption(parser):
         help="Run VLAN TRex/ping lab cases (tests/VLAN/) with live VLAN apply on BTS/CPE.",
     )
     group.addoption(
+        "--allow-logs-lab",
+        action="store_true",
+        default=False,
+        help="Run Logs lab cases (tests/Logs/) with live DUT ucidyn/logread/session checks.",
+    )
+    group.addoption(
+        "--allow-logs-destructive",
+        action="store_true",
+        default=False,
+        help="Allow Logs cases that reboot, fill storage, pressure memory, or upgrade firmware.",
+    )
+    group.addoption(
         "--allow-vlan-destructive",
         action="store_true",
         default=False,
@@ -293,6 +305,12 @@ async def _refresh_operating_ips_from_fallback(request, profile_bundle, device_c
     tb = active.setdefault("testbed", {})
     rec = tb.setdefault("recovery", {})
     mgmt = tb.setdefault("mgmt_vlan", {})
+    if not (dut.get("ip_mode") == "ipv6" or dut.get("strict_ipv6")):
+        print(
+            "[testbed] IPv4 profile — keeping dut.local_ip / dut.remote_ips; "
+            "skipping IPv6 operating-IP refresh."
+        )
+        return
 
     cli_local = _strip_ip_prefix(request.config.getoption("--local-ipv6") or "")
     cli_remote = request.config.getoption("--remote-ipv6") or ""

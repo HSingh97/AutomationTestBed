@@ -91,6 +91,8 @@ def _keywords_for_nodeid(nodeid: str, case_id: str) -> list[str]:
     cid = str(case_id or "").upper()
     if "VLAN" in cid or "/VLAN/" in nid or "test_vlan" in nid:
         return ["VLAN", cid or "VLAN"]
+    if "LOGS" in cid or "/Logs/" in nid or "test_logs" in nid:
+        return ["Logs", cid or "LOGS"]
     if "IP" in cid or "/IP/" in nid or "test_ip" in nid:
         return ["IP", cid or "IP"]
     if cid:

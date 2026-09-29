@@ -1580,7 +1580,12 @@ def run_vlan_ping_case(
     )
 
 
-def reboot_bts_and_wait(profile_active: dict[str, Any], *, wait_s: float = 180) -> None:
+def reboot_bts_and_wait(
+    profile_active: dict[str, Any],
+    *,
+    wait_s: float = 180,
+    require_su_link: bool = True,
+) -> None:
     from traffic.qos_lab import reboot_dut_and_wait
 
     hosts = lab_hosts(profile_active)
@@ -1591,7 +1596,9 @@ def reboot_bts_and_wait(profile_active: dict[str, Any], *, wait_s: float = 180) 
         down_poll_s=min(90, int(wait_s)),
         up_timeout_s=max(180, int(wait_s)),
     )
-    # RF reassociation after BTS reboot.
+    if not require_su_link:
+        return
+    # RF reassociation after BTS reboot (VLAN/throughput suites need SU; Logs does not).
     recover_su_link(profile_active, timeout_s=float((profile_active.get("performance") or {}).get("su_link_wait_s") or 180))
 
 

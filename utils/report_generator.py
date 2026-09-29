@@ -1,11 +1,13 @@
 import argparse
 import asyncio
+import html as html_lib
 import json
 import csv
 import sys
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -66,6 +68,24 @@ QOS_TRAFFIC_REPORT_CSS = """
             .test-steps-cell { max-width: 360px; font-size: 12px; color: #475569; line-height: 1.45; text-align: left; }
             .test-steps-text { white-space: pre-wrap; word-break: break-word; }
             tr.test-row td { padding-top: 18px; padding-bottom: 18px; }
+            .logs-proof-list { margin-top: 6px; }
+            .logs-proof-item { position: relative; padding-left: 14px; margin-bottom: 7px; color: #334155; }
+            .logs-proof-item::before { content: "•"; position: absolute; left: 0; color: #059669; font-weight: bold; }
+            .logs-proof-item.logs-proof-sub { padding-left: 28px; font-family: Consolas, monospace; font-size: 11px; color: #475569; }
+            .logs-proof-item.logs-proof-sub::before { content: "–"; color: #94a3b8; left: 14px; }
+            .logs-evidence-details { margin-top: 10px; }
+            .logs-evidence-details > summary {
+              cursor: pointer; list-style: none; font-size: 12px; font-weight: 600;
+              color: #1d4ed8; padding: 4px 0; user-select: none;
+            }
+            .logs-evidence-details > summary::-webkit-details-marker { display: none; }
+            .logs-evidence-details > summary::before { content: "▸ "; }
+            .logs-evidence-details[open] > summary::before { content: "▾ "; }
+            .logs-evidence-pre {
+              margin-top: 6px; padding: 10px 12px; background: #f8fafc; border: 1px solid #e2e8f0;
+              border-radius: 8px; font-family: Consolas, monospace; font-size: 11px;
+              color: #334155; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto;
+            }
 """
 
 
@@ -111,6 +131,13 @@ def _catalog_case_meta(test_id: str) -> dict[str, str]:
             meta["title"] = str(c.get("title") or "")
             meta["steps"] = str(c.get("steps") or "")
             meta["note"] = str(c.get("note") or "")
+        elif re.match(r"LOGS_\d+", tid, re.I):
+            from config.logs_test_cases import case_by_id
+
+            c = case_by_id(tid)
+            meta["title"] = str(c.get("title") or "")
+            meta["steps"] = str(c.get("steps") or "")
+            meta["note"] = str(c.get("note") or "")
         elif re.match(r"QoS_\d+", tid, re.I):
             from config.qos_test_cases import case_by_id
 
@@ -149,6 +176,8 @@ def get_group_marker(keywords):
             return "IP"
         if re.match(r"VLAN_\d+", str(kw), re.I) or low == "vlan":
             return "VLAN"
+        if re.match(r"LOGS_\d+", str(kw), re.I) or low == "logs":
+            return "Logs"
         if re.match(r"JMB_\d+", str(kw), re.I) or low in ("jumboframes", "jumbo"):
             return "JumboFrames"
         if re.match(r"PROCESS_\d+", str(kw), re.I) or low in ("processmonitor", "process_monitor"):
@@ -399,6 +428,234 @@ def load_qos_case_evidence(case_id: str) -> dict:
         return data if isinstance(data, dict) else {}
     except (json.JSONDecodeError, OSError):
         return {}
+
+
+def load_logs_case_evidence(case_id: str) -> dict[str, Any]:
+    """Load DUT-side Logs evidence written under ``reports/artifacts/logs_evidence/``."""
+    path = ARTIFACTS_DIR / "logs_evidence" / f"{case_id}.json"
+    if not path.is_file():
+        return {}
+    try:
+        with path.open(encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _logs_clip(text: Any, limit: int = 180) -> str:
+    s = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(s) <= limit:
+        return s
+    return s[: max(0, limit - 1)].rstrip() + "…"
+
+
+def build_logs_verification_lines(case_id: str, evidence: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Return (summary bullets, expandable detail lines) from Logs evidence JSON."""
+    if not evidence:
+        return (
+            [
+                f"{case_id}: no evidence sidecar found under reports/artifacts/logs_evidence/",
+                "Re-run with --allow-logs-lab to capture DUT proofs.",
+            ],
+            [],
+        )
+
+    # Prefer explicit proofs list when present (newer writers).
+    explicit = evidence.get("proofs")
+    if isinstance(explicit, list) and explicit:
+        summary = [str(x) for x in explicit if str(x).strip()]
+        details: list[str] = []
+        for key in ("matched", "logread_tail", "session_tail", "snlog_tail", "out_tail", "new_session"):
+            val = evidence.get(key)
+            if isinstance(val, list) and val:
+                details.append(f"{key}:")
+                details.extend(f"  {_logs_clip(ln, 220)}" for ln in val[-8:])
+            elif isinstance(val, str) and val.strip():
+                details.append(f"{key}:")
+                details.extend(f"  {_logs_clip(ln, 220)}" for ln in val.splitlines()[-8:] if ln.strip())
+        return summary, details
+
+    summary: list[str] = []
+    details: list[str] = []
+    mode = str(evidence.get("mode") or "").strip()
+    note = str(evidence.get("note") or "").strip()
+    catalog = _catalog_case_meta(case_id)
+    if not note:
+        note = catalog.get("note") or ""
+    if not mode:
+        try:
+            from config.logs_test_cases import case_by_id
+
+            mode = str((case_by_id(case_id) or {}).get("mode") or "")
+        except Exception:
+            mode = ""
+
+    if mode == "user_login_log":
+        summary.append("V&V method: Playwright GUI login + DUT session/snlog proof")
+    elif mode == "dut_log_extract":
+        summary.append("V&V method: DUT SSH extract of logread / snlog_json / session_logs")
+    elif mode:
+        summary.append(f"V&V method: DUT SSH ({mode})")
+    else:
+        summary.append("V&V method: DUT SSH log/UCI checks")
+
+    apply = evidence.get("apply")
+    if isinstance(apply, dict) and apply:
+        key = apply.get("key")
+        if key:
+            summary.append(
+                f"Applied UCI `{key}` → set={apply.get('set')!s}, "
+                f"readback={apply.get('got')!s}"
+            )
+        if apply.get("restored") is not None and key:
+            summary.append(f"Restored baseline `{key}` → {apply.get('restored')}")
+        for extra_key in ("channel", "ssid", "lease", "host", "option", "path", "value"):
+            if apply.get(extra_key) is not None:
+                summary.append(f"{extra_key}: {apply.get(extra_key)}")
+        out = str(apply.get("out") or "").strip()
+        if out:
+            details.append("ucidyn/apply output (tail):")
+            details.extend(f"  {_logs_clip(ln, 200)}" for ln in out.splitlines()[-6:] if ln.strip())
+
+    if "marker_ok" in evidence:
+        summary.append(
+            "Logger marker in logread: "
+            + ("PASS" if evidence.get("marker_ok") else "FAIL/absent")
+        )
+    if "snlog_grew_or_stable" in evidence:
+        summary.append(
+            "snlog size after apply: "
+            + ("grew or stable" if evidence.get("snlog_grew_or_stable") else "shrunk unexpectedly")
+        )
+    if evidence.get("new_logread_count") is not None:
+        summary.append(
+            f"New logread lines after apply: {evidence.get('new_logread_count')}; "
+            f"new session lines: {evidence.get('new_session_count', 0)}"
+        )
+
+    matched = evidence.get("matched") or []
+    if isinstance(matched, list) and matched:
+        summary.append(f"Matched DUT log lines for case grep: {len(matched)}")
+        details.append("Matched log snippets:")
+        details.extend(f"  {_logs_clip(ln, 220)}" for ln in matched[-8:])
+
+    if evidence.get("dut_extract_ok"):
+        summary.append(
+            f"DUT extract OK — logread={evidence.get('logread_chars')} chars, "
+            f"snlog={evidence.get('snlog_wc')} bytes, "
+            f"session_lines={evidence.get('session_lines')}"
+        )
+        if evidence.get("nms_pending"):
+            summary.append(f"NMS pending: {note or 'NMS side validation not automated yet'}")
+
+    if "post_logger_ok" in evidence:
+        summary.append(
+            "Post-reboot/event logger alive: "
+            + ("PASS" if evidence.get("post_logger_ok") else "FAIL")
+        )
+    if evidence.get("before_snlog_wc") is not None or evidence.get("after_snlog_wc") is not None:
+        summary.append(
+            f"snlog bytes before→after: {evidence.get('before_snlog_wc')} → {evidence.get('after_snlog_wc')}"
+        )
+    if evidence.get("before") is not None and evidence.get("after") is not None and "alive" in evidence:
+        summary.append(
+            f"snlog bytes before→after: {evidence.get('before')} → {evidence.get('after')}; "
+            f"logger alive={'PASS' if evidence.get('alive') else 'FAIL'}"
+        )
+    if evidence.get("cycles") is not None:
+        summary.append(
+            f"Persistent reboot cycles completed: {evidence.get('cycles')}; "
+            f"logger after={'PASS' if evidence.get('post_logger_ok') else 'FAIL'}"
+        )
+    if evidence.get("pct") is not None:
+        summary.append(
+            f"Memory pressure target ~{evidence.get('pct')}%; "
+            f"logger after={'PASS' if evidence.get('post_logger_ok') or evidence.get('alive') else 'see evidence'}"
+        )
+        if evidence.get("out_tail"):
+            details.append("memory/storage command output:")
+            details.extend(
+                f"  {_logs_clip(ln, 200)}"
+                for ln in str(evidence.get("out_tail")).splitlines()[-8:]
+                if ln.strip()
+            )
+
+    login = evidence.get("login")
+    if isinstance(login, dict) and login:
+        summary.append(
+            f"GUI login as {login.get('role') or login.get('user')} @ {login.get('host')}: "
+            f"{'OK' if login.get('ok') else 'FAIL'}"
+        )
+        if evidence.get("login_hit"):
+            summary.append("session_logs / snlog shows matching login event")
+        new_sess = evidence.get("new_session") or []
+        if isinstance(new_sess, list) and new_sess:
+            details.append("New session_logs lines:")
+            details.extend(f"  {_logs_clip(ln, 220)}" for ln in new_sess[-6:])
+        elif evidence.get("session_tail"):
+            details.append("session_logs sample:")
+            details.extend(
+                f"  {_logs_clip(ln, 220)}"
+                for ln in str(evidence["session_tail"]).splitlines()[-6:]
+                if ln.strip()
+            )
+
+    for key, label in (
+        ("logread_tail", "logread sample"),
+        ("session_tail", "session_logs sample"),
+        ("snlog_tail", "snlog sample"),
+        ("out_tail", "command output"),
+    ):
+        val = evidence.get(key)
+        if not isinstance(val, str) or not val.strip():
+            continue
+        # Avoid duplicating out_tail already added for memory/storage.
+        joined = "\n".join(details)
+        if key == "out_tail" and ("memory/storage command output:" in joined or "command output:" in joined):
+            continue
+        if f"{label}:" in joined:
+            continue
+        details.append(f"{label}:")
+        details.extend(f"  {_logs_clip(ln, 220)}" for ln in val.splitlines()[-6:] if ln.strip())
+
+    if note and "NMS pending" not in " ".join(summary):
+        summary.append(f"Plan note: {note}")
+
+    if not summary:
+        summary.append(f"{case_id}: evidence present but no structured fields — see raw JSON")
+        details.append(json.dumps(evidence, indent=2, default=str)[:1500])
+
+    return summary, details
+
+
+def render_logs_verification_html(case_id: str, evidence: dict[str, Any]) -> tuple[str, str]:
+    """HTML + CSV text for Logs Execution Details column."""
+    summary, details = build_logs_verification_lines(case_id, evidence)
+    if not summary and not details:
+        return "", ""
+
+    items_html = "".join(
+        f"<div class='logs-proof-item'>{html_lib.escape(line)}</div>" for line in summary
+    )
+    html_out = (
+        "<div class='reason-title'>Verification proof (DUT):</div>"
+        f"<div class='logs-proof-list'>{items_html}</div>"
+    )
+    if details:
+        raw_preview = "\n".join(details[:50])
+        html_out += (
+            "<details class='logs-evidence-details'>"
+            "<summary>Expand log / command samples</summary>"
+            f"<pre class='logs-evidence-pre'>{html_lib.escape(raw_preview)}</pre>"
+            "</details>"
+        )
+
+    csv_lines = ["Verification proof (DUT):"] + [f"- {ln}" for ln in summary]
+    if details:
+        csv_lines.append("Samples:")
+        csv_lines.extend(f"  {ln}" for ln in details[:50])
+    return html_out, "\n".join(csv_lines)
 
 
 def qos_verified_params_fallback(case_id: str) -> list[str]:
@@ -698,7 +955,28 @@ def generate():
                         )
                         vlan_fn = re.search(r"test_vlan\[(VLAN_\d+)\]", nodeid, re.I)
                         vlan_fn2 = re.search(r"(VLAN_\d+)", nodeid, re.I)
-                        if vlan_kw or vlan_fn or vlan_fn2:
+                        logs_kw = next(
+                            (
+                                str(k)
+                                for k in test.get("keywords", [])
+                                if re.match(r"LOGS_\d+", str(k), re.I)
+                            ),
+                            None,
+                        )
+                        logs_fn = re.search(r"test_logs\[(LOGS_\d+)\]", nodeid, re.I)
+                        logs_fn2 = re.search(r"(LOGS_\d+)", nodeid, re.I)
+                        if logs_kw or logs_fn or logs_fn2:
+                            raw = logs_kw or (logs_fn.group(1) if logs_fn else logs_fn2.group(1))
+                            m = re.match(r"LOGS_(\d+)", str(raw), re.I)
+                            test_id = f"LOGS_{int(m.group(1)):02d}" if m else str(raw).upper()
+                            try:
+                                from config.logs_test_cases import case_by_id
+
+                                c = case_by_id(test_id) or {}
+                                test_name = c.get("title") or c.get("note") or test_id
+                            except Exception:
+                                test_name = _humanize_module_name(nodeid, test_id)
+                        elif vlan_kw or vlan_fn or vlan_fn2:
                             raw = vlan_kw or (vlan_fn.group(1) if vlan_fn else vlan_fn2.group(1))
                             m = re.match(r"VLAN_(\d+)", str(raw), re.I)
                             test_id = f"VLAN_{int(m.group(1)):02d}" if m else str(raw).upper()
@@ -738,6 +1016,11 @@ def generate():
         qos_table_csv = ""
         is_qos_case = bool(re.match(r"QoS_\d+", str(test_id), re.I)) or group_name == "QoS"
         is_um_case = bool(re.match(r"UM_\d+", str(test_id), re.I)) or group_name == "UserMgmt"
+        is_logs_case = bool(re.match(r"LOGS_\d+", str(test_id), re.I)) or group_name == "Logs"
+        logs_evidence: dict[str, Any] = load_logs_case_evidence(str(test_id)) if is_logs_case else {}
+        logs_reason_html, logs_reason_csv = (
+            render_logs_verification_html(str(test_id), logs_evidence) if is_logs_case else ("", "")
+        )
         if is_qos_case:
             evidence = load_qos_case_evidence(str(test_id))
             if not validated_params:
@@ -760,7 +1043,10 @@ def generate():
                 if _is_process_monitor_test(test)
                 else ""
             )
-            if is_qos_case and validated_params:
+            if is_logs_case and logs_reason_html:
+                reason_html = logs_reason_html
+                reason_csv = logs_reason_csv
+            elif is_qos_case and validated_params:
                 pills = "".join([f"<span class='param-pill'>{p}</span>" for p in validated_params])
                 reason_html = (
                     f"<div class='reason-title'>Successfully Verified ({len(validated_params)} parameters):</div>"
@@ -935,6 +1221,11 @@ def generate():
             if ascii_table.strip():
                 reason_csv = f"{reason_csv}\n\n{ascii_table.strip()}".strip()
 
+        # Attach DUT verification proof for non-pass Logs outcomes when evidence exists.
+        if is_logs_case and logs_reason_html and outcome != "PASSED":
+            reason_html = f"{reason_html}{logs_reason_html}" if reason_html else logs_reason_html
+            reason_csv = f"{reason_csv}\n\n{logs_reason_csv}".strip() if reason_csv else logs_reason_csv
+
         capture_html, capture_csv = render_jumbo_capture_evidence_html(test_id, jumbo_capture_index)
         if capture_html:
             reason_html = f"{reason_html}{capture_html}"
@@ -966,6 +1257,8 @@ def generate():
             groups[group_name] = _sort_numbered_suite_records(records, "IP")
         elif group_name == "VLAN":
             groups[group_name] = _sort_numbered_suite_records(records, "VLAN")
+        elif group_name == "Logs":
+            groups[group_name] = _sort_numbered_suite_records(records, "LOGS")
         elif group_name == "JumboFrames":
             groups[group_name] = _sort_numbered_suite_records(records, "JMB")
 
