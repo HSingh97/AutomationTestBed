@@ -93,6 +93,14 @@ def _keywords_for_nodeid(nodeid: str, case_id: str) -> list[str]:
         return ["VLAN", cid or "VLAN"]
     if "LOGS" in cid or "/Logs/" in nid or "test_logs" in nid:
         return ["Logs", cid or "LOGS"]
+    if "FIREWALL" in cid or "/Firewall/" in nid or "test_firewall" in nid:
+        return ["Firewall", cid or "FIREWALL"]
+    if "DFS" in cid or "/DFS/" in nid or "test_dfs" in nid:
+        return ["DFS", cid or "DFS"]
+    if cid.startswith("SEC") or "/Security/" in nid or "test_security" in nid:
+        return ["Security", cid or "SEC"]
+    if "ACB" in cid or "/AsymmetricCBW/" in nid or "test_acb" in nid:
+        return ["AsymmetricCBW", cid or "ACB"]
     if "IP" in cid or "/IP/" in nid or "test_ip" in nid:
         return ["IP", cid or "IP"]
     if cid:

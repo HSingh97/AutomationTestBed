@@ -1,6 +1,6 @@
 # UBR Automation TestBed
 
-End-to-end automation framework for **Senao UBR** point-to-multipoint (P2MP) and point-to-point (P2P) validation: GUI sanity, IP networking, jumbo frames, stability regression, process monitoring, 2.4 GHz CPE API, wireless security, ARP/bridge tables, lab attenuator/SNR sweeps, and **TRex throughput matrix** runs with rich HTML reporting.
+End-to-end automation framework for **Senao UBR** point-to-multipoint (P2MP) and point-to-point (P2P) validation: GUI sanity, IP networking, jumbo frames, VLAN, QoS, logs, user management, firewall, DFS, security, asymmetric channel bandwidth, stability regression, process monitoring, 2.4 GHz CPE API, wireless security, ARP/bridge tables, lab attenuator/SNR sweeps, and **TRex throughput matrix** runs with rich HTML reporting.
 
 Designed for repeatable execution on lab benches, locally via pytest, and in **Jenkins** with per-stand agent labels (`TARGET_STAND`).
 
@@ -161,8 +161,12 @@ venv/bin/playwright install chromium
 |------|---------|
 | `conftest.py` | Global fixtures, CLI options, IP/regression collection hooks |
 | `pytest.ini` | Markers, asyncio mode, log level |
-| `config/` | `ip_test_cases.py`, `process_test_cases.py`, `benches.yaml`, defaults |
+| `config/` | Plan catalogs (`ip`, `vlan`, `qos`, `logs`, `firewall`, `dfs`, `security`, `acb`, …), `benches.yaml`, defaults |
 | `tests/GUI/` | LuCI GUI suites (`GUI_01`–`GUI_130` where implemented) |
+| `tests/Firewall/` | UBR655 Firewall (`FIREWALL_01`–`06`) |
+| `tests/DFS/` | UBR655 DFS (`TC_DFS_001`–`028`) |
+| `tests/Security/` | UBR655 Security (`SEC-01`–`16`) |
+| `tests/AsymmetricCBW/` | UBR655 Asymmetric CBW (`ACB_01`–`12`) |
 | `tests/IP/` | IPv4/IPv6 networking (`IP_01`–`IP_36` active) |
 | `tests/JumboFrames/` | Jumbo MTU (`JMB_01`–`JMB_10`) |
 | `tests/Regression/` | Stability (`REG_01`–`REG_03`) |
@@ -203,6 +207,38 @@ venv/bin/playwright install chromium
 | **ARP / Bridge** | `tests/ArpBridgeTable/` | `ArpBridgeTable` | **10** (`ARPBRIDGE_*`) | sanity |
 | **Lab attenuator** | `tests/Lab/` | `attenuator` | **1** mock sweep | `--allow-attenuator-lab` |
 | **Throughput unit** | `tests/Throughput/` | *(none)* | **~73** unit tests | No DUT required |
+| **Firewall** | `tests/Firewall/` | `Firewall` | **6** (`FIREWALL_01`–`06`) | `--allow-firewall-lab` |
+| **DFS** | `tests/DFS/` | `DFS` | **24** automated / 28 on sheet | `--allow-dfs-lab` (`--allow-dfs-long` for 30 min cases) |
+| **Security** | `tests/Security/` | `Security` | **13** automated / 16 on sheet | `--allow-security-lab` |
+| **Asymmetric CBW** | `tests/AsymmetricCBW/` | `AsymmetricCBW` | **8** automated / 12 on sheet | `--allow-acb-lab` |
+
+### UBR655 plan coverage
+
+Source: `Senao UBR P2MP Test Plan_Aug26_Alpha_UBR655.xlsx` Summary sheet — **41 test sheets, 1,725 cases**.
+
+**27.3% of plan cases are automated** (471 / 1,725). **17 of 41 sheets** have a pytest suite. The TRex throughput matrix exercises the Throughput sheet but is not 192 separate cases, so those 192 are not included in the 471.
+
+| Sheet | On sheet | Automated | Not in pytest |
+|-------|----------|-----------|----------------|
+| GUI | 139 | 73 | 66 |
+| Jumbo Frames | 10 | 10 | 0 |
+| VLAN | 59 | 46 | 13 (12 N/A, 1 manual) |
+| QoS | 40 | 36 | 4 manual (`QoS_28`, `31`, `33`, `35`) |
+| Arp & Bridge Table | 11 | 10 | 1 |
+| IPv4 & IPv6 | 49 | 34 | 15 (`IP_10`, `IP_29` manual; `IP_37`–`IP_60` not collected) |
+| User Management | 50 | 50 | 0 (7 are destructive and gated) |
+| Wireless Security | 14 | 8 | 6 |
+| 2.4 GHz Radio | 40 | 19 | 21 |
+| Process Monitoring | 19 | 19 | 0 |
+| Logs | 97 | 97 | 0 |
+| API | 27 | 18 | 9 |
+| Firewall | 6 | 6 | 0 (`FIREWALL_06` runs only when OpenVAS is installed) |
+| DFS | 28 | 24 | 4 N/A (`TC_DFS_009`, `024`, `025`, `027`) |
+| Security | 16 | 13 | 3 manual (`SEC-01`, `SEC-02`, `SEC-16`) |
+| Asymmetric CBW | 12 | 8 | 4 N/A (`ACB_08`–`ACB_11`) |
+| Throughput per MCS | 192 | matrix only | 192 discrete rows are not individual tests |
+
+**Sheets with no suite yet (24):** RFC Results, Sanity, Tx Power Measurement, ATPC, Functional, Link Test Tool, Ethernet Test, Cable Length, DCS, DDRS, OFDMA, MU-MIMO, Spectrum Analyser & Site Survey, DHCPv4 & DHCPv6, SECURE-DUAL-BOOT, Device Management, CPE-Power-On-PoE-Mechanism, CPE and IDU DHCP Authentication, PPPoE, GPS, NMS-Client Communication, Cascaded BTS Deployment, Device_NMS_Interoperability, Co-Channel.
 
 ### GUI (`tests/GUI/`) — 73 tests
 
@@ -329,6 +365,30 @@ pytest tests/WirelessSecurity/ -v
 pytest tests/ArpBridgeTable/ -v
 ```
 
+### Firewall, DFS, Security, Asymmetric CBW
+
+IPv4 lab example (pass the live BTS/CPE addresses; the profile default is not these units):
+
+```bash
+pytest tests/Firewall -m Firewall -v --allow-firewall-lab \
+  --profile ipv4_lab --local-ip 192.168.2.120 --remote-ip 192.168.2.121 \
+  --username root --password "$DUT_PASSWORD" --skip-testbed-bootstrap
+
+pytest tests/DFS -m DFS -v --allow-dfs-lab \
+  --profile ipv4_lab --local-ip 192.168.2.120 --remote-ip 192.168.2.121 \
+  --username root --password "$DUT_PASSWORD" --skip-testbed-bootstrap
+
+pytest tests/Security -m Security -v --allow-security-lab \
+  --profile ipv4_lab --local-ip 192.168.2.120 \
+  --username root --password "$DUT_PASSWORD" --skip-testbed-bootstrap
+
+pytest tests/AsymmetricCBW -m AsymmetricCBW -v --allow-acb-lab \
+  --profile ipv4_lab --local-ip 192.168.2.120 --remote-ip 192.168.2.121 \
+  --username root --password "$DUT_PASSWORD" --skip-testbed-bootstrap
+```
+
+DFS radar is `radartool -i wifi1 bangradar` on the current channel. `TC_DFS_008`, `TC_DFS_015`, and `TC_DFS_022` also need `--allow-dfs-long` (about 30 minutes each). Asymmetric CBW sets BTS `wireless.wifi1.htmode` (downlink) and CPE `advwireless.ath1.force_bw` (uplink). `dlulratio` is not used.
+
 ### IP suite flags
 
 | Flag | Purpose |
@@ -351,6 +411,11 @@ pytest tests/ArpBridgeTable/ -v
 | `--regression-fresh` | New regression HTML (don't append) |
 | `--firmware-image` | Path for `REG_03` |
 | `--allow-attenuator-lab` | Enable lab attenuator test |
+| `--allow-firewall-lab` | Enable Firewall port probes |
+| `--allow-dfs-lab` | Enable DFS cases |
+| `--allow-dfs-long` | Enable DFS cases that wait ~30 minutes |
+| `--allow-security-lab` | Enable Security cases |
+| `--allow-acb-lab` | Enable Asymmetric CBW cases |
 
 ### Session fixtures (root `conftest.py`)
 
@@ -579,6 +644,11 @@ Catalog in [docs/lab-instruments.html](docs/lab-instruments.html) (built by `scr
 | `scripts/bootstrap_testbed.py` | Mgmt VLAN + CPE discovery bootstrap |
 | `scripts/factory_provision.py` | Factory reset → basic config |
 | `scripts/run_qa_lab_trex.sh` | Start/kill dual TRex on qa-lab-02 |
+| `scripts/run_firewall.sh` | Firewall suite (`--allow-firewall-lab`) |
+| `scripts/run_dfs.sh` | DFS suite (`--allow-dfs-lab`) |
+| `scripts/run_security.sh` | Security suite (`--allow-security-lab`) |
+| `scripts/run_acb.sh` | Asymmetric CBW suite (`--allow-acb-lab`) |
+| `scripts/install_openvas.sh` | Optional Greenbone/OpenVAS install for `FIREWALL_06` |
 | `scripts/vlan_link_debug_campaign.py` | VLAN link-recovery campaign |
 | `scripts/build_grafana_report_from_matrix_json.py` | Grafana HTML from matrix JSON |
 | `scripts/build_sample_grafana_report.py` | Local Grafana preview |

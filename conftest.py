@@ -23,6 +23,75 @@ from utils.recovery_manager import RecoveryManager, set_active_recovery_manager
 ARTIFACTS_DIR = Path("reports/artifacts")
 
 
+def _html_report_prefix(report_path: Path) -> str:
+    """Pick a customer HTML prefix from the pytest JSON node ids."""
+    try:
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "Senao_UBR"
+    nodeids = " ".join(str(t.get("nodeid") or "") for t in data.get("tests") or [])
+    hits = []
+    for token, prefix in (
+        ("/Firewall/", "Senao_UBR_FIREWALL"),
+        ("/DFS/", "Senao_UBR_DFS"),
+        ("/Security/", "Senao_UBR_SECURITY"),
+        ("/AsymmetricCBW/", "Senao_UBR_ACB"),
+        ("/Logs/", "Senao_UBR_LOGS"),
+        ("/VLAN/", "Senao_UBR_VLAN"),
+        ("/QoS/", "Senao_UBR_QOS"),
+    ):
+        if token in nodeids:
+            hits.append(prefix)
+    if len(hits) == 1:
+        return hits[0]
+    return "Senao_UBR"
+
+
+def _write_customer_html(config) -> None:
+    """Always write the customer HTML/CSV from the pytest JSON report."""
+    import shutil
+    import subprocess
+
+    raw = ""
+    try:
+        raw = str(config.getoption("json_report_file", default="") or "")
+    except (ValueError, AttributeError):
+        raw = ""
+    src = Path(raw) if raw else ARTIFACTS_DIR / "report.json"
+    if not src.is_file():
+        return
+    dest = ARTIFACTS_DIR / "report.json"
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    if src.resolve() != dest.resolve():
+        shutil.copyfile(src, dest)
+    prefix = _html_report_prefix(dest)
+    build = prefix.removeprefix("Senao_UBR_").replace("Senao_UBR", "Lab") or "Lab"
+    ip = "192.168.2.120"
+    try:
+        ip = str(config.getoption("--local-ip") or ip)
+    except (ValueError, AttributeError):
+        pass
+    date_str = datetime.now().strftime("%Y%m%d")
+    repo = Path(__file__).resolve().parent
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(repo / "utils" / "report_generator.py"),
+            build,
+            ip,
+            date_str,
+            "--output-prefix",
+            prefix,
+            "--profile",
+            str(config.getoption("--profile") or ""),
+        ],
+        cwd=str(repo),
+        check=False,
+    )
+    if proc.returncode != 0:
+        print(f"\n[report] HTML report generator exited {proc.returncode}")
+
+
 def _artifact_path(*parts: str) -> Path:
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     return ARTIFACTS_DIR.joinpath(*parts)
@@ -175,6 +244,36 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Allow Logs cases that reboot, fill storage, pressure memory, or upgrade firmware.",
+    )
+    group.addoption(
+        "--allow-firewall-lab",
+        action="store_true",
+        default=False,
+        help="Run Firewall lab cases (tests/Firewall/) with live BTS/CPE port probes.",
+    )
+    group.addoption(
+        "--allow-dfs-lab",
+        action="store_true",
+        default=False,
+        help="Run DFS lab cases (tests/DFS/) with live channel apply and radartool bangradar.",
+    )
+    group.addoption(
+        "--allow-dfs-long",
+        action="store_true",
+        default=False,
+        help="Allow DFS cases that wait ~30 minutes for NOL/NOP/RRM (008, 015, 022).",
+    )
+    group.addoption(
+        "--allow-security-lab",
+        action="store_true",
+        default=False,
+        help="Run Security lab cases (tests/Security/) against live LuCI/SSH.",
+    )
+    group.addoption(
+        "--allow-acb-lab",
+        action="store_true",
+        default=False,
+        help="Run Asymmetric CBW lab cases (tests/AsymmetricCBW/) on the live DUT.",
     )
     group.addoption(
         "--allow-vlan-destructive",
@@ -893,6 +992,8 @@ def pytest_sessionfinish(session, exitstatus):
         pytest_html = getattr(session.config, "_regression_pytest_html", None)
         if pytest_html:
             print(f"[REGRESSION] Pytest HTML report: {pytest_html}")
+
+    _write_customer_html(session.config)
 
 # =====================================================================
 # 5. PLAYWRIGHT GUI ENGINE

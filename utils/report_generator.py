@@ -152,6 +152,34 @@ def _catalog_case_meta(test_id: str) -> dict[str, str]:
             meta["title"] = str(c.get("title") or "")
             meta["steps"] = str(c.get("steps") or "")
             meta["note"] = str(c.get("note") or "")
+        elif re.match(r"FIREWALL_\d+", tid, re.I):
+            from config.firewall_test_cases import case_by_id
+
+            c = case_by_id(tid)
+            meta["title"] = str(c.get("title") or "")
+            meta["steps"] = str(c.get("steps") or "")
+            meta["note"] = str(c.get("note") or "")
+        elif re.match(r"TC_DFS_\d+", tid, re.I):
+            from config.dfs_test_cases import case_by_id
+
+            c = case_by_id(tid)
+            meta["title"] = str(c.get("title") or "")
+            meta["steps"] = str(c.get("steps") or "")
+            meta["note"] = str(c.get("note") or "")
+        elif re.match(r"SEC-\d+", tid, re.I):
+            from config.security_test_cases import case_by_id
+
+            c = case_by_id(tid)
+            meta["title"] = str(c.get("title") or "")
+            meta["steps"] = str(c.get("steps") or "")
+            meta["note"] = str(c.get("note") or "")
+        elif re.match(r"ACB_\d+", tid, re.I):
+            from config.acb_test_cases import case_by_id
+
+            c = case_by_id(tid)
+            meta["title"] = str(c.get("title") or "")
+            meta["steps"] = str(c.get("steps") or "")
+            meta["note"] = str(c.get("note") or "")
     except Exception:
         pass
     return meta
@@ -186,6 +214,14 @@ def get_group_marker(keywords):
             return "QoS"
         if re.match(r"UM_\d+", str(kw), re.I) or low in ("usermgmt", "user_mgmt"):
             return "UserMgmt"
+        if re.match(r"FIREWALL_\d+", str(kw), re.I) or low == "firewall":
+            return "Firewall"
+        if re.match(r"TC_DFS_\d+", str(kw), re.I) or low == "dfs":
+            return "DFS"
+        if re.match(r"SEC-\d+", str(kw), re.I) or low == "security":
+            return "Security"
+        if re.match(r"ACB_\d+", str(kw), re.I) or low in ("asymmetriccbw", "asymmetric_cbw"):
+            return "AsymmetricCBW"
 
     for kw in kw_list:
         if kw in ignore_list or str(kw).startswith('GUI_') or str(kw).startswith('test_') or '.py' in str(kw):
@@ -205,7 +241,7 @@ OFFICIAL_PROCESS_REPORT_ORDER: tuple[int, ...] = tuple(range(1, 20))
 
 
 def _suite_case_number(test_id: str, prefix: str) -> int | None:
-    match = re.match(rf"{re.escape(prefix)}_(\d+)", str(test_id), re.I)
+    match = re.match(rf"{re.escape(prefix)}[_-](\d+)", str(test_id), re.I)
     return int(match.group(1)) if match else None
 
 
@@ -711,7 +747,9 @@ def _skip_reason_text(test: dict) -> str:
     blob = "\n".join(chunks).strip()
     m = re.search(r"(?:Skipped|skipped)[:\s]+['\"]?(.*?)['\"]?\s*$", blob, re.I | re.M)
     if m:
-        return m.group(1).strip()
+        text = m.group(1).strip().strip("'\"")
+        text = re.sub(r"['\"]\)\s*$", "", text).strip()
+        return text
     for line in blob.splitlines():
         line = line.strip().strip("'\"")
         if line and line.lower() not in ("skipped",):
@@ -988,18 +1026,39 @@ def generate():
                             except Exception:
                                 test_name = _humanize_module_name(nodeid, test_id)
                         else:
-                            match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
-                            if match:
-                                test_id = match.group(1).upper()
-                                raw_name = match.group(2)
-                                parts = raw_name.split('_')
-                                if len(parts) >= 2 and parts[0] == 'summary':
-                                    test_name = '-'.join(p.capitalize() for p in parts[::-1])
+                            ubr_m = re.search(
+                                r"(FIREWALL_\d+|TC_DFS_\d+|SEC-\d+|ACB_\d+)",
+                                nodeid,
+                                re.I,
+                            )
+                            if ubr_m:
+                                raw = ubr_m.group(1).upper()
+                                if raw.startswith("FIREWALL_"):
+                                    n = re.match(r"FIREWALL_(\d+)", raw, re.I)
+                                    test_id = f"FIREWALL_{int(n.group(1)):02d}" if n else raw
+                                elif raw.startswith("TC_DFS_"):
+                                    n = re.match(r"TC_DFS_(\d+)", raw, re.I)
+                                    test_id = f"TC_DFS_{int(n.group(1)):03d}" if n else raw
+                                elif raw.startswith("SEC-"):
+                                    n = re.match(r"SEC-(\d+)", raw, re.I)
+                                    test_id = f"SEC-{int(n.group(1)):02d}" if n else raw
                                 else:
-                                    test_name = '-'.join(p.capitalize() for p in parts)
+                                    n = re.match(r"ACB_(\d+)", raw, re.I)
+                                    test_id = f"ACB_{int(n.group(1)):02d}" if n else raw
+                                test_name = _humanize_module_name(nodeid, test_id)
                             else:
-                                test_id = "N/A"
-                                test_name = nodeid.split('::')[-1]
+                                match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
+                                if match:
+                                    test_id = match.group(1).upper()
+                                    raw_name = match.group(2)
+                                    parts = raw_name.split('_')
+                                    if len(parts) >= 2 and parts[0] == 'summary':
+                                        test_name = '-'.join(p.capitalize() for p in parts[::-1])
+                                    else:
+                                        test_name = '-'.join(p.capitalize() for p in parts)
+                                else:
+                                    test_id = "N/A"
+                                    test_name = nodeid.split('::')[-1]
 
         group_name = get_group_marker(test.get('keywords', []))
         outcome = _effective_outcome_for_report(test).upper()
@@ -1261,6 +1320,14 @@ def generate():
             groups[group_name] = _sort_numbered_suite_records(records, "LOGS")
         elif group_name == "JumboFrames":
             groups[group_name] = _sort_numbered_suite_records(records, "JMB")
+        elif group_name == "Firewall":
+            groups[group_name] = _sort_numbered_suite_records(records, "FIREWALL")
+        elif group_name == "DFS":
+            groups[group_name] = _sort_numbered_suite_records(records, "TC_DFS")
+        elif group_name == "Security":
+            groups[group_name] = _sort_numbered_suite_records(records, "SEC")
+        elif group_name == "AsymmetricCBW":
+            groups[group_name] = _sort_numbered_suite_records(records, "ACB")
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     html_filename = ARTIFACTS_DIR / f"{output_prefix}_{build_no}_Report_{date_str}.html"
