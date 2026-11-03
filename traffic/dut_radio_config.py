@@ -655,20 +655,23 @@ def configure_bts_bandwidth_ratio(
     bandwidth: str,
     ratio: str,
     *,
+    channel: int | None = None,
     ssh_timeout_s: int = 60,
     bandwidth_apply_wait_s: float = 60.0,
     verify: bool = True,
 ) -> str:
     """BTS only: htmode and DL/UL ratio (no MCS change)."""
     dl_ul_percent = ratio_to_uci_dl_percent(ratio)
+    chan_note = f", channel={channel}" if channel is not None else ""
     print(
         f"[BTS] Applying bandwidth/ratio on {ip}: bw={bandwidth}, "
-        f"ratio={ratio} (dlulratio={dl_ul_percent})"
+        f"ratio={ratio} (dlulratio={dl_ul_percent}){chan_note}"
     )
     commands = RootCommands.set_bandwidth_ratio_apply_commands(
         radio_idx,
         uci_htmode_value(bandwidth),
         dl_ul_percent,
+        channel=channel,
     )
     wait_s = max(0, int(round(bandwidth_apply_wait_s)))
     if wait_s > 0:
@@ -1769,6 +1772,7 @@ def configure_bandwidth_profile(
     link_debug_dir: str | None = None,
     verify: bool = True,
     skip_if_unchanged: bool = True,
+    channel: int | None = None,
 ) -> dict[str, object]:
     """Apply BTS htmode + DL:UL ratio once per bandwidth group (no MCS change)."""
     from traffic.su_link_ping import wait_for_su_links
@@ -1782,14 +1786,41 @@ def configure_bandwidth_profile(
     if skip_if_unchanged and bandwidth_profile_matches(
         bts_ip, user, password, radio_idx, bandwidth, ratio
     ):
-        print(
-            f"[CONFIG] Bandwidth already {normalize_bandwidth(bandwidth)}, "
-            f"ratio={ratio} — skipping apply"
-        )
-        return {"bandwidth_ok": True, "bandwidth_skipped": True}
+        if channel is not None:
+            actual_chan = _read_uci(
+                bts_ip,
+                user,
+                password,
+                f"uci get advwireless.ath{radio_idx}.channel",
+            ).strip()
+            if not actual_chan or actual_chan == "uci: Entry not found":
+                actual_chan = _read_uci(
+                    bts_ip,
+                    user,
+                    password,
+                    f"uci get wireless.wifi{radio_idx}.channel",
+                ).strip()
+            if actual_chan != str(int(channel)):
+                print(
+                    f"[CONFIG] Bandwidth/ratio already match but channel "
+                    f"{actual_chan} != {channel} — re-applying"
+                )
+            else:
+                print(
+                    f"[CONFIG] Bandwidth already {normalize_bandwidth(bandwidth)}, "
+                    f"ratio={ratio}, channel={channel} — skipping apply"
+                )
+                return {"bandwidth_ok": True, "bandwidth_skipped": True}
+        else:
+            print(
+                f"[CONFIG] Bandwidth already {normalize_bandwidth(bandwidth)}, "
+                f"ratio={ratio} — skipping apply"
+            )
+            return {"bandwidth_ok": True, "bandwidth_skipped": True}
 
     print(
         f"[CONFIG] Applying BTS bw={normalize_bandwidth(bandwidth)}, DL:UL ratio={ratio}"
+        + (f", channel={channel}" if channel is not None else "")
     )
     dl_ul_percent = configure_bts_bandwidth_ratio(
         bts_ip,
@@ -1798,6 +1829,7 @@ def configure_bandwidth_profile(
         radio_idx,
         bandwidth,
         ratio,
+        channel=channel,
         ssh_timeout_s=ssh_timeout_s,
         bandwidth_apply_wait_s=bandwidth_apply_wait_s,
         verify=verify,

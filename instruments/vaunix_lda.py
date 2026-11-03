@@ -112,6 +112,7 @@ class VaunixLdaApi:
         self._open = False
         self._use_legacy_att = False
         self._devices_ready: set[int] = set()
+        self.last_error = ""
 
     def open(self) -> None:
         if self._open:
@@ -140,8 +141,12 @@ class VaunixLdaApi:
             self._use_legacy_att = not hasattr(self._dll, "fnLDA_SetAttenuationHR")
             self._open = True
         except Exception as exc:
+            self.last_error = str(exc)
             if self._backend == "auto":
-                print(f"    -> [ATTEN] Vaunix SDK unavailable ({exc}); using mock backend.")
+                if "No Vaunix LDA" in self.last_error:
+                    print(f"    -> [ATTEN] {self.last_error}")
+                else:
+                    print(f"    -> [ATTEN] Vaunix SDK unavailable ({exc}); using mock backend.")
                 self._backend = "mock"
                 self._mock = MockVaunixLda()
                 self._device_ids = self._mock.get_dev_info()

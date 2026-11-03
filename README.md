@@ -441,21 +441,28 @@ python3 scripts/generate_automation_coverage.py
 
 ### Overview
 
-`traffic/performance_matrix.py` sweeps **bandwidth × MCS × DL/UL ratio**, configures the DUT, runs **TRex stats-check**, validates link rates, and writes JSON/CSV/HTML reports.
+`traffic/performance_matrix.py` sweeps **bandwidth × MCS × DL/UL ratio**, configures the DUT, runs **TRex stats-check**, validates link rates, and writes JSON/CSV/HTML reports. Jenkins publishes the **Grafana-style** HTML as `Senao_Performance_*.html` by default (classic table kept alongside).
 
 **Fixed matrix ratio:** 75:25 DL:UL (configurable per profile).
 
-**Dynamic targets (default):** from `traffic/operating_rate_table.py` (product spec sheet) × efficiency factor (default 70%). Example: HT20 + MCS23 → 286 Mbps operating rate → ~200 Mbps effective target at 75% efficiency.
+**Dynamic targets (default):** from `traffic/operating_rate_table.py` (product spec sheet) × efficiency factor (default 70–75%). Example: HT20 + MCS23 → operating rate from the sheet → effective TRex offer at efficiency %.
 
 ### DUT configuration flow
 
 1. **Bandwidth** applied once per htmode group (`HT20`, `HT40`, `HT80`, …)
-2. Wait for all SUs to link (`su_link_wait_s`, `bandwidth_running_wait_s`)
-3. **MCS** applied per iteration — BTS + all CPEs
-4. **Verify operating MCS** via BTS KWN sysfs (`read_operating_mcs_by_sua_slot`)
-5. On mismatch: `kickmac` → wait `mcs_kickmac_wait_s` → re-read sysfs
-6. **Continue TRex** even on persistent mismatch; report flags `mcs_mismatch_note`
-7. TRex run; grade RX against effective target
+2. Optional **`--channel N`** pins `advwireless.athN.channel` (+ `wireless.wifiN.channel`) on every BW apply so DFS/lab channel does not drift back
+3. Wait for all SUs to link (`su_link_wait_s`, `bandwidth_running_wait_s`)
+4. **MCS** applied per iteration — BTS + all CPEs
+5. **Verify operating MCS** via BTS KWN sysfs (`read_operating_mcs_by_sua_slot`)
+6. On mismatch: `kickmac` → wait `mcs_kickmac_wait_s` → re-read sysfs
+7. **Continue TRex** even on persistent mismatch; report flags `mcs_mismatch_note`
+8. TRex run; grade RX against effective target
+
+### TRex path learning (required for RX)
+
+`master_script_extended_16SU.py` and `qos_throughput_script.py` teach the bridge before unicast: each TRex port sends a short broadcast so BTS/CPE learn the far MAC. Without that, unknown unicast is not flooded onto the air and TRex **RX stays 0** even when the radio path can carry iperf.
+
+QoS multi-class offer (no `--equal-share`) fills priority 1 up to its MIR, then lower queues with leftover bandwidth. Priority-1 MIR 100% means only that stream is offered.
 
 ### Link stats source
 
@@ -464,11 +471,12 @@ python3 scripts/generate_automation_coverage.py
 | `qa_lab_02` | **SSH** — BTS `/sys/class/kwn/sua{N}/statistics/*` (MAC, IPv6, Tx/Rx rate, MCS, SNR, RSSI) |
 | Others | SNMP and/or SSH via `traffic/link_stats.py` (`link_stats_source: auto`) |
 
-### TRex topology (qa-lab-02)
+### TRex topology
 
-- **BSU server** `192.168.1.1` — ports 1–3 (BTS + 3 CPE)
-- **SU server** `192.168.1.2` — ports 0–2 (3 CPE)
-- **6 SUs** total; QinQ tags from profile (`svlan`/`cvlan` 200/201)
+| Bench | BSU / notes |
+|-------|-------------|
+| qa-lab-02 | `192.168.1.1` ports 1–3 + SU server `192.168.1.2` ports 0–2 (6 SUs, QinQ from profile) |
+| Harman / a60 PTP | TRex `192.168.3.3` ports `0,1` (1 SU); use `--no-qinq` when VLAN mode is transparent |
 
 ### Run locally
 
@@ -483,11 +491,19 @@ PYTHONPATH=. python3 traffic/performance_matrix.py --profile qa_lab_02 --stand t
 PYTHONPATH=. python3 traffic/performance_matrix.py \
   --stand test-qa-lab-02 --bandwidths HT80 --mcs MCS22,MCS23 --time 30
 
-# Full BW × MCS0–MCS23 (72 cells on 3 bandwidths)
+# Full BW × MCS0–MCS23 on a fixed DFS channel (PTP example)
+MCS_LIST=$(python3 -c 'print(",".join(f"MCS{i}" for i in range(24)))')
 PYTHONPATH=. python3 traffic/performance_matrix.py \
-  --stand test-qa-lab-02 \
-  --bandwidths HT20,HT40,HT80 \
-  --mcs MCS0,MCS1,MCS2,MCS3,MCS4,MCS5,MCS6,MCS7,MCS8,MCS9,MCS10,MCS11,MCS12,MCS13,MCS14,MCS15,MCS16,MCS17,MCS18,MCS19,MCS20,MCS21,MCS22,MCS23
+  --profile ipv4_lab \
+  --local-ip 192.168.1.231 --cpe-ip 192.168.1.230 \
+  --bandwidths HT20,HT40,HT80 --mcs "$MCS_LIST" \
+  --channel 120 --time 10 --su-count 1 --ratios 75:25 --ratios-only \
+  --no-qinq --trex-server 192.168.3.3 --trex-ports 0,1 \
+  --deploy-client-script --no-fail-on-rate-mismatch
+
+# Faster waits for a stable PTP lab (same matrix, less idle time)
+# --bandwidth-apply-wait-s 15 --su-link-wait-s 30 --bandwidth-running-wait-s 30 \
+# --operating-mcs-wait-s 20 --radio-settle-s 1 --link-wait-s 0
 ```
 
 ### Jenkins trigger
@@ -535,8 +551,8 @@ All outputs land under `reports/artifacts/` unless overridden.
 
 | Report | Module | Contents |
 |--------|--------|----------|
-| **Classic** `Performance_Report_<timestamp>.html` | `utils/performance_report.py` | Benchmark table, MCS + QAM + Mbps, operating-rate mismatch highlighting, per-SU TRex stats |
-| **Grafana-style** `Performance_Report_<timestamp>_Grafana.html` | `utils/grafana_matrix_report.py` | Light-theme dashboard: testbed table (model from `/etc/ademodel`, SU **MAC** from sysfs), **link stats table** (Tx/Rx rate, SNR, RSSI — no Rx MCS column), KPI cards, **BW×MCS coverage matrix** (TX sent → RX got), **Chart.js** live throughput + packet loss, iteration log with TX/RX Mbps |
+| **Grafana-style (default)** `Performance_Report_<timestamp>_Grafana.html` | `utils/grafana_matrix_report.py` | Published as `Senao_Performance_*.html`. Light-theme dashboard: testbed table, link stats, KPI cards, BW×MCS coverage, Chart.js live throughput / packet loss |
+| **Classic** `Performance_Report_<timestamp>.html` | `utils/performance_report.py` | Legacy benchmark table kept alongside for reference |
 
 Also per run:
 
@@ -560,7 +576,7 @@ Sample: `docs/samples/Senao_Performance_84_Grafana_Report.html`
 | Job | Renamed artifact |
 |-----|------------------|
 | AutomationFramework | `Senao_UBR_<build>_Report_<date>.html` |
-| Throughput | `Senao_Performance_<build>_Report_<date>.html` (+ Grafana HTML when matrix exports it) |
+| Throughput | `Senao_Performance_<build>_Report_<date>.html` (Grafana-style by default) |
 | Regression | `Senao_Regression_<build>_Report_<date>.html` |
 
 ---
@@ -620,6 +636,10 @@ Sample: `docs/samples/Senao_Performance_84_Grafana_Report.html`
 ```bash
 sudo PYTHONPATH=. python3 scripts/attenuator_snr.py sweep --start-db 0 --stop-db 40 --step-db 10
 PYTHONPATH=. pytest tests/Lab/ -v --allow-attenuator-lab --attenuator-backend mock
+
+# Conducted Rx sensitivity (PtP slave under test; Vaunix pad + PER ≤ 10%)
+python3 scripts/rx_sensitivity.py --preflight
+sudo python3 scripts/rx_sensitivity.py --channel 36 --baseline-loss-db 40
 ```
 
 Build SDK: `./scripts/build_vaunix_linux_sdk.sh` → `vendor/vaunix_linux_sdk/lib/libLDAhid.so`
@@ -648,6 +668,7 @@ Catalog in [docs/lab-instruments.html](docs/lab-instruments.html) (built by `scr
 | `scripts/run_dfs.sh` | DFS suite (`--allow-dfs-lab`) |
 | `scripts/run_security.sh` | Security suite (`--allow-security-lab`) |
 | `scripts/run_acb.sh` | Asymmetric CBW suite (`--allow-acb-lab`) |
+| `scripts/rx_sensitivity.py` | Conducted Rx sensitivity sweep (`profiles/rx_sensitivity.yaml`) |
 | `scripts/install_openvas.sh` | Optional Greenbone/OpenVAS install for `FIREWALL_06` |
 | `scripts/vlan_link_debug_campaign.py` | VLAN link-recovery campaign |
 | `scripts/build_grafana_report_from_matrix_json.py` | Grafana HTML from matrix JSON |

@@ -67,6 +67,50 @@ def _ip_layer(*, ipv6: bool, src: str | None = None, dst: str | None = None):
     return IP(**kwargs)
 
 
+def _port_ipv4(port_info: dict, fallback: str) -> str:
+    ip = str(port_info.get("src_ipv4") or "").strip()
+    if not ip or ip == "0.0.0.0":
+        return fallback
+    return ip
+
+
+def teach_bridge_path(clients, port_map) -> None:
+    """Flood each port MAC so the radio learns the path before unicast starts.
+
+    Unknown unicast is not forwarded onto the air. A TRex stream addressed to
+    the far port is dropped until that source MAC has been seen on the radio.
+    """
+    print("Teaching bridge path (broadcast from each TRex port)...")
+    for entry in port_map:
+        client = clients[entry["server"]]
+        port_id = entry["port_id"]
+        client.reset(ports=[port_id])
+        learn = (
+            Ether(src=entry["mac"], dst="ff:ff:ff:ff:ff:ff")
+            / IP(src=entry["ip"], dst="255.255.255.255")
+            / UDP(sport=9, dport=9)
+            / ("path-learn" * 4)
+        )
+        client.add_streams(
+            STLStream(
+                name=f"learn_{entry['label']}",
+                packet=STLPktBuilder(pkt=learn),
+                mode=STLTXSingleBurst(pps=20, total_pkts=40),
+            ),
+            ports=[port_id],
+        )
+        print(f"  {entry['label']} {entry['mac']} {entry['ip']}")
+
+    for name, client in clients.items():
+        ports = sorted({e["port_id"] for e in port_map if e["server"] == name})
+        if not ports:
+            continue
+        client.start(ports=ports)
+        client.wait_on_traffic(ports=ports, timeout=5)
+        client.stop(ports=ports)
+        client.remove_all_streams(ports=ports)
+
+
 def _apply_downlink_tags(l2_header, vlan_id, svlan_id, cvlan_id):
     return apply_downlink_tags(l2_header, vlan_id, svlan_id, cvlan_id, dot1q_cls=Dot1Q)
 
@@ -471,6 +515,7 @@ def run_multi_server_test(
         clients["su4"] = STLClient(server=su_server_4_ip)
 
     macs: dict[str, dict[int, str]] = {}
+    ips: dict[str, dict[int, str]] = {}
     server_ports: dict[str, list[int]] = {}
     port_map: list[dict[str, object]] = []
     results: dict = {}
@@ -497,6 +542,13 @@ def run_multi_server_test(
             client.acquire(ports=server_ports[name], force=True)
             port_info = client.get_port_info(server_ports[name])
             macs[name] = {port["index"]: port["hw_mac"] for port in port_info}
+            ips[name] = {
+                port["index"]: _port_ipv4(
+                    port,
+                    "1.1.1.1" if name == "bsu" else f"{2 + port['index']}.2.2.2",
+                )
+                for port in port_info
+            }
 
         bsu_ports = server_ports["bsu"]
         if 0 in bsu_ports:
@@ -537,6 +589,7 @@ def run_multi_server_test(
                 "role": "BSU",
                 "label": "BSU",
                 "mac": macs["bsu"][bsu_port_id],
+                "ip": ips["bsu"][bsu_port_id],
             }
         )
         for server_name, port_id in su_ports_for_this_test:
@@ -547,6 +600,7 @@ def run_multi_server_test(
                     "role": "SU",
                     "label": f"SU{su_counter}",
                     "mac": macs[server_name][port_id],
+                    "ip": ips[server_name][port_id],
                 }
             )
             su_counter += 1
@@ -603,7 +657,10 @@ def run_multi_server_test(
         print(param_table)
         print("-" * 80)
 
-        all_su_macs = [entry["mac"] for entry in port_map if entry["role"] == "SU"]
+        all_su_ports = [entry for entry in port_map if entry["role"] == "SU"]
+        bsu_ip = ips["bsu"][bsu_port_id]
+        if not use_ipv6:
+            teach_bridge_path(clients, port_map)
         test_num = 1
         num_total_tests = len(protocols_to_run) * len(sizes_to_test) * len(directions_to_run)
 
@@ -650,20 +707,22 @@ def run_multi_server_test(
 
                     active_ports = {name: set() for name in clients}
                     if direction in ["downlink", "bidi"]:
-                        for su_mac in all_su_macs:
+                        for su in all_su_ports:
                             l2_header = _apply_downlink_tags(
-                                Ether(src=macs["bsu"][bsu_port_id], dst=su_mac),
+                                Ether(src=macs["bsu"][bsu_port_id], dst=su["mac"]),
                                 vlan_id,
                                 svlan_id,
                                 cvlan_id,
                             )
+                            dl_src = src_ipv6 if use_ipv6 else bsu_ip
+                            dl_dst = dst_ipv6 if use_ipv6 else su["ip"]
                             if is_imix_test_current_size:
                                 for item in IMIX_PROFILE:
                                     bw = downlink_bw_per_su_mbps * (item["percent"] / 100.0)
                                     pps = (bw * 1_000_000) / (item["size"] * 8) if item["size"] > 0 else 0
                                     packet = (
                                         l2_header
-                                        / _ip_layer(ipv6=bool(use_ipv6), src=src_ipv6, dst=dst_ipv6)
+                                        / _ip_layer(ipv6=bool(use_ipv6), src=dl_src, dst=dl_dst)
                                         / l4_layer
                                         / item["dl_pad"]
                                     )
@@ -676,7 +735,7 @@ def run_multi_server_test(
                                 pad = "x" * max(0, size - dl_header_size)
                                 packet = (
                                     l2_header
-                                    / _ip_layer(ipv6=bool(use_ipv6), src=src_ipv6, dst=dst_ipv6)
+                                    / _ip_layer(ipv6=bool(use_ipv6), src=dl_src, dst=dl_dst)
                                     / l4_layer
                                     / pad
                                 )
@@ -697,13 +756,15 @@ def run_multi_server_test(
                                 svlan_id,
                                 cvlan_id,
                             )
+                            ul_src = dst_ipv6 if use_ipv6 else port["ip"]
+                            ul_dst = src_ipv6 if use_ipv6 else bsu_ip
                             if is_imix_test_current_size:
                                 for item in IMIX_PROFILE:
                                     bw = uplink_bw_per_su_mbps * (item["percent"] / 100.0)
                                     pps = (bw * 1_000_000) / (item["size"] * 8) if item["size"] > 0 else 0
                                     packet = (
                                         l2_header
-                                        / _ip_layer(ipv6=bool(use_ipv6), src=dst_ipv6, dst=src_ipv6)
+                                        / _ip_layer(ipv6=bool(use_ipv6), src=ul_src, dst=ul_dst)
                                         / l4_layer
                                         / item["ul_pad"]
                                     )
@@ -716,7 +777,7 @@ def run_multi_server_test(
                                 pad = "x" * max(0, size - ul_header_size)
                                 packet = (
                                     l2_header
-                                    / _ip_layer(ipv6=bool(use_ipv6), src=dst_ipv6, dst=src_ipv6)
+                                    / _ip_layer(ipv6=bool(use_ipv6), src=ul_src, dst=ul_dst)
                                     / l4_layer
                                     / pad
                                 )

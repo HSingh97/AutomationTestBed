@@ -118,6 +118,52 @@ def _build_ip_layer(tos: int, src_ip: str | None = None, dst_ip: str | None = No
     return IP(**kwargs)
 
 
+def _port_ipv4(port_info: dict, fallback: str) -> str:
+    ip = str(port_info.get("src_ipv4") or "").strip()
+    if not ip or ip == "0.0.0.0":
+        return fallback
+    return ip
+
+
+def teach_bridge_path(clients, port_map) -> None:
+    """Flood each port MAC so the radio learns the path before unicast starts.
+
+    Unknown unicast is not forwarded onto the air. A TRex stream addressed to
+    the far port is dropped until that source MAC has been seen on the radio.
+    One broadcast from each port teaches both bridges; the path itself does
+    not change between runs.
+    """
+    print("Teaching bridge path (broadcast from each TRex port)...")
+    for entry in port_map:
+        client = clients[entry["server"]]
+        port_id = entry["port_id"]
+        client.reset(ports=[port_id])
+        learn = (
+            Ether(src=entry["mac"], dst="ff:ff:ff:ff:ff:ff")
+            / IP(src=entry["ip"], dst="255.255.255.255")
+            / UDP(sport=9, dport=9)
+            / ("path-learn" * 4)
+        )
+        client.add_streams(
+            STLStream(
+                name=f"learn_{entry['label']}",
+                packet=STLPktBuilder(pkt=learn),
+                mode=STLTXSingleBurst(pps=20, total_pkts=40),
+            ),
+            ports=[port_id],
+        )
+        print(f"  {entry['label']} {entry['mac']} {entry['ip']}")
+
+    for name, client in clients.items():
+        ports = sorted({e["port_id"] for e in port_map if e["server"] == name})
+        if not ports:
+            continue
+        client.start(ports=ports)
+        client.wait_on_traffic(ports=ports, timeout=5)
+        client.stop(ports=ports)
+        client.remove_all_streams(ports=ports)
+
+
 def _pps_for_bw(bw_mbps: float, frame_size: int) -> float:
     if frame_size <= 0 or bw_mbps <= 0:
         return 0.0
@@ -355,11 +401,15 @@ def add_qos_streams(
     total_bw_mbps: float,
     pg_id_key: str,
     is_imix: bool,
+    src_ip: str,
+    dst_ip: str,
     enable_flow_stats: bool = False,
 ):
     """Add one STL stream per QoS class (fixed size or IMIX)."""
     for cls in qos_classes:
         class_bw = total_bw_mbps * float(cls["bw_share"])
+        if class_bw <= 0:
+            continue
         tos = int(cls["tos"])
         sport = int(cls["sport"])
         dport = int(cls["dport"])
@@ -369,7 +419,7 @@ def add_qos_streams(
             pad = "x" * max(0, frame_size - header_size)
             return (
                 l2_header
-                / _build_ip_layer(tos)
+                / _build_ip_layer(tos, src_ip=src_ip, dst_ip=dst_ip)
                 / _l4_layer(proto, sport, dport)
                 / pad
             )
@@ -427,7 +477,7 @@ def run_qos_throughput_test(
 ):
     # Imported here so --list-classes works without TRex installed locally.
     global Ether, IP, UDP, TCP, Dot1Q
-    global STLClient, STLStream, STLPktBuilder, STLTXCont, STLFlowStats
+    global STLClient, STLStream, STLPktBuilder, STLTXCont, STLTXSingleBurst, STLFlowStats
     from trex_stl_lib.api import (  # noqa: WPS433
         Dot1Q,
         Ether,
@@ -437,6 +487,7 @@ def run_qos_throughput_test(
         STLPktBuilder,
         STLStream,
         STLTXCont,
+        STLTXSingleBurst,
         TCP,
         UDP,
     )
@@ -496,6 +547,7 @@ def run_qos_throughput_test(
         clients["su4"] = STLClient(server=su_server_4_ip)
 
     macs: dict[str, dict[int, str]] = {}
+    ips: dict[str, dict[int, str]] = {}
     server_ports: dict[str, list[int]] = {}
     port_map: list[dict] = []
     results: dict = {}
@@ -523,6 +575,13 @@ def run_qos_throughput_test(
             client.acquire(ports=server_ports[name], force=True)
             port_info = client.get_port_info(server_ports[name])
             macs[name] = {port["index"]: port["hw_mac"] for port in port_info}
+            ips[name] = {
+                port["index"]: _port_ipv4(
+                    port,
+                    "1.1.1.1" if name == "bsu" else f"{2 + port['index']}.2.2.2",
+                )
+                for port in port_info
+            }
 
         bsu_ports = server_ports["bsu"]
         bsu_port_id = 0 if 0 in bsu_ports else min(bsu_ports)
@@ -551,6 +610,7 @@ def run_qos_throughput_test(
                 "role": "BSU",
                 "label": "BSU",
                 "mac": macs["bsu"][bsu_port_id],
+                "ip": ips["bsu"][bsu_port_id],
             }
         )
         for index, (server_name, port_id) in enumerate(su_ports_for_this_test, start=1):
@@ -561,6 +621,7 @@ def run_qos_throughput_test(
                     "role": "SU",
                     "label": f"SU{index}",
                     "mac": macs[server_name][port_id],
+                    "ip": ips[server_name][port_id],
                 }
             )
 
@@ -615,7 +676,9 @@ def run_qos_throughput_test(
         print(param_table)
         print("-" * 80)
 
-        all_su_macs = [entry["mac"] for entry in port_map if entry["role"] == "SU"]
+        all_su_ports = [entry for entry in port_map if entry["role"] == "SU"]
+        bsu_ip = ips["bsu"][bsu_port_id]
+        teach_bridge_path(clients, port_map)
         test_num = 1
         num_total_tests = len(protocols_to_run) * len(sizes_to_test) * len(directions_to_run)
 
@@ -658,9 +721,9 @@ def run_qos_throughput_test(
                     active_ports = {name: set() for name in clients}
 
                     if direction in ("downlink", "bidi"):
-                        for su_mac in all_su_macs:
+                        for su in all_su_ports:
                             l2_header = apply_downlink_tags(
-                                Ether(src=macs["bsu"][bsu_port_id], dst=su_mac),
+                                Ether(src=macs["bsu"][bsu_port_id], dst=su["mac"]),
                                 vlan_id,
                                 svlan_id,
                                 cvlan_id,
@@ -677,6 +740,8 @@ def run_qos_throughput_test(
                                 total_bw_mbps=downlink_bw_per_su,
                                 pg_id_key="pg_id_dl",
                                 is_imix=is_imix,
+                                src_ip=bsu_ip,
+                                dst_ip=su["ip"],
                                 enable_flow_stats=enable_flow_stats,
                             )
                         active_ports["bsu"].add(bsu_port_id)
@@ -704,6 +769,8 @@ def run_qos_throughput_test(
                                 total_bw_mbps=uplink_bw_per_su,
                                 pg_id_key="pg_id_ul",
                                 is_imix=is_imix,
+                                src_ip=port["ip"],
+                                dst_ip=bsu_ip,
                                 enable_flow_stats=enable_flow_stats,
                             )
                             active_ports[port["server"]].add(port["port_id"])
@@ -945,7 +1012,7 @@ def main():
     parser.add_argument(
         "--equal-share",
         action="store_true",
-        help="Split bandwidth equally across selected classes (ignore default shares).",
+        help="Split bandwidth equally across selected classes (ignore priority / MIR fill).",
     )
     parser.add_argument(
         "--list-classes",

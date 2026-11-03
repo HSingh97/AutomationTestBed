@@ -341,7 +341,9 @@ def select_classes(
     """
     Return a copy of selected classes.
 
-    Bandwidth shares default to LuCI SFC MIR weights unless equal_share=True.
+    Default offer fills priority 1 up to its MIR, then priority 2, and so on.
+    A class whose MIR is 100% takes the whole total, so lower priorities get nothing.
+    equal_share splits the total evenly instead.
     """
     if names:
         selected = [dict(get_class_by_name(n)) for n in names]
@@ -357,17 +359,23 @@ def select_classes(
     else:
         selected = [dict(cls) for cls in QOS_TRAFFIC_CLASSES]
 
+    selected.sort(key=lambda cls: (int(cls.get("priority") or 0), str(cls.get("name"))))
+
     if equal_share and selected:
         share = 1.0 / len(selected)
         for cls in selected:
             cls["bw_share"] = share
-    else:
-        if use_mir_share:
-            for cls in selected:
-                cls["bw_share"] = float(cls.get("mir", cls.get("bw_share", 1)))
-        total = sum(float(cls["bw_share"]) for cls in selected) or 1.0
+    elif use_mir_share:
+        remaining = 1.0
         for cls in selected:
-            cls["bw_share"] = float(cls["bw_share"]) / total
+            cap = max(0.0, float(cls.get("mir", 0))) / 100.0
+            give = min(cap, remaining)
+            cls["bw_share"] = give
+            remaining -= give
+    else:
+        total = sum(float(cls.get("bw_share", 0)) for cls in selected) or 1.0
+        for cls in selected:
+            cls["bw_share"] = float(cls.get("bw_share", 0)) / total
 
     for index, cls in enumerate(selected):
         cls["tos"] = dscp_to_tos(int(cls["dscp"]))

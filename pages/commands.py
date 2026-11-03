@@ -196,13 +196,35 @@ class RootCommands:
         ]
 
     @staticmethod
-    def set_bandwidth_ratio_apply_commands(radio_idx, bandwidth, dl_ul_percent: str):
-        """Set htmode + DL:UL ratio, then single ucidyn apply (no remote_exec for BTS bw)."""
-        return [
+    def set_bandwidth_ratio_apply_commands(
+        radio_idx,
+        bandwidth,
+        dl_ul_percent: str,
+        *,
+        channel: int | None = None,
+    ):
+        """Set htmode + DL:UL ratio, then single ucidyn apply (no remote_exec for BTS bw).
+
+        Optional channel is set in the same apply so BW changes do not restore the
+        previous channel from a cached radio profile.
+        """
+        commands = [
             f"ucidyn set wireless.wifi{radio_idx}.htmode {bandwidth}",
             f"ucidyn set ath{radio_idx}qos.qoscfg.dlulratio {dl_ul_percent}",
-            "ucidyn apply",
         ]
+        if channel is not None:
+            # Live RF channel for this platform is advwireless.athN.channel.
+            # Keep wireless.wifiN.channel in sync so LuCI/UCI readers agree.
+            commands.insert(
+                0,
+                f"ucidyn set advwireless.ath{radio_idx}.channel {int(channel)}",
+            )
+            commands.insert(
+                1,
+                f"ucidyn set wireless.wifi{radio_idx}.channel {int(channel)}",
+            )
+        commands.append("ucidyn apply")
+        return commands
 
     @staticmethod
     def remote_exec_command(su_index: int, command: str) -> str:

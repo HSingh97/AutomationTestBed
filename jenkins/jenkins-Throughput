@@ -1,5 +1,5 @@
 // UBR TRex performance matrix — runs on TARGET_STAND.
-// Report: Senao_Performance_<build>_Report_<date>.html (hero + testbed summary + throughput table).
+// Report: Senao_Performance_<build>_Report_<date>.html (Grafana-style by default).
 
 def archiveBuildArtifacts(pattern, allowEmpty = false) {
     step([
@@ -142,11 +142,18 @@ pipeline {
                     env.PERF_MATRIX_EXIT = "${exitCode}"
 
                     def reportPath = sh(
-                        script: 'ls -t reports/artifacts/Performance_Report_*.html 2>/dev/null | head -1',
+                        script: '''
+                            set -e
+                            latest=$(ls -t reports/artifacts/Performance_Report_*_Grafana.html 2>/dev/null | head -1 || true)
+                            if [ -z "$latest" ]; then
+                              latest=$(ls -t reports/artifacts/Performance_Report_*.html 2>/dev/null | grep -v '_Grafana\\.html$' | head -1 || true)
+                            fi
+                            echo "$latest"
+                        ''',
                         returnStdout: true
                     ).trim()
                     if (!reportPath) {
-                        error('Performance matrix finished but no HTML report found under reports/artifacts/')
+                        error('Performance matrix finished but no Grafana/classic HTML report found under reports/artifacts/')
                     }
                     env.PERFORMANCE_REPORT_RAW = reportPath
                     echo "HTML report (raw): ${reportPath}"

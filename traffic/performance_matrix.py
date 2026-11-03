@@ -387,6 +387,44 @@ def _atomic_write_text(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
+def _grafana_report_path(html_path: Path) -> Path:
+    return html_path.with_name(html_path.stem + "_Grafana.html")
+
+
+def _write_grafana_and_jenkins_reports(
+    *,
+    records: list[dict[str, object]],
+    html_path: Path,
+    jenkins_html_path: Path,
+    testbed_summary: dict[str, object],
+    executed_at: str,
+    csv_path: Path | None = None,
+) -> Path | None:
+    """Write Grafana HTML as the primary published report; keep classic HTML alongside."""
+    grafana_path = _grafana_report_path(html_path)
+    try:
+        report_id = html_path.stem.replace("Performance_Report_", "")
+        grafana_payload = build_matrix_grafana_payload(
+            records,
+            testbed_summary=testbed_summary,
+            report_id=report_id,
+            generated_at=executed_at,
+        )
+        write_grafana_sample_html(grafana_path, grafana_payload)
+    except Exception as exc:
+        print(f"[WARN] Grafana report generation failed: {exc}")
+        grafana_path = None
+
+    publish_src = grafana_path if grafana_path and grafana_path.is_file() else html_path
+    try:
+        jenkins_html_path.write_bytes(publish_src.read_bytes())
+        if csv_path is not None and csv_path.is_file():
+            jenkins_html_path.with_suffix(".csv").write_bytes(csv_path.read_bytes())
+    except Exception as exc:
+        print(f"[WARN] Jenkins-style report copy failed: {exc}")
+    return grafana_path
+
+
 def _refresh_live_reports(
     *,
     records: list[dict[str, object]],
@@ -455,15 +493,17 @@ def _refresh_live_reports(
         path=html_path,
         testbed_summary=testbed_summary,
     )
-    try:
-        jenkins_html_path.write_bytes(html_path.read_bytes())
-        csv_jenkins = jenkins_html_path.with_suffix(".csv")
-        if csv_path.is_file():
-            csv_jenkins.write_bytes(csv_path.read_bytes())
-    except Exception as exc:
-        print(f"[WARN] Jenkins-style report copy failed: {exc}")
+    grafana_path = _write_grafana_and_jenkins_reports(
+        records=records,
+        html_path=html_path,
+        jenkins_html_path=jenkins_html_path,
+        testbed_summary=testbed_summary,
+        executed_at=str(run_meta.get("executed_at") or started_at),
+        csv_path=csv_path,
+    )
+    published = grafana_path or html_path
     print(
-        f"[REPORT] Updated HTML ({len(records)} done, {passed_count} passed): {html_path}"
+        f"[REPORT] Updated HTML ({len(records)} done, {passed_count} passed): {published}"
     )
 
 
@@ -878,6 +918,8 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     print(f"TRex SU count:    {args.su_count}")
     print(f"TRex BSU ports:   {args.trex_ports}")
     print(f"Bandwidths:       {', '.join(bandwidths)}")
+    if getattr(args, "channel", None) is not None:
+        print(f"Channel:          {args.channel} (pinned on every BW apply)")
     print(f"MCS rates:        {', '.join(mcs_rates)}")
     print(f"Traffic profiles: {len(traffic_profiles)} per MCS/BW ({total_iterations} total runs)")
     print(
@@ -888,10 +930,11 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         print(f"Target ceiling:   {args.target} Mbps (optional cap)")
     print(f"Duration:         {args.time}s")
     print(f"Output directory: {output_dir}")
-    print(f"HTML report:      {html_path}")
+    print(f"HTML report:      {_grafana_report_path(html_path)} (Grafana default)")
+    print(f"Classic HTML:     {html_path}")
     print(f"Jenkins HTML:     {jenkins_html_path}")
     print("=" * 72 + "\n")
-    # Seed empty report so the HTML path exists immediately.
+    # Seed empty report so the HTML path exists immediately (Grafana preferred).
     try:
         write_html_report(
             records=[],
@@ -899,8 +942,14 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
             path=html_path,
             testbed_summary={},
         )
-        jenkins_html_path.write_bytes(html_path.read_bytes())
-        print(f"[REPORT] Seeded live HTML: {html_path}")
+        seeded = _write_grafana_and_jenkins_reports(
+            records=[],
+            html_path=html_path,
+            jenkins_html_path=jenkins_html_path,
+            testbed_summary={},
+            executed_at=executed_at,
+        )
+        print(f"[REPORT] Seeded live HTML: {seeded or html_path}")
     except Exception as exc:
         print(f"[WARN] Could not seed HTML report: {exc}")
 
@@ -1053,6 +1102,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         profile_tb=testbed_tb,
                         dut_cfg=dut,
                         skip_if_unchanged=args.skip_config_if_unchanged,
+                        channel=args.channel,
                         link_debug_dir=(
                             str(Path(args.link_debug_dir) / normalize_bandwidth(bandwidth))
                             if args.link_debug_dir
@@ -1541,24 +1591,19 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
         path=html_path,
         testbed_summary=testbed_summary,
     )
-    try:
-        jenkins_html_path.write_bytes(html_path.read_bytes())
-        jenkins_html_path.with_suffix(".csv").write_bytes(csv_path.read_bytes())
-    except Exception as exc:
-        print(f"[WARN] Jenkins-style report copy failed: {exc}")
-    grafana_path = html_path.with_name(html_path.stem + "_Grafana.html")
-    try:
-        report_id = html_path.stem.replace("Performance_Report_", "")
-        grafana_payload = build_matrix_grafana_payload(
-            records,
-            testbed_summary=testbed_summary,
-            report_id=report_id,
-            generated_at=executed_at,
-        )
-        write_grafana_sample_html(grafana_path, grafana_payload)
-        print(f"Grafana report: {grafana_path}")
-    except Exception as exc:
-        print(f"[WARN] Grafana report generation failed: {exc}")
+    grafana_path = _write_grafana_and_jenkins_reports(
+        records=records,
+        html_path=html_path,
+        jenkins_html_path=jenkins_html_path,
+        testbed_summary=testbed_summary,
+        executed_at=executed_at,
+        csv_path=csv_path,
+    )
+    if grafana_path:
+        summary["grafana_html_report"] = str(grafana_path)
+        summary["html_report"] = str(grafana_path)
+        _atomic_write_text(summary_path, json.dumps(summary, indent=2))
+        print(f"Grafana report (default): {grafana_path}")
 
     print("\n" + "=" * 72)
     _print_matrix_console_table(
@@ -1569,7 +1614,8 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
     print(f"Matrix complete: {passed_count}/{len(records)} passed")
     print(f"Summary JSON: {summary_path}")
     print(f"Summary CSV:  {csv_path}")
-    print(f"HTML report:  {html_path}")
+    print(f"HTML report:  {grafana_path or html_path}")
+    print(f"Classic HTML: {html_path}")
     print(f"Jenkins HTML: {jenkins_html_path}")
     print("=" * 72 + "\n")
     return summary
@@ -1600,6 +1646,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--bandwidths",
         default=",".join(perf["bandwidths"]),
         help="Comma-separated htmode values (HT20,HT40,...)",
+    )
+    parser.add_argument(
+        "--channel",
+        type=int,
+        default=None,
+        help="Pin BTS wireless.wifiN.channel on every bandwidth apply (e.g. 120)",
     )
     parser.add_argument(
         "--mcs",

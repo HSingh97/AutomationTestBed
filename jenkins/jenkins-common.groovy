@@ -48,11 +48,15 @@ def copyRegressionReport(String destFile) {
 }
 
 def copyLatestPerformanceReport(String destFile) {
+    // Prefer Grafana-style HTML (default throughput report). Classic Performance_Report_*.html is fallback.
     sh """
         set -e
-        latest=\$(ls -t reports/artifacts/Performance_Report_*.html 2>/dev/null | head -1 || true)
+        latest=\$(ls -t reports/artifacts/Performance_Report_*_Grafana.html 2>/dev/null | head -1 || true)
         if [ -z "\$latest" ]; then
-          echo "No reports/artifacts/Performance_Report_*.html found"
+          latest=\$(ls -t reports/artifacts/Performance_Report_*.html 2>/dev/null | grep -v '_Grafana\\.html\$' | head -1 || true)
+        fi
+        if [ -z "\$latest" ]; then
+          echo "No reports/artifacts/Performance_Report_*_Grafana.html (or classic) found"
           exit 1
         fi
         cp "\$latest" "${destFile}"
