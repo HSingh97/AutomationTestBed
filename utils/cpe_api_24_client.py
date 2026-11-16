@@ -43,24 +43,6 @@ _UPGRADE_FAIL_STATES = frozenset({"FAILURE", "FAILED", "ERROR"})
 
 from utils.cpe_mgmt_wifi import wait_for_mgmt_api_reachable
 
-DEBUG_LOG_PATH = "/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-a5d6ea.log"
-DEBUG_SESSION_ID = "a5d6ea"
-
-
-def _debug_log(*, run_id: str, hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
-    payload = {
-        "sessionId": DEBUG_SESSION_ID,
-        "runId": run_id,
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(payload, separators=(",", ":")) + "\n")
-
-
 @dataclass
 class CpeApiResponse:
     status_code: int
@@ -68,7 +50,6 @@ class CpeApiResponse:
     raw_body: str
     transport: str = "httpx"
     headers: dict[str, str] | None = None
-
 
 class CpeApi24Client:
     def __init__(self, config: CpeApi24Config):
@@ -461,15 +442,6 @@ class CpeApi24Client:
             str(int(read_s)),
             url,
         ]
-        # #region agent log
-        _debug_log(
-            run_id="run5",
-            hypothesis_id="H10",
-            location="utils/cpe_api_24_client.py:upload_sw",
-            message="starting curl firmware upload",
-            data={"url": url, "file": str(image), "size_bytes": size_bytes, "max_time_s": int(read_s)},
-        )
-        # #endregion
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -486,20 +458,6 @@ class CpeApi24Client:
                 parsed = parsed_body
         except Exception:
             pass
-        # #region agent log
-        _debug_log(
-            run_id="run5",
-            hypothesis_id="H11",
-            location="utils/cpe_api_24_client.py:upload_sw",
-            message="curl firmware upload finished",
-            data={
-                "exit_code": proc.returncode,
-                "status_code": status_code,
-                "stderr": err[:200],
-                "body_preview": body[:200],
-            },
-        )
-        # #endregion
         if proc.returncode != 0:
             raise RuntimeError(
                 f"API_09 curl upload failed (exit {proc.returncode}): {err or raw[:300]}"
@@ -688,15 +646,6 @@ class CpeApi24Client:
     async def factory_reset_cpe(self) -> None:
         """Full CPE factory reset (clears BTS link state), not BTS disconnect only."""
         if await self._factory_reset_via_mgmt_api():
-            # #region agent log
-            _debug_log(
-                run_id="run1",
-                hypothesis_id="H2",
-                location="utils/cpe_api_24_client.py:factory_reset_cpe",
-                message="factory reset path used mgmt API override",
-                data={"factory_reset_path": self.config.factory_reset_path},
-            )
-            # #endregion
             return
 
         host = self.config.cpe_ssh_host
@@ -715,51 +664,15 @@ class CpeApi24Client:
             f"    -> [CPE] Full factory reset via SSH {host} "
             f"({self.config.cpe_ssh_user}): {cmd}"
         )
-        # #region agent log
-        _debug_log(
-            run_id="run1",
-            hypothesis_id="H14",
-            location="utils/cpe_api_24_client.py:factory_reset_cpe",
-            message="starting reset command over ssh foreground",
-            data={"host": host, "command": cmd},
-        )
-        # #endregion
         try:
             conn = await self._connect_ssh_with_retries(host=host)
             bts_tunnel_conn = getattr(conn, "_agent_bts_tunnel_conn", None)
             async with conn:
-                # #region agent log
-                _debug_log(
-                    run_id="run1",
-                    hypothesis_id="H15",
-                    location="utils/cpe_api_24_client.py:factory_reset_cpe",
-                    message="checking reset command prerequisites",
-                    data={"cmd_check": "command -v firstboot && command -v reboot && command -v nohup"},
-                )
-                # #endregion
                 pre = await conn.run("command -v firstboot; command -v reboot; command -v nohup", check=False, timeout=8)
-                # #region agent log
-                _debug_log(
-                    run_id="run1",
-                    hypothesis_id="H15",
-                    location="utils/cpe_api_24_client.py:factory_reset_cpe",
-                    message="reset command prerequisites result",
-                    data={"exit_status": pre.exit_status, "stdout": (pre.stdout or "")[:200], "stderr": (pre.stderr or "")[:200]},
-                )
-                # #endregion
                 try:
                     result = await conn.run(cmd, check=False, timeout=45)
                     out = (result.stdout or "").strip()
                     err = (result.stderr or "").strip()
-                    # #region agent log
-                    _debug_log(
-                        run_id="run1",
-                        hypothesis_id="H14",
-                        location="utils/cpe_api_24_client.py:factory_reset_cpe",
-                        message="reset command returned before disconnect",
-                        data={"exit_status": result.exit_status, "stdout": out[:200], "stderr": err[:200]},
-                    )
-                    # #endregion
                     # On some firmware the SSH command reports exit_status=None
                     # because reboot tears down the channel before shell exit.
                     if result.exit_status not in (0, None):
@@ -768,26 +681,8 @@ class CpeApi24Client:
                         )
                 except Exception as exc:
                     # Expected path on reboot: transport/socket errors while rebooting.
-                    # #region agent log
-                    _debug_log(
-                        run_id="run1",
-                        hypothesis_id="H14",
-                        location="utils/cpe_api_24_client.py:factory_reset_cpe",
-                        message="reset command raised during reboot",
-                        data={"error_type": type(exc).__name__, "error": str(exc)[:200]},
-                    )
-                    # #endregion
                     if type(exc).__name__ not in ("ConnectionLost", "ConnectionResetError", "DisconnectError", "TimeoutError"):
                         raise
-                # #region agent log
-                _debug_log(
-                    run_id="run1",
-                    hypothesis_id="H14",
-                    location="utils/cpe_api_24_client.py:factory_reset_cpe",
-                    message="reset command accepted; proceeding to reboot wait",
-                    data={"host": host},
-                )
-                # #endregion
                 print("    -> [CPE] Factory reset command sent; waiting for reboot")
             if bts_tunnel_conn is not None:
                 bts_tunnel_conn.close()
@@ -804,15 +699,6 @@ class CpeApi24Client:
             )
         last_exc: Exception | None = None
         for attempt in range(1, 5):
-            # #region agent log
-            _debug_log(
-                run_id="run1",
-                hypothesis_id="H9",
-                location="utils/cpe_api_24_client.py:_connect_ssh_with_retries",
-                message="attempting ssh connect for reset",
-                data={"host": host, "attempt": attempt},
-            )
-            # #endregion
             try:
                 conn = await asyncssh.connect(
                     host,
@@ -821,27 +707,9 @@ class CpeApi24Client:
                     known_hosts=None,
                     connect_timeout=8,
                 )
-                # #region agent log
-                _debug_log(
-                    run_id="run1",
-                    hypothesis_id="H9",
-                    location="utils/cpe_api_24_client.py:_connect_ssh_with_retries",
-                    message="ssh connect succeeded for reset",
-                    data={"host": host, "attempt": attempt},
-                )
-                # #endregion
                 return conn
             except (asyncssh.Error, OSError) as exc:
                 last_exc = exc
-                # #region agent log
-                _debug_log(
-                    run_id="run1",
-                    hypothesis_id="H9",
-                    location="utils/cpe_api_24_client.py:_connect_ssh_with_retries",
-                    message="ssh connect failed for reset",
-                    data={"host": host, "attempt": attempt, "error_type": type(exc).__name__, "error": str(exc)[:200]},
-                )
-                # #endregion
                 await asyncio.sleep(2)
         if isinstance(last_exc, Exception):
             raise last_exc
@@ -852,15 +720,6 @@ class CpeApi24Client:
     ) -> asyncssh.SSHClientConnection:
         last_exc: Exception | None = None
         for attempt in range(1, 5):
-            # #region agent log
-            _debug_log(
-                run_id="run1",
-                hypothesis_id="H10",
-                location="utils/cpe_api_24_client.py:_connect_ssh_via_bts_tunnel_with_retries",
-                message="attempting cpe ssh via bts tunnel for reset",
-                data={"host": host, "tunnel_host": tunnel_host, "attempt": attempt},
-            )
-            # #endregion
             bts_conn: asyncssh.SSHClientConnection | None = None
             try:
                 bts_conn = await asyncssh.connect(
@@ -879,35 +738,11 @@ class CpeApi24Client:
                     tunnel=bts_conn,
                 )
                 setattr(cpe_conn, "_agent_bts_tunnel_conn", bts_conn)
-                # #region agent log
-                _debug_log(
-                    run_id="run1",
-                    hypothesis_id="H10",
-                    location="utils/cpe_api_24_client.py:_connect_ssh_via_bts_tunnel_with_retries",
-                    message="cpe ssh via bts tunnel connected",
-                    data={"host": host, "tunnel_host": tunnel_host, "attempt": attempt},
-                )
-                # #endregion
                 return cpe_conn
             except (asyncssh.Error, OSError) as exc:
                 last_exc = exc
                 if bts_conn is not None:
                     bts_conn.close()
-                # #region agent log
-                _debug_log(
-                    run_id="run1",
-                    hypothesis_id="H10",
-                    location="utils/cpe_api_24_client.py:_connect_ssh_via_bts_tunnel_with_retries",
-                    message="cpe ssh via bts tunnel failed",
-                    data={
-                        "host": host,
-                        "tunnel_host": tunnel_host,
-                        "attempt": attempt,
-                        "error_type": type(exc).__name__,
-                        "error": str(exc)[:200],
-                    },
-                )
-                # #endregion
                 await asyncio.sleep(2)
         if isinstance(last_exc, Exception):
             raise last_exc
@@ -922,16 +757,6 @@ class CpeApi24Client:
 
         for idx in range(attempts):
             reachable = await is_mgmt_api_reachable(self.config.base_url, timeout_s=2.0)
-            if idx in (0, attempts - 1) or idx % 6 == 0:
-                # #region agent log
-                _debug_log(
-                    run_id="run1",
-                    hypothesis_id="H3",
-                    location="utils/cpe_api_24_client.py:_wait_for_mgmt_api_down",
-                    message="mgmt api down probe",
-                    data={"probe_index": idx, "attempts": attempts, "reachable": reachable},
-                )
-                # #endregion
             if not reachable:
                 print("    -> CPE mgmt API went down (reboot in progress)")
                 return True
@@ -941,15 +766,6 @@ class CpeApi24Client:
 
     async def factory_reset_and_wait(self, *, label: str) -> None:
         wait_s = self.config.reset_wait_s
-        # #region agent log
-        _debug_log(
-            run_id="run1",
-            hypothesis_id="H4",
-            location="utils/cpe_api_24_client.py:factory_reset_and_wait",
-            message="entered factory reset and wait",
-            data={"label": label, "wait_seconds": wait_s, "base_url": self.config.base_url},
-        )
-        # #endregion
         print(
             f"\n[Preflight] {label}: full CPE factory reset (firstboot), "
             f"then wait {wait_s:.0f}s..."
@@ -970,30 +786,12 @@ class CpeApi24Client:
             attempts=60,
             delay_s=5.0,
         ):
-            # #region agent log
-            _debug_log(
-                run_id="run1",
-                hypothesis_id="H5",
-                location="utils/cpe_api_24_client.py:factory_reset_and_wait",
-                message="mgmt api did not return after reset",
-                data={"base_url": self.config.base_url, "attempts": 60, "delay_s": 5.0},
-            )
-            # #endregion
             raise RuntimeError(
                 f"CPE mgmt API {self.config.base_url} did not return after factory reset.\n"
                 "  1. Rejoin CPE 2.4 GHz mgmt Wi‑Fi if the SSID changed.\n"
                 "  2. Confirm curl .../api/v1/cpe/sw-version returns 200.\n"
                 "  3. Re-run pytest."
             )
-        # #region agent log
-        _debug_log(
-            run_id="run1",
-            hypothesis_id="H4",
-            location="utils/cpe_api_24_client.py:factory_reset_and_wait",
-            message="factory reset wait completed with mgmt api reachable",
-            data={"label": label, "base_url": self.config.base_url},
-        )
-        # #endregion
         print(f"[Preflight] {label}: factory reset complete; mgmt API is up.\n")
 
     async def reset_and_wait(self, *, label: str) -> None:
@@ -1031,20 +829,6 @@ class CpeApi24Client:
         deadline = upgrade_start + FW_UPGRADE_WAIT_MAX_S
         model, model_source = await self.resolve_cpe_model()
         can_check_bts = bool(bts_host and bts_password)
-        # #region agent log
-        _debug_log(
-            run_id="post-fix",
-            hypothesis_id="H1",
-            location="utils/cpe_api_24_client.py:wait_post_upgrade_and_link",
-            message="post-upgrade wait plan",
-            data={
-                "model": model,
-                "model_source": model_source,
-                "wait_max_s": FW_UPGRADE_WAIT_MAX_S,
-                "bts_host_set": can_check_bts,
-            },
-        )
-        # #endregion
 
         print(
             f"\n[API_11] Waiting for reboot, device up, then BTS link "
@@ -1109,21 +893,6 @@ class CpeApi24Client:
                 log=False,
             ):
                 link_formed_at_s = elapsed
-                # #region agent log
-                _debug_log(
-                    run_id="post-fix",
-                    hypothesis_id="H3",
-                    location="utils/cpe_api_24_client.py:wait_post_upgrade_and_link",
-                    message="BTS link up",
-                    data={
-                        "model": model,
-                        "link_formed_at_s": link_formed_at_s,
-                        "link_elapsed_after_device_up_s": link_elapsed,
-                        "reboot_at_s": reboot_at_s,
-                        "api_up_at_s": api_up_at_s,
-                    },
-                )
-                # #endregion
                 break
 
             if link_elapsed - last_progress_print >= 180.0:
@@ -1142,20 +911,6 @@ class CpeApi24Client:
                 radio_idx=1,
                 log=False,
             )
-            # #region agent log
-            _debug_log(
-                run_id="post-fix",
-                hypothesis_id="H2",
-                location="utils/cpe_api_24_client.py:wait_post_upgrade_and_link",
-                message="BTS link safety timeout",
-                data={
-                    "model": model,
-                    "total_elapsed_s": total_elapsed,
-                    "wait_max_s": FW_UPGRADE_WAIT_MAX_S,
-                    "bts_link_broken": broken,
-                },
-            )
-            # #endregion
             if broken:
                 raise RuntimeError(
                     f"BTS link did not return within {FW_UPGRADE_WAIT_MAX_S / 60:.0f} min ({model}). "

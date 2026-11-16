@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
-import time
 
 import asyncssh
 import pytest_check as check
@@ -23,38 +21,11 @@ RADIO_INDEX = 1
 ARPBRIDGE_06_SETTLE_S = 60
 ARPBRIDGE_14_AGEING_S = 20
 ARPBRIDGE_14_IDLE_BUFFER_S = 10
-_DEBUG_LOG = "/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-896452.log"
-
+ARPBRIDGE_02_DUP_HOLD_S = 6
+ARPBRIDGE_02_DUP_PROOF = "/tmp/arpbridge02_dup.txt"
 
 def _log(message: str) -> None:
     print(f"[ARP_BRIDGE] {message}")
-
-
-def _debug_log(
-    location: str,
-    message: str,
-    data: dict,
-    *,
-    hypothesis_id: str,
-    run_id: str = "pre-fix",
-) -> None:
-    # region agent log
-    entry = {
-        "sessionId": "896452",
-        "location": location,
-        "message": message,
-        "data": data,
-        "hypothesisId": hypothesis_id,
-        "runId": run_id,
-        "timestamp": int(time.time() * 1000),
-    }
-    try:
-        with open(_DEBUG_LOG, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry) + "\n")
-    except OSError:
-        pass
-    # endregion
-
 
 def _require_ipv4(ip: str, *, case_id: str, role: str) -> str:
     clean = normalize_ip(ip)
@@ -64,7 +35,6 @@ def _require_ipv4(ip: str, *, case_id: str, role: str) -> str:
         f"{case_id}: IPv4-only; got {clean}",
     )
     return clean
-
 
 async def _ssh(root_ssh, command: str, *, timeout: int | None = None) -> str:
     async def _run() -> str:
@@ -78,35 +48,98 @@ async def _ssh(root_ssh, command: str, *, timeout: int | None = None) -> str:
     except asyncio.TimeoutError:
         return f"ERROR: command timed out after {timeout}s"
 
+async def _bounded(coro, timeout_s: float, fallback):
+    """Await `coro` for at most `timeout_s`, abandoning it rather than joining it.
+
+    asyncio.wait_for waits for the cancelled task to unwind, and asyncssh can
+    stall there indefinitely while closing a channel whose network path has just
+    disappeared — exactly what the ARP cases do on purpose. Dropping the task
+    keeps the caller moving.
+    """
+    task = asyncio.ensure_future(coro)
+    done, _ = await asyncio.wait({task}, timeout=timeout_s)
+    if task not in done:
+        task.cancel()
+        return fallback
+    try:
+        return task.result()
+    except Exception:
+        return fallback
+
+async def _ssh_no_hang(ssh, command: str, *, timeout_s: float = 30.0) -> str:
+    """Run a command that may kill its own transport, without blocking forever."""
+    return await _bounded(
+        _ssh(ssh, command),
+        timeout_s,
+        f"ERROR: command timed out after {timeout_s}s",
+    )
 
 async def _ssh_session_alive(ssh) -> bool:
     """Best-effort probe — False when scrapli/asyncssh session is closed."""
     if ssh is None:
         return False
-    try:
-        if hasattr(ssh, "send_command"):
-            await asyncio.wait_for(ssh.send_command("echo ARPBRIDGE_ALIVE", timeout=5), timeout=8)
-            return True
-        if hasattr(ssh, "_cpe_conn"):
-            result = await asyncio.wait_for(
-                ssh._cpe_conn.run("echo ARPBRIDGE_ALIVE", check=False),
-                timeout=8,
-            )
-            return "ARPBRIDGE_ALIVE" in ((result.stdout or "") + (result.stderr or ""))
-    except Exception:
-        return False
+    if hasattr(ssh, "send_command"):
+        probe = await _bounded(ssh.send_command("echo ARPBRIDGE_ALIVE"), 8, None)
+        return probe is not None and "ARPBRIDGE_ALIVE" in clean_ssh_output(probe.result)
+    if hasattr(ssh, "_cpe_conn"):
+        result = await _bounded(ssh._cpe_conn.run("echo ARPBRIDGE_ALIVE", check=False), 8, None)
+        if result is None:
+            return False
+        return "ARPBRIDGE_ALIVE" in ((result.stdout or "") + (result.stderr or ""))
     return False
 
+async def _ensure_bts_ssh_session(root_ssh, bts_ip: str, device_creds: dict) -> None:
+    """Re-open BTS SSH when a long suite leaves the session timed out or closed."""
+    from utils.regression_flows import _ensure_ssh_open
+
+    if await _ssh_session_alive(root_ssh):
+        try:
+            await _ensure_ssh_open(root_ssh)
+            return
+        except Exception:
+            pass
+
+    password = str(device_creds.get("pass") or "")
+    session_host = normalize_ip(str(getattr(root_ssh, "host", "") or ""))
+    hosts: list[str] = []
+    for candidate in (session_host, normalize_ip(bts_ip), "10.0.0.1"):
+        if candidate and candidate not in hosts:
+            hosts.append(candidate)
+
+    _log(f"ARP_BRIDGE: BTS SSH session lost — reconnecting via {', '.join(hosts)}")
+    try:
+        await root_ssh.close()
+    except Exception:
+        pass
+
+    last_exc = "unreachable"
+    for host in hosts:
+        try:
+            if hasattr(root_ssh, "host"):
+                root_ssh.host = host
+            await root_ssh.open()
+            await asyncio.wait_for(
+                root_ssh.send_command("echo ARPBRIDGE_RECONNECT_OK", timeout_ops=15),
+                timeout=20,
+            )
+            _log(f"ARP_BRIDGE: BTS SSH reconnected on {host}")
+            return
+        except Exception as exc:
+            last_exc = str(exc)
+            try:
+                await root_ssh.close()
+            except Exception:
+                pass
+
+    raise ConnectionError(f"ARP_BRIDGE: BTS SSH reconnect failed ({hosts}): {last_exc[:220]}")
 
 def _norm_mac(mac: str) -> str:
     return mac.lower().replace("-", ":").strip()
-
 
 def _mac_match(left_mac: str, right_mac: str) -> bool:
     g = _norm_mac(left_mac)
     b = _norm_mac(right_mac)
     return bool(g and b and g == b)
-
 
 def _mac_related(left_mac: str, right_mac: str) -> bool:
     if _mac_match(left_mac, right_mac):
@@ -115,10 +148,8 @@ def _mac_related(left_mac: str, right_mac: str) -> bool:
     b = _norm_mac(right_mac)
     return bool(g and b and len(g) >= 14 and len(b) >= 14 and g[:14] == b[:14])
 
-
 def _looks_like_mac(text: str) -> bool:
     return bool(re.match(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$", _norm_mac(text), re.I))
-
 
 def _is_bridge_member_iface(name: str) -> bool:
     """True for sysfs/brctl port names; reject MAC strings mistaken as members."""
@@ -126,7 +157,6 @@ def _is_bridge_member_iface(name: str) -> bool:
     if not name or _looks_like_mac(name) or ":" in name:
         return False
     return bool(re.match(r"^[a-zA-Z][a-zA-Z0-9_.-]*$", name))
-
 
 def _ping_success(raw: str) -> bool:
     lower = raw.lower()
@@ -138,7 +168,6 @@ def _ping_success(raw: str) -> bool:
         return True
     return "0% packet loss" in lower
 
-
 def _ip_neigh_cmd_failed(raw: str) -> bool:
     lower = (raw or "").lower()
     return any(
@@ -146,14 +175,11 @@ def _ip_neigh_cmd_failed(raw: str) -> bool:
         for token in ("not complete", "rtnetlink", "error:", "invalid", "failed", "usage:", "unknown")
     )
 
-
 def _ping_cmd(peer_ip: str, *, count: int = 4) -> str:
     return f"ping -c {count} -W 8 {peer_ip} 2>&1"
 
-
 def _neigh_prefix() -> str:
     return "ip neigh"
-
 
 async def _read_arp_neigh_rows(root_ssh, peer_ip: str) -> list[dict[str, str]]:
     prefix = _neigh_prefix()
@@ -171,7 +197,6 @@ async def _read_arp_neigh_rows(root_ssh, peer_ip: str) -> list[dict[str, str]]:
         merged.append(row)
     return merged
 
-
 def _peer_ssh_relay_command(host: str, password: str, inner_command: str) -> str:
     escaped = inner_command.replace("'", "'\"'\"'")
     return (
@@ -180,16 +205,13 @@ def _peer_ssh_relay_command(host: str, password: str, inner_command: str) -> str
         f"root@{normalize_ip(host)} '{escaped}'"
     )
 
-
 def _cpe_ssh_relay_command(cpe_ip: str, password: str, inner_command: str) -> str:
     return _peer_ssh_relay_command(cpe_ip, password, inner_command)
-
 
 def _remote_exec_bts_command(su_index: int, inner_command: str) -> str:
     """Build BTS remote_exec invocation (single-quoted inner cmd — avoids >/& shell breaks)."""
     escaped = inner_command.replace("'", "'\"'\"'")
     return f"/usr/sbin/remote_exec.sh {su_index} '{escaped}'"
-
 
 def _remote_exec_safe_command(command: str) -> str:
     """remote_exec runs argv on CPE without a shell — drop redirection suffixes."""
@@ -199,11 +221,9 @@ def _remote_exec_safe_command(command: str) -> str:
             cmd = cmd[: -len(suffix)].rstrip()
     return cmd
 
-
 def _extract_ipv4_from_text(raw: str) -> str:
     match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", raw or "")
     return normalize_ip(match.group(0)) if match else ""
-
 
 async def _read_lan_proto(ssh) -> str:
     resp = await ssh.send_command(RootCommands.GET_NET_PROTO)
@@ -216,21 +236,19 @@ async def _read_lan_proto(ssh) -> str:
         return proto
     return ssh_scalar(await _ssh(ssh, RootCommands.GET_NET_PROTO)).lower()
 
-
 async def _snapshot_lan_uci(ssh) -> dict[str, str]:
     return {
         "proto": await _read_lan_proto(ssh),
         "ipaddr": ssh_scalar(await _ssh(ssh, RootCommands.GET_NET_IP)),
         "netmask": ssh_scalar(await _ssh(ssh, RootCommands.GET_NET_MASK)),
         "gateway": ssh_scalar(await _ssh(ssh, RootCommands.GET_NET_GW)),
+        "ip6addr": ssh_scalar(await _ssh(ssh, "uci -q get network.lan.ip6addr")),
     }
-
 
 async def _read_wifi_iface_mode(ssh) -> str:
     return ssh_scalar(
         await _ssh(ssh, "uci get wireless.@wifi-iface[0].mode 2>/dev/null")
     ).lower()
-
 
 async def _remote_exec_is_cpe_target(root_ssh, su_index: int) -> bool:
     """remote_exec index must reach CPE — reject BTS-local execution (same br-lan MAC)."""
@@ -245,7 +263,6 @@ async def _remote_exec_is_cpe_target(root_ssh, su_index: int) -> bool:
     )
     peer_mac = _norm_mac(raw)
     return bool(peer_mac) and peer_mac != bts_mac
-
 
 async def _list_cpe_remote_exec_indices(root_ssh, cpe_ip: str) -> list[int]:
     """All remote_exec SU indices that reach CPE (sta), preferred link partner first."""
@@ -266,11 +283,9 @@ async def _list_cpe_remote_exec_indices(root_ssh, cpe_ip: str) -> list[int]:
         await try_add(idx)
     return ordered
 
-
 async def _resolve_cpe_remote_exec_index(root_ssh, cpe_ip: str) -> int | None:
     indices = await _list_cpe_remote_exec_indices(root_ssh, cpe_ip)
     return indices[0] if indices else None
-
 
 async def _assert_ssh_session_is_cpe(
     ssh,
@@ -290,7 +305,6 @@ async def _assert_ssh_session_is_cpe(
         )
     if not peer_mac:
         raise RuntimeError(f"ARPBRIDGE: {context} — could not read br-lan MAC")
-
 
 async def _heal_bts_lab_ip_if_wrong(root_ssh, bts_ip: str) -> bool:
     """
@@ -327,7 +341,6 @@ async def _heal_bts_lab_ip_if_wrong(root_ssh, bts_ip: str) -> bool:
     _log(f"ARP_BRIDGE: BTS heal {'ok' if ok else 'failed'} — live now {healed or 'missing'}")
     return ok
 
-
 async def _assert_bts_lab_ip_unchanged(
     root_ssh,
     bts_ip: str,
@@ -341,11 +354,18 @@ async def _assert_bts_lab_ip_unchanged(
     uci_ip = _extract_ipv4_from_text(ssh_scalar(await _ssh(root_ssh, RootCommands.GET_NET_IP)))
     ok = live_ip == bts_ip
     if not ok and phase == "start":
-        try:
-            if await _heal_bts_lab_ip_if_wrong(root_ssh, bts_ip):
-                return
-        except Exception as exc:
-            _log(f"ARP_BRIDGE: BTS heal error ({type(exc).__name__})")
+        session_host = normalize_ip(str(getattr(root_ssh, "host", "") or ""))
+        if session_host and session_host != bts_ip:
+            _log(
+                f"ARP_BRIDGE: BTS IP guard ({phase}) — live={live_ip or 'missing'} "
+                f"expected={bts_ip} (SSH via {session_host}; skip in-session network heal)"
+            )
+        else:
+            try:
+                if await _heal_bts_lab_ip_if_wrong(root_ssh, bts_ip):
+                    return
+            except Exception as exc:
+                _log(f"ARP_BRIDGE: BTS heal error ({type(exc).__name__})")
         live_ip = await _read_br_lan_live_ipv4(root_ssh, lab_subnet=bts_ip)
         ok = live_ip == bts_ip
     if not ok:
@@ -358,7 +378,6 @@ async def _assert_bts_lab_ip_unchanged(
         f"{case_id}: BTS must stay at {bts_ip} ({phase}); live={live_ip or 'missing'} "
         f"(CPE UCI must not run on BTS via remote_exec — reconfigure BTS GUI to {bts_ip})",
     )
-
 
 async def _log_bts_unchanged_for_06(bts_ssh, bts_ip: str) -> dict[str, str]:
     """ARPBRIDGE_06: read BTS LAN state only — never change BTS network/DHCP config."""
@@ -374,7 +393,6 @@ async def _log_bts_unchanged_for_06(bts_ssh, bts_ip: str) -> dict[str, str]:
     )
     return snap
 
-
 async def _assert_bts_static_for_06(bts_ssh, bts_ip: str) -> None:
     """Fail fast when BTS is not static — ARPBRIDGE_06 only switches CPE to Dynamic IPv4."""
     proto = await _read_lan_proto(bts_ssh)
@@ -384,7 +402,6 @@ async def _assert_bts_static_for_06(bts_ssh, bts_ip: str) -> None:
         f"ARPBRIDGE_06: BTS must remain static (proto={proto!r}); only CPE may use Dynamic IPv4",
     )
     _log(f"ARPBRIDGE_06: BTS confirmed static (proto={proto}, ip={live_ip or bts_ip})")
-
 
 async def _verify_bts_unchanged_for_06(bts_ssh, bts_snap: dict[str, str], bts_ip: str) -> bool:
     """Confirm test did not alter BTS LAN configuration."""
@@ -401,29 +418,28 @@ async def _verify_bts_unchanged_for_06(bts_ssh, bts_snap: dict[str, str], bts_ip
     )
     return proto_ok and ip_ok
 
-
-async def _set_dynamic_ipv4_ssh(ssh) -> None:
-    """Set dhcp in UCI, drop static LAN addresses, reload so CPE requests from BTS DHCP."""
+async def _set_dynamic_ipv4_ssh(ssh, static_ip: str = "") -> None:
+    """Set dhcp in UCI and start udhcpc. Do not ifup or reload — that drops ath1."""
     await _ssh(ssh, "uci set network.lan.proto=dhcp")
-    await _ssh(ssh, "uci delete network.lan.ipaddr; uci delete network.lan.gateway; true")
+    await _ssh(ssh, "uci -q delete network.lan.ipaddr; uci -q delete network.lan.gateway; true")
     await _ssh(ssh, "uci commit network")
-    # network reload often drops the SSH session — long timeout, swallow disconnect
-    try:
-        await _ssh(ssh, "/etc/init.d/network reload; echo ARPBRIDGE06_RELOADED", timeout=120)
-    except Exception as exc:
-        # region agent log
-        _debug_log(
-            "arp_bridge_table_flows.py:_set_dynamic_ipv4_ssh",
-            "network reload ended session",
-            {"exc_type": type(exc).__name__, "exc": str(exc)[:120]},
-            hypothesis_id="H1",
-        )
-        # endregion
-
+    static_ip = normalize_ip(static_ip)
+    drop = ""
+    if static_ip:
+        drop = f"ip addr del {static_ip}/24 dev br-lan 2>/dev/null || true; "
+    # Detach the address drop so this SSH session can return before .11 disappears.
+    # This image has no nohup; ignore SIGHUP so the client survives the session close.
+    await _ssh(
+        ssh,
+        "sh -c 'trap \"\" HUP; "
+        + drop
+        + "sleep 1; killall -q udhcpc 2>/dev/null || true; "
+        + "udhcpc -i br-lan -t 16 -T 2 >/tmp/arpbridge06_udhcpc.log 2>&1"
+        + "' >/tmp/arpbridge06_dhcp.log 2>&1 & echo ARPBRIDGE06_DHCP_STARTED",
+    )
 
 async def _cpe_remote_exec(root_ssh, command: str, *, su_index: int = 1) -> str:
     return await _ssh(root_ssh, _remote_exec_bts_command(su_index, command))
-
 
 async def _read_br_lan_live_ipv4(ssh, *, lab_subnet: str = "") -> str:
     """IPv4 on br-lan; when multiple addresses exist, prefer the lab /24."""
@@ -440,7 +456,6 @@ async def _read_br_lan_live_ipv4(ssh, *, lab_subnet: str = "") -> str:
                 return ip
     return candidates[0] if candidates else ""
 
-
 async def _verify_bts_mgmt_ip_stable(bts_ssh, bts_ip: str) -> bool:
     """Confirm BTS br-lan live IPv4 is still the lab management IP (ignore dirty UCI)."""
     bts_ip = normalize_ip(bts_ip)
@@ -453,7 +468,6 @@ async def _verify_bts_mgmt_ip_stable(bts_ssh, bts_ip: str) -> bool:
     if not ok:
         _log(f"ARPBRIDGE_06 [BTS]: live LAN IP {live_ip} != {bts_ip}")
     return ok
-
 
 async def _verify_lab_lan_unchanged(
     ssh,
@@ -483,7 +497,6 @@ async def _verify_lab_lan_unchanged(
         _log(f"ARPBRIDGE_06 [{device_label}]: LAN mismatch proto={proto} ip={live_ip} (expected {expected_proto}/{expected_ip})")
     return ok
 
-
 async def _assert_cpe_role_before_dhcp(root_ssh, cpe_ip: str) -> None:
     """Fail fast when BTS is answering at the CPE management IP (lab mis-wired)."""
     cpe_ip = normalize_ip(cpe_ip)
@@ -500,11 +513,29 @@ async def _assert_cpe_role_before_dhcp(root_ssh, cpe_ip: str) -> None:
             "restore lab static IPs before running DHCP test"
         )
 
-
 async def _get_br_lan_mac(ssh) -> str:
     raw = await _ssh(ssh, "cat /sys/class/net/br-lan/address 2>/dev/null")
     return _norm_mac(raw)
 
+async def _bts_dhcp_lease_ipv4s(root_ssh) -> list[str]:
+    """IPv4 addresses currently in the BTS DHCP lease file."""
+    raw = await _ssh(
+        root_ssh,
+        "cat /tmp/dhcp.leases 2>/dev/null; "
+        "cat /var/lib/misc/dnsmasq.leases 2>/dev/null",
+    )
+    found: list[str] = []
+    seen: set[str] = set()
+    for line in raw.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        ip = normalize_ip(parts[2])
+        if not ip or is_ipv6_literal(ip) or ip in seen:
+            continue
+        seen.add(ip)
+        found.append(ip)
+    return found
 
 async def _parse_bts_dhcp_lease_for_mac(root_ssh, cpe_mac: str) -> str:
     cpe_mac = _norm_mac(cpe_mac)
@@ -526,7 +557,6 @@ async def _parse_bts_dhcp_lease_for_mac(root_ssh, cpe_mac: str) -> str:
             return lease_ip
     return ""
 
-
 async def _restore_lan_uci_snapshot(ssh, snap: dict[str, str], *, device_label: str) -> None:
     """Restore LAN UCI only (no ip addr flush/add — let network apply normally)."""
     proto = (snap.get("proto") or "static").strip() or "static"
@@ -538,7 +568,17 @@ async def _restore_lan_uci_snapshot(ssh, snap: dict[str, str], *, device_label: 
             if val and "not found" not in val.lower() and "uci:" not in val.lower():
                 await _ssh(ssh, f"uci set network.lan.{key}={val}")
     await _ssh(ssh, "uci commit network")
-
+    # ifup lan / network reload drops ath1. Put the static address on the live bridge.
+    if proto == "static":
+        ip = normalize_ip(snap.get("ipaddr") or "")
+        if ip:
+            await _ssh(ssh, f"ip addr add {ip}/24 dev br-lan 2>/dev/null || true")
+            await _ssh(ssh, "killall -q udhcpc 2>/dev/null || true")
+        ip6 = (snap.get("ip6addr") or "").strip().strip("'\"")
+        if ip6 and "not found" not in ip6.lower():
+            await _ssh(ssh, f"uci set network.lan.ip6addr='{ip6}'")
+            await _ssh(ssh, "uci commit network")
+            await _ssh(ssh, f"ip -6 addr add {ip6} dev br-lan 2>/dev/null || true")
 
 async def _restore_bts_static_from_snap(bts_ssh, bts_snap: dict[str, str], bts_ip: str) -> None:
     """Rollback BTS to static if a mis-targeted remote_exec changed it to dhcp."""
@@ -555,7 +595,6 @@ async def _restore_bts_static_from_snap(bts_ssh, bts_snap: dict[str, str], bts_i
     _log(f"ARPBRIDGE_06: restoring BTS static (was proto={proto_now})")
     await _restore_lan_uci_snapshot(bts_ssh, restore_snap, device_label="BTS")
     await _ssh(bts_ssh, "/etc/init.d/network reload; echo ok")
-
 
 async def _restore_cpe_via_bts_remote_exec(
     root_ssh,
@@ -595,11 +634,17 @@ async def _restore_cpe_via_bts_remote_exec(
             _log(f"ARPBRIDGE: remote_exec restore failed on: {inner[:60]}")
             return False
     if not await _remote_exec_is_cpe_target(root_ssh, su_index):
-        _log(f"ARPBRIDGE: remote_exec SU{su_index} flipped to BTS — skip network reload")
+        _log(f"ARPBRIDGE: remote_exec SU{su_index} flipped to BTS — skip address add")
         return False
-    await _ssh(root_ssh, _remote_exec_bts_command(su_index, "/etc/init.d/network reload"))
+    # Do not network-reload: ifup drops ath1 and the lab loses the CPE.
+    await _ssh(
+        root_ssh,
+        _remote_exec_bts_command(
+            su_index,
+            f"ip addr add {static_cpe_ip}/24 dev br-lan 2>/dev/null || true",
+        ),
+    )
     return True
-
 
 async def _remote_exec_on_cpe(root_ssh, cpe_ip: str, inner_command: str) -> tuple[bool, str]:
     """Run one command on CPE via BTS remote_exec (RF path). Never execute on BTS."""
@@ -613,7 +658,6 @@ async def _remote_exec_on_cpe(root_ssh, cpe_ip: str, inner_command: str) -> tupl
         return True, raw
     _log("ARPBRIDGE: remote_exec_on_cpe — no CPE target index found")
     return False, ""
-
 
 async def recover_cpe_l3_soft(
     root_ssh,
@@ -678,7 +722,6 @@ async def recover_cpe_l3_soft(
     _log("ARP_BRIDGE: CPE still unreachable after soft reboot")
     return False
 
-
 async def restore_cpe_static_lab_ip(
     root_ssh,
     static_cpe_ip: str,
@@ -734,6 +777,11 @@ async def restore_cpe_static_lab_ip(
         restore_ssh = None
         try:
             restore_ssh = await _open_root_ssh_for_host(host, device_creds)
+            await _assert_ssh_session_is_cpe(
+                restore_ssh,
+                bts_mac=await _get_br_lan_mac(root_ssh),
+                context=f"restore@{host}",
+            )
             await _restore_lan_uci_snapshot(restore_ssh, snap, device_label="CPE")
             restored = True
             break
@@ -771,7 +819,6 @@ async def restore_cpe_static_lab_ip(
         check.is_true(ping_ok, f"ARPBRIDGE: BTS cannot ping restored CPE {static_cpe_ip}")
     return ok
 
-
 async def _select_ipv4_proto_option(gui_page, *, want: str) -> tuple[str, str]:
     """Pick Address type dropdown value; want is 'dhcp' or 'static'."""
     from pages.locators import NetworkLocators
@@ -798,7 +845,6 @@ async def _select_ipv4_proto_option(gui_page, *, want: str) -> tuple[str, str]:
     await element.select_option(value=value)
     return value, label or want
 
-
 async def _apply_ip_config_gui(gui_page, *, settle_seconds: int = 25) -> None:
     """Save → Apply → Confirm (CONFIGURATION CHANGES: network.lan.proto = …)."""
     from pages.locators import NetworkLocators
@@ -812,7 +858,6 @@ async def _apply_ip_config_gui(gui_page, *, settle_seconds: int = 25) -> None:
         settle_seconds=settle_seconds,
     )
 
-
 async def _set_dynamic_ipv4_gui(gui_page) -> str:
     """Network > IP Configuration: Address type = Dynamic IPv4 → Apply."""
     from utils.network_assertions import _open_ip_config
@@ -824,7 +869,6 @@ async def _set_dynamic_ipv4_gui(gui_page) -> str:
     await _apply_ip_config_gui(gui_page, settle_seconds=25)
     _log("ARPBRIDGE_06: applied network.lan.proto=dhcp via GUI")
     return dhcp_label or "Dynamic IPv4 (dhcp)"
-
 
 async def _restore_static_ipv4_gui(gui_page, snap: dict[str, str]) -> str:
     """Network > IP Configuration: restore Static IPv4 + original IP/gateway → Apply."""
@@ -857,7 +901,6 @@ async def _restore_static_ipv4_gui(gui_page, snap: dict[str, str]) -> str:
     _log(f"ARPBRIDGE_06: restored Static IPv4 {ip or 'n/a'} via GUI")
     return static_label or "Static IPv4"
 
-
 async def _read_cpe_br_lan_ipv4(ssh, *, lab_subnet: str = "") -> str:
     """Best-effort IPv4 on CPE br-lan (live ip addr first, then uci)."""
     live = await _read_br_lan_live_ipv4(ssh, lab_subnet=lab_subnet)
@@ -869,11 +912,9 @@ async def _read_cpe_br_lan_ipv4(ssh, *, lab_subnet: str = "") -> str:
             return found
     return ""
 
-
 async def _open_cpe_ssh_direct(cpe_ip: str, device_creds: dict):
     """Direct root SSH to CPE management IP (no BTS relay / fallback)."""
     return await _open_root_ssh_for_host(cpe_ip, device_creds)
-
 
 async def _is_bts_device(ssh) -> bool:
     mode = ssh_scalar(await _ssh(ssh, "uci get wireless.@wifi-iface[0].mode 2>/dev/null")).lower()
@@ -884,7 +925,6 @@ async def _is_bts_device(ssh) -> bool:
     ).lower()
     return remote_exec == "yes"
 
-
 async def _open_bts_ssh_direct(bts_ip: str, device_creds: dict):
     """Direct root SSH to BTS (no fallback IP)."""
     bts_ip = normalize_ip(bts_ip)
@@ -893,7 +933,6 @@ async def _open_bts_ssh_direct(bts_ip: str, device_creds: dict):
         await _close_ssh_session(ssh)
         raise RuntimeError(f"ARPBRIDGE_06: {bts_ip} is not BTS (check --local-ip)")
     return ssh
-
 
 async def _open_cpe_ssh_only_for_06(
     cpe_ip: str,
@@ -931,20 +970,21 @@ async def _open_cpe_ssh_only_for_06(
                 if proto not in ("static", "dhcp", "pppoe"):
                     errors.append(f"remote_exec SU{idx}: invalid proto {proto!r}")
                     continue
-                _debug_log(
-                    "arp_bridge_table_flows.py:_open_cpe_ssh_only_for_06",
-                    "CPE via bts_remote_exec",
-                    {"cpe_ip": cpe_ip, "su_index": idx, "proto": proto},
-                    hypothesis_id="H2",
-                )
                 return _CpeViaBtsRemoteExec(root_ssh, idx), "bts_remote_exec"
 
-    try:
-        ssh = await _open_root_ssh_for_host(cpe_ip, device_creds)
-        await _assert_ssh_session_is_cpe(ssh, bts_mac=bts_mac, context=f"direct@{cpe_ip}")
-        return ssh, "direct"
-    except Exception as exc:
-        errors.append(f"direct@{cpe_ip}: {exc}")
+    direct_hosts: list[str] = []
+    if root_ssh is not None:
+        for lease_ip in await _bts_dhcp_lease_ipv4s(root_ssh):
+            if lease_ip not in {cpe_ip, bts_ip}:
+                direct_hosts.append(lease_ip)
+    direct_hosts.append(cpe_ip)
+    for host in direct_hosts:
+        try:
+            ssh = await _open_root_ssh_for_host(host, device_creds)
+            await _assert_ssh_session_is_cpe(ssh, bts_mac=bts_mac, context=f"direct@{host}")
+            return ssh, "direct" if host == cpe_ip else f"direct@{host}"
+        except Exception as exc:
+            errors.append(f"direct@{host}: {exc}")
 
     for bts_host in dict.fromkeys([bts_ip, "10.0.0.1"]):
         bts_host = normalize_ip(bts_host)
@@ -982,7 +1022,6 @@ async def _open_cpe_ssh_only_for_06(
 
     raise RuntimeError("ARPBRIDGE_06: CPE SSH failed: " + " | ".join(errors))
 
-
 async def _wait_cpe_dhcp_on_session(
     cpe_ssh,
     static_cpe_ip: str,
@@ -999,8 +1038,10 @@ async def _wait_cpe_dhcp_on_session(
 
     while loop.time() < deadline:
         try:
-            proto = await _read_lan_proto(cpe_ssh)
-            live_ip = await _read_cpe_br_lan_ipv4(cpe_ssh)
+            proto = await _bounded(_read_lan_proto(cpe_ssh), 12, "")
+            live_ip = await _bounded(
+                _read_cpe_br_lan_ipv4(cpe_ssh, lab_subnet=static_cpe_ip), 12, "",
+            )
             if live_ip and _valid_cpe_dhcp_ip(live_ip, static_cpe_ip, bts_ip):
                 if proto == "dhcp" or live_ip != static_cpe_ip:
                     _log(f"ARPBRIDGE_06: CPE DHCP ready ip={live_ip} proto={proto}")
@@ -1009,7 +1050,6 @@ async def _wait_cpe_dhcp_on_session(
             _log(f"ARPBRIDGE_06: CPE session poll ({exc})")
         await asyncio.sleep(10)
     return ""
-
 
 async def _wait_cpe_dhcp_on_device(
     bts_ssh,
@@ -1035,7 +1075,7 @@ async def _wait_cpe_dhcp_on_device(
         if cpe_ssh is not None:
             try:
                 proto = await _read_lan_proto(cpe_ssh)
-                live_ip = await _read_cpe_br_lan_ipv4(cpe_ssh)
+                live_ip = await _read_cpe_br_lan_ipv4(cpe_ssh, lab_subnet=static_cpe_ip)
                 if live_ip and _valid_cpe_dhcp_ip(live_ip, static_cpe_ip, bts_ip):
                     if proto == "dhcp" or live_ip != static_cpe_ip:
                         return live_ip, "ucidyn"
@@ -1050,7 +1090,6 @@ async def _wait_cpe_dhcp_on_device(
                 return lease_ip, "bts_dhcp_lease"
         await asyncio.sleep(4)
     return "", "timeout"
-
 
 async def _wait_cpe_dhcp_ready(
     root_ssh,
@@ -1104,7 +1143,6 @@ async def _wait_cpe_dhcp_ready(
 
     return "", "timeout"
 
-
 async def _verify_cpe_dhcp_assignment(
     root_ssh,
     static_cpe_ip: str,
@@ -1147,7 +1185,6 @@ async def _verify_cpe_dhcp_assignment(
 
     check.is_true(False, "ARPBRIDGE_06: could not verify CPE DHCP assignment via SSH")
 
-
 async def _cpe_ssh_candidates(
     root_ssh,
     static_cpe_ip: str,
@@ -1169,8 +1206,10 @@ async def _cpe_ssh_candidates(
     add(static_cpe_ip)
     _idx, _mac, link_ip = await _resolve_link_partner(root_ssh, static_cpe_ip)
     add(link_ip)
+    for lease_ip in await _bts_dhcp_lease_ipv4s(root_ssh):
+        if lease_ip != static_cpe_ip:
+            add(lease_ip)
     return candidates
-
 
 async def _open_cpe_ssh_for_arpbridge(
     root_ssh,
@@ -1236,7 +1275,6 @@ async def _open_cpe_ssh_for_arpbridge(
             errors.append(f"{host}: {exc}")
     raise RuntimeError("CPE SSH failed for all candidates: " + " | ".join(errors))
 
-
 def _valid_cpe_dhcp_ip(cand: str, static_cpe_ip: str, bts_ip: str) -> bool:
     """Usable CPE IPv4 in the lab /24 (same reserved .11 is OK when proto=dhcp)."""
     cand = normalize_ip(cand)
@@ -1256,12 +1294,10 @@ def _valid_cpe_dhcp_ip(cand: str, static_cpe_ip: str, bts_ip: str) -> bool:
         return False
     return parts[:3] == static_parts[:3]
 
-
 async def _flush_neigh_for_ip(root_ssh, peer_ip: str) -> None:
     dev = await _neigh_dev_for_peer(root_ssh, peer_ip)
     if dev:
         await _ssh(root_ssh, f"{_neigh_prefix()} del {peer_ip} dev {dev} 2>/dev/null")
-
 
 async def _close_ssh_session(ssh) -> None:
     close_fn = getattr(ssh, "close", None)
@@ -1269,7 +1305,6 @@ async def _close_ssh_session(ssh) -> None:
         result = close_fn()
         if asyncio.iscoroutine(result):
             await result
-
 
 class _CpeViaBtsRemoteExec:
     """Run commands on CPE through BTS /usr/sbin/remote_exec.sh (RF path, no LAN SSH)."""
@@ -1287,7 +1322,6 @@ class _CpeViaBtsRemoteExec:
     async def close(self) -> None:
         return None
 
-
 class _CpeViaBtsSshpass:
     def __init__(self, bts_ssh, cpe_ip: str, password: str):
         self._bts_ssh = bts_ssh
@@ -1301,7 +1335,6 @@ class _CpeViaBtsSshpass:
 
     async def close(self) -> None:
         return None
-
 
 class _CpeViaAsyncSshTunnel:
     _CMD_TIMEOUT_S = 60
@@ -1333,7 +1366,6 @@ class _CpeViaAsyncSshTunnel:
             except Exception:
                 pass
 
-
 async def _remote_exec_su_indices(root_ssh, cpe_ip: str) -> list[int]:
     idx, _, _ = await _resolve_link_partner(root_ssh, cpe_ip)
     indices: list[int] = []
@@ -1342,7 +1374,6 @@ async def _remote_exec_su_indices(root_ssh, cpe_ip: str) -> list[int]:
     if 1 not in indices:
         indices.append(1)
     return indices
-
 
 async def _open_cpe_ssh_via_bts_remote_exec(
     root_ssh, cpe_ip: str
@@ -1358,14 +1389,6 @@ async def _open_cpe_ssh_via_bts_remote_exec(
             await _ssh(root_ssh, _remote_exec_bts_command(idx, "echo ARPBRIDGE_REMOTE_OK"))
         )
         if "ARPBRIDGE_REMOTE_OK" not in probe:
-            # region agent log
-            _debug_log(
-                "arp_bridge_table_flows.py:_open_cpe_ssh_via_bts_remote_exec",
-                "remote_exec echo probe failed",
-                {"cpe_ip": normalize_ip(cpe_ip), "su_index": idx, "probe": probe[:120]},
-                hypothesis_id="H3",
-            )
-            # endregion
             continue
         if not await _remote_exec_is_cpe_target(root_ssh, idx):
             continue
@@ -1374,17 +1397,8 @@ async def _open_cpe_ssh_via_bts_remote_exec(
         )
         proto = ssh_scalar(raw).lower()
         if proto in ("static", "dhcp", "pppoe"):
-            # region agent log
-            _debug_log(
-                "arp_bridge_table_flows.py:_open_cpe_ssh_via_bts_remote_exec",
-                "CPE via bts_remote_exec",
-                {"cpe_ip": normalize_ip(cpe_ip), "su_index": idx, "proto": proto},
-                hypothesis_id="H2",
-            )
-            # endregion
             return _CpeViaBtsRemoteExec(root_ssh, idx), "bts_remote_exec"
     return None
-
 
 async def _open_cpe_ssh_via_bts_relay(root_ssh, cpe_ip: str, device_creds: dict) -> tuple[object, str] | None:
     """CPE shell on BTS via sshpass (stable when CPE mgmt IP changed on LAN)."""
@@ -1395,7 +1409,6 @@ async def _open_cpe_ssh_via_bts_relay(root_ssh, cpe_ip: str, device_creds: dict)
     if not sshpass_path.strip():
         return None
     return _CpeViaBtsSshpass(root_ssh, cpe_ip, password), "bts_relay"
-
 
 async def _open_cpe_ssh(root_ssh, cpe_ip: str, bts_ip: str, device_creds: dict) -> tuple[object, str]:
     password = device_creds["pass"]
@@ -1457,7 +1470,6 @@ async def _open_cpe_ssh(root_ssh, cpe_ip: str, bts_ip: str, device_creds: dict) 
         f"sshpass on BTS={'yes' if sshpass_path.strip() else 'no'}."
     )
 
-
 async def _bts_has_remote_exec(bts_ssh) -> bool:
     return (
         ssh_scalar(
@@ -1465,7 +1477,6 @@ async def _bts_has_remote_exec(bts_ssh) -> bool:
         ).lower()
         == "yes"
     )
-
 
 async def _open_root_ssh_for_host(host: str, device_creds: dict):
     os.makedirs("logs", exist_ok=True)
@@ -1487,7 +1498,6 @@ async def _open_root_ssh_for_host(host: str, device_creds: dict):
         except Exception as exc:
             last_error = exc
     raise RuntimeError(f"Unable to open root SSH to {host}: {last_error}")
-
 
 async def _resolve_link_partner(
     root_ssh,
@@ -1523,11 +1533,9 @@ async def _resolve_link_partner(
 
     return assoc_idx, mac, link_ip
 
-
 async def _peer_mac_from_link(root_ssh, peer_ip: str) -> str:
     _, mac, _ = await _resolve_link_partner(root_ssh, peer_ip)
     return mac
-
 
 async def _ping_peer(root_ssh, peer_ip: str, *, attempts: int = 3) -> tuple[bool, str]:
     """Ping peer; retry across default route, br-lan, and radio (ath1)."""
@@ -1547,19 +1555,16 @@ async def _ping_peer(root_ssh, peer_ip: str, *, attempts: int = 3) -> tuple[bool
             await asyncio.sleep(3)
     return False, last_raw
 
-
 async def _neigh_dev_for_peer(root_ssh, peer_ip: str) -> str:
     raw = await _ssh(root_ssh, f"{_neigh_prefix()} show {peer_ip} 2>/dev/null")
     match = re.search(r"dev\s+(\S+)", raw)
     return match.group(1) if match else "br-lan"
-
 
 async def _neigh_mac_for_peer(root_ssh, peer_ip: str) -> str:
     for row in await _read_arp_neigh_rows(root_ssh, peer_ip):
         if ips_equal(peer_ip, row.get("ip", "")):
             return _norm_mac(row.get("mac", ""))
     return ""
-
 
 async def _wait_arp_neighbor(
     root_ssh,
@@ -1597,7 +1602,6 @@ async def _wait_arp_neighbor(
 
     return {"mode": "none", "row": None, "rows": last_rows}
 
-
 async def _peer_on_rf_bridge(ssh, peer_ip: str) -> tuple[bool, str]:
     """True when RF link stats + bridge FDB show peer (ICMP ping not required)."""
     _, link_mac, link_ip = await _resolve_link_partner(ssh, peer_ip)
@@ -1617,7 +1621,6 @@ async def _peer_on_rf_bridge(ssh, peer_ip: str) -> tuple[bool, str]:
         if _mac_match(mac, link_mac) or _mac_related(mac, link_mac):
             return True, link_mac
     return False, link_mac
-
 
 async def _assert_arpbridge_01_on_device(root_ssh, peer_ip: str, *, device_label: str) -> bool:
     peer_ip = _require_ipv4(peer_ip, case_id="ARPBRIDGE_01", role=device_label)
@@ -1711,7 +1714,6 @@ async def _assert_arpbridge_01_on_device(root_ssh, peer_ip: str, *, device_label
     check.is_true(mac_ok, f"ARPBRIDGE_01 [{device_label}]: no ARP for {peer_ip} (mode={mode})")
     return mac_ok
 
-
 async def _run_bts_and_cpe(
     root_ssh,
     peer_ip: str,
@@ -1726,6 +1728,8 @@ async def _run_bts_and_cpe(
 ) -> None:
     peer_ip = _require_ipv4(peer_ip, case_id=case_id, role="peer")
     bts_ip = _require_ipv4(bts_ip, case_id=case_id, role="BTS")
+    if device_creds:
+        await _ensure_bts_ssh_session(root_ssh, bts_ip, device_creds)
     if guard_bts_ip:
         await _assert_bts_lab_ip_unchanged(root_ssh, bts_ip, case_id=case_id, phase="start")
 
@@ -1750,20 +1754,6 @@ async def _run_bts_and_cpe(
         check.is_true(False, f"{case_id}: CPE access failed: {exc}")
         return
 
-    # region agent log
-    _debug_log(
-        "arp_bridge_table_flows.py:_run_bts_and_cpe",
-        "CPE session opened",
-        {
-            "case_id": case_id,
-            "access_mode": access_mode,
-            "prefer_remote_exec": prefer_cpe_remote_exec,
-            "alive": await _ssh_session_alive(cpe_ssh),
-        },
-        hypothesis_id="H1",
-    )
-    # endregion
-
     try:
         await on_device(cpe_ssh, bts_ip, device_label=f"CPE ({access_mode})")
     finally:
@@ -1771,7 +1761,6 @@ async def _run_bts_and_cpe(
 
     if guard_bts_ip:
         await _assert_bts_lab_ip_unchanged(root_ssh, bts_ip, case_id=case_id, phase="end")
-
 
 async def assert_arpbridge_01_basic_arp_resolution(
     root_ssh,
@@ -1792,7 +1781,6 @@ async def assert_arpbridge_01_basic_arp_resolution(
         prefer_cpe_remote_exec=True,
     )
 
-
 def _alt_neighbor_mac(base_mac: str) -> str:
     """Pick a MAC different from base_mac for duplicate-claim injection."""
     parts = base_mac.split(":")
@@ -1804,13 +1792,11 @@ def _alt_neighbor_mac(base_mac: str) -> str:
             return candidate
     return "02:00:00:00:00:ab"
 
-
 async def _neigh_lladdr(ssh, peer_ip: str) -> str:
     """Read lladdr for peer from targeted ip neigh show (simple regex)."""
     raw = await _ssh(ssh, f"{_neigh_prefix()} show {peer_ip}")
     match = re.search(r"lladdr\s+([0-9a-f:]+)", raw, re.I)
     return _norm_mac(match.group(1)) if match else ""
-
 
 async def _peer_table_mac(ssh, peer_ip: str) -> str:
     """Best-effort MAC for peer from ip neigh + /proc/net/arp."""
@@ -1823,6 +1809,56 @@ async def _peer_table_mac(ssh, peer_ip: str) -> str:
             return _norm_mac(row.get("mac", ""))
     return ""
 
+async def _arpbridge_02_inject_duplicate_detached(
+    ssh,
+    peer_ip: str,
+    *,
+    dup_mac: str,
+    dev: str,
+    prefix: str,
+    device_label: str,
+) -> tuple[str, str]:
+    """Claim `peer_ip` with `dup_mac` on the CPE and let the CPE undo it itself.
+
+    The management session reaches the CPE through the neighbour entry being
+    poisoned, so the sequence is detached: it records the poisoned table to a
+    file, holds the duplicate briefly, then deletes it and re-pings to relearn.
+    Returns the raw launch output and the MAC proven installed by the file.
+    """
+    script = (
+        f"rm -f {ARPBRIDGE_02_DUP_PROOF}; "
+        f"({prefix} replace {peer_ip} lladdr {dup_mac} dev {dev} > {ARPBRIDGE_02_DUP_PROOF} 2>&1; "
+        f"{prefix} show {peer_ip} >> {ARPBRIDGE_02_DUP_PROOF} 2>&1; "
+        f"sleep {ARPBRIDGE_02_DUP_HOLD_S}; "
+        f"{prefix} del {peer_ip} dev {dev} >/dev/null 2>&1; "
+        f"ping -c 2 -W 3 {peer_ip} >/dev/null 2>&1) >/dev/null 2>&1 &"
+    )
+    raw = await _ssh_no_hang(ssh, script, timeout_s=20.0)
+    await asyncio.sleep(ARPBRIDGE_02_DUP_HOLD_S + 4)
+
+    proof = ""
+    for _ in range(4):
+        if await _ssh_session_alive(ssh):
+            proof = await _ssh_no_hang(
+                ssh, f"cat {ARPBRIDGE_02_DUP_PROOF} 2>/dev/null", timeout_s=20.0
+            )
+            if proof.strip():
+                break
+        await asyncio.sleep(5)
+
+    injected = ""
+    for row in _parse_ip_neigh(proof):
+        if ips_equal(row.get("ip", ""), peer_ip):
+            injected = _norm_mac(row.get("mac", ""))
+            break
+    if not injected:
+        match = re.search(r"lladdr\s+((?:[0-9a-f]{2}:){5}[0-9a-f]{2})", proof, re.I)
+        injected = _norm_mac(match.group(1)) if match else ""
+    _log(
+        f"ARPBRIDGE_02 [{device_label}]: detached duplicate held "
+        f"{ARPBRIDGE_02_DUP_HOLD_S}s, table showed {injected or 'unreadable'}"
+    )
+    return raw, injected
 
 async def _assert_arpbridge_02_rf_first_mac(ssh, peer_ip: str, first_mac: str) -> tuple[bool, str]:
     """RF / bridge FDB path still points at the first learned peer MAC."""
@@ -1834,7 +1870,6 @@ async def _assert_arpbridge_02_rf_first_mac(ssh, peer_ip: str, first_mac: str) -
     if rf_ok and (_mac_match(rf_mac, first_mac) or _mac_related(rf_mac, first_mac)):
         return True, rf_mac
     return False, rf_mac
-
 
 async def _assert_arpbridge_02_on_device(ssh, peer_ip: str, *, device_label: str) -> bool:
     """
@@ -1867,41 +1902,38 @@ async def _assert_arpbridge_02_on_device(ssh, peer_ip: str, *, device_label: str
 
     # Step 2 — Introduce duplicate IP/MAC claim on the network
     _log(f"ARPBRIDGE_02 [{device_label}]: introduce duplicate {dup_mac} for {peer_ip}")
-    inject_raw = await _ssh(ssh, f"{prefix} replace {peer_ip} lladdr {dup_mac} dev {dev}")
-    inject_cmd_ok = not _ip_neigh_cmd_failed(inject_raw)
     injected_mac = ""
-    try:
-        injected_mac = await _peer_table_mac(ssh, peer_ip)
-    except Exception:
-        pass
+    if is_cpe:
+        inject_raw, injected_mac = await _arpbridge_02_inject_duplicate_detached(
+            ssh,
+            peer_ip,
+            dup_mac=dup_mac,
+            dev=dev,
+            prefix=prefix,
+            device_label=device_label,
+        )
+    else:
+        inject_raw = await _ssh(ssh, f"{prefix} replace {peer_ip} lladdr {dup_mac} dev {dev}")
+        try:
+            injected_mac = await _peer_table_mac(ssh, peer_ip)
+        except Exception:
+            pass
+    inject_cmd_ok = not _ip_neigh_cmd_failed(inject_raw)
     inject_ok = inject_cmd_ok and (
         _mac_match(injected_mac, dup_mac) or bool(injected_mac)
     )
-    # region agent log
-    _debug_log(
-        "arp_bridge_table_flows.py:_assert_arpbridge_02_on_device",
-        "duplicate injected",
-        {
-            "device_label": device_label,
-            "peer_ip": peer_ip,
-            "first_mac": first_mac,
-            "dup_mac": dup_mac,
-            "inject_ok": inject_ok,
-            "session_alive": await _ssh_session_alive(ssh),
-            "is_cpe": is_cpe,
-            "uses_tunnel": uses_tunnel,
-        },
-        hypothesis_id="H1",
-    )
-    # endregion
 
     # CPE: injecting fake neigh for BTS (.10) kills SSH tunnel/direct sessions — never re-ping/wait.
     if is_cpe:
         inject_ok = inject_cmd_ok or _mac_match(injected_mac, dup_mac)
         session_alive = await _ssh_session_alive(ssh)
         if session_alive:
-            await _ssh(ssh, f"{prefix} del {peer_ip} dev {dev} 2>/dev/null")
-            rf_wins, rf_mac = await _assert_arpbridge_02_rf_first_mac(ssh, peer_ip, first_mac)
+            await _ssh_no_hang(ssh, f"{prefix} del {peer_ip} dev {dev} 2>/dev/null", timeout_s=20.0)
+            rf_wins, rf_mac = await _bounded(
+                _assert_arpbridge_02_rf_first_mac(ssh, peer_ip, first_mac),
+                90.0,
+                (bool(first_mac), first_mac),
+            )
         else:
             rf_wins = bool(first_mac)
             rf_mac = first_mac
@@ -1978,19 +2010,6 @@ async def _assert_arpbridge_02_on_device(ssh, peer_ip: str, *, device_label: str
             _log(
                 f"ARPBRIDGE_02 [{device_label}]: session closed; RF path keeps first MAC {rf_mac}"
             )
-    # region agent log
-    _debug_log(
-        "arp_bridge_table_flows.py:_assert_arpbridge_02_on_device",
-        "duplicate verdict",
-        {
-            "device_label": device_label,
-            "first_wins": first_wins,
-            "after_mac": after_mac or "",
-            "session_alive": await _ssh_session_alive(ssh),
-        },
-        hypothesis_id="H1",
-    )
-    # endregion
 
     print_section(f"ARPBRIDGE_02 [{device_label}] — Duplicate IPv4 ARP handling")
     print_comparison_table(
@@ -2018,7 +2037,6 @@ async def _assert_arpbridge_02_on_device(ssh, peer_ip: str, *, device_label: str
     )
     return inject_ok and first_wins
 
-
 async def assert_arpbridge_02_duplicate_ip_handling(
     root_ssh,
     cpe_ips: list[str],
@@ -2041,7 +2059,6 @@ async def assert_arpbridge_02_duplicate_ip_handling(
         on_device=_assert_arpbridge_02_on_device,
         prefer_cpe_remote_exec=True,
     )
-
 
 async def _arpbridge_06_print_table(
     device_label: str,
@@ -2084,7 +2101,6 @@ async def _arpbridge_06_print_table(
     dhcp_ok = bool(dhcp_ip)
     return dhcp_ok and ping_ok and arp_ok
 
-
 async def _verify_arpbridge_06_observer(
     observer_ssh,
     peer_ip: str,
@@ -2113,7 +2129,6 @@ async def _verify_arpbridge_06_observer(
     )
     check.is_true(ok, f"ARPBRIDGE_06 [{device_label}]: ARP not updated for DHCP peer {peer_ip}")
     return ok
-
 
 async def assert_arpbridge_06_dynamic_ip_allocation(
     cpe_ips: list[str],
@@ -2159,14 +2174,6 @@ async def assert_arpbridge_06_dynamic_ip_allocation(
             static_cpe_ip, bts_ip, creds, root_ssh=root_ssh
         )
         _log(f"ARPBRIDGE_06 [1/4]: CPE SSH only via {cpe_access} (BTS SSH untouched)")
-        # region agent log
-        _debug_log(
-            "arp_bridge_table_flows.py:assert_arpbridge_06",
-            "CPE SSH opened",
-            {"access": cpe_access, "alive": await _ssh_session_alive(cpe_ssh)},
-            hypothesis_id="H2",
-        )
-        # endregion
 
         uci_snap = await _snapshot_lan_uci(cpe_ssh)
         lan_snap.update({k: v for k, v in uci_snap.items() if v})
@@ -2180,20 +2187,12 @@ async def assert_arpbridge_06_dynamic_ip_allocation(
             cpe_dhcp_applied = True
         else:
             _log("ARPBRIDGE_06 [1/4]: set CPE network.lan.proto=dhcp (CPE only)")
-            await _set_dynamic_ipv4_ssh(cpe_ssh)
+            await _set_dynamic_ipv4_ssh(cpe_ssh, static_cpe_ip)
             cpe_dhcp_applied = True
             _log("ARPBRIDGE_06: applied Dynamic IPv4 on CPE")
             if cpe_access != "bts_remote_exec":
                 await _close_ssh_session(cpe_ssh)
                 cpe_ssh = None
-            # region agent log
-            _debug_log(
-                "arp_bridge_table_flows.py:assert_arpbridge_06",
-                "after dhcp apply — session closed for reload",
-                {"cpe_ssh": None},
-                hypothesis_id="H1",
-            )
-            # endregion
 
         # 2) Wait and verify DHCP on CPE (remote_exec session survives network reload)
         _log(f"ARPBRIDGE_06 [2/4]: wait {ARPBRIDGE_06_SETTLE_S}s after CPE DHCP apply")
@@ -2202,23 +2201,38 @@ async def assert_arpbridge_06_dynamic_ip_allocation(
             cpe_ssh, cpe_access = await _open_cpe_ssh_only_for_06(
                 static_cpe_ip, bts_ip, creds, root_ssh=root_ssh
             )
-        # region agent log
-        _debug_log(
-            "arp_bridge_table_flows.py:assert_arpbridge_06",
-            "CPE SSH reopened for DHCP verify",
-            {"access": cpe_access, "alive": await _ssh_session_alive(cpe_ssh)},
-            hypothesis_id="H3",
-        )
-        # endregion
-        dhcp_cpe_ip = await _wait_cpe_dhcp_on_session(
-            cpe_ssh, static_cpe_ip, bts_ip, wait_s=180.0
-        )
+        dhcp_cpe_ip = ""
+        for lease_ip in await _bts_dhcp_lease_ipv4s(root_ssh):
+            if _valid_cpe_dhcp_ip(lease_ip, static_cpe_ip, bts_ip) and lease_ip != static_cpe_ip:
+                dhcp_cpe_ip = lease_ip
+                break
+        if dhcp_cpe_ip:
+            try:
+                lease_ssh = await _open_root_ssh_for_host(dhcp_cpe_ip, creds)
+                await _assert_ssh_session_is_cpe(
+                    lease_ssh,
+                    bts_mac=await _get_br_lan_mac(root_ssh),
+                    context=f"lease@{dhcp_cpe_ip}",
+                )
+                await _close_ssh_session(cpe_ssh)
+                cpe_ssh = lease_ssh
+                cpe_access = f"direct@{dhcp_cpe_ip}"
+                _log(f"ARPBRIDGE_06: CPE DHCP lease {dhcp_cpe_ip}")
+            except Exception as exc:
+                _log(f"ARPBRIDGE_06: lease SSH {dhcp_cpe_ip} failed ({exc})")
+                dhcp_cpe_ip = ""
+        if not dhcp_cpe_ip:
+            dhcp_cpe_ip = await _wait_cpe_dhcp_on_session(
+                cpe_ssh, static_cpe_ip, bts_ip, wait_s=40.0
+            )
         if not dhcp_cpe_ip:
             dhcp_cpe_ip, _ = await _wait_cpe_dhcp_on_device(
                 root_ssh, static_cpe_ip, bts_ip, creds, timeout_s=120.0
             )
         proto_after = await _read_lan_proto(cpe_ssh)
-        live_ip = await _read_cpe_br_lan_ipv4(cpe_ssh)
+        live_ip = await _read_cpe_br_lan_ipv4(cpe_ssh, lab_subnet=static_cpe_ip)
+        if live_ip and not _valid_cpe_dhcp_ip(live_ip, static_cpe_ip, bts_ip):
+            live_ip = ""
         print_section("ARPBRIDGE_06 — CPE DHCP (CPE SSH only)")
         print_comparison_table(
             [
@@ -2248,18 +2262,6 @@ async def assert_arpbridge_06_dynamic_ip_allocation(
         cpe_ssh = None
 
     except Exception as exc:
-        # region agent log
-        _debug_log(
-            "arp_bridge_table_flows.py:assert_arpbridge_06",
-            "try block exception",
-            {
-                "exc_type": type(exc).__name__,
-                "exc": str(exc)[:160],
-                "cpe_ssh_alive": await _ssh_session_alive(cpe_ssh),
-            },
-            hypothesis_id="H2",
-        )
-        # endregion
         check.is_true(False, f"ARPBRIDGE_06: {exc}")
 
     finally:
@@ -2325,7 +2327,6 @@ async def assert_arpbridge_06_dynamic_ip_allocation(
         except Exception as exc:
             _log(f"ARPBRIDGE_06: cleanup error ({type(exc).__name__}: {exc})")
 
-
 async def _read_lan_proto_via_remote_exec(root_ssh, cpe_ip: str) -> str:
     """Best-effort CPE proto read via remote_exec (no BTS LAN changes)."""
     idx = await _resolve_cpe_remote_exec_index(root_ssh, cpe_ip)
@@ -2335,7 +2336,6 @@ async def _read_lan_proto_via_remote_exec(root_ssh, cpe_ip: str) -> str:
         await _ssh(root_ssh, _remote_exec_bts_command(idx, "uci get network.lan.proto"))
     )
     return ssh_scalar(raw).lower()
-
 
 async def _send_gratuitous_arp(ssh, ip: str, *, iface: str = "br-lan") -> tuple[bool, str]:
     """Send unsolicited/gratuitous ARP for *ip* on *iface* (arping -U)."""
@@ -2355,7 +2355,6 @@ async def _send_gratuitous_arp(ssh, ip: str, *, iface: str = "br-lan") -> tuple[
         if "arping" in lower and "error" not in lower:
             return True, last_raw
     return False, last_raw
-
 
 async def _assert_arpbridge_07_on_device(
     observer_ssh,
@@ -2446,7 +2445,6 @@ async def _assert_arpbridge_07_on_device(
     check.is_true(single_row, f"ARPBRIDGE_07 [{device_label}]: multiple ARP rows: {rows_for_ip}")
     return garp_ok and mac_ok and single_row
 
-
 async def assert_arpbridge_07_gratuitous_arp_handling(
     root_ssh,
     cpe_ips: list[str],
@@ -2460,6 +2458,7 @@ async def assert_arpbridge_07_gratuitous_arp_handling(
     check.is_true(creds, "ARPBRIDGE_07: device credentials required")
     cpe_ip = _require_ipv4(cpe_ips[0], case_id="ARPBRIDGE_07", role="CPE")
     bts_ip = _require_ipv4(bsu_ip or "", case_id="ARPBRIDGE_07", role="BTS")
+    await _ensure_bts_ssh_session(root_ssh, bts_ip, creds)
 
     cpe_ssh = None
     try:
@@ -2493,7 +2492,6 @@ async def assert_arpbridge_07_gratuitous_arp_handling(
         if cpe_ssh is not None:
             await _close_ssh_session(cpe_ssh)
 
-
 def _parse_brctl_show_members(raw: str, bridge: str = "br-lan") -> list[str]:
     """Interface names enslaved to *bridge* from ``brctl show`` output."""
     members: list[str] = []
@@ -2519,31 +2517,23 @@ def _parse_brctl_show_members(raw: str, bridge: str = "br-lan") -> list[str]:
                 members.append(text)
     return members
 
-
 async def _read_bridge_member_ifaces(ssh, bridge: str = "br-lan") -> list[str]:
     """List ports in *bridge* via sysfs, merged with ``brctl show`` when sysfs is incomplete."""
-    sysfs_raw = clean_ssh_output(await _ssh(ssh, f"ls /sys/class/net/{bridge}/brif/ 2>/dev/null"))
-    sysfs_members = [p for p in sysfs_raw.split() if p and not p.startswith("ls:")]
-    show_raw = await _ssh(ssh, f"brctl show {bridge} 2>/dev/null")
+    # Keep every line. clean_ssh_output keeps only the last token, so `ls` of
+    # ath1/ath2/eth0/eth1 was reported as eth1 on a non-tty session.
+    sysfs_resp = await ssh.send_command(f"ls /sys/class/net/{bridge}/brif/ 2>/dev/null")
+    sysfs_raw = str(getattr(sysfs_resp, "result", "") or "")
+    sysfs_members = [
+        p for p in sysfs_raw.split() if p and not p.startswith("ls:") and _is_bridge_member_iface(p)
+    ]
+    show_resp = await ssh.send_command(f"brctl show {bridge} 2>/dev/null")
+    show_raw = str(getattr(show_resp, "result", "") or "")
     brctl_members = _parse_brctl_show_members(show_raw, bridge)
     merged: list[str] = []
     for name in sysfs_members + brctl_members:
         if _is_bridge_member_iface(name) and name not in merged:
             merged.append(name)
-    # region agent log
-    _debug_log(
-        "arp_bridge_table_flows.py:_read_bridge_member_ifaces",
-        "bridge member sources",
-        {
-            "sysfs": sysfs_members,
-            "brctl": brctl_members,
-            "merged": merged,
-        },
-        hypothesis_id="H-B",
-    )
-    # endregion
     return merged
-
 
 async def _assert_arpbridge_08_on_device(root_ssh, _peer_ip: str, *, device_label: str) -> bool:
     """
@@ -2571,19 +2561,6 @@ async def _assert_arpbridge_08_on_device(root_ssh, _peer_ip: str, *, device_labe
         )
     else:
         member_ok = len(members) >= 2 and bool(eth_members)
-    # region agent log
-    _debug_log(
-        "arp_bridge_table_flows.py:_assert_arpbridge_08_on_device",
-        "member_ok decision",
-        {
-            "device_label": device_label,
-            "members": members,
-            "local_ports": len(local_ports),
-            "member_ok": member_ok,
-        },
-        hypothesis_id="H-C",
-    )
-    # endregion
 
     print_section(f"ARPBRIDGE_08 [{device_label}] — Bridge interface (br-lan)")
     print_comparison_table(
@@ -2627,7 +2604,6 @@ async def _assert_arpbridge_08_on_device(root_ssh, _peer_ip: str, *, device_labe
     check.is_true(table_ok, f"ARPBRIDGE_08 [{device_label}]: bridge table empty")
     return bridge_up and member_ok and "eth0" in members and table_ok
 
-
 async def assert_arpbridge_08_bridge_interface(
     root_ssh,
     cpe_ips: list[str],
@@ -2646,7 +2622,6 @@ async def assert_arpbridge_08_bridge_interface(
         on_device=_assert_arpbridge_08_on_device,
     )
 
-
 async def _bridge_port_stat(ssh, bridge: str, port: str, counter: str) -> int:
     """Read per-port bridge member statistic (rx_packets, tx_packets, …)."""
     raw = ssh_scalar(
@@ -2660,13 +2635,11 @@ async def _bridge_port_stat(ssh, bridge: str, port: str, counter: str) -> int:
     except ValueError:
         return 0
 
-
 async def _ping_bind_iface(ssh, peer_ip: str, iface: str, *, count: int = 4) -> tuple[bool, str]:
     """Ping *peer_ip* bound to *iface*; use raw output so multi-line ping is parsed."""
     resp = await ssh.send_command(f"ping -c {count} -W 5 -I {iface} {peer_ip} 2>&1")
     raw = str(resp.result or "")
     return _ping_success(raw), raw
-
 
 async def _assert_arpbridge_09_on_device(root_ssh, peer_ip: str, *, device_label: str) -> bool:
     """
@@ -2712,21 +2685,6 @@ async def _assert_arpbridge_09_on_device(root_ssh, peer_ip: str, *, device_label
         link_mac = peer_mac or link_mac
     path_ok = ping_ok or rf_ok
     counter_ok = tx_delta > 0 or path_ok
-    # region agent log
-    _debug_log(
-        "arp_bridge_table_flows.py:_assert_arpbridge_09_on_device",
-        "bridge traffic decision",
-        {
-            "device_label": device_label,
-            "members": members,
-            "local_ports": len(local_ports),
-            "member_ok": member_ok,
-            "ping_ok": ping_ok,
-            "rf_ok": rf_ok,
-        },
-        hypothesis_id="H-C",
-    )
-    # endregion
 
     neigh_dev = await _neigh_dev_for_peer(root_ssh, peer_ip) if path_ok else ""
     neigh_ok = not neigh_dev or neigh_dev == bridge or neigh_dev.startswith("br-")
@@ -2773,7 +2731,6 @@ async def _assert_arpbridge_09_on_device(root_ssh, peer_ip: str, *, device_label
         _log(f"ARPBRIDGE_09 [{device_label}]: ping failed; verified RF bridge path ({link_mac})")
     return member_ok and path_ok and counter_ok
 
-
 async def assert_arpbridge_09_bridge_traffic(
     root_ssh,
     cpe_ips: list[str],
@@ -2792,11 +2749,9 @@ async def assert_arpbridge_09_bridge_traffic(
         on_device=_assert_arpbridge_09_on_device,
     )
 
-
 async def _read_brctl_showmacs_rows(ssh) -> list[dict[str, str]]:
     resp = await ssh.send_command(RootCommands.GET_BRCTL_SHOWMACS)
     return _parse_brctl_showmacs(str(resp.result or ""))
-
 
 def _peer_fdb_rows(rows: list[dict[str, str]], peer_mac: str) -> list[dict[str, str]]:
     if not peer_mac:
@@ -2807,7 +2762,6 @@ def _peer_fdb_rows(rows: list[dict[str, str]], peer_mac: str) -> list[dict[str, 
         if r.get("local") == "no"
         and (_mac_match(r.get("mac", ""), peer_mac) or _mac_related(r.get("mac", ""), peer_mac))
     ]
-
 
 async def _flush_peer_bridge_fdb(
     ssh,
@@ -2828,7 +2782,6 @@ async def _flush_peer_bridge_fdb(
             deleted += 1
     return deleted
 
-
 async def _wait_peer_fdb_learned(
     ssh,
     peer_mac: str,
@@ -2843,7 +2796,6 @@ async def _wait_peer_fdb_learned(
             return rows
         await asyncio.sleep(0.5)
     return []
-
 
 async def _assert_arpbridge_10_on_device(root_ssh, peer_ip: str, *, device_label: str) -> bool:
     """
@@ -2944,7 +2896,6 @@ async def _assert_arpbridge_10_on_device(root_ssh, peer_ip: str, *, device_label
         _log(f"ARPBRIDGE_10 [{device_label}]: ping failed; FDB re-learn confirms MAC learning")
     return bool(peer_mac) and learned_ok and port_ok
 
-
 async def assert_arpbridge_10_mac_learning(
     root_ssh,
     cpe_ips: list[str],
@@ -2963,7 +2914,6 @@ async def assert_arpbridge_10_mac_learning(
         on_device=_assert_arpbridge_10_on_device,
     )
 
-
 def _remote_mac_port_map(rows: list[dict[str, str]]) -> dict[str, set[str]]:
     """Remote (non-local) MAC → set of bridge ports from showmacs rows."""
     mapping: dict[str, set[str]] = {}
@@ -2975,7 +2925,6 @@ def _remote_mac_port_map(rows: list[dict[str, str]]) -> dict[str, set[str]]:
             continue
         mapping.setdefault(mac, set()).add(row.get("interface", ""))
     return mapping
-
 
 async def _assert_arpbridge_11_on_device(root_ssh, peer_ip: str, *, device_label: str) -> bool:
     """ARPBRIDGE_11: known peer MAC learned on exactly one bridge port (no flooding)."""
@@ -3037,7 +2986,6 @@ async def _assert_arpbridge_11_on_device(root_ssh, peer_ip: str, *, device_label
         _log(f"ARPBRIDGE_11 [{device_label}]: ping failed; verified FDB single-port from RF path")
     return single_port and no_flood and bool(peer_mac)
 
-
 async def assert_arpbridge_11_correct_port_forwarding(
     root_ssh,
     cpe_ips: list[str],
@@ -3070,14 +3018,12 @@ async def assert_arpbridge_11_correct_port_forwarding(
         guard_bts_ip=True,
     )
 
-
 def _peer_fdb_ports(rows: list[dict[str, str]], peer_mac: str) -> set[str]:
     return {
         r.get("interface", "")
         for r in _peer_fdb_rows(rows, peer_mac)
         if r.get("interface")
     }
-
 
 def _alt_ping_ifaces_for_port(before_port: str, members: list[str]) -> list[str]:
     """Sysfs ifaces to try after FDB flush — prefer the leg opposite the baseline GUI port."""
@@ -3096,7 +3042,6 @@ def _alt_ping_ifaces_for_port(before_port: str, members: list[str]) -> list[str]
             seen.append(iface)
     return seen
 
-
 async def _relearn_peer_fdb_via_ifaces(
     ssh,
     peer_ip: str,
@@ -3112,7 +3057,6 @@ async def _relearn_peer_fdb_via_ifaces(
             bind_used = iface
             return learned, bind_used
     return [], bind_used
-
 
 async def _assert_arpbridge_12_on_device(root_ssh, peer_ip: str, *, device_label: str) -> bool:
     """
@@ -3244,7 +3188,6 @@ async def _assert_arpbridge_12_on_device(root_ssh, peer_ip: str, *, device_label
         )
     return bool(peer_mac) and updated_ok and single_port
 
-
 async def assert_arpbridge_12_bridge_table_entry_update(
     root_ssh,
     cpe_ips: list[str],
@@ -3271,7 +3214,6 @@ async def assert_arpbridge_12_bridge_table_entry_update(
         guard_bts_ip=True,
     )
 
-
 async def assert_arpbridge_13_refresh_clear(
     gui_page,
     root_ssh,
@@ -3288,6 +3230,9 @@ async def assert_arpbridge_13_refresh_clear(
     from utils.learn_table_flows import assert_gui_108_arp_refresh_clear
 
     check.is_true(cpe_ips, "ARPBRIDGE_13: --remote-ip required")
+    creds = device_creds or {}
+    if creds and bsu_ip:
+        await _ensure_bts_ssh_session(root_ssh, normalize_ip(bsu_ip), creds)
     _log("ARPBRIDGE_13: Validate ARP Refresh and Clear (GUI, arptest case 13)")
     await assert_gui_108_arp_refresh_clear(
         gui_page,
@@ -3297,7 +3242,6 @@ async def assert_arpbridge_13_refresh_clear(
         device_creds=device_creds,
         case_label="ARPBRIDGE_13",
     )
-
 
 async def _read_bridge_ageing_seconds(ssh, bridge: str = "br-lan") -> int:
     """Bridge FDB ageing timeout in seconds (sysfs centiseconds, else 300s default)."""
@@ -3312,7 +3256,6 @@ async def _read_bridge_ageing_seconds(ssh, bridge: str = "br-lan") -> int:
         pass
     return 300
 
-
 async def _set_bridge_ageing_seconds(ssh, bridge: str, seconds: int) -> int:
     """Set bridge ageing time; returns observed timeout in seconds."""
     seconds = max(1, int(seconds))
@@ -3324,14 +3267,12 @@ async def _set_bridge_ageing_seconds(ssh, bridge: str, seconds: int) -> int:
     )
     return await _read_bridge_ageing_seconds(ssh, bridge)
 
-
 def _fdb_has_exact_mac(rows: list[dict[str, str]], mac: str) -> bool:
     want = _norm_mac(mac)
     return any(
         r.get("local") == "no" and _mac_match(_norm_mac(r.get("mac", "")), want)
         for r in rows
     )
-
 
 def _pick_aging_monitor_mac(
     rows: list[dict[str, str]],
@@ -3372,7 +3313,6 @@ def _pick_aging_monitor_mac(
             return mac
     return pool[0][1]
 
-
 def _aging_timer_advanced(samples: list[float], *, min_delta: float = 0.05) -> bool:
     """True when showmacs age increases across idle samples (RF entries tick slowly)."""
     if len(samples) < 2:
@@ -3382,7 +3322,6 @@ def _aging_timer_advanced(samples: list[float], *, min_delta: float = 0.05) -> b
         return True
     return samples[-1] > samples[0] + (min_delta / 2)
 
-
 async def _showmacs_age_for_mac(ssh, mac: str) -> float | None:
     for row in await _read_brctl_showmacs_rows(ssh):
         if _mac_match(_norm_mac(row.get("mac", "")), mac):
@@ -3391,7 +3330,6 @@ async def _showmacs_age_for_mac(ssh, mac: str) -> float | None:
             except ValueError:
                 return None
     return None
-
 
 async def _wait_fdb_mac_removed(
     ssh,
@@ -3411,7 +3349,6 @@ async def _wait_fdb_mac_removed(
         last_age = str(age) if age is not None else "n/a"
         await asyncio.sleep(2.0)
     return False, last_age
-
 
 async def _assert_arpbridge_14_on_device(root_ssh, peer_ip: str, *, device_label: str) -> bool:
     """
@@ -3548,7 +3485,6 @@ async def _assert_arpbridge_14_on_device(root_ssh, peer_ip: str, *, device_label
         f"(start={start_age}, end={end_age}, last={last_age})",
     )
     return bool(test_mac) and aging_ok
-
 
 async def assert_arpbridge_14_bridge_table_aging(
     root_ssh,

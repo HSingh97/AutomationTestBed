@@ -26,29 +26,7 @@ from utils.cpe_api_24_flows import (
 from utils.cpe_api_24_config import resolve_invalid_fw_file_path
 from utils.cpe_api_24_lab import fetch_bts_credentials_for_api, is_bts_link_broken
 
-
-def _debug_log(*, run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    import json
-    import time
-
-    payload = {
-        "sessionId": "a5d6ea",
-        "runId": run_id,
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    with open(
-        "/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-a5d6ea.log",
-        "a",
-        encoding="utf-8",
-    ) as fh:
-        fh.write(json.dumps(payload, separators=(",", ":")) + "\n")
-
 pytestmark = [pytest.mark.sanity, pytest.mark.CPE_API_24]
-
 
 @pytest.mark.order(1)
 @pytest.mark.asyncio(scope="session")
@@ -76,28 +54,14 @@ async def test_api_01_btsconnect_success(
         password=device_creds["pass"],
         radio_idx=1,
     )
-    # #region agent log
-    _debug_log(
-        run_id="run4",
-        hypothesis_id="H9",
-        location="tests/API/test_API.py:test_api_01_btsconnect_success",
-        message="pre-api01 BTS creds compare",
-        data={
-            "config_ssid": cpe_api_24_config.bts_ssid,
-            "live_ssid": live.ssid,
-            "config_pw_len": len(cpe_api_24_config.bts_password or ""),
-            "live_pw_len": len(live.password or ""),
-            "config_pw_sha8": hashlib.sha256((cpe_api_24_config.bts_password or "").encode()).hexdigest()[:8],
-            "live_pw_sha8": hashlib.sha256((live.password or "").encode()).hexdigest()[:8],
-        },
-    )
-    # #endregion
     await assert_api_01_btsconnect_success(
         cpe_api_24_client,
         ssid=cpe_api_24_config.bts_ssid,
         password=cpe_api_24_config.bts_password,
+        bts_host=bsu_ip,
+        bts_username=device_creds["user"],
+        bts_password=device_creds["pass"],
     )
-
 
 @pytest.mark.order(2)
 @pytest.mark.asyncio(scope="session")
@@ -122,7 +86,6 @@ async def test_api_02_btsconnect_authentication_fail(
             "treating case as PASS because API returned authentication_fail."
         )
 
-
 @pytest.mark.order(3)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.API_03
@@ -130,7 +93,6 @@ async def test_api_02_btsconnect_authentication_fail(
 async def test_api_03_btsconnect_ssid_not_found(cpe_api_24_client, cpe_api_24_config):
     """API_03 — invalid BTS SSID must return HTTP 404, reason=ssid_not_found (401 is FAIL)."""
     await assert_api_03_btsconnect_ssid_not_found(cpe_api_24_client, cpe_api_24_config)
-
 
 @pytest.mark.order(4)
 @pytest.mark.asyncio(scope="session")
@@ -151,14 +113,12 @@ async def test_api_04_alignment_info_stream_1s(
     )
     await assert_api_04_alignment_info_stream_1s(cpe_api_24_client)
 
-
 @pytest.mark.order(5)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.API_05
 @pytest.mark.CPE_API_24
 async def test_api_05_alignment_info_stream_5s(cpe_api_24_client):
     await assert_api_05_alignment_info_stream_5s(cpe_api_24_client)
-
 
 @pytest.mark.order(6)
 @pytest.mark.asyncio(scope="session")
@@ -167,7 +127,6 @@ async def test_api_05_alignment_info_stream_5s(cpe_api_24_client):
 async def test_api_06_alignment_data(cpe_api_24_client):
     await assert_api_06_alignment_data(cpe_api_24_client)
 
-
 @pytest.mark.order(7)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.API_07
@@ -175,14 +134,12 @@ async def test_api_06_alignment_data(cpe_api_24_client):
 async def test_api_07_sw_version(cpe_api_24_client):
     await assert_api_07_sw_version(cpe_api_24_client)
 
-
 @pytest.mark.order(8)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.API_08
 @pytest.mark.CPE_API_24
 async def test_api_08_sw_version_missing_file_returns_503(cpe_api_24_client):
     await assert_api_08_sw_version_unavailable_when_file_removed(cpe_api_24_client)
-
 
 @pytest.mark.order(9)
 @pytest.mark.asyncio(scope="session")
@@ -192,11 +149,10 @@ async def test_api_09_upload_sw(cpe_api_24_client, cpe_api_24_config):
     if not cpe_api_24_config.fw_file_path:
         pytest.fail(
             "API_09 requires firmware file on CLI, e.g.\n"
-            "  --cpe-24-fw-file=Senao-UBR650-xxx-0.0.0.703-apps.tgz\n"
+            "  --cpe-24-fw-file=Senao-UBR650-xxx-0.0.0.801-apps.tgz\n"
             "  (file is read from /tftpboot on the test PC unless you pass a full path)"
         )
     await assert_api_09_upload_sw(cpe_api_24_client, cpe_api_24_config.fw_file_path)
-
 
 @pytest.mark.order(10)
 @pytest.mark.asyncio(scope="session")
@@ -204,7 +160,6 @@ async def test_api_09_upload_sw(cpe_api_24_client, cpe_api_24_config):
 @pytest.mark.CPE_API_24
 async def test_api_10_upload_sw_status(cpe_api_24_client):
     await assert_api_10_upload_sw_status(cpe_api_24_client)
-
 
 @pytest.mark.order(11)
 @pytest.mark.asyncio(scope="session")
@@ -218,7 +173,6 @@ async def test_api_11_upgrade_sw_preserve_config(cpe_api_24_client, bsu_ip, devi
         bts_password=device_creds["pass"],
     )
 
-
 @pytest.mark.order(12)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.API_12
@@ -228,7 +182,7 @@ async def test_api_12_upgrade_sw_no_preserve_config(
 ):
     if not cpe_api_24_config.fw_file_path:
         pytest.fail(
-            "API_12 requires --cpe-24-fw-file=Senao-UBR650-xxx-0.0.0.703-apps.tgz"
+            "API_12 requires --cpe-24-fw-file=Senao-UBR650-xxx-0.0.0.801-apps.tgz"
         )
     await assert_api_12_upgrade_sw_no_preserve_config(
         cpe_api_24_client,
@@ -239,7 +193,6 @@ async def test_api_12_upgrade_sw_no_preserve_config(
         bts_password=device_creds["pass"],
     )
 
-
 @pytest.mark.order(13)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.API_13
@@ -249,7 +202,7 @@ async def test_api_13_upgrade_sw_status_in_progress(
 ):
     if not cpe_api_24_config.fw_file_path:
         pytest.fail(
-            "API_13 requires --cpe-24-fw-file=Senao-UBR650-xxx-0.0.0.703-apps.tgz"
+            "API_13 requires --cpe-24-fw-file=Senao-UBR650-xxx-0.0.0.801-apps.tgz"
         )
     await assert_api_13_upgrade_sw_status_in_progress(
         cpe_api_24_client,
@@ -258,7 +211,6 @@ async def test_api_13_upgrade_sw_status_in_progress(
         bts_username=device_creds["user"],
         bts_password=device_creds["pass"],
     )
-
 
 @pytest.mark.order(14)
 @pytest.mark.asyncio(scope="session")
@@ -277,7 +229,6 @@ async def test_api_14_upgrade_sw_status_success(
         bts_username=device_creds["user"],
         bts_password=device_creds["pass"],
     )
-
 
 @pytest.mark.order(15)
 @pytest.mark.asyncio(scope="session")
@@ -298,7 +249,6 @@ async def test_api_15_upgrade_sw_status_invalid_fw(
         bts_password=device_creds["pass"],
     )
 
-
 @pytest.mark.order(16)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.API_16
@@ -318,7 +268,6 @@ async def test_api_16_link_throughput_test(
     )
     await assert_api_16_link_throughput_test(cpe_api_24_client)
 
-
 @pytest.mark.order(17)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.API_17
@@ -332,7 +281,6 @@ async def test_api_17_link_throughput_test_no_bts_server(
         bts_username=device_creds["user"],
         bts_password=device_creds["pass"],
     )
-
 
 @pytest.mark.order(18)
 @pytest.mark.asyncio(scope="session")
@@ -352,6 +300,4 @@ async def test_api_18_link_throughput_test_in_progress(
         bts_password=device_creds["pass"],
     )
     await assert_api_18_link_throughput_test_in_progress(cpe_api_24_client)
-
-
 

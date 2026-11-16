@@ -92,17 +92,22 @@ def build_bts_qinq_commands(profile_tb: dict[str, Any]) -> list[str]:
     return cmds + extra
 
 
-def build_bts_transparent_mgmt_commands(profile_tb: dict[str, Any]) -> list[str]:
+def build_bts_transparent_mgmt_commands(
+    profile_tb: dict[str, Any], *, mgmt_vlan_id: int | None = None,
+) -> list[str]:
     """BTS: transparent mode + mgmt VLAN only (single mgmt tag)."""
     keys = _iface_keys(profile_tb, "bts")
     mgmt = _mgmt(profile_tb)
-    mgmt_val = int(mgmt.get("uci_value", _qinq(profile_tb).get("cvlan", 101)))
+    mgmt_val = int(
+        mgmt_vlan_id if mgmt_vlan_id is not None
+        else mgmt.get("uci_value", _qinq(profile_tb).get("cvlan", 101))
+    )
     mode_val = resolve_vlan_mode_uci(
         _vlan_uci(profile_tb).get("bts", {}).get("mode_value", "0"),
         default="0",
     )
     if mode_val != "0":
-        # This helper is transparent-only; ignore profile leftovers like qinq=3.
+        # Transparent-only; ignore profile leftovers like qinq=3.
         mode_val = "0"
     cmds = [
         build_uci_set(keys["mode"], mode_val),
@@ -160,11 +165,16 @@ def build_cpe_untagged_commands(profile_tb: dict[str, Any]) -> list[str]:
     return cmds + extra
 
 
-def build_cpe_mgmtvlan_only_commands(profile_tb: dict[str, Any]) -> list[str]:
+def build_cpe_mgmtvlan_only_commands(
+    profile_tb: dict[str, Any], *, mgmt_vlan_id: int | None = None,
+) -> list[str]:
     """CPE factory / quick-start: transparent + mgmt VLAN ID only (no double-tag)."""
     keys = _iface_keys(profile_tb, "cpe")
     mgmt = _mgmt(profile_tb)
-    mgmt_val = int(mgmt.get("uci_value", _qinq(profile_tb).get("cvlan", 101)))
+    mgmt_val = int(
+        mgmt_vlan_id if mgmt_vlan_id is not None
+        else mgmt.get("uci_value", _qinq(profile_tb).get("cvlan", 101))
+    )
     return [
         build_uci_set(keys["mode"], "0"),
         build_uci_delete(keys["svlan"]),

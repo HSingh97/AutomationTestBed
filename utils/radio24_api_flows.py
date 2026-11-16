@@ -386,10 +386,17 @@ async def assert_radio_24_46_api_after_reboot(
     bts_host: str | None = None,
     bts_username: str = "root",
     bts_password: str = "",
+    profile_bundle=None,
 ) -> None:
     """2.4G_RADIO_46 — reboot CPE; backend SSH verify; GET sw-version; wait BTS link."""
     case_id = "2_4G_RADIO_46"
     print_section(f"{case_id} — API after CPE reboot")
+    if profile_bundle is not None:
+        from utils.radio24_lab_net import ensure_radio24_lab_ipv6_routes
+
+        await asyncio.to_thread(ensure_radio24_lab_ipv6_routes, profile_bundle)
+    # Prefer Ethernet IPv6 for the reboot command when mgmt Wi‑Fi is not joined.
+    await client.ensure_ssh_path_before_reboot()
     elapsed = await client.reboot_and_wait_for_backend(
         max_wait_s=RADIO24_API_REBOOT_WAIT_S,
         label=case_id,
@@ -471,6 +478,10 @@ async def assert_radio_24_49_api_response_time(client: CpeApi24Client) -> None:
         },
     )
 
+    # Prior reboot cases often leave Wi‑Fi down — join CPE mgmt before SSH/API.
+    from utils.cpe_mgmt_wifi import ensure_pc_mgmt_api_ready
+
+    await ensure_pc_mgmt_api_ready(client.config, label=case_id)
     backend_ver = await client._read_sw_version_via_ssh()
     print_comparison_table(
         [
@@ -605,6 +616,9 @@ async def assert_radio_24_50_api_logging(client: CpeApi24Client) -> None:
         },
     )
 
+    from utils.cpe_mgmt_wifi import ensure_pc_mgmt_api_ready
+
+    await ensure_pc_mgmt_api_ready(client.config, label=case_id)
     log_before = await _fetch_cpe_log_tail(client, lines=200)
     get_resp = await client.get(SW_VERSION_PATH, read_timeout_s=20.0)
     get_body = _body(get_resp)

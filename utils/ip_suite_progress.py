@@ -126,10 +126,24 @@ class IpSuiteProgress:
         print(flush=True)
 
 
+# Functional / ARP-Bridge / Sanity cases exercise BTS↔CPE even when the pytest
+# node is not parametrized per device.
+_BOTH_DEVICE_CASES = frozenset({f"FT_{idx:02d}" for idx in range(1, 29)})
+_ARPBRIDGE_CASE_RE = re.compile(r"^ARPBRIDGE_\d+$", re.I)
+_SANITY_CASE_RE = re.compile(r"^SANITY_\d+$", re.I)
+_SPECT_CASE_RE = re.compile(r"SPECT_ANALYZER_\d+", re.I)
+
+
 def _parse_nodeid(nodeid: str) -> tuple[str, str, str]:
     base = nodeid.split("::")[-1]
+    spect_m = _SPECT_CASE_RE.search(base)
     case_m = _CASE_ID_RE.search(base)
-    case_id = case_m.group(1).upper() if case_m else base.removeprefix("test_")[:24]
+    if spect_m:
+        case_id = spect_m.group(0).upper()
+    elif case_m:
+        case_id = case_m.group(1).upper()
+    else:
+        case_id = base.removeprefix("test_")[:24]
     target_m = _TARGET_RE.search(base)
     target = (target_m.group(1) if target_m else "bts").lower()
     if "extended" in base and "[" in nodeid:
@@ -137,8 +151,26 @@ def _parse_nodeid(nodeid: str) -> tuple[str, str, str]:
         parts = param.split("-", 1)
         if len(parts) == 2:
             case_id, target = parts[0].upper(), parts[1].lower()
+    if not target_m and _is_dual_device_nodeid(nodeid, case_id):
+        target = "bts & cpe"
     label = f"{case_id}-{target.upper()}"
     return case_id, target, label
+
+
+def _is_dual_device_nodeid(nodeid: str, case_id: str) -> bool:
+    """Tests that always exercise BTS and CPE (single pytest node, both devices)."""
+    path = nodeid.lower().replace("\\", "/")
+    if "/tests/sanity/" in path:
+        return True
+    if case_id in _BOTH_DEVICE_CASES:
+        return True
+    if _ARPBRIDGE_CASE_RE.match(case_id):
+        return True
+    if _SANITY_CASE_RE.match(case_id):
+        return True
+    if _SPECT_CASE_RE.search(case_id):
+        return True
+    return False
 
 
 def _format_duration(seconds: int) -> str:

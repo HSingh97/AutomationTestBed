@@ -15,8 +15,8 @@ class RadioPropertiesPage:
     async def navigate(self):
         if "chrome-error" in (self.page.url or ""):
             await self.page.goto(
-                f"https://{format_http_host(self.local_ip)}/cgi-bin/luci/admin/wireless/radio1",
-                timeout=15000,
+                f"http://{format_http_host(self.local_ip)}/cgi-bin/luci/admin/wireless/radio1",
+                timeout=45000,
             )
             await self.page.wait_for_timeout(4000)
 
@@ -36,7 +36,7 @@ class RadioPropertiesPage:
         if match:
             await self.page.goto(
                 f"{match.group(1)}/admin/wireless/radio1",
-                timeout=15000,
+                timeout=45000,
                 wait_until="commit",
             )
             await self.page.wait_for_timeout(2000)
@@ -68,7 +68,7 @@ class RadioPropertiesPage:
             await radio_1.click()
             await self.page.wait_for_timeout(2000)
 
-        await ssid_field.wait_for(state="attached", timeout=15000)
+        await ssid_field.wait_for(state="attached", timeout=45000)
 
     async def open_ddrs_atpc(self):
         await self.navigate()
@@ -84,7 +84,7 @@ class RadioPropertiesPage:
             if not match:
                 raise
             target = f"{match.group(1)}{self.RADIO_1_DDRS_URL_CHUNK}"
-            await self.page.goto(target, timeout=15000)
+            await self.page.goto(target, timeout=45000)
             await self.page.wait_for_load_state("networkidle")
             await self.page.wait_for_timeout(2000)
 

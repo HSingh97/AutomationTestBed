@@ -32,6 +32,7 @@ class PcWifiJoinResult:
     interface: str | None
     ssid: str | None
     method: str  # manual | nmcli
+    mgmt_password: str | None = None
 
 
 def resolve_cpe_mgmt_wifi_credentials(config: CpeApi24Config) -> CpeMgmtWifiCredentials:
@@ -886,23 +887,58 @@ async def ensure_pc_on_cpe_mgmt_wifi(
             f"[Step 1] nmcli join CPE hidden SSID '{creds.ssid}' "
             f"(Wi‑Fi NIC: {iface_hint or 'auto-detect'})..."
         )
-        used_iface = await connect_pc_to_cpe_hidden_wifi(
-            iface_hint or "",
-            creds,
-            connection_name=config.wifi_connection_name,
-            settle_s=config.wifi_settle_s,
-            bts_ssid=(config.bts_ssid or "").strip() or None,
-            config=config,
-            bts_host=bts_host,
-            bts_username=bts_username,
-            bts_password=bts_password,
-        )
+        try:
+            used_iface = await connect_pc_to_cpe_hidden_wifi(
+                iface_hint or "",
+                creds,
+                connection_name=config.wifi_connection_name,
+                settle_s=config.wifi_settle_s,
+                bts_ssid=(config.bts_ssid or "").strip() or None,
+                config=config,
+                bts_host=bts_host,
+                bts_username=bts_username,
+                bts_password=bts_password,
+            )
+        except RuntimeError as exc:
+            if not (bts_host and bts_password):
+                raise
+            print(
+                f"    -> Profile mgmt SSID {creds.ssid!r} join failed; "
+                f"fetching live CPE mgmt AP from BTS ({exc})..."
+            )
+            from utils.cpe_api_24_lab import fetch_cpe_mgmt_ap_credentials
+
+            fetch_kwargs = _mgmt_fetch_kwargs(
+                config,
+                bts_host=bts_host,
+                bts_username=bts_username,
+                bts_password=bts_password,
+            )
+            fetch_kwargs["known_mgmt_ssid"] = None
+            fresh = await fetch_cpe_mgmt_ap_credentials(**fetch_kwargs)
+            creds = CpeMgmtWifiCredentials(
+                ssid=fresh.ssid,
+                password=fresh.password,
+                hidden=fresh.hidden,
+            )
+            used_iface = await connect_pc_to_cpe_hidden_wifi(
+                iface_hint or "",
+                creds,
+                connection_name=fresh.ssid,
+                settle_s=config.wifi_settle_s,
+                bts_ssid=(config.bts_ssid or "").strip() or None,
+                config=config,
+                bts_host=bts_host,
+                bts_username=bts_username,
+                bts_password=bts_password,
+            )
         print(f"[Step 1] Ready on {used_iface} — API tests use {config.base_url}\n")
         return PcWifiJoinResult(
             connected=True,
             interface=used_iface,
             ssid=creds.ssid,
             method="nmcli",
+            mgmt_password=creds.password,
         )
 
     if bts_host and bts_password:
@@ -950,6 +986,7 @@ async def ensure_pc_on_cpe_mgmt_wifi(
             interface=used_iface,
             ssid=creds.ssid,
             method="nmcli",
+            mgmt_password=creds.password,
         )
 
     return await verify_manual_cpe_mgmt_wifi(config)

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Senao PTP Stability Report — 12 Hour</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    :root {
+      --bg: #eef2f7; --card: #ffffff; --text: #334155; --title: #0f172a;
+      --border: #cbd5e1; --head: #1e3a8a; --muted: #64748b;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px 12px 40px; font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); }
+    .wrap { max-width: 1100px; margin: 0 auto; }
+    .hero {
+      background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #2563eb 100%);
+      color: #fff; border-radius: 14px; padding: 22px 26px; margin-bottom: 18px;
+      display: flex; justify-content: space-between; align-items: center; gap: 20px;
+    }
+    .hero h1 { margin: 0 0 8px; font-size: 24px; }
+    .hero p { margin: 0; font-size: 14px; opacity: 0.92; }
+    .hero-logo { background: #fff; border-radius: 10px; padding: 10px 14px; flex: 0 0 auto; }
+    .hero-logo img { display: block; height: 42px; }
+    .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 14px 16px; border-bottom: 3px solid #1e3a8a;
+    }
+    .card h3 { margin: 0; font-size: 22px; color: var(--title); font-variant-numeric: tabular-nums; }
+    .card p { margin: 6px 0 0; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; font-weight: 700; color: var(--muted); }
+    .card.accent { border-bottom-color: #2563eb; }
+    .card.accent h3 { color: #1e3a8a; }
+    .panel {
+      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+      padding: 20px 22px; margin-bottom: 16px;
+    }
+    .panel h2 { margin: 0 0 14px; font-size: 17px; color: var(--title); }
+    table.setup { width: 100%; border-collapse: collapse; }
+    table.setup th, table.setup td { border-bottom: 1px solid #e2e8f0; padding: 10px 12px; text-align: left; font-size: 13px; }
+    table.setup th { width: 220px; color: var(--muted); font-size: 11px; text-transform: uppercase; font-weight: 700; }
+    table.sheet { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    table.sheet th, table.sheet td { border: 1px solid var(--border); padding: 10px 12px; text-align: center; font-size: 13px; }
+    table.sheet thead th { background: #eff6ff; color: var(--head); font-size: 12px; font-weight: 700; }
+    table.sheet tbody tr:nth-child(even) td { background: #f8fafc; }
+    table.sheet td.elapsed { text-align: left; font-weight: 600; color: var(--head); }
+    table.sheet td.total, table.sheet th.total { background: #eff6ff; font-weight: 700; color: var(--title); }
+    table.sheet tr.empty td { color: var(--muted); font-weight: 500; background: #fff; }
+    table.sheet tfoot td { background: #f8fafc; font-weight: 700; color: var(--title); }
+    table.sheet tfoot td.total { background: #dbeafe; }
+    .note { margin: 12px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+    @media (max-width: 800px) {
+      .cards { grid-template-columns: 1fr 1fr; }
+      .hero { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <div>
+      <h1>PTP Stability Report</h1>
+      <p>12-hour bidirectional throughput · 30-minute capture · 13 Oct 2026</p>
+    </div>
+    <div class="hero-logo"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4OC45NyA5Mi4zMiI+PGRlZnM+PHN0eWxlPi5jbHMtMXtmaWxsOiMwMDcxYmU7fS5jbHMtMSwuY2xzLTJ7ZmlsbC1ydWxlOmV2ZW5vZGQ7fS5jbHMtMntmaWxsOiNmYmM2NDk7c3Ryb2tlOiNmY2NmMDA7c3Ryb2tlLW1pdGVybGltaXQ6MjIuOTM7c3Ryb2tlLXdpZHRoOjAuMjJweDt9PC9zdHlsZT48L2RlZnM+PHRpdGxlPuizh+eUoiAxPC90aXRsZT48ZyBpZD0i5ZyW5bGkXzIiIGRhdGEtbmFtZT0i5ZyW5bGkIDIiPjxnIGlkPSLlnJblsaRfMS0yIiBkYXRhLW5hbWU9IuWcluWxpCAxIj48cGF0aCBjbGFzcz0iY2xzLTEiIGQ9Ik0xNi4wOSw1LjVhMTMuODksMTMuODksMCwwLDAtNC43My0xLjE1LDUuNTcsNS41NywwLDAsMSwxLDEuOGwzLjctLjY1Wk0yOS41MSwzLjg0QTE0LDE0LDAsMCwwLDIzLjcsMi4xOGExNC4zNSwxNC4zNSwwLDAsMSwxLjQyLDIuNDNsNC4zOS0uNzdabTguMzQtLjc3LDUuMzUtLjk0QTEzLjg0LDEzLjg0LDAsMCwwLDM2LDBhOSw5LDAsMCwxLDEuODEsMy4wN1ptLjM2LDZhMTcuOTIsMTcuOTIsMCwwLDAtMy42LTIuNzZMMjYuOCw3LjcxYTI0LjQsMjQuNCwwLDAsMSwxLDMuMjJMMzguMjEsOS4wOVptMTMtMS43MmMtMS40Ni0xLjg3LTMuNDQtMy41LTQuOTEtMy44TDM4LjYsNC45MkE0NS44Myw0NS44MywwLDAsMSw0MC4yMiw5LjNsMTEtMS45M1ptLTEuMDcsNjQuNUE2LjI3LDYuMjcsMCwwLDEsNDkuNSw3NGwtMS43MS0xLjY4LDIuMzMtLjQxWm0uNDctNC42MWE1LjYyLDUuNjIsMCwwLDAsMC0yLjEyTDQwLjksNjYuODUsNDMsNjguNTlsNy41NS0xLjMzWm0xMi4yOS0xLjZhMjIsMjIsMCwwLDAsMC0zLjI1bC0xMCwxLjc3LDMuMywyLjY3LDYuNzEtMS4xOVpNNjIuMjEsNjlsLTMuMTYuNTZjLjcuNzIsMS4yNSwxLjQ3LDIsMi4zNEE2LjEzLDYuMTMsMCwwLDAsNjIuMjEsNjlaTTc0LjcsNjYuMTJhNi4xNCw2LjE0LDAsMCwxLTEuNDYsMy43OWwtMi42Ni0zLjA2LDQuMTItLjczWm0uNTMtNi41OUw2NC42Nyw2MS4zOWwzLjgyLDQsNi40NC0xLjE0YTEzLjEsMTMuMSwwLDAsMCwuMy00LjcxWm0tMS41NS02LjM3YTI0Ljg1LDI0Ljg1LDAsMCwxLDEuMjEsNC40NWwtMTIuMiwyLjE1LS44MS0uNTctMTIuMiwyLjE2TDQ5LDYwLjc2LDM3LDYyLjg4bC0yLjEyLTEuNkw0Ny4xNyw1OS4xbC0uNjctLjU5LDEyLjItMi4xNS0uNjUtLjQ1LDE1LjYzLTIuNzVabS0yLjk0LTYuMjctMTcuMTQsMywuMjYuNjZMNDEuNTIsNTIuNzVsLjUzLjYxLTEyLjIsMi4xNWE5LjcyLDkuNzIsMCwwLDAsMS40NCwxLjczbDEyLjItMi4xNS41MS40NywxMS45My0yLjEuMzkuNjQsMTYuNTktMi45M2ExOCwxOCwwLDAsMC0yLjE3LTQuMjhabS0zLjIyLTYuMjJjLjgyLDEuNDEsMS42NiwzLDIuNDcsNC4zN0w0NS4zMSw0OS4zOWwtLjgtLjU2LTEwLjcsMS44OC0uOC0uNTZMMTkuNzEsNTIuNWE4LjEsOC4xLDAsMCwxLTIuMTItMS42MWwxMy44NC0yLjQ0LS45NC0uNTQsMTEuNTItMi0uNTMtLjYxLDI2LTQuNlptLTEtNy0yOC4xMSw1Yy4xLjU1LjI4LjguMzUsMS4yMWwtMTEuNTEsMiwuMjYuNjYtMTMsMi4zYzAsLjEzLDAsLjEzLjEuNTRzLjMxLjk0LjM4LDEuMzVsMTMtMi4zLjI2LjY3LDExLjUyLTIsLjIzLjUyLDI2LjYtNC42OWMtLjc1LTEuODUtMS00LjItLjA3LTUuMjJabS0xLTYuNi41NS0uMWMyLjA2LS4zNiw0Ljg2LDEuMTIsNi4wNywzLjE3bC4yMS4zOS0zNCw2LDAtLjcxTDI2Ljc0LDM3LjgzYTEuMTEsMS4xMSwwLDAsMCwuNDUtLjY1TDEzLjc1LDM5LjU1YTQuODQsNC44NCwwLDAsMSwuNi0yLjIyTDI3LjUxLDM1YzAtLjEzLjA2LS40MywwLS41N2wxMS4yNC0yLC4xNi0uNzNMNjUuNTQsMjdabS00Ljg2LTEuMTJBMTAuNjgsMTAuNjgsMCwwLDEsNTksMjEuMzlMNDMsMjQuMjJsLjI2LjY2TDMwLjkxLDI3LjA1bC4xMi42OUwxOC43LDI5LjkyYTQuNTEsNC41MSwwLDAsMCwuNDcsMS44OWwxMi40OC0yLjIuMjYuNjZMNDQsMjguMTRsLjI2LjY3LDE2LjQ1LTIuOVpNNTYuOCwxNS4xNGEyOC42OSwyOC42OSwwLDAsMSwxLjYyLDQuMzhsLTE2LDIuODMtLjIzLS41M0wzMCwyNGwtLjEyLS42OC0xMi4yLDIuMTVjLS4xNS0uODItLjM2LTEuMjEtLjQ4LTEuOWwxMi4zNC0yLjE3LS4yNi0uNjYsMTIuMi0yLjE1LDAtLjcxTDU2LjgsMTUuMTRabS0yOC4yLS40YTEuMjMsMS4yMywwLDAsMCwwLS43MUw0MSwxMS44NWMwLS4xMy0uMDgtLjQxLS4xLS41NEw1Mi43OSw5LjJhMTYsMTYsMCwwLDEsMy4xMiw0LjEybC0xNC44LDIuNjFhMS4yMywxLjIzLDAsMCwwLDAtLjcxTDI4Ljc5LDE3LjM5YTEuMjMsMS4yMywwLDAsMCwwLS43MWwtMTIuNDcsMi4yYTguNjQsOC42NCwwLDAsMC0uMi0xLjk0bDEyLjQ3LTIuMlptLTMuNC00LjA2YTEyLjc0LDEyLjc0LDAsMCwwLTIuMTItMS42MWwtOC41LDEuNS4yOC44LjMzLDEuMDdaIi8+PHBhdGggY2xhc3M9ImNscy0yIiBkPSJNNjYuNCwxMi44NGMxMS40Ny0yLjk1LDE5LjkyLTIuNzIsMjEuOTIsMS4zNywzLjQ0LDctOS43LDI0LjA4LTMzLjg3LDM2LjQ1UzQsNjYuMTQuNTUsNTkuMTJDLS43OCw1Ni40MS45NCw1Mi4zNyw1LDQ3LjczLDMuNzcsNTAsMy40Nyw1Miw0LjIsNTMuNjMsNy4zLDYwLjQ4LDI3Ljg4LDU3LjU1LDUwLDQ3LjFTODcuNjQsMjIuNTMsODQuNTQsMTUuNjhDODIuODQsMTEuOTMsNzUuOTMsMTEuMTEsNjYuNCwxMi44NFoiLz48cGF0aCBjbGFzcz0iY2xzLTEiIGQ9Ik02MC45Myw5MmgzLjRsLTUtMTQuMTlINTUuNjdMNTAuMzYsOTJINTMuOEw1Ny40OCw4MS43LDYwLjkzLDkyWm0xMC42LTE0LjQ5YTcuNCw3LjQsMCwxLDEtNy4xNSw3LjQsNy4yOSw3LjI5LDAsMCwxLDcuMTUtNy40Wm0wLDNhNC4zNyw0LjM3LDAsMSwwLDQuMTEsNC4zNiw0LjI1LDQuMjUsMCwwLDAtNC4xMS00LjM2Wk0zNS4yNiw5MlY4OS4yMUgyOC42NVY4Nmg2LjZ2LTIuOGgtNi42VjgwLjU0aDYuNnYtMi43SDI1LjMydjcuOTJoMHY0Ljc2aDBWOTJabTEzLjgtMTQuMThINDUuNzR2OS4zOWwtNS4zNS05LjQySDM3LjA2VjkyaDMuMzNWODIuNkw0Niw5MmgzVjc3Ljg0Wk0xOSw4OS4xOGMtMy4xOSwwLTQuOTMsMC04LjEzLDBWOTJIMTkuMmM1LjgyLS4zMiw1LjM3LTksMC05SDE0LjYxYy0yLjA2LS44LS43Mi0yLjc2LDEuNjktMi41Mmg2LjE5di0yLjdoLTYuN2MtNi4zOSwwLTcsNy42Ny0xLjY5LDhoNUMyMC44NSw4NS44NiwyMC44Niw4OC43MSwxOSw4OS4xOFoiLz48L2c+PC9nPjwvc3ZnPg==" alt="Senao"/></div>
+  </div>
+
+  <div class="cards">
+    <div class="card"><h3>800 Mbps</h3><p>400 each direction</p></div>
+    <div class="card"><h3>380.97</h3><p>BSU Rx (Mbps)</p></div>
+    <div class="card"><h3>380.90</h3><p>SU Rx (Mbps)</p></div>
+    <div class="card accent"><h3>761.87</h3><p>Total throughput (Mbps)</p></div>
+  </div>
+
+  <div class="panel">
+    <h2>Test setup</h2>
+    <table class="setup">
+      <tr><th>Mode</th><td>PTP, 1 SU</td></tr>
+      <tr><th>BSU IP</th><td>192.168.2.10</td></tr>
+      <tr><th>SU IP</th><td>192.168.2.11</td></tr>
+      <tr><th>BSU Model / FW</th><td>UBR650 / 1.0.0-157</td></tr>
+      <tr><th>SU Model / FW</th><td>UBR650 / 1.0.0-157</td></tr>
+      <tr><th>Bandwidth</th><td>800 Mbps · 400 each direction</td></tr>
+      <tr><th>Packet size</th><td>1500 bytes</td></tr>
+      <tr><th>Direction</th><td>Bidirectional</td></tr>
+      <tr><th>Run length</th><td>12 hr</td></tr>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>30-minute throughput</h2>
+    <table class="sheet">
+      <thead>
+        <tr>
+          <th>Elapsed</th>
+          <th>BSU TX (Mbps)</th>
+          <th>BSU RX (Mbps)</th>
+          <th>SU TX (Mbps)</th>
+          <th>SU RX (Mbps)</th>
+          <th class="total">Total throughput (Mbps)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="elapsed">00:30</td><td>401.05</td><td>372.75</td><td>401.04</td><td>373.27</td><td class="total">746.02</td></tr>
+        <tr><td class="elapsed">01:00</td><td>401.21</td><td>377.37</td><td>401.36</td><td>377.39</td><td class="total">754.76</td></tr>
+        <tr><td class="elapsed">01:30</td><td>400.67</td><td>367.24</td><td>400.67</td><td>366.90</td><td class="total">734.14</td></tr>
+        <tr><td class="elapsed">02:00</td><td>402.57</td><td>399.96</td><td>400.64</td><td>397.76</td><td class="total">797.72</td></tr>
+        <tr><td class="elapsed">02:30</td><td>402.20</td><td>396.98</td><td>400.66</td><td>395.18</td><td class="total">792.16</td></tr>
+        <tr><td class="elapsed">03:00</td><td>401.83</td><td>394.00</td><td>400.68</td><td>392.60</td><td class="total">786.60</td></tr>
+        <tr><td class="elapsed">03:30</td><td>401.47</td><td>391.02</td><td>400.69</td><td>390.01</td><td class="total">781.03</td></tr>
+        <tr><td class="elapsed">04:00</td><td>401.10</td><td>388.04</td><td>400.71</td><td>387.43</td><td class="total">775.47</td></tr>
+        <tr><td class="elapsed">04:30</td><td>400.73</td><td>385.06</td><td>400.73</td><td>384.85</td><td class="total">769.91</td></tr>
+        <tr><td class="elapsed">05:00</td><td>400.83</td><td>353.66</td><td>400.84</td><td>356.73</td><td class="total">710.39</td></tr>
+        <tr><td class="elapsed">05:30</td><td>400.89</td><td>364.80</td><td>400.89</td><td>365.99</td><td class="total">730.79</td></tr>
+        <tr><td class="elapsed">06:00</td><td>400.95</td><td>375.93</td><td>400.94</td><td>375.24</td><td class="total">751.17</td></tr>
+        <tr><td class="elapsed">06:30</td><td>401.20</td><td>380.52</td><td>401.18</td><td>380.46</td><td class="total">760.98</td></tr>
+        <tr><td class="elapsed">07:00</td><td>401.06</td><td>386.34</td><td>401.09</td><td>386.37</td><td class="total">772.71</td></tr>
+        <tr><td class="elapsed">07:30</td><td>401.51</td><td>378.80</td><td>401.53</td><td>378.32</td><td class="total">757.12</td></tr>
+        <tr><td class="elapsed">08:00</td><td>401.60</td><td>372.90</td><td>401.57</td><td>371.65</td><td class="total">744.55</td></tr>
+        <tr><td class="elapsed">08:30</td><td>400.81</td><td>391.28</td><td>400.81</td><td>390.80</td><td class="total">782.08</td></tr>
+        <tr><td class="elapsed">09:00</td><td>400.91</td><td>359.88</td><td>400.92</td><td>362.68</td><td class="total">722.56</td></tr>
+        <tr><td class="elapsed">09:30</td><td>400.97</td><td>371.02</td><td>400.97</td><td>371.94</td><td class="total">742.96</td></tr>
+        <tr><td class="elapsed">10:00</td><td>401.03</td><td>382.15</td><td>401.02</td><td>381.19</td><td class="total">763.34</td></tr>
+        <tr><td class="elapsed">10:30</td><td>401.28</td><td>386.74</td><td>401.26</td><td>386.41</td><td class="total">773.15</td></tr>
+        <tr><td class="elapsed">11:00</td><td>401.14</td><td>392.56</td><td>401.17</td><td>392.32</td><td class="total">784.88</td></tr>
+        <tr><td class="elapsed">11:30</td><td>401.59</td><td>385.02</td><td>401.61</td><td>384.27</td><td class="total">769.29</td></tr>
+        <tr><td class="elapsed">12:00</td><td>401.68</td><td>379.12</td><td>401.65</td><td>377.60</td><td class="total">756.72</td></tr>
+      </tbody>
+      <tfoot>
+        <tr>
+          <td>TRex summary</td>
+          <td>—</td>
+          <td>380.97</td>
+          <td>—</td>
+          <td>380.90</td>
+          <td class="total">761.87</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</div>
+</body>
+</html>

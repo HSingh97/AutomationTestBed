@@ -12,13 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from utils.net_utils import format_mgmt_ipv6_display
+from utils.senao_branding import senao_logo_src
 
 DEFAULT_REGRESSION_REPORT = Path("reports/artifacts/Regression_Report.html")
 DEFAULT_STATE_FILE = Path("reports/artifacts/regression_collector_state.json")
-
-SENAO_LOGO_URL = (
-    "https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png"
-)
 
 # Above this SU count, testbed summary switches from wide columns to a vertical list.
 TESTBED_WIDE_COLUMN_MAX = 4
@@ -380,10 +377,11 @@ def _render_testbed_summary_table(summary: dict[str, Any]) -> str:
             prefix_len=int(summary.get("ipv6_prefix_len") or 120),
         )
 
+    ip_label = "IPv4" if str(summary.get("ip_mode", "")).lower().startswith("ipv4") else "IP"
     rows = (
         ("Model", "model"),
         ("FW Version", "fw_version"),
-        ("IP", "ip"),
+        (ip_label, "ip"),
         ("Vlan", "vlan"),
     )
     if _is_populated_summary_value(bts.get("qos")) or _is_populated_summary_value(cpe.get("qos")):
@@ -1177,7 +1175,7 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
         <p class="hero-date">{executed_at}</p>
       </div>
       <div class="hero-logo">
-        <img src="{SENAO_LOGO_URL}" alt="Senao Networks"/>
+        <img src="{senao_logo_src()}" alt="Senao Networks"/>
       </div>
     </header>
 

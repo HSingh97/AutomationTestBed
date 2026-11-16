@@ -15,6 +15,8 @@ LINK_TEST_DEFAULTS = {
     "duration_max": 300,
     "bw_min": 20,
     "bw_max": 400,
+    "high_bw_mbps": 600,
+    "high_htmode": "HT80",
     "result_tolerance_throughput_mbps": 25,
     "result_tolerance_latency_ms": 5,
     "reference_results_path": None,

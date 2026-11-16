@@ -1,0 +1,49 @@
+name: ipv6_soak
+description: >
+  IPv6 management testbed for the hard reboot and factory reset soak scripts.
+  BTS is reached directly from the lab PC (enp1s0, 2401:4900:d0:40d4::17b8:0:301/120);
+  the CPE is reached over the RF link through an SSH tunnel via the BTS, because the
+  PC has no working direct layer-2 path to the CPE.
+
+dut:
+  ip_mode: ipv6
+  strict_ipv6: true
+  local_ip: "2401:4900:d0:40d4:0:17b8:0:330"
+  remote_ips:
+    - "2401:4900:d0:40d4:0:17b8:0:331"
+  username: root
+  password: Sen@0ubRNwk$
+
+# IPv4 equivalents kept for recovery when IPv6 management is unavailable
+# (for example straight after a factory reset, before IPv6 is re-applied).
+fallback_ipv4:
+  bts: "192.168.2.10"
+  cpe: "192.168.2.11"
+
+link:
+  expected_mode: linked
+  min_connected_clients: 1
+  health_check_timeout_s: 20
+
+recovery:
+  max_retries: 2
+  retry_backoff_seconds:
+    - 3
+    - 8
+  allow_factory_reset: false
+  factory_reset_command: firstboot && reboot
+  reboot_wait_seconds: 120
+
+pdu:
+  enabled: true
+  scheme: http
+  host: "192.168.1.190"
+  username: "admin"
+  password: "1234"
+  timeout_s: 10
+  cycle_off_s: 15
+  post_on_wait_s: 45
+  verify_ssl: false
+  outlets:
+    bts: 1
+    cpe: 2

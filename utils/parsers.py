@@ -39,8 +39,10 @@ def _is_ssh_banner_line(line: str) -> bool:
 
 
 def _looks_like_ssh_scalar(line: str) -> bool:
-    """True for simple uci/shell scalar values (proto, IP, hostname, etc.)."""
-    return bool(re.fullmatch(r"[\w.:@/-]+", line)) and len(line) <= 128
+    """True for simple uci/shell scalar values (proto, IP, hostname, encryption, etc.)."""
+    # Include '+' for wireless encryption (e.g. psk2+ccmp-256).
+    # Include '!' for WPA keys / network secrets.
+    return bool(re.fullmatch(r"[\w.:+@/!\-]+", line)) and len(line) <= 128
 
 
 def _ssh_output_lines(raw_output) -> list[str]:
@@ -89,16 +91,17 @@ def clean_ssh_output(raw_output):
     if not lines:
         return ""
 
-    # Ignore common shell prompt and command-echo lines.
+    # Ignore common shell prompt and command-echo lines (ROOT@ / root@).
     filtered = []
     prompt_or_echo_patterns = (
         r"^root@.+[:#]\s*$",
         r"^root@.+[:#]\s+.+$",
         r"^#\s*$",
-        r"^uci\s+get\s+.+$",
+        r"^uci\s+(-q\s+)?get\s+.+$",
+        r"^uci\s+(-q\s+)?show\s+.+$",
     )
     for line in lines:
-        if any(re.match(pat, line) for pat in prompt_or_echo_patterns):
+        if any(re.match(pat, line, flags=re.IGNORECASE) for pat in prompt_or_echo_patterns):
             continue
         if _is_ssh_banner_line(line):
             continue
@@ -106,7 +109,8 @@ def clean_ssh_output(raw_output):
 
     scalar_lines = [line for line in filtered if _looks_like_ssh_scalar(line)]
     if scalar_lines:
-        return scalar_lines[-1]
+        # Prefer first scalar for single-value uci get (trailing prompt junk is common).
+        return scalar_lines[0] if len(scalar_lines) == 1 else scalar_lines[-1]
 
     if not filtered:
         return lines[-1]
@@ -237,10 +241,12 @@ def extract_ip_objects(text):
 
 def extract_uci_value(ssh_str):
     """Extracts value from 'uci show' output, e.g., key='value' -> value"""
-    match = re.search(r"='?([^']*)'?", str(ssh_str))
+    cleaned = clean_ssh_output(ssh_str)
+    match = re.search(r"='?([^']*)'?", cleaned)
     if match:
         return match.group(1).strip()
-    return str(ssh_str).strip()
+    # Plain `uci get` output — already stripped of prompts by clean_ssh_output.
+    return cleaned.split("\n", 1)[0].strip()
 
 
 def parse_radio_status(ssh_str):
@@ -591,6 +597,21 @@ def parse_iwconfig_active_channel(ssh_str):
     return ""
 
 
+def parse_iwconfig_tx_power(ssh_str: str) -> str:
+    """Parse Tx-Power (dBm) from iwconfig or iw dev athN info output."""
+    text = str(ssh_str or "")
+    for pattern in (
+        r"Tx-Power[=:\s]+(\d+)",
+        r"txpower\s+(\d+(?:\.\d+)?)\s*dBm",
+        r"txpower[:\s]+(\d+)",
+        r"Power[=:\s]+(\d+)\s*dBm",
+    ):
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return str(int(float(match.group(1))))
+    return ""
+
+
 def parse_uptime_to_seconds(gui_uptime_str):
     """
     Converts the GUI string like '3d 2h 42m 28s' into raw seconds for math comparison.
@@ -625,6 +646,23 @@ def parse_link_test_results(text: str) -> dict[str, str]:
         match = re.search(pattern, clean, re.IGNORECASE)
         if match:
             parsed[key] = match.group(1).strip()
+    if parsed:
+        return parsed
+
+    # UBR650 table layout: Test Report → Tx/Rx throughput and latency columns.
+    table_match = re.search(
+        r"Test Report.*?Tx\s+Rx\s+Tx\s+Rx\s+\d+\s+\S+\s+"
+        r"(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)",
+        clean,
+        re.IGNORECASE,
+    )
+    if table_match:
+        return {
+            "ul_throughput": table_match.group(1),
+            "dl_throughput": table_match.group(2),
+            "ul_latency": table_match.group(3),
+            "dl_latency": table_match.group(4),
+        }
     return parsed
 
 
@@ -638,6 +676,19 @@ def format_assoc_uptime(total_seconds: int | str) -> str:
     hours, rem = divmod(rem, 3600)
     minutes, seconds = divmod(rem, 60)
     return f"{days:02d}:{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def parse_assoc_uptime_display(display: str) -> int:
+    """Parse dd:hh:mm:ss link uptime from Monitor → Radio Statistics → Link."""
+    text = (display or "").strip()
+    parts = text.split(":")
+    if len(parts) != 4:
+        return -1
+    try:
+        days, hours, minutes, seconds = (int(part) for part in parts)
+    except ValueError:
+        return -1
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
 
 
 def sysfs_tput_to_mbps(raw_value: str) -> str:

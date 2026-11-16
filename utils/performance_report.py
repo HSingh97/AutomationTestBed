@@ -12,10 +12,7 @@ from typing import Any
 from traffic.operating_rate_table import lookup_spec, modulation_scheme, operating_rate_mbps
 from traffic.throughput_validation import MCS_THROUGHPUT_FAIL_PCT, MCS_THROUGHPUT_WARN_PCT
 from utils.regression_report import _render_testbed_summary_table
-
-SENAO_LOGO_URL = (
-    "https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png"
-)
+from utils.senao_branding import senao_logo_src
 
 
 def _parse_dl_ul_fractions(ratio: str) -> tuple[float, float]:
@@ -1068,7 +1065,7 @@ def write_html_report(
         <p class="hero-date">{executed_at}</p>
       </div>
       <div class="hero-logo">
-        <img src="{SENAO_LOGO_URL}" alt="Senao Networks"/>
+        <img src="{senao_logo_src()}" alt="Senao Networks"/>
       </div>
     </header>
 

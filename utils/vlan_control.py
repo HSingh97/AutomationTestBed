@@ -148,7 +148,9 @@ async def ensure_bts_qinq_ssh(ssh, profile_tb: dict[str, Any]) -> bool:
     return ok and _verify_bts_qinq(after, profile_tb)
 
 
-async def ensure_bts_transparent_ssh(ssh, profile_tb: dict[str, Any]) -> bool:
+async def ensure_bts_transparent_ssh(
+    ssh, profile_tb: dict[str, Any], *, mgmt_vlan_id: int | None = None,
+) -> bool:
     current = await read_vlan_uci_ssh(ssh, profile_tb, "bts")
     # Prefer full show — intermittent bare `uci get` parses can miss mgmtvlan and force reload.
     try:
@@ -161,13 +163,16 @@ async def ensure_bts_transparent_ssh(ssh, profile_tb: dict[str, Any]) -> bool:
             current[short] = val.strip().strip("'\"")
     except Exception:
         pass
-    exp_mgmt = str(int((profile_tb.get("mgmt_vlan", {}) or {}).get("uci_value", 101)))
+    mgmt_cfg = profile_tb.get("mgmt_vlan", {}) or {}
+    exp_mgmt = str(
+        int(mgmt_vlan_id if mgmt_vlan_id is not None else mgmt_cfg.get("uci_value", 101))
+    )
     mode = _normalize_mode_name(current.get("mode", "transparent"))
     mgmt = str(current.get("mgmtvlan", "")).strip()
     if mode == "transparent" and (mgmt == exp_mgmt or not mgmt):
         print(f"[vlan] BTS transparent OK (mgmtvlan={mgmt or exp_mgmt})")
         return True
-    cmds = build_bts_transparent_mgmt_commands(profile_tb)
+    cmds = build_bts_transparent_mgmt_commands(profile_tb, mgmt_vlan_id=mgmt_vlan_id)
     soft = [c for c in cmds if "network reload" not in c]
     print(f"[vlan] BTS applying transparent soft ({len(soft)} cmds, no network reload)")
     ok = await apply_vlan_commands_ssh(ssh, soft)
@@ -177,7 +182,7 @@ async def ensure_bts_transparent_ssh(ssh, profile_tb: dict[str, Any]) -> bool:
     mgmt_after = str(after.get("mgmtvlan", "")).strip()
     if ok and mode_after == "transparent" and (mgmt_after == exp_mgmt or not mgmt_after):
         return True
-    print(f"[vlan] BTS transparent soft incomplete — full apply with network reload")
+    print("[vlan] BTS transparent soft incomplete — full apply with network reload")
     ok = await apply_vlan_commands_ssh(ssh, cmds)
     await asyncio.sleep(15)
     after = await read_vlan_uci_ssh(ssh, profile_tb, "bts")

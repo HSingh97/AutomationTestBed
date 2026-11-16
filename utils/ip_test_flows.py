@@ -33,6 +33,7 @@ from utils.lab_pc_net import (
     set_lab_pc_iface_mtu,
 )
 from utils.regression_flows import _ensure_ssh_open, _navigate_to_flashops, _open_upgrade_tab
+from utils.pdu_power import pdu_enabled, pdu_hard_reboot
 from utils.ui_helpers import attach_dialog_handler
 from utils.vlan_uci import build_cpe_mgmtvlan_only_commands
 
@@ -3931,7 +3932,7 @@ class CpeSecondaryHopDriver:
     async def send_command(self, command: str, *, timeout_ops: int = 60):
         hop = (
             f"sshpass -p {shlex.quote(self._password)} "
-            "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 "
+            "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=20 "
             f"{shlex.quote(self._user)}@{self._factory} {shlex.quote(command)}"
         )
         return await self._sec.send_command(hop, timeout_ops=timeout_ops)
@@ -3950,7 +3951,7 @@ async def _probe_cpe_ssh_via_secondary(
     for cpe_user, cpe_pass in _cpe_ssh_credential_attempts(profile):
         probe = (
             f"sshpass -p {shlex.quote(cpe_pass)} "
-            "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 "
+            "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 "
             f"{shlex.quote(cpe_user)}@{factory} 'echo cpe_ok' 2>&1"
         )
         out = await _ssh_run_raw(sec_conn, probe, timeout=25)
@@ -4322,6 +4323,104 @@ async def _run_soft_reboot_case(ctx: IpTestContext, *, v6: bool) -> None:
             )
 
 
+async def _run_hard_reboot_case(ctx: IpTestContext, *, v6: bool) -> None:
+    cfg = ctx.cfg
+    profile = cfg.get("_profile") or {}
+    password = str(cfg.get("_password", ""))
+    ssh = ctx.ssh
+    before = await _read_uci_ip(ssh, v6=v6)
+    lan_ip = ""
+    if v6:
+        lan_ip = await _resolve_dut_ipv6_for_lab_ping(ctx)
+    elif ctx.device_target == "bts":
+        lan_ip = await _resolve_bts_lan_ipv4(ctx)
+    else:
+        lan_ip = normalize_ip(
+            str(ctx.peer_host or cfg.get("remote_ping_host") or cfg.get("cpe_ipv4_default_address", "")).split("/")[0]
+        )
+
+    cid = ctx.case.case_id
+    ctx.notes.append(f"{cid}: UCI before hard reboot {before}")
+    hosts = await _event_ssh_hosts(ctx, lan_ip=lan_ip or None)
+    started = time.monotonic()
+    await pdu_hard_reboot(profile, device_target=ctx.device_target)
+    await _close_ssh(ssh)
+    await asyncio.sleep(5)
+
+    timeout_s = int(cfg.get("reboot_timeout_s", 200))
+    max_down = int(cfg.get("reboot_max_downtime_s", timeout_s))
+    new_ssh, effective = await _wait_ssh_after_event(
+        ctx, password, timeout_s=timeout_s, extra_hosts=hosts
+    )
+    downtime = time.monotonic() - started
+    ctx.ssh = new_ssh
+    ctx.host = effective
+
+    settle_s = int(cfg.get("post_reboot_settle_s", 150))
+    if downtime < settle_s:
+        extra = settle_s - downtime
+        ctx.notes.append(
+            f"{cid}: SSH on {effective} after hard reboot in {downtime:.0f}s — waiting {extra:.0f}s settle"
+        )
+        await asyncio.sleep(extra)
+
+    async def _post_reboot_checks() -> None:
+        nonlocal after
+        after = await _read_uci_ip(ctx.ssh, v6=v6)
+        _verify_uci_ip_retained(before, after, v6=v6, case_id=cid)
+        ctx.notes.append(f"{cid}: UCI after hard reboot {after}")
+        uptime = await _read_uptime_s(ctx.ssh)
+        ctx.notes.append(f"post-hard-reboot uptime {uptime:.0f}s on {ctx.host}")
+        assert uptime < max(max_down, 600), f"uptime {uptime}s suggests device did not reboot"
+
+    after: dict[str, str] = {}
+    if ctx.device_target == "bts" and v6:
+        from utils.ip_case_preflight import case_requires_cpe, run_post_event_testbed_recovery_v6
+
+        await run_post_event_testbed_recovery_v6(
+            ctx,
+            label="post-hard-reboot",
+            after_mgmt_hook=_post_reboot_checks,
+            require_cpe=case_requires_cpe(cid),
+        )
+    elif ctx.device_target == "bts" and not v6:
+        from utils.ip_case_preflight import run_post_event_testbed_recovery
+
+        link_timeout = int(cfg.get("post_reboot_link_timeout_s", 120))
+        cfg["_link_recovery_timeout_override"] = link_timeout
+        try:
+            await run_post_event_testbed_recovery(
+                ctx,
+                label="post-hard-reboot",
+                after_mgmt_hook=_post_reboot_checks,
+                require_cpe=False,
+                link_formation=True,
+                strict=False,
+            )
+        finally:
+            cfg.pop("_link_recovery_timeout_override", None)
+        if lan_ip:
+            ping_wait = int(cfg.get("post_reboot_ping_wait_s", 90))
+            await _assert_lab_ping_ipv4(
+                ctx,
+                lan_ip,
+                wait_s=ping_wait,
+                interval_s=int(cfg.get("post_reboot_remote_ping_interval_s", 10)),
+            )
+    else:
+        await _post_reboot_checks()
+        await _assert_local_reachable(ctx, v6=v6, count=3)
+        if lan_ip and v6:
+            await _assert_lab_ping_ipv6(ctx, lan_ip, count=int(cfg.get("ping_count_short", 4)))
+        if ctx.peer_host and ctx.device_target == "bts":
+            await _ping_remote_after_local(
+                ctx,
+                v6=v6,
+                count=int(cfg.get("ping_count_short", 4)),
+                retries=int(cfg.get("post_reboot_remote_ping_retries", 12)),
+            )
+
+
 async def _run_soft_reset_case(ctx: IpTestContext, *, v6: bool) -> None:
     cfg = ctx.cfg
     password = str(cfg.get("_password", ""))
@@ -4641,7 +4740,13 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
     password = str(cfg.get("_password", ""))
 
     if "manual_power" in case.requires:
-        _skip_if_unsupported(ctx, "manual_power", "requires physical power cycle (not automatable)")
+        profile = cfg.get("_profile") or {}
+        if not pdu_enabled(profile):
+            _skip_if_unsupported(
+                ctx,
+                "manual_power",
+                "requires hard-reboot PDU config in profile.pdu (enabled/host/outlets)",
+            )
 
     if "firmware" in case.requires and not str(cfg.get("firmware_image_path", "")).strip():
         _skip_if_unsupported(ctx, "firmware", "set ip_tests.firmware_image_path in profile")
@@ -4907,7 +5012,11 @@ async def execute_ip_case(ctx: IpTestContext) -> None:
         return
 
     if cid in ("IP_10", "IP_29"):
-        pytest.skip("hard reboot requires manual power cycle (PDU not available)")
+        stack_v6 = cid == "IP_29"
+        if not _stack_allowed(ctx, "v6" if stack_v6 else "v4"):
+            pytest.skip("stack not in scope")
+        await _run_hard_reboot_case(ctx, v6=stack_v6)
+        return
 
     if cid in ("IP_11", "IP_30"):
         stack_v6 = cid == "IP_30"

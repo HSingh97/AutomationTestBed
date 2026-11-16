@@ -36,3 +36,15 @@ docs/samples/Senao_UBR_QoS_01_40_Full_Report.csv
 docs/samples/Senao_UBR_QoS_01_40_Full_Report.html
 docs/samples/Senao_UBR_QoS_11_20_Sample_Report.csv
 docs/samples/Senao_UBR_QoS_11_20_Sample_Report.html
+
+# Cursor agent / local debug dumps
+.cursor/debug-*.log
+.cursor/
+
+# Local run artifacts
+*.log
+*.out
+traffic/.jumbo_watch_start
+traffic/*_watch.log
+radio24_*.log
+radio24_*.out

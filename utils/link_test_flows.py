@@ -6,7 +6,6 @@ import asyncio
 import json
 import os
 import re
-import time
 from pathlib import Path
 from typing import Any
 
@@ -26,37 +25,9 @@ RADIO_INDEX = 1
 RESULT_POLL_INTERVAL_S = 2
 RESULT_BUFFER_S = 15
 UCI_SETTLE_S = 5
-DEBUG_LOG_PATH = Path("/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-a9118f.log")
-DEBUG_SESSION_ID = "a9118f"
-DEBUG_RUN_ID = "pre-fix"
-
 
 def _log(message: str):
     print(f"[LINK_TEST] {message}")
-
-
-def _debug_log(location: str, message: str, data: dict, hypothesis_id: str) -> None:
-    try:
-        DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with DEBUG_LOG_PATH.open("a", encoding="utf-8") as fp:
-            fp.write(
-                json.dumps(
-                    {
-                        "sessionId": DEBUG_SESSION_ID,
-                        "runId": DEBUG_RUN_ID,
-                        "hypothesisId": hypothesis_id,
-                        "location": location,
-                        "message": message,
-                        "data": data,
-                        "timestamp": int(time.time() * 1000),
-                    },
-                    ensure_ascii=True,
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-
 
 async def _goto_admin_path(gui_page, path_fragment: str) -> bool:
     match = re.search(r"(https?://[^/]+/cgi-bin/luci/;stok=[^/]+)", gui_page.url or "")
@@ -66,7 +37,6 @@ async def _goto_admin_path(gui_page, path_fragment: str) -> bool:
     await gui_page.goto(target, timeout=UITimeouts.PAGE_LOAD_MS)
     await gui_page.wait_for_load_state("domcontentloaded")
     return True
-
 
 async def open_link_test_tool(gui_page):
     """Navigate Monitor -> Tools -> Link Test Tool tab."""
@@ -95,22 +65,10 @@ async def open_link_test_tool(gui_page):
         state="visible", timeout=UITimeouts.ELEMENT_WAIT_MS
     )
     await gui_page.wait_for_timeout(UITimeouts.MEDIUM_WAIT_MS)
-    # region agent log
-    _debug_log(
-        "utils/link_test_flows.py:95",
-        "link test tool page opened",
-        {
-            "url": gui_page.url or "",
-        },
-        "H4",
-    )
-    # endregion
-
 
 async def _send_ssh(root_ssh, command: str) -> str:
     response = await root_ssh.send_command(command)
     return clean_ssh_output(response.result)
-
 
 async def _open_root_ssh_for_host(host: str, device_creds: dict):
     """Open a temporary root SSH session to a peer device."""
@@ -134,19 +92,15 @@ async def _open_root_ssh_for_host(host: str, device_creds: dict):
             open_errors.append(str(exc))
     raise RuntimeError(f"Unable to open root SSH to {host}: {' | '.join(open_errors)}")
 
-
 async def clear_link_test_cpe_list(root_ssh, radio_idx: int = RADIO_INDEX):
     await _send_ssh(root_ssh, RootCommands.clear_tool_cpe_list(radio_idx))
-
 
 async def _fill_field(gui_page, locator: str, value: str):
     field = gui_page.locator(locator).first
     await field.fill(value)
     check.equal(await field.input_value(), value, f"GUI field {locator} did not retain value {value}")
 
-
 DEFAULT_PACKET_SIZE = 1400
-
 
 async def _configure_link_test_fields(
     gui_page,
@@ -174,28 +128,10 @@ async def _configure_link_test_fields(
     bidirection_info = await bidirection.evaluate(
         """el => ({tag: el.tagName, type: el.getAttribute('type') || '', checked: !!el.checked})"""
     )
-    # region agent log
-    _debug_log(
-        "utils/link_test_flows.py:163",
-        "configured link test fields",
-        {
-            "url": gui_page.url or "",
-            "bandwidth": bandwidth,
-            "duration_s": duration_s,
-            "vlan_id": vlan_id,
-            "bidirection_before": was_checked,
-            "bidirection_after": is_checked,
-            "bidirection_info": bidirection_info,
-        },
-        "H7",
-    )
-    # endregion
     check.is_true(is_checked, "Bidirection checkbox should stay enabled for link test")
-
 
 def _dropdown_has_cpe(options: list[str], cpe_ip: str) -> bool:
     return any(ip_in_text(cpe_ip, opt) for opt in options)
-
 
 async def _wait_for_cpe_dropdown(gui_page, cpe_ip: str, timeout_s: int = 30):
     dropdown = gui_page.locator(LinkTestToolLocators.CPE_DROPDOWN).first
@@ -208,7 +144,6 @@ async def _wait_for_cpe_dropdown(gui_page, cpe_ip: str, timeout_s: int = 30):
         await gui_page.reload(wait_until="networkidle")
         await gui_page.locator(LinkTestToolLocators.BANDWIDTH_INPUT).wait_for(state="visible", timeout=10000)
     raise TimeoutError(f"CPE IP {cpe_ip} not found in Link Test dropdown after {timeout_s}s")
-
 
 async def _select_cpe_dropdown_option(dropdown, cpe_ip: str) -> None:
     """Select CPE by label/value; IPv6 options may use different compression than CLI."""
@@ -227,7 +162,6 @@ async def _select_cpe_dropdown_option(dropdown, cpe_ip: str) -> None:
         return
     await dropdown.select_option(label=cpe_ip)
 
-
 async def _add_cpe_from_dropdown(gui_page, cpe_ip: str):
     dropdown = gui_page.locator(LinkTestToolLocators.CPE_DROPDOWN).first
     await _select_cpe_dropdown_option(dropdown, cpe_ip)
@@ -236,25 +170,9 @@ async def _add_cpe_from_dropdown(gui_page, cpe_ip: str):
     await add_btn.click()
     try:
         await gui_page.wait_for_load_state("networkidle")
-        # region agent log
-        _debug_log(
-            "utils/link_test_flows.py:238",
-            "add-cpe navigation reached networkidle",
-            {"peer_ip": cpe_ip, "url": gui_page.url or ""},
-            "H10",
-        )
-        # endregion
     except Exception:
         # Some firmwares keep long-poll/XHR active; rely on form readiness instead.
         await gui_page.wait_for_load_state("domcontentloaded")
-        # region agent log
-        _debug_log(
-            "utils/link_test_flows.py:248",
-            "add-cpe fallback to domcontentloaded after networkidle timeout",
-            {"peer_ip": cpe_ip, "url": gui_page.url or ""},
-            "H10",
-        )
-        # endregion
     await gui_page.locator(LinkTestToolLocators.BANDWIDTH_INPUT).wait_for(
         state="visible", timeout=UITimeouts.ELEMENT_WAIT_MS
     )
@@ -266,10 +184,8 @@ async def _add_cpe_from_dropdown(gui_page, cpe_ip: str):
         await asyncio.sleep(0.5)
     raise TimeoutError(f"CPE {cpe_ip} not visible in Link Test CPE table")
 
-
 async def _cpe_rows_count(gui_page) -> int:
     return await gui_page.locator(f"{LinkTestToolLocators.CPE_TABLE_ROWS}:not(:first-child)").count()
-
 
 async def _ensure_cpe_in_list(gui_page, root_ssh, cpe_ip: str, link_test_config: LinkTestConfig):
     """Add CPE from dropdown when the list table is empty."""
@@ -288,7 +204,6 @@ async def _ensure_cpe_in_list(gui_page, root_ssh, cpe_ip: str, link_test_config:
         vlan_id=link_test_config.vlan_id,
     )
 
-
 async def _prepare_link_test_run(
     gui_page,
     root_ssh,
@@ -296,6 +211,7 @@ async def _prepare_link_test_run(
     link_test_config: LinkTestConfig,
     *,
     device_label: str = "BTS",
+    validate_uci: bool = True,
 ):
     """
     GUI_130 prep: clear peer list, set bandwidth/duration/VLAN/bidirection, add peer, verify UCI.
@@ -342,7 +258,8 @@ async def _prepare_link_test_run(
             ("Peer IP", peer_ip, backend_cfg.get("iplist", ""), None),
         ],
     )
-    _validate_uci_parameters(bandwidth, duration_s, vlan_id, backend_cfg)
+    if validate_uci:
+        _validate_uci_parameters(bandwidth, duration_s, vlan_id, backend_cfg)
     check.is_true(
         ip_in_text(peer_ip, backend_cfg.get("iplist", "")),
         f"GUI_130 [{device_label}]: peer {peer_ip} not in UCI iplist after Add",
@@ -364,7 +281,6 @@ async def _prepare_link_test_run(
             f"GUI_130 [{device_label}]: {label} field must be {expected} before Start (got {actual!r})",
         )
 
-
 async def _start_link_test(gui_page):
     start_btn = gui_page.locator(LinkTestToolLocators.START_BUTTON).first
     await start_btn.wait_for(state="visible", timeout=UITimeouts.ELEMENT_WAIT_MS)
@@ -377,7 +293,6 @@ async def _start_link_test(gui_page):
     except Exception:
         pass
 
-
 async def _stop_link_test_if_running(gui_page):
     stop_btn = gui_page.locator(LinkTestToolLocators.STOP_BUTTON).first
     try:
@@ -386,7 +301,6 @@ async def _stop_link_test_if_running(gui_page):
             await gui_page.wait_for_timeout(UITimeouts.MEDIUM_WAIT_MS)
     except Exception:
         pass
-
 
 async def _wait_for_link_test_started(
     root_ssh,
@@ -402,7 +316,6 @@ async def _wait_for_link_test_started(
             return True
         await asyncio.sleep(RESULT_POLL_INTERVAL_S)
     return False
-
 
 async def _wait_for_link_test_complete(
     root_ssh,
@@ -455,18 +368,6 @@ async def _wait_for_link_test_complete(
         await asyncio.sleep(2)
 
     # Some CPE pages only render the final result after reopening the tool page.
-    # region agent log
-    _debug_log(
-        "utils/link_test_flows.py:293",
-        "link test result missing after initial poll; reopening tool page",
-        {
-            "url": gui_page.url or "",
-            "duration_s": duration_s,
-            "backend_active_status": status.strip(),
-        },
-        "H5",
-    )
-    # endregion
     await open_link_test_tool(gui_page)
     read_deadline = asyncio.get_event_loop().time() + 10
     while asyncio.get_event_loop().time() < read_deadline:
@@ -476,20 +377,7 @@ async def _wait_for_link_test_complete(
         await asyncio.sleep(2)
 
     final_text = await _read_candidate_text()
-    # region agent log
-    _debug_log(
-        "utils/link_test_flows.py:311",
-        "link test result still not parseable after reopen",
-        {
-            "url": gui_page.url or "",
-            "parsed": bool(parse_link_test_results(final_text)),
-            "text_sample": " ".join(final_text.split())[:240],
-        },
-        "H5",
-    )
-    # endregion
     return final_text
-
 
 async def _read_backend_config(root_ssh, radio_idx: int = RADIO_INDEX) -> dict[str, str]:
     return {
@@ -499,14 +387,12 @@ async def _read_backend_config(root_ssh, radio_idx: int = RADIO_INDEX) -> dict[s
         "iplist": ssh_scalar(await _send_ssh(root_ssh, RootCommands.get_tool_iplist(radio_idx))),
     }
 
-
 async def _read_backend_results(root_ssh, radio_idx: int = RADIO_INDEX, assoc_idx: int = 1) -> dict[str, str]:
     stats_cmds = RootCommands.get_link_test_stats(radio_idx, assoc_idx)
     results: dict[str, str] = {}
     for key, cmd in stats_cmds.items():
         results[key] = ssh_scalar(await _send_ssh(root_ssh, cmd))
     return results
-
 
 def _normalize_backend_results_for_device(device_label: str, backend_results: dict[str, str]) -> dict[str, str]:
     if device_label != "CPE":
@@ -517,7 +403,6 @@ def _normalize_backend_results_for_device(device_label: str, backend_results: di
     normalized["ul_latency"] = backend_results.get("dl_latency", "")
     normalized["dl_latency"] = backend_results.get("ul_latency", "")
     return normalized
-
 
 def _load_reference_results(path: str | None) -> dict[str, str] | None:
     if not path:
@@ -542,7 +427,6 @@ def _load_reference_results(path: str | None) -> dict[str, str] | None:
                 break
     return parsed or None
 
-
 def _validate_uci_parameters(
     expected_bw: int,
     expected_duration: int,
@@ -552,7 +436,6 @@ def _validate_uci_parameters(
     validate_param("Link Test BW (UCI)", str(expected_bw), backend_cfg.get("bandwidth", ""))
     validate_param("Link Test Duration (UCI)", str(expected_duration), backend_cfg.get("duration", ""))
     validate_param("Link Test VLAN (UCI)", str(expected_vlan), backend_cfg.get("vlan", ""))
-
 
 def _validate_metric_pair(
     label: str,
@@ -574,7 +457,6 @@ def _validate_metric_pair(
     )
     if diff <= tolerance:
         _log(f"    -> {label}: PASSED (GUI={gui_val}, {reference_label}={reference_val})")
-
 
 def _validate_nonzero_link_test_traffic(
     gui_results: dict[str, str],
@@ -599,7 +481,6 @@ def _validate_nonzero_link_test_traffic(
         f"(GUI UL/DL={gui_ul}/{gui_dl}, backend UL/DL={backend_ul}/{backend_dl}). "
         "Configuration path is valid; likely firmware/lab traffic condition."
     )
-
 
 def _validate_results_against_reference(
     gui_results: dict[str, str],
@@ -640,7 +521,6 @@ def _validate_results_against_reference(
         reference_label,
     )
 
-
 async def _verify_parameter_ranges_in_gui(gui_page, config: LinkTestConfig):
     range_cases = (
         ("Bandwidth (min)", LinkTestToolLocators.BANDWIDTH_INPUT, config.bw_min),
@@ -656,7 +536,6 @@ async def _verify_parameter_ranges_in_gui(gui_page, config: LinkTestConfig):
     )
     for label, locator, value in range_cases:
         await _fill_field(gui_page, locator, str(value))
-
 
 # ---------------------------------------------------------------------------
 # GUI_127 — Bandwidth, Time Duration, VLAN (parameters + GUI/UCI)
@@ -713,7 +592,6 @@ async def _assert_gui_127_on_device(
         "vlan_id": vlan_id,
     }
 
-
 async def assert_gui_127_link_test_parameters(
     gui_page,
     root_ssh,
@@ -744,7 +622,6 @@ async def assert_gui_127_link_test_parameters(
     finally:
         await cpe_root_ssh.close()
         await cpe_page.close()
-
 
 async def _assert_gui_128_on_device(
     gui_page,
@@ -794,7 +671,6 @@ async def _assert_gui_128_on_device(
     _log(f"GUI_128 [{device_label}] completed: {target_ip} added to link test list")
     return {"target_ip": target_ip}
 
-
 async def assert_gui_128_link_test_cpe(
     gui_page,
     root_ssh,
@@ -818,18 +694,6 @@ async def assert_gui_128_link_test_cpe(
     check.is_true(bool(bsu_ip), "GUI_128: BTS IP is required for CPE-side validation")
     check.is_true(bool(device_creds), "GUI_128: device credentials are required for CPE validation")
     _log(f"GUI_128: saved BTS add-peer snapshot ({bts_result['target_ip']}); logging into CPE {cpe_ip}")
-    # region agent log
-    _debug_log(
-        "utils/link_test_flows.py:591",
-        "starting GUI_128 CPE validation",
-        {
-            "cpe_ip": cpe_ip,
-            "bts_ip": bsu_ip or "",
-            "saved_target_ip": bts_result.get("target_ip", ""),
-        },
-        "H4",
-    )
-    # endregion
 
     cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
     if not cpe_page:
@@ -846,7 +710,6 @@ async def assert_gui_128_link_test_cpe(
     finally:
         await cpe_root_ssh.close()
         await cpe_page.close()
-
 
 async def _assert_gui_130_on_device(
     gui_page,
@@ -891,18 +754,6 @@ async def _assert_gui_130_on_device(
 
     raw_backend_results = await _read_backend_results(root_ssh)
     backend_results = _normalize_backend_results_for_device(device_label, raw_backend_results)
-    # region agent log
-    _debug_log(
-        "utils/link_test_flows.py:728",
-        "backend link test results prepared for comparison",
-        {
-            "device_label": device_label,
-            "raw_backend_results": raw_backend_results,
-            "normalized_backend_results": backend_results,
-        },
-        "H9",
-    )
-    # endregion
     print_gui_backend_table(
         f"GUI_130 [{device_label}] — Link Test results (GUI vs backend)",
         [
@@ -944,7 +795,6 @@ async def _assert_gui_130_on_device(
         "gui_results": gui_results,
     }
 
-
 async def assert_gui_130_link_test_results(
     gui_page,
     root_ssh,
@@ -968,18 +818,6 @@ async def assert_gui_130_link_test_results(
     check.is_true(bool(bsu_ip), "GUI_130: BTS IP is required for CPE-side validation")
     check.is_true(bool(device_creds), "GUI_130: device credentials are required for CPE validation")
     _log(f"GUI_130: saved BTS result snapshot ({bts_result['target_ip']}); logging into CPE {cpe_ip}")
-    # region agent log
-    _debug_log(
-        "utils/link_test_flows.py:720",
-        "starting GUI_130 CPE validation",
-        {
-            "cpe_ip": cpe_ip,
-            "bts_ip": bsu_ip or "",
-            "saved_target_ip": bts_result.get("target_ip", ""),
-        },
-        "H4",
-    )
-    # endregion
 
     cpe_page = await open_cpe_gui_session_if_reachable(gui_page.context, cpe_ip, device_creds)
     if not cpe_page:

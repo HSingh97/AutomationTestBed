@@ -66,7 +66,11 @@ def format_mgmt_ipv6_display(label: str, ipv6: str, *, prefix_len: int = 120) ->
 
 
 def format_luci_url(ip_text: str, *, scheme: str = "https") -> str:
-    """LuCI base URL with bracketed IPv6 host when needed."""
+    """LuCI base URL with bracketed IPv6 host when needed.
+
+    Default stays HTTPS for the existing GUI suites. Sanity and installer
+    flows pass ``scheme="http"`` where CPE Chromium hangs on uhttpd TLS.
+    """
     return f"{scheme}://{format_http_host(ip_text)}/cgi-bin/luci/"
 
 

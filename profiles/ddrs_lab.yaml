@@ -1,0 +1,132 @@
+name: ddrs_lab
+description: >
+  Basic DDRS function lab on qa-lab-01 (10.0.150.116).
+  Primary BTS 192.168.2.20 + CPE 192.168.2.21 (VLAN 21).
+  Secondary interferer: BTS 192.168.3.20 + CPE 192.168.3.21 (co-channel).
+  Isolated DDRS suite — secondary link method matches co-channel tests.
+
+dut:
+  ip_mode: ipv4
+  strict_ipv6: false
+  local_ip: "192.168.2.20"
+  remote_ips:
+    - "192.168.2.21"
+  username: root
+  password: Sen@0ubRNwk$
+
+link:
+  expected_mode: linked
+  min_connected_clients: 1
+  health_check_timeout_s: 30
+  radio_idx: 1
+
+recovery:
+  max_retries: 1
+  retry_backoff_seconds:
+    - 3
+  allow_factory_reset: false
+  reboot_wait_seconds: 120
+
+traffic:
+  benchmark_backend: mac_vlan
+  stats_backend: mac_vlan
+
+testbed:
+  enabled: true
+  bootstrap_on_start: false
+  primary_pc:
+    local: false
+    mgmt_interface: enp4s0
+    internet_ssh: "qa-lab-01@10.0.150.116"
+    internet_ssh_password: "senao1234#"
+  secondary_pc:
+    enabled: false
+
+ddrs:
+  lab_pc_ssh: "qa-lab-01@10.0.150.116"
+  lab_pc_password: "senao1234#"
+  device_password: "Sen@0ubRNwk$"
+  bts_ip: "192.168.2.20"
+  cpe_ips:
+    - "192.168.2.21"
+  wlan_iface: "ath1"
+  wifi_iface: "wifi1"
+  radio_idx: 1
+  mac_vlan_script: "/home/qa-lab-01/Desktop/Automation Scripts/mac_vlan_traffic_test_mf.py"
+  bts_iface: "enp4s0"
+  cpe_iface: "enx8cae4cdd4da8"
+  dl_mbps_per_su: 40.0
+  ul_mbps_per_su: 10.0
+  traffic_duration_s: 60
+  traffic_su_count: 1
+  buffer_s: 3
+  stats_interval_s: 5
+  link_settle_s: 30
+  reboot_wait_s: 300
+  wifi_log_lines: 80
+  results_dir: "reports/artifacts"
+  normal_tx_dbm: 5
+  low_rssi_tx_dbm: 1
+  low_rssi_settle_s: 20
+  # Live sua table after bench re-cable: .21=SU2 .22=SU1 .23=SU3 .24=SU4 .25=SU5 .26=SU6
+  # 0 = resolve from BTS sua stats by CPE IP (do not pin — SU index moves after setup changes)
+  cpe_remote_exec_su: 0
+  cpe_fixed_mcs: 23
+  bts_fixed_mcs: 23
+  # P2MP (DDRS_31–36) — same BTS, CPEs VLAN 21–26
+  p2mp_cpe_ips:
+    - "192.168.2.21"
+    - "192.168.2.22"
+    - "192.168.2.23"
+    - "192.168.2.24"
+    - "192.168.2.25"
+    - "192.168.2.26"
+  p2mp_min_stations: 2
+  p2mp_max_loss_pct: 5.0
+  p2mp_stability_duration_s: 60
+  # DDRS_65 — DDRS on vs fixed max MCS; throughput/latency/jitter + BTS CPU
+  # DDRS_66 — spatialstream firmware map: 1=Single 2=Dual 3=Auto
+  # DDRS_71 — wait for max MCS, then kickmac; reconnect must start at MCS0 and ramp
+  max_rate_wait_s: 180
+  reconnect_ramp_s: 150
+  reconnect_min_mcs: 2
+  # Secondary link (same as cochannel_ipv4 profile)
+  secondary_bts: "192.168.3.20"
+  secondary_cpe: "192.168.3.21"
+  interference_level: mid
+  interference_mode: obss
+  secondary_traffic_backend: trex
+  secondary_throughput_max_mbps: 400
+  secondary_throughput_step_mbps: 2
+  secondary_tx_power_min_dbm: 1
+  secondary_tx_power_max_dbm: 26
+  rssi_settle_s: 10
+  trex:
+    host: "192.168.1.1"
+    user: root
+    password: ubuntu
+    directory: /opt/v3.06
+    pythonpath: /opt/v3.06/automation/trex_control_plane/interactive/
+    client_script: /root/master_script_extended_16SU.py
+    ports: "0,1"
+    duration_s: 7200
+    su: 1
+  interference:
+    low:
+      secondary_tx_power_dbm: 1
+      obss_min: 5
+      obss_max: 20
+      secondary_iperf_mbps: 0
+      tune_obss: false
+    mid:
+      secondary_tx_power_dbm: 15
+      obss_min: 22
+      obss_max: 28
+      secondary_iperf_mbps: 3
+      tune_obss: true
+    high:
+      secondary_tx_power_dbm: 26
+      obss_min: 30
+      obss_max: 35
+      secondary_iperf_mbps: 5
+      tune_obss: true

@@ -110,24 +110,26 @@ async def resolve_link_credentials_ssh(
 
 async def _read_radio_ssid(ssh, radio_idx: int) -> str:
     raw = await ssh.send_command(RootCommands.get_ssid(radio_idx), timeout_ops=20)
-    return extract_uci_value(str(raw.result or "").strip())
+    return extract_uci_value(str(raw.result or "")).split("\n", 1)[0].strip()
 
 
 async def _read_radio_key(ssh, radio_idx: int) -> str:
     raw = await ssh.send_command(RootCommands.get_encryption_key(radio_idx), timeout_ops=20)
-    return extract_uci_value(str(raw.result or "").strip())
+    return extract_uci_value(str(raw.result or "")).split("\n", 1)[0].strip()
 
 
 def _uci_set_commands(creds: LinkCredentials, radio_idx: int) -> list[str]:
     ssid_q = shlex.quote(creds.ssid)
     pass_q = shlex.quote(creds.password)
     idx = radio_idx
+    # Prefer ucidyn apply — `wifi reload` often hangs scrapli on these platforms.
     return [
-        f"uci set wireless.@wifi-iface[{idx}].ssid={ssid_q}",
-        f"uci set wireless.@wifi-iface[{idx}].key={pass_q}",
-        f"uci set wireless.wifi{idx}.nwksecret={pass_q}",
-        "uci commit wireless",
-        "wifi reload 2>/dev/null || /etc/init.d/network reload",
+        f"ucidyn set wireless.@wifi-iface[{idx}].ssid={ssid_q}",
+        f"ucidyn set wireless.@wifi-iface[{idx}].key={pass_q}",
+        f"ucidyn set wireless.wifi{idx}.ssid={ssid_q}",
+        f"ucidyn set wireless.wifi{idx}.key={pass_q}",
+        f"ucidyn set wireless.wifi{idx}.nwksecret={pass_q}",
+        "ucidyn apply",
     ]
 
 
@@ -176,7 +178,7 @@ async def apply_link_credentials_via_secondary_pc(
     radio_idx: int = 1,
 ) -> bool:
     """Apply wireless UCI on CPE via CPE-side lab PC → factory IPv4 (recovery path)."""
-    inner = " && ".join(shlex.quote(c) for c in _uci_set_commands(creds, radio_idx))
+    inner = " && ".join(_uci_set_commands(creds, radio_idx))
     return await _run_on_cpe_via_secondary_ssh(
         sec_cfg,
         {"dut": {"password": password}},
@@ -251,9 +253,12 @@ async def _run_on_cpe_via_secondary_ssh(
     await pc.open()
     try:
         for cpe_user, cpe_pass in _cpe_ssh_credential_attempts(profile):
+            # Quote the *entire* remote script once so `a && b && c` all run on CPE.
             remote = (
                 f"sshpass -p {shlex.quote(cpe_pass)} ssh -o StrictHostKeyChecking=no "
-                f"-o ConnectTimeout=20 {shlex.quote(cpe_user)}@{cpe_target} {inner}"
+                f"-o UserKnownHostsFile=/dev/null -o ConnectTimeout=20 "
+                f"{shlex.quote(cpe_user)}@{cpe_target} "
+                f"{shlex.quote(inner)}"
             )
             try:
                 result = await pc.send_command(remote, timeout_ops=timeout_ops)
@@ -278,11 +283,15 @@ def cpe_ssh_access(profile: dict[str, Any]) -> dict[str, str]:
     sec = tb.get("secondary_pc", {}) or {}
     cpe_acc = tb.get("cpe_access", {}) or {}
     dut = profile.get("dut", {}) or {}
+    # Prefer secondary_pc factory hop (10.0.0.1). Never let link.cpe_fallback_ipv4
+    # steal this when it is mis-set to the BTS lab address (192.168.2.10).
     host = str(
-        link.get("cpe_fallback_ipv4")
+        sec.get("cpe_factory_ipv4")
+        or cpe_acc.get("factory_ipv4")
         or cpe_acc.get("fallback_ipv4")
         or sec.get("cpe_gui_ipv4")
         or sec.get("cpe_ssh_ipv4")
+        or link.get("cpe_fallback_ipv4")
         or "10.0.0.1"
     ).strip()
     return {
@@ -329,24 +338,52 @@ async def _apply_cpe_credentials_via_secondary_ssh(
     tb = profile.get("testbed", {}) or {}
     sec = sec_cfg if sec_cfg is not None else (tb.get("secondary_pc", {}) or {})
     link = link_config(profile)
+    dut = profile.get("dut", {}) or {}
     radio_idx = int(link.get("cpe_radio_idx", link.get("radio_idx", 1)))
     tx_power = _tx_power_default(profile)
     dyn_cmds = [
         f"ucidyn set wireless.@wifi-iface[{radio_idx}].ssid {shlex.quote(creds.ssid)}",
         f"ucidyn set wireless.@wifi-iface[{radio_idx}].key {shlex.quote(creds.password)}",
+        f"ucidyn set wireless.@wifi-iface[{radio_idx}].mode sta",
+        f"ucidyn set wireless.@wifi-iface[{radio_idx}].encryption psk2+ccmp-256",
+        f"ucidyn set wireless.wifi{radio_idx}.ssid {shlex.quote(creds.ssid)}",
+        f"ucidyn set wireless.wifi{radio_idx}.key {shlex.quote(creds.password)}",
         f"ucidyn set wireless.wifi{radio_idx}.nwksecret {shlex.quote(creds.password)}",
         f"ucidyn set txparam.ath{radio_idx}.atpcpower {shlex.quote(tx_power)}",
         "ucidyn apply",
     ]
-    inner = " && ".join(shlex.quote(c) for c in dyn_cmds)
-    return await _run_on_cpe_via_secondary_ssh(
-        sec,
-        profile,
-        inner,
-        cpe_host=cpe_ssh_access(profile)["host"],
-        timeout_ops=180,
-        log_ok="CPE SSID/key",
-    )
+    # Do not quote each command individually — that makes `&&` run on the secondary PC.
+    inner = " && ".join(dyn_cmds)
+    # Lab IPv4 first (common after RF drop), then factory. Direct BTS-side probe often fails.
+    hosts: list[str] = []
+    for host in (
+        str(dut.get("cpe_lab_ipv4") or link.get("cpe_lab_ipv4") or "192.168.2.11").strip(),
+        str(sec.get("cpe_ssh_ipv4") or sec.get("cpe_gui_ipv4") or "").strip(),
+        str(sec.get("cpe_factory_ipv4") or cpe_ssh_access(profile)["host"]).strip(),
+        str(dut.get("cpe_fallback_ip") or link.get("cpe_fallback_ipv4") or "10.0.0.1").strip(),
+    ):
+        h = host.split("/")[0].strip()
+        if h and h not in hosts:
+            hosts.append(h)
+    last_exc: Exception | None = None
+    for host in hosts:
+        try:
+            ok = await _run_on_cpe_via_secondary_ssh(
+                sec,
+                profile,
+                inner,
+                cpe_host=host,
+                timeout_ops=180,
+                log_ok=f"CPE SSID/key@{host}",
+            )
+            if ok:
+                return True
+        except Exception as exc:
+            last_exc = exc
+            print(f"[link] CPE credential push failed on {host}: {exc}")
+    if last_exc:
+        raise last_exc
+    return False
 
 
 async def ensure_p2mp_link_credentials(
@@ -407,7 +444,7 @@ async def apply_cpe_pre_link_via_secondary_pc(
     elif cpe_mode == "transparent":
         uci_cmds.extend(build_cpe_untagged_commands(tb))
     uci_cmds.extend(_uci_set_commands(creds, radio_idx))
-    inner = " && ".join(shlex.quote(c) for c in uci_cmds)
+    inner = " && ".join(uci_cmds)
     cpe_factory = str(sec_cfg.get("cpe_factory_ipv4", "192.168.2.1")).strip()
     ok = await _run_on_cpe_via_secondary_ssh(
         sec_cfg,

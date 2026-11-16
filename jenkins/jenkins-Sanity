@@ -1,0 +1,192 @@
+// Sanity plan suite — one-by-one on TARGET_STAND (recovery stays in code).
+// Report: same Senao Sanity HTML as lab (utils/sanity_plan_report.py + plan sheet).
+
+def archiveBuildArtifacts(pattern, allowEmpty = false) {
+    step([
+        $class: 'ArtifactArchiver',
+        artifacts: pattern,
+        fingerprint: true,
+        onlyIfSuccessful: false,
+        allowEmptyArchive: allowEmpty,
+    ])
+}
+
+pipeline {
+    agent { node { label "${TARGET_STAND}" } }
+
+    options {
+        disableConcurrentBuilds()
+        timestamps()
+    }
+
+    parameters {
+        string(
+            name: 'PROFILE',
+            defaultValue: 'default',
+            description: 'profiles/<name>.yaml (Alpha 2 IPv6 lab uses default)'
+        )
+        string(
+            name: 'START_FROM',
+            defaultValue: '',
+            description: 'Optional resume node: SANITY_02 / sanity_02 / test_sanity_02_… (empty = full sheet)'
+        )
+        string(
+            name: 'PLAN_XLSX',
+            defaultValue: '',
+            description: 'Path to Senao UBR P2MP Test Plan xlsx. Empty = \$HOME/Downloads/Senao UBR P2MP Test Plan_v8.0a.xlsx'
+        )
+        booleanParam(
+            name: 'SKIP_TESTBED_BOOTSTRAP',
+            defaultValue: true,
+            description: 'Skip VLAN bootstrap (Sanity recovers RF/mgmt itself; keep true for Jenkins)'
+        )
+        booleanParam(
+            name: 'STOP_ON_FAIL',
+            defaultValue: false,
+            description: 'Stop the one-by-one loop on first FAIL (default: continue all cases)'
+        )
+    }
+
+    stages {
+        stage('Prepare') {
+            steps {
+                script {
+                    echo '----------------------------------------'
+                    echo 'Senao Sanity (pytest one-by-one)'
+                    echo "--- TARGET STAND: ${TARGET_STAND}"
+                    echo "Profile:        ${params.PROFILE}"
+                    echo "Start from:     ${params.START_FROM ?: '(full suite)'}"
+                    echo "Bootstrap skip: ${params.SKIP_TESTBED_BOOTSTRAP}"
+                    echo "Stop on fail:   ${params.STOP_ON_FAIL}"
+                    echo 'Report:         Senao_Sanity_<build>_Report_<date>.html (plan sheet)'
+                    echo '----------------------------------------'
+                }
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh '''
+                    python3 -m venv venv
+                    venv/bin/pip install --upgrade pip
+                    venv/bin/pip install -r requirements.txt
+                    venv/bin/playwright install chromium
+                '''
+            }
+        }
+
+        stage('Execute Sanity Suite') {
+            steps {
+                script {
+                    sh '''
+                        mkdir -p reports/artifacts/case_runs
+                        # Fresh run only — do not mix prior case_runs into the Senao HTML
+                        rm -f reports/artifacts/case_runs/sanity_*.json \
+                              reports/artifacts/case_runs/sanity_*.log \
+                              reports/artifacts/case_runs/sanity_one_by_one_results.txt \
+                              reports/artifacts/case_runs/sanity_full_master.log \
+                              reports/artifacts/sanity_report.json \
+                              reports/artifacts/Senao_Sanity_Report_*.html \
+                              Senao_Sanity_*.html || true
+                    '''
+
+                    def startFrom = (params.START_FROM ?: '').trim()
+                    def stopOnFail = params.STOP_ON_FAIL ? '1' : '0'
+                    def skipBoot = params.SKIP_TESTBED_BOOTSTRAP ? '1' : '0'
+
+                    catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                        sh """
+                            export PYTHONUNBUFFERED=1
+                            export PYTHONPATH=.
+                            export PY=\"\${WORKSPACE}/venv/bin/python\"
+                            export PROFILE_NAME='${params.PROFILE}'
+                            export SKIP_TESTBED_BOOTSTRAP='${skipBoot}'
+                            export STOP_ON_FAIL='${stopOnFail}'
+                            stdbuf -oL -eL bash scripts/run_sanity_one_by_one.sh ${startFrom ? "'" + startFrom + "'" : ''} \
+                              2>&1 | tee reports/artifacts/case_runs/sanity_full_master.log
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Generate Sanity Report') {
+            steps {
+                script {
+                    def senao = load 'jenkins/jenkins-common.groovy'
+                    def basename = senao.standardReportBasename('Senao_Sanity')
+                    def htmlFile = "${basename}.html"
+                    def planArg = (params.PLAN_XLSX ?: '').trim()
+
+                    sh """
+                        set -e
+                        export PYTHONPATH=.
+                        export PY=\"\${WORKSPACE}/venv/bin/python\"
+                        export PLAN_XLSX='${planArg}'
+                        chmod +x scripts/generate_sanity_report.sh
+                        bash scripts/generate_sanity_report.sh '${htmlFile}'
+                        test -f '${htmlFile}'
+                    """
+
+                    if (!fileExists(htmlFile)) {
+                        unstable("Sanity HTML report not produced: ${htmlFile}")
+                    } else {
+                        env.SANITY_REPORT = htmlFile
+                    }
+                }
+            }
+        }
+
+        stage('Archive Report') {
+            steps {
+                script {
+                    archiveBuildArtifacts('Senao_Sanity_*.html', true)
+                    archiveBuildArtifacts('reports/artifacts/case_runs/sanity_*.json', true)
+                    archiveBuildArtifacts('reports/artifacts/case_runs/sanity_one_by_one_results.txt', true)
+                    archiveBuildArtifacts('reports/artifacts/case_runs/sanity_full_master.log', true)
+                    archiveBuildArtifacts('reports/artifacts/testbed_summary.json', true)
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                def senao = load 'jenkins/jenkins-common.groovy'
+                def destFile = env.SANITY_REPORT ?: "${senao.standardReportBasename('Senao_Sanity')}.html"
+                def hasReport = fileExists(destFile)
+
+                if (hasReport) {
+                    senao.publishSenaoHtmlReport(destFile, "Senao Sanity Report - Build ${env.BUILD_NUMBER}")
+                }
+
+                def results = ''
+                if (fileExists('reports/artifacts/case_runs/sanity_one_by_one_results.txt')) {
+                    results = readFile('reports/artifacts/case_runs/sanity_one_by_one_results.txt').trim()
+                }
+                def passN = results.split('\n').findAll { it.startsWith('PASS ') }.size()
+                def failN = results.split('\n').findAll { it.startsWith('FAIL ') }.size()
+
+                def detailsHtml = """\
+                    <p><strong>Profile:</strong> ${params.PROFILE}</p>
+                    <p><strong>Start from:</strong> ${params.START_FROM ?: '(full suite)'}</p>
+                    <p><strong>Automated PASS/FAIL:</strong> ${passN} / ${failN}</p>
+                    <p><strong>Report engine:</strong> utils/sanity_plan_report.py (same HTML as Alpha / Alpha 2 lab reports)</p>
+                """
+
+                try {
+                    senao.sendSenaoPipelineEmail([
+                        subjectPrefix: 'Senao Sanity',
+                        reportTitle: 'Senao Sanity Test Report',
+                        footerNote: 'Plan-sheet Sanity one-by-one with in-code recovery',
+                        reportFile: hasReport ? destFile : '',
+                        detailsHtml: detailsHtml
+                    ])
+                } catch (Exception exc) {
+                    echo "Email notification failed: ${exc.message}"
+                }
+            }
+        }
+    }
+}

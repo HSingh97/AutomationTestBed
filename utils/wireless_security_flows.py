@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
 import shlex
@@ -30,31 +29,9 @@ RADIO_IDX = 1
 APPLY_SETTLE_S = 10
 LINK_DOWN_VERIFY_S = 20
 LOG_TAIL_LINES = 200
-_DEBUG_LOG = "/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-981b65.log"
-
-
-def _dbg981b(location: str, message: str, data: dict, *, hypothesis_id: str, run_id: str = "post-fix") -> None:
-    # region agent log
-    try:
-        payload = {
-            "sessionId": "981b65",
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        with open(_DEBUG_LOG, "a", encoding="utf-8") as fp:
-            fp.write(json.dumps(payload, ensure_ascii=True) + "\n")
-    except OSError:
-        pass
-    # endregion
-
 
 def _log(message: str) -> None:
     print(f"[WIRELESS_SECURITY] {message}")
-
 
 def _require_ipv6(ip: str, *, case_id: str, role: str) -> str:
     clean = normalize_ip(ip)
@@ -65,13 +42,11 @@ def _require_ipv6(ip: str, *, case_id: str, role: str) -> str:
     )
     return clean
 
-
 def _require_ipv6_profile(profile_bundle, *, case_id: str) -> None:
     dut = profile_bundle.active.get("dut", {})
     ipv6_mode = dut.get("ip_mode") == "ipv6" or dut.get("strict_ipv6")
     if not ipv6_mode:
         pytest.skip(f"{case_id}: requires IPv6 profile (ip_mode: ipv6 / strict_ipv6: true)")
-
 
 async def _ssh(
     root_ssh,
@@ -89,15 +64,8 @@ async def _ssh(
         return clean_ssh_output(response.result)
     except (ScrapliTimeout, asyncio.TimeoutError, TimeoutError) as exc:
         if tolerate_timeout:
-            _dbg981b(
-                "wireless_security_flows.py:_ssh",
-                "SSH timeout tolerated",
-                {"command_head": command[:80], "error": str(exc)[:120]},
-                hypothesis_id="H-cpe-reload",
-            )
             return ""
         raise
-
 
 async def _ssh_full_output(
     root_ssh,
@@ -115,7 +83,6 @@ async def _ssh_full_output(
     except (ScrapliTimeout, asyncio.TimeoutError, TimeoutError):
         return ""
 
-
 def _ping_success(raw: str) -> bool:
     """Match BusyBox/OpenWrt ping output — do not rely on clean_ssh_output's last line."""
     lower = str(raw or "").lower()
@@ -129,16 +96,13 @@ def _ping_success(raw: str) -> bool:
         return True
     return "0% packet loss" in lower
 
-
 def _ipv6_ping_cmd(peer_ip: str, *, count: int = 4, wait_s: int = 8) -> str:
     peer = shlex.quote(normalize_ip(peer_ip))
     return f"ping -6 -c {count} -W {wait_s} {peer} 2>&1"
 
-
 async def _ping_ipv6_reachable(root_ssh, peer_ip: str) -> bool:
     ping_out = await _ssh_full_output(root_ssh, _ipv6_ping_cmd(peer_ip), timeout_s=30)
     return _ping_success(ping_out)
-
 
 async def _open_root_ssh_for_host(host: str, device_creds: dict):
     os.makedirs("logs", exist_ok=True)
@@ -161,7 +125,6 @@ async def _open_root_ssh_for_host(host: str, device_creds: dict):
             open_errors.append(str(exc))
     raise RuntimeError(f"Unable to open root SSH to {host}: {' | '.join(open_errors)}")
 
-
 async def _try_open_root_ssh_for_host(host: str, device_creds: dict):
     """Single quick SSH attempt; returns connection or None (no long retry loop)."""
     conn = AsyncGenericDriver(
@@ -181,7 +144,6 @@ async def _try_open_root_ssh_for_host(host: str, device_creds: dict):
             pass
         return None
 
-
 async def _navigate_radio_1(gui_page, host_ip: str) -> None:
     radio_page = RadioPropertiesPage(gui_page, local_ip=host_ip)
     await radio_page.navigate()
@@ -189,7 +151,6 @@ async def _navigate_radio_1(gui_page, host_ip: str) -> None:
         state="attached",
         timeout=UITimeouts.ELEMENT_WAIT_MS,
     )
-
 
 async def _read_gui_encryption(gui_page) -> str:
     element = gui_page.locator(WirelessSecurityLocators.ENCRYPTION_DROPDOWN).first
@@ -202,13 +163,11 @@ async def _read_gui_encryption(gui_page) -> str:
         """
     )
 
-
 async def _read_backend_encryption(root_ssh) -> tuple[str, str]:
     enc_raw = await _ssh(root_ssh, RootCommands.get_security(RADIO_IDX))
     enc_label = parse_encryption(enc_raw)
     enc_uci = extract_uci_value(enc_raw)
     return enc_label, enc_uci
-
 
 async def _select_encryption(gui_page, option_text: str) -> None:
     element = gui_page.locator(WirelessSecurityLocators.ENCRYPTION_DROPDOWN).first
@@ -238,10 +197,8 @@ async def _select_encryption(gui_page, option_text: str) -> None:
             match["value"],
         )
 
-
 def _is_wpa2_configured(gui_enc: str, backend_enc: str, expected_encryption: str) -> bool:
     return gui_enc == expected_encryption and backend_enc == expected_encryption
-
 
 async def _ensure_wpa2_encryption(
     gui_page,
@@ -268,7 +225,6 @@ async def _ensure_wpa2_encryption(
     await execute_triple_apply(gui_page, WirelessSecurityLocators.RADIO_URL_CHUNK)
     await gui_page.wait_for_timeout(APPLY_SETTLE_S * 1000)
     return True
-
 
 async def _verify_wpa2_on_device(
     gui_page,
@@ -317,7 +273,6 @@ async def _verify_wpa2_on_device(
         f"{device_label}: GUI and backend encryption must match",
     )
 
-
 async def _ensure_and_verify_wpa2_on_device(
     gui_page,
     root_ssh,
@@ -342,7 +297,6 @@ async def _ensure_and_verify_wpa2_on_device(
         device_label=device_label,
         expected_encryption=expected_encryption,
     )
-
 
 async def assert_w_security_01_configure_wpa2(
     gui_page,
@@ -398,11 +352,9 @@ async def assert_w_security_01_configure_wpa2(
 
     _log(f"{case_id} completed: BTS and CPE verified on WPA2 ({expected_encryption})")
 
-
 class _AsyncSshCommandResult:
     def __init__(self, text: str):
         self.result = text
-
 
 class _AsyncSshSession:
     """Minimal scrapli-compatible wrapper for asyncssh connections."""
@@ -422,7 +374,6 @@ class _AsyncSshSession:
         if self._jump is not None:
             self._jump.close()
 
-
 def _resolve_oob_ips(profile_bundle, *, fallback_ip_cli: str | None = None) -> tuple[str, str, str]:
     dut = profile_bundle.active.get("dut", {})
     cpe_pc_ip = str(dut.get("cpe_pc_ip") or "").strip()
@@ -432,7 +383,6 @@ def _resolve_oob_ips(profile_bundle, *, fallback_ip_cli: str | None = None) -> t
     cpe_pc_password = str(dut.get("cpe_pc_password") or "senao1234#").strip()
     return cpe_pc_ip, cpe_fallback_ip, cpe_pc_password
 
-
 async def _read_device_logs(ssh) -> str:
     return await _ssh(
         ssh,
@@ -441,7 +391,6 @@ async def _read_device_logs(ssh) -> str:
         f"| tail -n {LOG_TAIL_LINES}",
     )
 
-
 async def _is_cpe_ssh_target(ssh) -> bool:
     """True when SSH landed on CPE (STA), not BTS (AP)."""
     try:
@@ -449,35 +398,16 @@ async def _is_cpe_ssh_target(ssh) -> bool:
         for idx in (RADIO_IDX, 0):
             mode = clean_ssh_output(await _ssh(ssh, RootCommands.get_radio_mode(idx), timeout_s=15)).lower()
             if mode == "sta":
-                _dbg981b(
-                    "wireless_security_flows.py:_is_cpe_ssh_target",
-                    "CPE role confirmed",
-                    {"radio_idx": idx, "mode": mode},
-                    hypothesis_id="H-cpe-role",
-                )
                 return True
             if mode == "ap":
                 remote_exec = clean_ssh_output(
                     await _ssh(ssh, "test -x /usr/sbin/remote_exec.sh && echo yes || echo no", timeout_s=15)
                 ).lower()
                 if remote_exec == "yes":
-                    _dbg981b(
-                        "wireless_security_flows.py:_is_cpe_ssh_target",
-                        "BTS detected on SSH session",
-                        {"radio_idx": idx, "mode": mode, "remote_exec": remote_exec},
-                        hypothesis_id="H-cpe-role",
-                    )
                     return False
         return False
     except Exception as exc:
-        _dbg981b(
-            "wireless_security_flows.py:_is_cpe_ssh_target",
-            "Role check exception",
-            {"error": str(exc)[:160]},
-            hypothesis_id="H-cpe-role",
-        )
         return False
-
 
 def _filter_relevant_log_lines(lines: list[str], ignore_patterns: list[str]) -> list[str]:
     ignore = [re.compile(p, re.IGNORECASE) for p in ignore_patterns]
@@ -488,11 +418,9 @@ def _filter_relevant_log_lines(lines: list[str], ignore_patterns: list[str]) -> 
         kept.append(line)
     return kept
 
-
 def _new_log_lines(before: str, after: str) -> list[str]:
     before_set = set(before.splitlines())
     return [line for line in after.splitlines() if line.strip() and line not in before_set]
-
 
 def _grep_rejection_lines(lines: list[str], patterns: list[str], ignore_patterns: list[str]) -> list[str]:
     filtered = _filter_relevant_log_lines(lines, ignore_patterns)
@@ -502,7 +430,6 @@ def _grep_rejection_lines(lines: list[str], patterns: list[str], ignore_patterns
         if any(rx.search(line) for rx in compiled):
             matches.append(line)
     return matches
-
 
 async def _wait_for_ipv6_link(
     root_ssh,
@@ -526,7 +453,6 @@ async def _wait_for_ipv6_link(
             _log(f"{label}: waiting for IPv6 link ({attempt} checks, {timeout_s}s max)...")
         await asyncio.sleep(3)
     return False
-
 
 async def _open_cpe_ssh_via_pc_jump(
     cpe_pc_ip: str,
@@ -558,7 +484,6 @@ async def _open_cpe_ssh_via_pc_jump(
     except Exception:
         jump.close()
         raise
-
 
 async def _try_open_cpe_ssh_when_link_down(
     cpe_ip: str,
@@ -603,7 +528,6 @@ async def _try_open_cpe_ssh_when_link_down(
 
     return None, ""
 
-
 async def _open_cpe_ssh_when_link_down(
     cpe_ip: str,
     cpe_pc_ip: str,
@@ -633,7 +557,6 @@ async def _open_cpe_ssh_when_link_down(
     pytest.fail(f"W_SECURITY_03: unable to reach CPE SSH after link down — {' | '.join(errors)}")
     return None, ""
 
-
 async def _close_cpe_ssh(session) -> None:
     if session is None:
         return
@@ -641,7 +564,6 @@ async def _close_cpe_ssh(session) -> None:
         await session.close()
     except Exception:
         pass
-
 
 async def _read_encryption_uci(root_ssh) -> str:
     """Read Radio encryption UCI value, ignoring shell job-control noise."""
@@ -657,14 +579,12 @@ async def _read_encryption_uci(root_ssh) -> str:
             return line
     return extract_uci_value(raw).strip("'\"")
 
-
 async def _snapshot_encryption(root_ssh) -> dict[str, str]:
     enc_uci = await _read_encryption_uci(root_ssh)
     return {
         "encryption_uci": enc_uci,
         "encryption_label": parse_encryption(enc_uci),
     }
-
 
 async def _wait_for_insecure_link_down(
     root_ssh,
@@ -705,7 +625,6 @@ async def _wait_for_insecure_link_down(
     _log(f"{context}: link did not drop within {timeout_s}s")
     return False
 
-
 async def _probe_cpe_ipv6_ssh(cpe_ip: str, device_creds: dict) -> bool:
     """Single quick attempt — CPE reachable over IPv6 SSH (mode=sta)."""
     conn = AsyncGenericDriver(
@@ -725,7 +644,6 @@ async def _probe_cpe_ipv6_ssh(cpe_ip: str, device_creds: dict) -> bool:
             await conn.close()
         except Exception:
             pass
-
 
 async def _wait_for_secure_link_up(
     root_ssh,
@@ -756,7 +674,6 @@ async def _wait_for_secure_link_up(
         _log(f"{context}: link wait ended — continuing (CPE phase may use OOB)")
     return False, None
 
-
 async def _wait_for_bidirectional_ping_up(
     root_ssh,
     cpe_ip: str,
@@ -779,7 +696,6 @@ async def _wait_for_bidirectional_ping_up(
     _log(f"{context}: bidirectional IPv6 ping not ready within {timeout_s}s")
     return False
 
-
 async def _cpe_ping_bts_reachable(cpe_ip: str, bsu_ip: str, device_creds: dict) -> bool:
     cpe_ssh = await _try_open_root_ssh_for_host(cpe_ip, device_creds)
     if cpe_ssh is None:
@@ -793,7 +709,6 @@ async def _cpe_ping_bts_reachable(cpe_ip: str, bsu_ip: str, device_creds: dict) 
         return False
     finally:
         await _close_cpe_ssh(cpe_ssh)
-
 
 async def _wait_for_link_up_after_key_restore(
     root_ssh,
@@ -826,13 +741,11 @@ async def _wait_for_link_up_after_key_restore(
                 return True, elapsed
         await asyncio.sleep(poll_interval_s)
 
-
 def _resolve_reboot_wait_s(profile_bundle) -> int:
     reboot_wait_s = int(WIRELESS_SECURITY_TEST_VALUES["CPE_REBOOT_WAIT_S"])
     if profile_bundle is not None:
         reboot_wait_s = int(profile_bundle.active.get("recovery", {}).get("reboot_wait_seconds", reboot_wait_s))
     return reboot_wait_s
-
 
 async def _verify_link_stays_down(
     root_ssh,
@@ -848,13 +761,11 @@ async def _verify_link_stays_down(
         await asyncio.sleep(5)
     return True
 
-
 async def _silent_device_reboot(ssh) -> None:
     try:
         await _ssh(ssh, "reboot", timeout_s=15, tolerate_timeout=True)
     except Exception:
         pass
-
 
 async def _wait_for_bts_ssh_after_reboot(
     bts_ip: str,
@@ -874,7 +785,6 @@ async def _wait_for_bts_ssh_after_reboot(
     if not quiet:
         _log("BTS SSH did not return")
     return None
-
 
 async def _reboot_bts_and_cpe_after_link_down(
     root_ssh,
@@ -921,7 +831,6 @@ async def _reboot_bts_and_cpe_after_link_down(
     )
     return bts_ssh, cpe_back
 
-
 async def _wait_for_cpe_ready_after_recovery(
     cpe_ip: str,
     cpe_pc_ip: str,
@@ -955,7 +864,6 @@ async def _wait_for_cpe_ready_after_recovery(
 
         await asyncio.sleep(10)
     return False
-
 
 async def _restore_cpe_original_key(
     cpe_ip: str,
@@ -994,7 +902,6 @@ async def _restore_cpe_original_key(
     finally:
         await _close_cpe_ssh(cpe_oob)
 
-
 async def _apply_cpe_wpa2_aes256_oob(
     cpe_ip: str,
     wpa2_uci: str,
@@ -1013,7 +920,6 @@ async def _apply_cpe_wpa2_aes256_oob(
         return (await _read_encryption_uci(cpe_oob)).lower()
     finally:
         await _close_cpe_ssh(cpe_oob)
-
 
 async def _tiered_link_recovery_after_drop(
     root_ssh,
@@ -1083,7 +989,6 @@ async def _tiered_link_recovery_after_drop(
     )
     return link_ok, elapsed, evidence, root_ssh
 
-
 async def _assert_w_security_05_link_restore_time(
     *,
     context: str,
@@ -1115,7 +1020,6 @@ async def _assert_w_security_05_link_restore_time(
             link_uptime_max_s,
             f"W_SECURITY_05: link restore too slow ({restore_elapsed_s:.1f}s)",
         )
-
 
 async def _assert_w_security_06_link_stability(
     root_ssh,
@@ -1201,11 +1105,9 @@ async def _assert_w_security_06_link_stability(
     await _close_cpe_ssh(cpe_ssh)
     return bts_stable, cpe_stable
 
-
 async def _read_encryption_key_uci(ssh) -> str:
     raw = await _ssh(ssh, RootCommands.get_encryption_key(RADIO_IDX), timeout_s=30)
     return extract_uci_value(raw).strip("'\"")
-
 
 async def _set_encryption_key_ssh(
     ssh,
@@ -1223,7 +1125,6 @@ async def _set_encryption_key_ssh(
     )
     _log(f"{device_label}: ucidyn apply")
     await _ssh(ssh, "ucidyn apply", timeout_s=90, tolerate_timeout=may_drop_link)
-
 
 async def _cpe_apply_wrong_key(
     cpe_ip: str,
@@ -1266,7 +1167,6 @@ async def _cpe_apply_wrong_key(
     finally:
         await _close_cpe_ssh(cpe_oob)
 
-
 async def _verify_both_on_wpa2_aes256(
     root_ssh,
     cpe_ip: str,
@@ -1300,7 +1200,6 @@ async def _verify_both_on_wpa2_aes256(
     check.is_true(bool(original_key), f"{case_id}: CPE original key must be readable")
     return original_key
 
-
 async def _set_encryption_ssh(
     root_ssh,
     *,
@@ -1323,7 +1222,6 @@ async def _set_encryption_ssh(
         tolerate_timeout=may_drop_link,
     )
 
-
 async def _restore_encryption_ssh(root_ssh, snapshot: dict[str, str], *, device_label: str) -> None:
     enc = snapshot.get("encryption_uci", "")
     if not enc:
@@ -1331,11 +1229,9 @@ async def _restore_encryption_ssh(root_ssh, snapshot: dict[str, str], *, device_
     _log(f"{device_label}: restore wireless.@wifi-iface[{RADIO_IDX}].encryption='{enc}'")
     await _set_encryption_ssh(root_ssh, encryption_uci=enc, device_label=device_label)
 
-
 async def _verify_encryption_uci(root_ssh, *, device_label: str, expected_uci: str) -> None:
     enc_uci = (await _read_encryption_uci(root_ssh)).lower()
     check.equal(enc_uci, expected_uci.lower(), f"{device_label}: UCI encryption must be '{expected_uci}'")
-
 
 async def _assert_config_log_encryption(root_ssh, *, device_label: str, expected_uci: str) -> None:
     needle = f"wireless.@wifi-iface[{RADIO_IDX}].encryption = {expected_uci}"
@@ -1374,7 +1270,6 @@ async def _assert_config_log_encryption(root_ssh, *, device_label: str, expected
         f"{device_label}: config must show encryption = {expected_uci} (syslog or uci show)",
     )
 
-
 async def _assert_rejection_logs(
     *,
     device_label: str,
@@ -1404,7 +1299,6 @@ async def _assert_rejection_logs(
         _log(f"{device_label}: rejection log: {matches[0][:200]}")
     return matches
 
-
 async def _ensure_wpa2_encryption_ssh(ssh, *, device_label: str, wpa2_uci: str) -> None:
     snap = await _snapshot_encryption(ssh)
     if snap["encryption_uci"].lower() == wpa2_uci.lower():
@@ -1413,7 +1307,6 @@ async def _ensure_wpa2_encryption_ssh(ssh, *, device_label: str, wpa2_uci: str) 
     _log(f"{device_label}: baseline restore {snap['encryption_uci']} -> {wpa2_uci}")
     await _set_encryption_ssh(ssh, encryption_uci=wpa2_uci, device_label=device_label)
     await _verify_encryption_uci(ssh, device_label=device_label, expected_uci=wpa2_uci)
-
 
 async def _bootstrap_wpa2_baseline(
     root_ssh,
@@ -1458,7 +1351,6 @@ async def _bootstrap_wpa2_baseline(
     else:
         _log("WARN: IPv6 link still down after baseline — BTS phase will run; CPE phase uses OOB if needed")
 
-
 async def _apply_encryption_via_gui(
     gui_page,
     host_ip: str,
@@ -1471,7 +1363,6 @@ async def _apply_encryption_via_gui(
     await _select_encryption(gui_page, encryption_gui)
     await execute_triple_apply(gui_page, WirelessSecurityLocators.RADIO_URL_CHUNK)
     await gui_page.wait_for_timeout(APPLY_SETTLE_S * 1000)
-
 
 async def _verify_encryption_gui_backend(
     gui_page,
@@ -1500,7 +1391,6 @@ async def _verify_encryption_gui_backend(
     check.equal(gui_enc, expected_gui, f"{device_label}: GUI encryption must be '{expected_gui}'")
     check.equal(backend_enc, expected_gui, f"{device_label}: backend encryption must be '{expected_gui}'")
     check.equal(enc_uci.lower(), expected_uci.lower(), f"{device_label}: UCI must be '{expected_uci}'")
-
 
 async def _bootstrap_wpa2_gui(
     gui_page,
@@ -1546,7 +1436,6 @@ async def _bootstrap_wpa2_gui(
         _log("IPv6 link is up after baseline restore")
     else:
         _log("WARN: IPv6 link still down after baseline — CPE phase may need link after BTS revert")
-
 
 async def _run_insecure_phase_gui(
     gui_page,
@@ -1602,7 +1491,6 @@ async def _run_insecure_phase_gui(
     )
     _log(f"{device_label} phase completed — restored to {wpa2_gui} ({wpa2_uci})")
 
-
 async def _run_insecure_phase_ssh(
     ssh,
     *,
@@ -1634,7 +1522,6 @@ async def _run_insecure_phase_ssh(
     await _restore_encryption_ssh(ssh, {"encryption_uci": wpa2_uci}, device_label=device_label)
     await _verify_encryption_uci(ssh, device_label=device_label, expected_uci=wpa2_uci)
     _log(f"{device_label} phase completed — restored to {wpa2_uci}")
-
 
 async def _run_cpe_insecure_phase_oob_restore(
     cpe_ip: str,
@@ -1694,7 +1581,6 @@ async def _run_cpe_insecure_phase_oob_restore(
 
     _log(f"CPE phase completed — restored to {wpa2_uci} via OOB")
 
-
 async def _wsec03_apply_insecure(
     ssh,
     *,
@@ -1732,13 +1618,11 @@ async def _wsec03_apply_insecure(
     )
     return logs_before
 
-
 async def _wsec03_restore_secure(ssh, *, device_label: str, wpa2_uci: str) -> None:
     await _set_encryption_ssh(ssh, encryption_uci=wpa2_uci, device_label=device_label)
     await _verify_encryption_uci(ssh, device_label=device_label, expected_uci=wpa2_uci)
     await _assert_config_log_encryption(ssh, device_label=device_label, expected_uci=wpa2_uci)
     _log(f"{device_label}: restored to {wpa2_uci}")
-
 
 async def _wsec03_cpe_apply_none(
     cpe_ip: str,
@@ -1794,7 +1678,6 @@ async def _wsec03_cpe_apply_none(
         await _close_cpe_ssh(cpe_oob)
     return logs_before
 
-
 def _print_rejection_logs_if_found(
     *,
     device_label: str,
@@ -1816,7 +1699,6 @@ def _print_rejection_logs_if_found(
             ("Rejection log lines", ">0", str(len(matches)), "PASS"),
         ]
     )
-
 
 async def assert_w_security_insecure_encryption_flow(
     root_ssh,
@@ -2036,7 +1918,6 @@ async def assert_w_security_insecure_encryption_flow(
     print_comparison_table(summary_rows)
     _log(f"{case_id} completed — both devices restored to {wpa2_uci}")
 
-
 async def assert_w_security_03_validate_rejection_logs(
     root_ssh,
     cpe_ips: list[str],
@@ -2058,7 +1939,6 @@ async def assert_w_security_03_validate_rejection_logs(
         run_05=False,
         run_06=False,
     )
-
 
 async def assert_w_security_05_link_uptime_after_restore(
     root_ssh,
@@ -2082,7 +1962,6 @@ async def assert_w_security_05_link_uptime_after_restore(
         run_06=False,
     )
 
-
 async def assert_w_security_06_link_stability_monitor(
     root_ssh,
     cpe_ips: list[str],
@@ -2105,15 +1984,12 @@ async def assert_w_security_06_link_stability_monitor(
         run_06=True,
     )
 
-
 async def _read_radio_mode(ssh, radio_idx: int = RADIO_IDX) -> str:
     return clean_ssh_output(await _ssh(ssh, RootCommands.get_radio_mode(radio_idx), timeout_s=20)).lower()
-
 
 async def _read_link_field_at_peer(ssh, peer_ip: str, field: str) -> str:
     assoc_idx = await find_assoc_index_for_cpe(ssh, peer_ip, radio_idx=RADIO_IDX)
     return ssh_scalar(await _ssh(ssh, RootCommands.get_link_stat_field(RADIO_IDX, assoc_idx, field), timeout_s=20))
-
 
 async def _ensure_cpe_wpa2_ssh(
     cpe_ip: str,
@@ -2147,7 +2023,6 @@ async def _ensure_cpe_wpa2_ssh(
         await _ensure_wpa2_encryption_ssh(cpe_oob, device_label=f"CPE-OOB ({oob_label})", wpa2_uci=wpa2_uci)
     finally:
         await _close_cpe_ssh(cpe_oob)
-
 
 async def _assert_wpa2_association(
     root_ssh,
@@ -2222,7 +2097,6 @@ async def _assert_wpa2_association(
         check.is_true(cpe_ip_ok, f"{case_id}: CPE must have IPv6 assigned ({phase})")
         check.is_true(bts_ip_ok, f"{case_id}: BTS link table must show CPE IPv6 ({phase})")
 
-
 async def _assert_w_security_07_association_and_ip(
     root_ssh,
     cpe_ssh,
@@ -2240,7 +2114,6 @@ async def _assert_w_security_07_association_and_ip(
         verify_ip=True,
     )
 
-
 async def _reboot_cpe_via_ssh(cpe_ip: str, device_creds: dict) -> bool:
     """Reboot CPE over IPv6 SSH. Returns True when reboot command was sent."""
     cpe_ssh = None
@@ -2256,7 +2129,6 @@ async def _reboot_cpe_via_ssh(cpe_ip: str, device_creds: dict) -> bool:
         return False
     finally:
         await _close_cpe_ssh(cpe_ssh)
-
 
 async def _wait_for_cpe_ssh_after_reboot(
     cpe_ip: str,
@@ -2286,7 +2158,6 @@ async def _wait_for_cpe_ssh_after_reboot(
     if not quiet and context:
         _log(f"{context}: CPE SSH did not return within {timeout_s}s")
     return False
-
 
 async def assert_w_security_07_wpa2_psk_connection(
     root_ssh,
@@ -2381,7 +2252,6 @@ async def assert_w_security_07_wpa2_psk_connection(
         ]
     )
     _log(f"{case_id} completed — CPE associated on WPA2-PSK with IPv6 assigned")
-
 
 async def assert_w_security_09_wpa2_association(
     root_ssh,
@@ -2499,7 +2369,6 @@ async def assert_w_security_09_wpa2_association(
         ]
     )
     _log(f"{case_id} completed — CPE re-associated on WPA2 after reboot")
-
 
 async def assert_w_security_11_open_mode_attempt(
     root_ssh,
@@ -2629,7 +2498,6 @@ async def assert_w_security_11_open_mode_attempt(
     check.equal(cpe_enc_restored, wpa2_uci.lower(), f"{case_id}: CPE must be restored to {wpa2_uci}")
     check.is_true(link_stable, f"{case_id}: link must be stable after CPE WPA2 restore")
     _log(f"{case_id} completed — open mode rejected, CPE restored to {wpa2_uci}")
-
 
 async def assert_w_security_14_invalid_passphrase(
     root_ssh,

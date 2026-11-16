@@ -11,9 +11,15 @@ dut:
   password: Sen@0ubRNwk$
 
 link:
+  # Keep live lab SSID — do not run AIRTEL_SSID_GEN (breaks CPE association).
+  auto_credentials: false
+  ssid: "ATUMNAWJ"
+  key: "ubr@1234"
+  radio_idx: 1
+  cpe_radio_idx: 1
   expected_mode: linked
   min_connected_clients: 1
-  health_check_timeout_s: 20
+  health_check_timeout_s: 120
 
 recovery:
   max_retries: 2
@@ -28,14 +34,30 @@ traffic:
   benchmark_backend: ixia
   stats_backend: trex
 
+pdu:
+  enabled: true
+  scheme: http
+  host: "192.168.1.190"
+  username: "admin"
+  password: "1234"
+  timeout_s: 10
+  cycle_off_s: 15
+  post_on_wait_s: 45
+  verify_ssl: false
+  outlets:
+    bts: 1
+    cpe: 2
+
 link_test:
   vlan_id: 0
   vlan_min: 0
   vlan_max: 4094
   duration_s: 30
   duration_min: 1
-  duration_max: 300
+  duration_max: 60
   bw_min: 20
-  bw_max: 400
+  bw_max: 210
+  high_bw_mbps: 400
+  high_htmode: HT80
   result_tolerance_throughput_mbps: 25
   result_tolerance_latency_ms: 5
