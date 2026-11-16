@@ -30,6 +30,8 @@ OPERATING_RATE_DUAL_MBPS: dict[str, list[float]] = {
     "HT20": [17, 34, 51, 68, 103, 137, 154, 172, 206, 229, 258, 286],
     "HT40": [34, 68, 103, 137, 206, 275, 309, 344, 412, 455, 516, 573],
     "HT80": [72, 144, 216, 288, 432, 576, 648, 720, 864, 960, 1080, 1201],
+    # HT160 is double the HT80 sheet. Dual MCS23 is 2402 Mbps.
+    "HT160": [144, 288, 432, 576, 864, 1152, 1296, 1440, 1728, 1920, 2160, 2402],
 }
 
 # Single-stream reference (Mbps) — same sheet, first value in Rate column.
@@ -37,12 +39,15 @@ OPERATING_RATE_SINGLE_MBPS: dict[str, list[float]] = {
     "HT20": [8, 17, 25, 34, 51, 68, 77, 86, 103, 114, 129, 143],
     "HT40": [17, 34, 51, 68, 103, 137, 154, 172, 206, 229, 258, 286],
     "HT80": [36, 72, 108, 144, 216, 288, 324, 360, 432, 480, 540, 600],
+    "HT160": [72, 144, 216, 288, 432, 576, 648, 720, 864, 960, 1080, 1200],
 }
 
 MIN_SNR_DB: dict[str, list[float]] = {
     "HT20": [11, 13, 16, 19, 21, 24, 26, 28, 30, 32, 34, 36],
     "HT40": [13, 16, 19, 21, 24, 27, 29, 31, 33, 36, 38, 41],
     "HT80": [15, 18, 21, 23, 26, 29, 31, 34, 37, 40, 42, 44],
+    # The sheet has no HT160 SNR row. This keeps the HT80 values so a lookup still resolves.
+    "HT160": [15, 18, 21, 23, 26, 29, 31, 34, 37, 40, 42, 44],
 }
 
 # HT20 lab reference TCP throughput (Mbps) from benchmark sheet — for efficiency display.

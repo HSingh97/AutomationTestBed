@@ -11,12 +11,27 @@ def archiveBuildArtifacts(pattern, allowEmpty = false) {
     ])
 }
 
-def expandBandwidths(raw) {
-    def text = (raw ?: '').trim()
-    if (!text || text.equalsIgnoreCase('all')) {
-        return 'HT20,HT40,HT80'
+def selectedBandwidths(boolean failIfEmpty = true) {
+    def selected = []
+    if (params.HT20) {
+        selected << 'HT20'
     }
-    return text
+    if (params['HT40+']) {
+        selected << 'HT40+'
+    }
+    if (params.HT80) {
+        selected << 'HT80'
+    }
+    if (params.HT160) {
+        selected << 'HT160'
+    }
+    if (!selected) {
+        if (failIfEmpty) {
+            error('Select at least one bandwidth')
+        }
+        return '(none)'
+    }
+    return selected.join(',')
 }
 
 def expandMcs(raw) {
@@ -36,11 +51,10 @@ pipeline {
             choices: ['test-qa-lab-01', 'test-qa-lab-02', 'test-harman2', 'test-puneet'],
             description: 'Jenkins agent / lab stand'
         )
-        string(
-            name: 'Bandwidth',
-            defaultValue: 'all',
-            description: 'htmode list (e.g. HT80) or all → HT20,HT40,HT80'
-        )
+        booleanParam(name: 'HT20', defaultValue: true, description: 'Run HT20')
+        booleanParam(name: 'HT40+', defaultValue: true, description: 'Run HT40+')
+        booleanParam(name: 'HT80', defaultValue: true, description: 'Run HT80')
+        booleanParam(name: 'HT160', defaultValue: false, description: 'Run HT160')
         string(
             name: 'MCS',
             defaultValue: 'all',
@@ -87,12 +101,12 @@ pipeline {
         stage('Prepare Testbed') {
             steps {
                 script {
-                    def bandwidths = expandBandwidths(params.Bandwidth)
+                    def bandwidths = selectedBandwidths()
                     def mcsList = expandMcs(params.MCS)
                     echo '------------------------------------------'
                     echo 'UBR Performance Throughput (TRex matrix)'
                     echo "--- TARGET STAND: ${TARGET_STAND}"
-                    echo "Bandwidth:  ${params.Bandwidth} → ${bandwidths}"
+                    echo "Bandwidth:  ${bandwidths}"
                     echo "MCS:        ${params.MCS} → ${mcsList}"
                     echo "TRex IP:    ${params['TRex IP'] ?: '(stand profile)'}"
                     echo "BTS IP:     ${params['BTS IP'] ?: '(stand profile)'}"
@@ -121,7 +135,7 @@ pipeline {
         stage('Run Performance Matrix') {
             steps {
                 script {
-                    def bandwidths = expandBandwidths(params.Bandwidth)
+                    def bandwidths = selectedBandwidths()
                     def mcsList = expandMcs(params.MCS)
                     def ratio = (params['DL:UL Ratio'] ?: '75:25').trim()
                     def testTime = (params['Throughput Test Time'] ?: '30').trim()
@@ -235,7 +249,7 @@ pipeline {
 
                 def detailsHtml = """\
                     <p><strong>Stand:</strong> ${params.TARGET_STAND}</p>
-                    <p><strong>Bandwidth:</strong> ${params.Bandwidth}</p>
+                    <p><strong>Bandwidth:</strong> ${selectedBandwidths(false)}</p>
                     <p><strong>MCS:</strong> ${params.MCS}</p>
                     <p><strong>TRex IP:</strong> ${params['TRex IP'] ?: '(stand profile)'}</p>
                     <p><strong>BTS IP:</strong> ${params['BTS IP'] ?: '(stand profile)'}</p>

@@ -2,6 +2,12 @@ from traffic.operating_rate_table import operating_rate_mbps, uci_htmode_matches
 from traffic.phy_rate_targets import compute_traffic_targets
 
 
+def test_ht160_mcs23_operating_rate_is_double_ht80():
+    assert operating_rate_mbps("HT160", "MCS23") == 2402.0
+    assert uci_htmode_value("HT40+") == "HT40+"
+    assert uci_htmode_value("HT160") == "HT160"
+
+
 def test_ht20_mcs23_operating_rate_from_sheet():
     assert operating_rate_mbps("HT20", "MCS23") == 286.0
 

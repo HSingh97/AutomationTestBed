@@ -33,7 +33,8 @@ Usage: trigger-throughput.sh [OPTIONS]
 
 Options:
   --stand STAND       TARGET_STAND / agent label (default: test-qa-lab-01)
-  --bandwidth LIST    htmode list or all (default: all → HT20,HT40,HT80)
+  --bandwidth LIST    Which boxes to check: HT20,HT40+,HT80,HT160 or all
+                      (default: all except HT160)
   --mcs LIST          MCS list or all (default: all → MCS0..MCS23)
   --trex-ip IP        TRex server IP (default: stand profile)
   --bts-ip IP         BTS management IP (default: stand profile)
@@ -76,13 +77,38 @@ if [[ -z "${JENKINS_TOKEN:-}" ]]; then
   fi
 fi
 
+HT20=false
+HT40=false
+HT80=false
+HT160=false
+bw_key="$(printf '%s' "${BANDWIDTH}" | tr '[:lower:]' '[:upper:]' | tr -d ' ')"
+if [[ -z "${bw_key}" || "${bw_key}" == "ALL" ]]; then
+  HT20=true
+  HT40=true
+  HT80=true
+else
+  IFS=',' read -ra bw_items <<<"${bw_key}"
+  for item in "${bw_items[@]}"; do
+    case "${item}" in
+      HT20) HT20=true ;;
+      HT40|HT40+) HT40=true ;;
+      HT80) HT80=true ;;
+      HT160) HT160=true ;;
+      *) echo "Unknown bandwidth: ${item}" >&2; exit 1 ;;
+    esac
+  done
+fi
+
 CRUMB_JSON="$(curl -fsS -u "${JENKINS_USER}:${JENKINS_TOKEN}" "${JENKINS_URL}/crumbIssuer/api/json")"
 CRUMB="$(python3 -c "import json,sys; print(json.load(sys.stdin).get('crumb',''))" <<<"$CRUMB_JSON")"
 CRUMB_FIELD="$(python3 -c "import json,sys; print(json.load(sys.stdin).get('crumbRequestField','Jenkins-Crumb'))" <<<"$CRUMB_JSON")"
 
 POST_DATA=(
   --data-urlencode "TARGET_STAND=${TARGET_STAND}"
-  --data-urlencode "Bandwidth=${BANDWIDTH}"
+  --data-urlencode "HT20=${HT20}"
+  --data-urlencode "HT40+=${HT40}"
+  --data-urlencode "HT80=${HT80}"
+  --data-urlencode "HT160=${HT160}"
   --data-urlencode "MCS=${MCS}"
   --data-urlencode "TRex IP=${TREX_IP}"
   --data-urlencode "BTS IP=${BTS_IP}"
