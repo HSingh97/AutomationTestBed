@@ -163,6 +163,30 @@ class RootCommands:
     def get_maxcpe(radio_idx):
         return f"uci get wireless.@wifi-iface[{radio_idx}].maxsta"
 
+    @staticmethod
+    def get_tx_power(radio_idx):
+        return f"uci get txparam.ath{radio_idx}.atpcpower"
+
+    @staticmethod
+    def get_atpc_status(radio_idx):
+        return f"uci get txparam.ath{radio_idx}.atpcstatus"
+
+    @staticmethod
+    def get_ddrs_status(radio_idx):
+        return f"uci get txparam.ath{radio_idx}.ddrsstatus"
+
+    @staticmethod
+    def get_max_eirp(radio_idx):
+        return f"uci get txparam.ath{radio_idx}.maxeirp"
+
+    @staticmethod
+    def get_iwconfig(radio_idx):
+        return f"iwconfig ath{radio_idx}"
+
+    @staticmethod
+    def get_iw_dev_info(radio_idx):
+        return f"iw dev ath{radio_idx} info"
+
     # --- THROUGHPUT CONFIG COMMANDS ---
     @staticmethod
     def mcs_ucidyn_set_commands(radio_idx, mcs_rate, spatial_stream, ddrs_rate):

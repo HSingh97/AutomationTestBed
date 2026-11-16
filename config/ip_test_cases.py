@@ -95,9 +95,9 @@ IP_TEST_CASES: tuple[IpTestCase, ...] = (
     IpTestCase("IP_60", "Incorrect MLD handling", "Negative", "both", "dual"),
 )
 
-# IPv6 cases with execute_ip_case() handlers (IP_29 hard reboot excluded — manual PDU).
+# IPv6 cases with execute_ip_case() handlers.
 IPV6_IMPLEMENTED_CASE_IDS: frozenset[str] = frozenset(
-    f"IP_{n:02d}" for n in range(18, 35) if n != 29
+    f"IP_{n:02d}" for n in range(18, 35)
 )
 
 # Cases enabled in tests/IP/test_IP.py (implemented handlers only).
@@ -112,6 +112,7 @@ ACTIVE_IP_CASE_IDS: frozenset[str] = frozenset(
         "IP_07",
         "IP_08",
         "IP_09",
+        "IP_10",
         "IP_11",
         "IP_12",
         "IP_13",
@@ -126,10 +127,7 @@ ACTIVE_IP_CASE_IDS: frozenset[str] = frozenset(
 
 # Manual / not automatable with current bench.
 INACTIVE_IP_CASE_IDS: frozenset[str] = frozenset(
-    {
-        "IP_10",  # manual PDU power
-        "IP_29",  # manual PDU power
-    }
+    set()
 )
 
 # IP_37–IP_60: catalog only until isolation/multicast flows are added

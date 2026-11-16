@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import shlex
 import time
-from pathlib import Path
 from typing import Any
 
 from scrapli.driver.generic import AsyncGenericDriver
@@ -23,44 +21,12 @@ from utils.sanity_ssh import (
     wait_sanity_ssh,
 )
 
-
 def _log(msg: str) -> None:
     print(f"[sanity] {msg}", flush=True)
-
 
 def _log_q(msg: str, *, quiet: bool) -> None:
     if not quiet:
         _log(msg)
-
-
-_DEBUG_LOG = Path(
-    "/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-5d791c.log"
-)
-
-
-def _dbg03(
-    hypothesis_id: str,
-    location: str,
-    message: str,
-    data: dict | None = None,
-) -> None:
-    # region agent log
-    try:
-        entry = {
-            "sessionId": "5d791c",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data or {},
-            "timestamp": int(time.time() * 1000),
-        }
-        _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with _DEBUG_LOG.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=True) + "\n")
-    except Exception:
-        pass
-    # endregion
-
 
 def cpe_pc_credentials(profile: dict[str, Any], values: dict[str, Any]) -> tuple[str, str, str]:
     """Return (host, user, password) for the CPE bench PC."""
@@ -85,7 +51,6 @@ def cpe_pc_credentials(profile: dict[str, Any], values: dict[str, Any]) -> tuple
     ).strip()
     return host, (user or "root").strip(), password
 
-
 def cpe_factory_ipv4(profile: dict[str, Any], values: dict[str, Any]) -> str:
     tb = profile.get("testbed", {}) or {}
     sec = tb.get("secondary_pc", {}) or {}
@@ -97,10 +62,8 @@ def cpe_factory_ipv4(profile: dict[str, Any], values: dict[str, Any]) -> str:
         )
     )
 
-
 def bts_factory_ipv4(values: dict[str, Any]) -> str:
     return normalize_ip(str(values.get("bts_factory_ipv4") or "192.168.2.1"))
-
 
 async def ensure_bts_pc_factory_lan(profile: dict[str, Any], device_password: str) -> None:
     """Ensure the BTS lab PC can reach factory LAN 192.168.2.1 (keep IPv6/VLAN up)."""
@@ -114,7 +77,6 @@ async def ensure_bts_pc_factory_lan(profile: dict[str, Any], device_password: st
         device_password,
         cidr="192.168.2.200/24",
     )
-
 
 async def open_cpe_pc_ssh(profile: dict[str, Any], values: dict[str, Any]) -> AsyncGenericDriver:
     host, user, password = cpe_pc_credentials(profile, values)
@@ -130,7 +92,6 @@ async def open_cpe_pc_ssh(profile: dict[str, Any], values: dict[str, Any]) -> As
     await asyncio.wait_for(conn.open(), timeout=40)
     await conn.send_command("echo ok", timeout_ops=20)
     return conn
-
 
 async def _probe_cpe_via_pc(
     pc_ssh: AsyncGenericDriver,
@@ -152,7 +113,6 @@ async def _probe_cpe_via_pc(
             return "root", pw
         last = out
     raise ConnectionError(f"[sanity] CPE hop probe failed for {cpe_host}: {last[:220]}")
-
 
 class SanityCpeHop:
     """Run CPE commands through CPE PC → factory SSH."""
@@ -183,7 +143,6 @@ class SanityCpeHop:
     async def close(self) -> None:
         await close_sanity_ssh(self._pc)
 
-
 def _cpe_hop_candidate_hosts(
     profile: dict[str, Any],
     values: dict[str, Any],
@@ -211,7 +170,6 @@ def _cpe_hop_candidate_hosts(
         if host and host not in out:
             out.append(host)
     return out
-
 
 async def wait_cpe_hop(
     profile: dict[str, Any],
@@ -279,7 +237,6 @@ async def wait_cpe_hop(
         await asyncio.sleep(max(1, poll_s))
     raise TimeoutError(f"[sanity] CPE hop not ready at {hosts}: {last_err}")
 
-
 async def _resolve_cpe_sta_iface_idx(hop: SanityCpeHop) -> int:
     """Return UCI @wifi-iface index for CPE Radio-1 STA (BTS link)."""
     raw = await hop.run(
@@ -303,7 +260,6 @@ async def _resolve_cpe_sta_iface_idx(hop: SanityCpeHop) -> int:
         return 1
     return 1 if 1 in sta_indices else min(sta_indices)
 
-
 def _bts_radio1_wireless(bts_before: dict[str, str]) -> tuple[str, str, str, str]:
     """SSID/key/nwksecret/encryption captured from BTS before upgrade."""
     ssid = (bts_before.get("wireless.ssid") or "").strip()
@@ -311,7 +267,6 @@ def _bts_radio1_wireless(bts_before: dict[str, str]) -> tuple[str, str, str, str
     nwk = (bts_before.get("wireless.nwksecret") or key).strip()
     enc = (bts_before.get("wireless.encryption") or "").strip()
     return ssid, key, nwk, enc
-
 
 async def restore_bts_from_snapshot(
     bts_ssh: AsyncGenericDriver,
@@ -444,7 +399,6 @@ async def restore_bts_from_snapshot(
     except Exception as exc:
         _log(f"BTS restore SSH dropped after soft reboot (expected): {exc}")
 
-
 async def wait_bts_after_restore(
     *,
     password: str,
@@ -511,7 +465,6 @@ async def wait_bts_after_restore(
         f"{[h for h, _ in candidates]}: {last_err}"
     )
 
-
 async def ensure_bts_lan_matches(
     bts_ssh: AsyncGenericDriver,
     before: dict[str, str],
@@ -552,7 +505,6 @@ async def ensure_bts_lan_matches(
         timeout_s=timeout_s,
         poll_s=poll_s,
     )
-
 
 async def restore_cpe_from_snapshot(
     hop: SanityCpeHop,
@@ -631,7 +583,6 @@ async def restore_cpe_from_snapshot(
     except Exception as exc:
         _log(f"CPE restore hop closed (expected on apply): {exc}")
 
-
 async def _ensure_bts_lab_channel_149(
     bts_ssh: AsyncGenericDriver,
     *,
@@ -671,7 +622,6 @@ async def _ensure_bts_lab_channel_149(
     _log(f"BTS channel UCI={cur!r} — pin 149/HT80 (no bounce)")
     await sanity_ssh_run(bts_ssh, cmds + "echo CH149_PINNED", timeout_s=40)
 
-
 async def ensure_bts_rf_transparent(bts_ssh: AsyncGenericDriver) -> None:
     """No-VLAN sanity: BTS data path must be transparent for CPE IPv6 over RF."""
     mode = (await sanity_ssh_run(bts_ssh, "uci -q get vlan.ath1.mode")).strip()
@@ -702,7 +652,6 @@ async def ensure_bts_rf_transparent(bts_ssh: AsyncGenericDriver) -> None:
         return
     await asyncio.sleep(8)
 
-
 def _profile_network_targets(profile: dict[str, Any]) -> dict[str, str]:
     """Known bench IPv4/IPv6 targets from active profile + defaults."""
     dut = profile.get("dut", {}) or {}
@@ -731,7 +680,6 @@ def _profile_network_targets(profile: dict[str, Any]) -> dict[str, str]:
         "cpe_netmask": netmask,
     }
 
-
 async def _read_bts_wireless_for_cpe(
     bts_ssh: AsyncGenericDriver,
     *,
@@ -747,7 +695,6 @@ async def _read_bts_wireless_for_cpe(
         await sanity_ssh_run(bts_ssh, f"uci -q get wireless.wifi{radio_idx}.nwksecret")
     ).strip()
     return ssid, key, nwk or key
-
 
 async def bootstrap_cpe_network_from_profile(
     profile: dict[str, Any],
@@ -786,7 +733,6 @@ async def bootstrap_cpe_network_from_profile(
         await hop.close()
     await asyncio.sleep(15)
 
-
 async def _quick_cpe_reachable(
     cpe_v6: str,
     password: str,
@@ -810,7 +756,6 @@ async def _quick_cpe_reachable(
     except Exception:
         return False
 
-
 def _link_recovery_profile(profile: dict[str, Any], profile_bundle) -> dict[str, Any]:
     """Merge active testbed/dut with recovery link settings.
 
@@ -833,7 +778,6 @@ def _link_recovery_profile(profile: dict[str, Any], profile_bundle) -> dict[str,
         if str(link.get("tx_power_default", "1")).strip() in ("", "1"):
             link["tx_power_default"] = "26"
     return merged
-
 
 async def ensure_sanity_cpe_ssh(
     bts_ssh: AsyncGenericDriver,
@@ -963,7 +907,6 @@ async def ensure_sanity_cpe_ssh(
         f"[sanity] CPE SSH not ready at {cpe_v6} (also tried {cpe_v4}): {last_error}"
     )
 
-
 async def sanity_03_restore_link(
     *,
     profile: dict[str, Any],
@@ -1007,12 +950,6 @@ async def sanity_03_restore_link(
         timeout_s=ssh_timeout_s,
         poll_s=poll_s,
     )
-    _dbg03(
-        "D",
-        "sanity_recovery.py:sanity_03_restore_link",
-        "BTS factory SSH open",
-        {"factory_bts": factory_bts},
-    )
     try:
         await restore_bts_from_snapshot(bts_ssh, bts_before, radio_idx=radio_idx)
     finally:
@@ -1047,12 +984,6 @@ async def sanity_03_restore_link(
         target_v4 or reached
     )
     reconnect_host = reached
-    _dbg03(
-        "D",
-        "sanity_recovery.py:sanity_03_restore_link",
-        "BTS restored and RF transparent",
-        {"reached": reached, "preferred": preferred},
-    )
     if preferred and preferred != reached:
         try:
             await close_sanity_ssh(bts_ssh)
@@ -1098,12 +1029,6 @@ async def sanity_03_restore_link(
         await hop.close()
 
     _log_q(f"Waiting CPE SSH at restored address {cpe_original_host}", quiet=False)
-    _dbg03(
-        "E",
-        "sanity_recovery.py:sanity_03_restore_link",
-        "CPE restore via hop done, waiting SSH",
-        {"cpe_original_host": cpe_original_host},
-    )
     cpe_ssh_wait_s = min(ssh_timeout_s, 240)
     try:
         cpe_ssh = await wait_sanity_ssh(
@@ -1115,19 +1040,7 @@ async def sanity_03_restore_link(
             poll_s=poll_s,
         )
         await close_sanity_ssh(cpe_ssh)
-        _dbg03(
-            "E",
-            "sanity_recovery.py:sanity_03_restore_link",
-            "CPE SSH reachable after restore",
-            {"cpe_original_host": cpe_original_host},
-        )
     except Exception as exc:
-        _dbg03(
-            "E",
-            "sanity_recovery.py:sanity_03_restore_link",
-            "CPE SSH not yet reachable after restore",
-            {"cpe_original_host": cpe_original_host, "error": str(exc)},
-        )
         _log(f"CPE SSH pending after restore ({exc}) — continuing to RF link wait")
 
     await asyncio.sleep(10)
@@ -1181,15 +1094,8 @@ async def sanity_03_restore_link(
             ping_stable=ping_stable,
             rf_stable=rf_stable,
         )
-    _dbg03(
-        "E",
-        "sanity_recovery.py:sanity_03_restore_link",
-        "RF link stable after restore",
-        {"reconnect_host": reconnect_host, "cpe_original_host": cpe_original_host},
-    )
     await close_sanity_ssh(bts_ssh)
     _log("SANITY_03 restore complete — RF link up; backend verify next")
-
 
 async def _verify_post_restore_cpe_reachability(
     bts_ssh: AsyncGenericDriver,
@@ -1220,7 +1126,6 @@ async def _verify_post_restore_cpe_reachability(
             f"(BTS={bts_mgmt_host}, CPE={cpe_original_host})"
         )
     _log("RF link stable during restore — backend SSH verify follows in Step 5")
-
 
 def profile_baseline_snapshots(profile: dict[str, Any]) -> tuple[dict[str, str], dict[str, str]]:
     """Build BTS/CPE restore snapshots from active profile (preflight factory recovery)."""
@@ -1275,7 +1180,6 @@ def profile_baseline_snapshots(profile: dict[str, Any]) -> tuple[dict[str, str],
     }
     return bts_before, cpe_before
 
-
 async def sanity_preflight_restore_if_factory(
     profile: dict[str, Any],
     *,
@@ -1317,7 +1221,6 @@ async def sanity_preflight_restore_if_factory(
         ping_stable=2,
     )
     return True
-
 
 async def _quick_bts_factory_check(factory_host: str, password: str) -> bool:
     try:

@@ -124,8 +124,8 @@ def _sanitize_fw(raw_output: str) -> str:
     match = _FW_TOKEN_RE.search(text)
     if match:
         return match.group(0)
-    scalar = ssh_scalar(raw_output).strip()
-    return scalar if scalar else "—"
+    # Board names like UBR655-C18 are not firmware versions — leave blank.
+    return "—"
 
 
 async def _fetch_qos_label(ssh: AsyncGenericDriver, host: str) -> str:

@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
 import time
-from pathlib import Path
 from typing import Any
 
 import pytest_check as check
@@ -62,37 +60,8 @@ COUNTER_ABS_TOL = 3000
 COUNTER_REL_TOL = 0.08
 SNR_TOLERANCE_DB = 2.0
 
-DEBUG_LOG_PATH = Path("/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-a9118f.log")
-DEBUG_SESSION_ID = "a9118f"
-DEBUG_RUN_ID = "pre-fix"
-
-
 def _log(message: str):
     print(f"[RADIO_STATS] {message}")
-
-
-def _debug_log(location: str, message: str, data: dict, hypothesis_id: str) -> None:
-    try:
-        DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with DEBUG_LOG_PATH.open("a", encoding="utf-8") as fp:
-            fp.write(
-                json.dumps(
-                    {
-                        "sessionId": DEBUG_SESSION_ID,
-                        "runId": DEBUG_RUN_ID,
-                        "hypothesisId": hypothesis_id,
-                        "location": location,
-                        "message": message,
-                        "data": data,
-                        "timestamp": int(time.time() * 1000),
-                    },
-                    ensure_ascii=True,
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-
 
 async def _goto_admin_path(gui_page, path_fragment: str) -> bool:
     match = re.search(r"(https?://[^/]+/cgi-bin/luci/;stok=[^/]+)", gui_page.url or "")
@@ -104,33 +73,64 @@ async def _goto_admin_path(gui_page, path_fragment: str) -> bool:
     await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
     return True
 
-
 async def open_radio1_link_statistics(gui_page):
-    """Navigate Monitor -> Radio 1 Statistics -> Link tab."""
-    try:
-        menu = gui_page.locator(CommonLocators.MENU_MONITOR).first
-        await menu.wait_for(state="visible", timeout=UITimeouts.ELEMENT_WAIT_MS)
-        await menu.click(timeout=UITimeouts.ELEMENT_WAIT_MS)
-        await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
-        submenu = gui_page.locator(MonitorLocators.SUBMENU_RADIO_1_STATS).first
-        await submenu.click(timeout=UITimeouts.ELEMENT_WAIT_MS)
-        await gui_page.wait_for_load_state("domcontentloaded")
-    except Exception:
-        if not await _goto_admin_path(gui_page, "/monitor/radio1"):
-            raise
+    """Navigate Monitor -> Radio 1 Statistics -> Link tab.
 
-    link_tab = gui_page.locator(MonitorLocators.TAB_LINK_STATS).first
-    try:
-        await link_tab.wait_for(state="visible", timeout=UITimeouts.ELEMENT_WAIT_MS)
-        await link_tab.click(timeout=UITimeouts.ELEMENT_WAIT_MS)
-    except Exception:
-        pass
+    Retries after CPE reboot / LuCI settle — a single 10s menu wait is too
+    short when uhttpd is still coming back.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            try:
+                menu = gui_page.locator(CommonLocators.MENU_MONITOR).first
+                await menu.wait_for(
+                    state="visible",
+                    timeout=max(UITimeouts.ELEMENT_WAIT_MS, 20000),
+                )
+                await menu.click(timeout=UITimeouts.ELEMENT_WAIT_MS)
+                await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
+                submenu = gui_page.locator(MonitorLocators.SUBMENU_RADIO_1_STATS).first
+                await submenu.click(timeout=UITimeouts.ELEMENT_WAIT_MS)
+                await gui_page.wait_for_load_state("domcontentloaded")
+            except Exception:
+                if not await _goto_admin_path(gui_page, "/monitor/radio1"):
+                    raise
 
-    table = gui_page.locator(MonitorLocators.RADIO1_LINK_TABLE).first
-    await table.wait_for(state="attached", timeout=UITimeouts.ELEMENT_WAIT_MS)
-    await _wait_for_link_table_rows(gui_page)
-    await gui_page.wait_for_timeout(UITimeouts.MEDIUM_WAIT_MS)
+            link_tab = gui_page.locator(MonitorLocators.TAB_LINK_STATS).first
+            try:
+                await link_tab.wait_for(
+                    state="visible",
+                    timeout=max(UITimeouts.ELEMENT_WAIT_MS, 15000),
+                )
+                await link_tab.click(timeout=UITimeouts.ELEMENT_WAIT_MS)
+            except Exception:
+                pass
 
+            table = gui_page.locator(MonitorLocators.RADIO1_LINK_TABLE).first
+            await table.wait_for(
+                state="attached",
+                timeout=max(UITimeouts.ELEMENT_WAIT_MS, 15000),
+            )
+            await _wait_for_link_table_rows(gui_page)
+            await gui_page.wait_for_timeout(UITimeouts.MEDIUM_WAIT_MS)
+            return
+        except Exception as exc:
+            last_exc = exc
+            print(
+                f"[sanity] open_radio1_link_statistics retry {attempt}/3 ({exc})",
+                flush=True,
+            )
+            try:
+                await gui_page.reload(
+                    timeout=UITimeouts.PAGE_LOAD_MS,
+                    wait_until="domcontentloaded",
+                )
+            except Exception:
+                pass
+            await gui_page.wait_for_timeout(UITimeouts.LONG_WAIT_MS)
+    if last_exc is not None:
+        raise last_exc
 
 async def _wait_for_link_table_rows(gui_page):
     table = gui_page.locator(MonitorLocators.RADIO1_LINK_TABLE).first
@@ -145,11 +145,9 @@ async def _wait_for_link_table_rows(gui_page):
         await asyncio.sleep(1)
     raise TimeoutError("Radio 1 Link statistics table did not populate in time")
 
-
 async def _send_ssh(root_ssh, command: str) -> str:
     response = await root_ssh.send_command(command)
     return clean_ssh_output(response.result)
-
 
 async def _open_root_ssh_for_host(host: str, device_creds: dict):
     """Open a temporary root SSH session to a peer device."""
@@ -173,7 +171,6 @@ async def _open_root_ssh_for_host(host: str, device_creds: dict):
             open_errors.append(str(exc))
     raise RuntimeError(f"Unable to open root SSH to {host}: {' | '.join(open_errors)}")
 
-
 async def _infer_prefer_ipv6(root_ssh, radio_idx: int, assoc_idx: int, cpe_ip: str | None) -> bool:
     if prefer_ipv6_for_cpe(cpe_ip):
         return True
@@ -182,7 +179,6 @@ async def _infer_prefer_ipv6(root_ssh, radio_idx: int, assoc_idx: int, cpe_ip: s
     ipv4_empty = not ipv4 or ipv4 in {"", "0.0.0.0"}
     ipv6_valid = bool(ipv6) and ipv6 not in {"", "::"}
     return ipv6_valid and ipv4_empty
-
 
 async def _read_backend_link_row(root_ssh, radio_idx: int, assoc_idx: int, *, prefer_ipv6: bool) -> dict[str, str]:
     ipv4 = ssh_scalar(await _send_ssh(root_ssh, RootCommands.get_link_stat_field(radio_idx, assoc_idx, "ip")))
@@ -214,7 +210,6 @@ async def _read_backend_link_row(root_ssh, radio_idx: int, assoc_idx: int, *, pr
         "tput_out": sysfs_tput_to_mbps(tx_tput),
         "tput_in": sysfs_tput_to_mbps(rx_tput),
     }
-
 
 async def _scrape_gui_link_row(gui_page, row_index: int = 0) -> dict[str, str]:
     row = gui_page.locator(MonitorLocators.RADIO1_LINK_ROWS).nth(row_index)
@@ -257,13 +252,11 @@ async def _scrape_gui_link_row(gui_page, row_index: int = 0) -> dict[str, str]:
         "tput_in": tput_in,
     }
 
-
 def _validate_link_field(label: str, backend_val: str, gui_val: str, *, tolerance: float | None = None):
     from utils.verify_output import match_status
 
     status = match_status(gui_val, backend_val, tolerance=tolerance)
     check.equal(status, "PASS", f"{label} mismatch (GUI={gui_val}, Backend={backend_val})")
-
 
 async def _assert_gui_83_on_device(
     gui_page,
@@ -334,7 +327,6 @@ async def _assert_gui_83_on_device(
         "backend_row": backend_row,
     }
 
-
 async def assert_gui_83_radio_link_statistics(
     gui_page,
     root_ssh,
@@ -366,7 +358,6 @@ async def assert_gui_83_radio_link_statistics(
         await cpe_root_ssh.close()
         await cpe_page.close()
 
-
 async def _find_link_row_index(gui_page, cpe_ip: str | None = None) -> int:
     """Return row index in Radio 1 link table (default first active row)."""
     rows = gui_page.locator(MonitorLocators.RADIO1_LINK_ROWS)
@@ -385,7 +376,6 @@ async def _find_link_row_index(gui_page, cpe_ip: str | None = None) -> int:
             return i
     return 0
 
-
 async def _is_on_link_statistics_page(gui_page) -> bool:
     url = gui_page.url or ""
     on_radio1 = "/monitor/radio1" in url and "/details/" not in url
@@ -393,7 +383,6 @@ async def _is_on_link_statistics_page(gui_page) -> bool:
         timeout=UITimeouts.ELEMENT_WAIT_MS
     )
     return on_radio1 and table_visible
-
 
 async def _is_on_detailed_statistics_page(gui_page) -> bool:
     url = gui_page.url or ""
@@ -403,7 +392,6 @@ async def _is_on_detailed_statistics_page(gui_page) -> bool:
         timeout=UITimeouts.ELEMENT_WAIT_MS
     )
     return back_visible
-
 
 async def open_link_detailed_statistics(
     gui_page,
@@ -419,19 +407,6 @@ async def open_link_detailed_statistics(
     row_count = await gui_page.locator(MonitorLocators.RADIO1_LINK_ROWS).count()
     idx = row_index if row_index is not None else await _find_link_row_index(gui_page, cpe_ip)
     row = gui_page.locator(MonitorLocators.RADIO1_LINK_ROWS).nth(idx)
-    # region agent log
-    _debug_log(
-        "utils/radio_statistics_flows.py:418",
-        "attempting detailed statistics row click",
-        {
-            "peer_ip": cpe_ip or "",
-            "row_count": row_count,
-            "selected_index": idx,
-            "url_before": gui_page.url or "",
-        },
-        "H2",
-    )
-    # endregion
     await row.locator("td[data-col='index']").click(timeout=UITimeouts.ELEMENT_WAIT_MS)
     await gui_page.wait_for_load_state("domcontentloaded")
     await gui_page.wait_for_timeout(UITimeouts.MEDIUM_WAIT_MS)
@@ -440,14 +415,12 @@ async def open_link_detailed_statistics(
         f"Expected Detailed Statistics page after row click (url={gui_page.url})",
     )
 
-
 async def _backend_link_count(root_ssh) -> int:
     raw = ssh_scalar(await _send_ssh(root_ssh, RootCommands.get_active_link_count(RADIO_INDEX)))
     match = re.search(r":(\d+)", raw)
     if match:
         return int(match.group(1))
     return int(raw) if raw.isdigit() else 0
-
 
 async def _backend_assoc_time(root_ssh, assoc_idx: int = 1) -> int:
     raw = ssh_scalar(
@@ -457,7 +430,6 @@ async def _backend_assoc_time(root_ssh, assoc_idx: int = 1) -> int:
         return int(float(raw))
     except ValueError:
         return -1
-
 
 async def _backend_detail_tput(root_ssh, assoc_idx: int = 1) -> tuple[int, int]:
     tx = ssh_scalar(
@@ -471,7 +443,6 @@ async def _backend_detail_tput(root_ssh, assoc_idx: int = 1) -> tuple[int, int]:
     except ValueError:
         return -1, -1
 
-
 async def _wait_for_measurable_tput(root_ssh, assoc_idx: int, *, min_tput: int = CLEAR_MIN_TPUT) -> tuple[int, int]:
     """Wait for link byte counters to accumulate so Clear has a measurable baseline."""
     deadline = time.monotonic() + CLEAR_POLL_S + 12.0
@@ -483,7 +454,6 @@ async def _wait_for_measurable_tput(root_ssh, assoc_idx: int, *, min_tput: int =
             return tx, rx
         await asyncio.sleep(0.5)
     return last_tx, last_rx
-
 
 async def _find_peer_ip_link(gui_page, peer_ip: str):
     """Return (link locator, visible text, href) for the row matching peer_ip."""
@@ -505,7 +475,6 @@ async def _find_peer_ip_link(gui_page, peer_ip: str):
         return fallback
     raise RuntimeError("No peer IP hyperlink found in Radio 1 Link statistics table")
 
-
 async def _verify_target_summary_page(target_page, target_ip: str) -> tuple[bool, str, str]:
     """Return (summary_ok, summary_ip_text, page_status for table)."""
     login_visible = await target_page.locator(LoginPageLocators.USERNAME_INPUT).is_visible(
@@ -526,7 +495,6 @@ async def _verify_target_summary_page(target_page, target_ip: str) -> tuple[bool
     summary_ok = model_visible and ip_ok and not login_visible
     page_status = "SUMMARY" if summary_ok else "not_ready"
     return summary_ok, gui_ip, page_status
-
 
 async def _verify_single_ip_hyperlink(
     gui_page,
@@ -608,7 +576,6 @@ async def _verify_single_ip_hyperlink(
     _log(f"GUI_84 [{source_label}] saved hyperlink snapshot for {target_label} {target_ip}")
     return snapshot
 
-
 async def _assert_gui_84_on_bts(gui_page, cpe_ips: list[str], device_creds: dict):
     """GUI_84 on BTS: CPE IP hyperlink opens CPE web GUI."""
     check.is_true(bool(cpe_ips), "GUI_84 requires at least one CPE (--remote-ip or profile)")
@@ -632,7 +599,6 @@ async def _assert_gui_84_on_bts(gui_page, cpe_ips: list[str], device_creds: dict
         await open_radio1_link_statistics(gui_page)
 
     _log(f"GUI_84 completed: verified {len(cpe_ips)} CPE(s)")
-
 
 async def assert_gui_84_cpe_ip_hyperlink(
     gui_page,
@@ -663,7 +629,6 @@ async def assert_gui_84_cpe_ip_hyperlink(
         )
     finally:
         await cpe_page.close()
-
 
 async def _assert_gui_88_on_device(gui_page, peer_ips: list[str], *, device_label: str = "BTS"):
     """
@@ -697,7 +662,6 @@ async def _assert_gui_88_on_device(gui_page, peer_ips: list[str], *, device_labe
         "final_url": gui_page.url or "",
     }
 
-
 async def assert_gui_88_detailed_statistics_back(
     gui_page,
     cpe_ips: list[str],
@@ -725,7 +689,6 @@ async def assert_gui_88_detailed_statistics_back(
         await _assert_gui_88_on_device(cpe_page, [bsu_ip], device_label="CPE")
     finally:
         await cpe_page.close()
-
 
 async def _assert_gui_89_on_device(
     gui_page,
@@ -770,22 +733,6 @@ async def _assert_gui_89_on_device(
         assoc_min = min(assoc_min, assoc_now) if assoc_now >= 0 else assoc_min
         if saw_reset and links_now >= 1:
             break
-    # region agent log
-    _debug_log(
-        "utils/radio_statistics_flows.py:761",
-        "disconnect metrics sampled",
-        {
-            "device_label": device_label,
-            "assoc_before": assoc_before,
-            "assoc_min": assoc_min,
-            "links_before": links_before,
-            "links_after": links_after,
-            "saw_reset": saw_reset,
-            "elapsed_s": round(time.monotonic() - t0, 2),
-        },
-        "H3",
-    )
-    # endregion
 
     reconnect_ok = links_after >= 1
     duration_s = round(time.monotonic() - t0, 2)
@@ -817,7 +764,6 @@ async def _assert_gui_89_on_device(
         "links_before": links_before,
         "links_after": links_after,
     }
-
 
 async def assert_gui_89_detailed_statistics_disconnect(
     gui_page,
@@ -851,7 +797,6 @@ async def assert_gui_89_detailed_statistics_disconnect(
         await cpe_root_ssh.close()
         await cpe_page.close()
 
-
 async def _peak_detail_tput(root_ssh, assoc_idx: int, samples: int = CLEAR_PEAK_SAMPLES) -> tuple[int, int]:
     """Sample sysfs tput over a short window; return peak tx/rx (baseline for Clear)."""
     tx_peak, rx_peak = 0, 0
@@ -861,7 +806,6 @@ async def _peak_detail_tput(root_ssh, assoc_idx: int, samples: int = CLEAR_PEAK_
         rx_peak = max(rx_peak, rx, 0)
         await asyncio.sleep(0.3)
     return tx_peak, rx_peak
-
 
 async def _assert_gui_90_on_device(
     gui_page,
@@ -935,7 +879,6 @@ async def _assert_gui_90_on_device(
         "rx_after": rx_after,
     }
 
-
 async def assert_gui_90_detailed_statistics_clear(
     gui_page,
     root_ssh,
@@ -969,13 +912,11 @@ async def assert_gui_90_detailed_statistics_clear(
         await cpe_root_ssh.close()
         await cpe_page.close()
 
-
 async def _detail_id_text(gui_page, css_selector: str) -> str:
     loc = gui_page.locator(css_selector).first
     if await loc.count() == 0:
         return ""
     return (await loc.inner_text()).strip()
-
 
 async def _detail_row_pair(gui_page, row_label: str) -> tuple[str, str]:
     """Return (local, remote) column text for a labeled statistics row."""
@@ -988,12 +929,10 @@ async def _detail_row_pair(gui_page, row_label: str) -> tuple[str, str]:
                 return parts[1].strip(), parts[2].strip()
     return "", ""
 
-
 async def _ssh_link_field(root_ssh, assoc_idx: int, field: str) -> str:
     return ssh_scalar(
         await _send_ssh(root_ssh, RootCommands.get_link_stat_field(RADIO_INDEX, assoc_idx, field))
     )
-
 
 def _noise_sysfs_to_dbm(raw: str) -> str:
     """Convert sysfs noise counter to dBm shown in Detailed Statistics GUI."""
@@ -1005,7 +944,6 @@ def _noise_sysfs_to_dbm(raw: str) -> str:
     except ValueError:
         return raw
 
-
 def _normalize_detail_value(val: str) -> str:
     clean = str(val or "").strip()
     lower = clean.lower()
@@ -1014,7 +952,6 @@ def _normalize_detail_value(val: str) -> str:
     if "uci" in lower and "not found" in lower:
         return ""
     return clean
-
 
 def _detail_values_match(label: str, gui_val: str, backend_val: str, tol: float | None) -> bool:
     gui_n = _normalize_detail_value(gui_val)
@@ -1050,12 +987,10 @@ def _detail_values_match(label: str, gui_val: str, backend_val: str, tol: float 
 
     return backend_n.lower() in gui_n.lower() or gui_n.lower() in backend_n.lower()
 
-
 def _validate_detail_metric(label: str, backend_val: str, gui_val: str, *, tolerance: float | None = None):
     if _detail_values_match(label, gui_val, backend_val, tolerance):
         return
     check.fail(f"{label} mismatch (GUI={gui_val}, Backend={backend_val})")
-
 
 async def _run_detail_comparison_table(title: str, comparisons: list[tuple[str, str, str, float | None]]):
     """comparisons: (label, gui_value, backend_value, optional_tolerance)."""
@@ -1069,7 +1004,6 @@ async def _run_detail_comparison_table(title: str, comparisons: list[tuple[str, 
         check.equal(status, "PASS", f"{title}: {label} failed")
     for label, gui_val, backend_val, tol in comparisons:
         _validate_detail_metric(label, backend_val, gui_val, tolerance=tol)
-
 
 async def _snapshot_backend_detail(root_ssh, assoc_idx: int) -> dict[str, str]:
     """Read sysfs link statistics once to avoid drift between field reads."""
@@ -1094,7 +1028,6 @@ async def _snapshot_backend_detail(root_ssh, assoc_idx: int) -> dict[str, str]:
         (await root_ssh.send_command(RootCommands.get_mac_wireless(RADIO_INDEX))).result
     )
     return snapshot
-
 
 async def _snapshot_gui_detail(gui_page) -> dict[str, str]:
     local_mac, remote_mac = await _detail_row_pair(gui_page, "MAC Address")
@@ -1140,7 +1073,6 @@ async def _snapshot_gui_detail(gui_page) -> dict[str, str]:
         "fw_local": local_fw,
         "fw_remote": remote_fw or await _detail_id_text(gui_page, MonitorLocators.DETAIL_REMOTE_FW),
     }
-
 
 async def _assert_gui_91_on_device(
     gui_page,
@@ -1193,7 +1125,6 @@ async def _assert_gui_91_on_device(
         "peer_ip": cpe_ip or "",
     }
 
-
 async def assert_gui_91_detailed_statistics_identity(
     gui_page,
     root_ssh,
@@ -1224,7 +1155,6 @@ async def assert_gui_91_detailed_statistics_identity(
     finally:
         await cpe_root_ssh.close()
         await cpe_page.close()
-
 
 async def _assert_gui_92_on_device(
     gui_page,
@@ -1278,7 +1208,6 @@ async def _assert_gui_92_on_device(
         "assoc_idx": assoc_idx,
         "peer_ip": cpe_ip or "",
     }
-
 
 async def assert_gui_92_detailed_statistics_performance(
     gui_page,

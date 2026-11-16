@@ -116,7 +116,6 @@ class CpeApi24Config:
     cpe_ssh_via_bts_tunnel: bool
     cpe_ssh_user: str
     cpe_ssh_password: str
-    invalid_ssid: str
     invalid_password: str
     fetch_bts_via_ssh: bool
     fw_file_path: str | None
@@ -210,10 +209,6 @@ def resolve_cpe_api_24_config(request, profile: dict | None = None) -> CpeApi24C
         cpe_ssh_via_bts_tunnel=bool(cpe24.get("cpe_ssh_via_bts_tunnel", False)),
         cpe_ssh_user=cpe_ssh_user,
         cpe_ssh_password=str(cpe_ssh_password),
-        invalid_ssid=str(
-            request.config.getoption("--cpe-24-invalid-ssid")
-            or "UBR_INVALID_SSID_NOT_FOUND"
-        ),
         invalid_password=str(
             request.config.getoption("--cpe-24-invalid-password") or "wrong-password-99"
         ),

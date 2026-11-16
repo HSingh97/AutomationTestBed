@@ -47,6 +47,7 @@ CONFIG_SNAPSHOT_FIELDS: tuple[tuple[str, str], ...] = (
     ("wireless.encryption", SanityCommands.get_encryption(1)),
     ("wireless.key", SanityCommands.get_key(1)),
     ("wireless.nwksecret", SanityCommands.get_nwksecret(1)),
+    ("wireless.channel", "uci -q get wireless.wifi1.channel"),
     ("vlan.ath1.mode", SanityCommands.GET_VLAN_MODE),
     ("vlan.ath1.mgmtvlan", SanityCommands.GET_VLAN_MGMT),
     ("system.hostname", SanityCommands.GET_HOSTNAME),

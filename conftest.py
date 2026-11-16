@@ -20,6 +20,10 @@ from utils.net_utils import format_http_host, normalize_ip
 from utils.profile_manager import load_profile_bundle
 from utils.recovery_manager import RecoveryManager, set_active_recovery_manager
 
+# Shared CPE 2.4 GHz API fixtures (Radio24Scan API cases + tests/API).
+# Must live at top-level — nested pytest_plugins is rejected by pytest.
+pytest_plugins = ("tests.API.conftest",)
+
 ARTIFACTS_DIR = Path("reports/artifacts")
 
 
@@ -207,6 +211,32 @@ def pytest_addoption(parser):
         help="Disable ProcessMonitor SSH-loss recovery reboot (armed before each crash/kill).",
     )
     group.addoption(
+        "--allow-functional",
+        action="store_true",
+        default=False,
+        help="Enable Functional suite tests (FT_02/FT_03).",
+    )
+    group.addoption(
+        "--skip-functional",
+        action="store_true",
+        default=False,
+        help="Skip Functional suite even when collected.",
+    )
+    group.addoption(
+        "--functional-ram-mb",
+        action="store",
+        type=int,
+        default=0,
+        help="FT_02 dd size in MB (dd bs=1M count=N). 0 = auto max from MemAvailable per device.",
+    )
+    group.addoption(
+        "--functional-overload-duration-s",
+        action="store",
+        type=int,
+        default=120,
+        help="FT_02 sustained overload monitor window in seconds. Default: 120.",
+    )
+    group.addoption(
         "--skip-testbed-bootstrap",
         action="store_true",
         default=False,
@@ -227,6 +257,108 @@ def pytest_addoption(parser):
             "Use --profile factory_provision. For installer GUI use scripts/factory_provision.py --headed."
         ),
     )
+    group.addoption(
+        "--sanity-fw-dir",
+        action="store",
+        default="/tftpboot",
+        help="Directory on lab PC containing Senao-UBR*.tgz firmware images (SANITY_02).",
+    )
+    group.addoption(
+        "--sanity-bts-fw",
+        action="store",
+        default="",
+        help="Override BTS firmware path/filename for SANITY_02 (default: newest Senao-<model>-*.tgz in --sanity-fw-dir).",
+    )
+    group.addoption(
+        "--sanity-cpe-fw",
+        action="store",
+        default="",
+        help="Override CPE firmware path/filename for SANITY_02 (default: newest Senao-UBR650-*.tgz).",
+    )
+    group.addoption(
+        "--sanity-wrong-model-fw",
+        action="store",
+        default="",
+        help="Override wrong-model firmware path/filename for SANITY_04 (default: auto-pick different UBR model from --sanity-fw-dir).",
+    )
+    group.addoption(
+        "--sanity-power-loss-delay-s",
+        action="store",
+        default="",
+        help="Seconds after Proceed before PDU power cut for SANITY_06 (default: power_loss_install_delay_s in config).",
+    )
+
+    lt = parser.getgroup("Link Test Tool")
+    lt.addoption("--link-test-vlan", action="store", default=None, type=int, help="Link Test VLAN ID override.")
+    lt.addoption("--link-test-duration", action="store", default=None, type=int, help="Link Test duration (seconds).")
+    lt.addoption("--link-test-bw-min", action="store", default=None, type=int, help="Link Test minimum bandwidth (Mbps).")
+    lt.addoption("--link-test-bw-max", action="store", default=None, type=int, help="Link Test maximum bandwidth (Mbps).")
+    lt.addoption(
+        "--link-test-reference-json",
+        action="store",
+        default=None,
+        help="Optional JSON file with reference throughput/latency for GUI_130 / LINK_TEST_130.",
+    )
+
+    cpe = parser.getgroup("CPE API 2.4 GHz")
+    cpe.addoption(
+        "--skip-cpe-api-24",
+        action="store_true",
+        default=False,
+        help="Skip CPE API tests (tests/API/).",
+    )
+    cpe.addoption("--cpe-24-api-base", action="store", default="", help="CPE mgmt REST API base URL.")
+    cpe.addoption("--cpe-24-factory-reset-command", action="store", default="", help="SSH factory reset command.")
+    cpe.addoption("--cpe-24-factory-reset-path", action="store", default="", help="REST factory-reset path override.")
+    cpe.addoption("--cpe-24-mgmt-ssid", action="store", default="", help="CPE 2.4 GHz mgmt Wi‑Fi SSID.")
+    cpe.addoption("--cpe-24-mgmt-password", action="store", default=None, help="CPE mgmt Wi‑Fi password.")
+    cpe.addoption("--cpe-24-wifi-interface", action="store", default="", help="PC Wi‑Fi interface for nmcli join.")
+    cpe.addoption("--cpe-24-auto-join-wifi", action="store_true", default=False, help="nmcli join CPE mgmt Wi‑Fi.")
+    cpe.addoption(
+        "--cpe-24-wifi-leave-connected",
+        action="store_true",
+        default=False,
+        help="Keep PC on CPE mgmt Wi‑Fi after the API session.",
+    )
+    cpe.addoption("--cpe-24-bts-ssid", action="store", default="", help="BTS SSID for btsconnect POST.")
+    cpe.addoption("--cpe-24-bts-password", action="store", default=None, help="BTS password for btsconnect POST.")
+    cpe.addoption("--cpe-24-btsconnect-timeout", action="store", default=None, type=float, help="btsconnect wait (s).")
+    cpe.addoption(
+        "--cpe-24-btsconnect-negative-timeout",
+        action="store",
+        default=None,
+        type=float,
+        help="Negative btsconnect case timeout (s).",
+    )
+    cpe.addoption("--cpe-24-reset-wait-s", action="store", default=None, type=float, help="Post factory-reset wait (s).")
+    cpe.addoption("--cpe-24-ssh-host", action="store", default="", help="CPE SSH host for factory reset.")
+    cpe.addoption("--cpe-24-invalid-password", action="store", default="", help="Invalid BTS password for API_02.")
+    cpe.addoption(
+        "--cpe-24-no-bts-ssh-fetch",
+        action="store_true",
+        default=False,
+        help="Do not fetch BTS SSID/password over SSH.",
+    )
+    cpe.addoption(
+        "--cpe-24-fw-file",
+        action="store",
+        default="",
+        help="Firmware image for API_09–14 (filename under --cpe-24-fw-dir or absolute path).",
+    )
+    cpe.addoption(
+        "--cpe-24-fw-dir",
+        action="store",
+        default="",
+        help="Directory containing Senao-UBR*.tgz firmware images.",
+    )
+    cpe.addoption(
+        "--cpe-24-invalid-fw-file",
+        action="store",
+        default="",
+        help="Wrong-model firmware for API_15.",
+    )
+    cpe.addoption("--cpe-24-fw-upload-timeout", action="store", default=None, type=float, help="FW upload timeout (s).")
+    cpe.addoption("--cpe-24-cpe-model", action="store", default="", help="CPE model override (e.g. UBR650).")
 
 # =====================================================================
 # 2. PARAMETER FIXTURES
@@ -332,6 +464,33 @@ def pytest_collection_modifyitems(config, items):
 
     _apply_ip_stack_markers(items)
 
+    if any(item.get_closest_marker("Functional") for item in items):
+        config.option.skip_testbed_bootstrap = True
+
+    if any(item.get_closest_marker("Sanity") for item in items):
+        config.option.skip_testbed_bootstrap = True
+
+    # Wireless Security cases deliberately change encryption and recover the RF
+    # link themselves. Starting them with the generic VLAN bootstrap can mutate
+    # an already healthy lab and leave the shared BTS SSH transport stale.
+    if any(item.get_closest_marker("WirelessSecurity") for item in items):
+        config.option.skip_testbed_bootstrap = True
+
+    if any(
+        item.get_closest_marker("CoChannel") or item.get_closest_marker("Lab")
+        for item in items
+    ):
+        config.option.skip_testbed_bootstrap = True
+
+    if any(item.get_closest_marker("DDRS") for item in items):
+        config.option.skip_testbed_bootstrap = True
+
+    if any(item.get_closest_marker("LINK_TEST") for item in items):
+        config.option.skip_testbed_bootstrap = True
+
+    if any(item.get_closest_marker("SpectrumSiteSurvey") for item in items):
+        config.option.skip_testbed_bootstrap = True
+
 
 @pytest.fixture(scope="session")
 def bsu_ip(request, testbed_ready):
@@ -377,6 +536,13 @@ def profile_bundle(request):
         username=request.config.getoption("--username"),
         password=request.config.getoption("--password"),
     )
+
+
+@pytest.fixture(scope="session")
+def link_test_config(request, profile_bundle):
+    from utils.link_test_config import resolve_link_test_config
+
+    return resolve_link_test_config(profile_bundle.active, request)
 
 
 @pytest.fixture(scope="session")
@@ -432,14 +598,17 @@ async def root_ssh(request, bsu_ip, device_creds, recovery_manager):
     if effective != normalize_ip(bsu_ip):
         print(f"[ssh] root_ssh session on {effective} (profile primary {bsu_ip})")
     await recovery_manager.ensure_link_or_recover(bsu_ip=bsu_ip, device_creds=device_creds, root_ssh=conn)
-    from utils.link_ssid import ensure_bts_link_ssid_ssh
+    if getattr(request.config.option, "skip_testbed_bootstrap", False):
+        print("[link] SSID left as-is (skip-testbed-bootstrap).")
+    else:
+        from utils.link_ssid import ensure_bts_link_ssid_ssh
 
-    profile = recovery_manager.profile_bundle.active
-    await ensure_bts_link_ssid_ssh(
-        conn,
-        profile=profile,
-        radio_idx=int(profile.get("link", {}).get("radio_idx", 1)),
-    )
+        profile = recovery_manager.profile_bundle.active
+        await ensure_bts_link_ssid_ssh(
+            conn,
+            profile=profile,
+            radio_idx=int(profile.get("link", {}).get("radio_idx", 1)),
+        )
     yield conn
     await conn.close()
 
@@ -649,7 +818,7 @@ async def gui_page(request, gui_browser, bsu_ip, device_creds, recovery_manager,
     print("\n[+] Performing Global GUI Session Login...")
 
     # Open the browser and start the DVR trace for the entire session
-    context = await gui_browser.new_context(ignore_https_errors=True)
+    context = await gui_browser.new_context(ignore_https_errors=True, accept_downloads=True)
     await context.tracing.start(screenshots=True, snapshots=True, sources=True)
     page = await context.new_page()
 
@@ -719,13 +888,16 @@ async def gui_page(request, gui_browser, bsu_ip, device_creds, recovery_manager,
     print("    -> Waiting 3 seconds for Dashboard routing...")
     await page.wait_for_timeout(3000)
 
-    from utils.link_ssid import ensure_bts_link_ssid_gui
-
     profile = recovery_manager.profile_bundle.active
-    try:
-        await ensure_bts_link_ssid_gui(page, root_ssh, profile=profile)
-    except Exception as exc:
-        print(f"[link] GUI SSID restore after login skipped: {exc}")
+    if getattr(request.config.option, "skip_testbed_bootstrap", False):
+        print("[link] SSID left as-is (skip-testbed-bootstrap).")
+    else:
+        from utils.link_ssid import ensure_bts_link_ssid_gui
+
+        try:
+            await ensure_bts_link_ssid_gui(page, root_ssh, profile=profile)
+        except Exception as exc:
+            print(f"[link] GUI SSID restore after login skipped: {exc}")
 
     ip_cfg = profile.get("ip_tests", {}) or {}
     if ip_cfg.get("take_session_backup", False):
@@ -786,6 +958,9 @@ def pytest_collection_finish(session):
 
 
 def pytest_sessionstart(session):
+    if getattr(session.config.option, "skip_testbed_bootstrap", False):
+        print("[pytest] Isolated suite — skipping Lab/Functional GUI bootstrap.\n")
+        return
     print(
         "[pytest] Session fixtures next: testbed_ready → root_ssh → gui_page "
         "(bootstrap/SSH/GUI can take several minutes on Jenkins).\n"

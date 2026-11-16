@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import html as html_module
 import json
 import csv
 import sys
@@ -11,6 +12,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from utils.functional_report_log import load as load_functional_case_logs
 from utils.jumbo_capture_report import (
     JUMBO_CAPTURE_REPORT_CSS,
     load_jumbo_capture_index,
@@ -18,10 +20,8 @@ from utils.jumbo_capture_report import (
     render_jumbo_capture_evidence_html,
 )
 from utils.regression_report import _render_testbed_summary_table
+from utils.senao_branding import senao_logo_src
 
-SENAO_LOGO_URL = (
-    "https://manuals.plus/wp-content/uploads/2023/06/Senao-Networks-logo.png"
-)
 ARTIFACTS_DIR = Path("reports/artifacts")
 
 
@@ -38,6 +38,27 @@ def _humanize_module_name(nodeid: str, test_id: str) -> str:
         raw = re.sub(r"^process_\d+_?", "", raw, flags=re.I)
         return raw.replace("_", " ").strip().title()
 
+    if re.match(r"FT_\d+", test_id, re.I):
+        raw = re.sub(r"^ft_\d+_?", "", raw, flags=re.I)
+        return raw.replace("_", " ").strip().title()
+
+    if re.match(r"API_\d+", test_id, re.I):
+        raw = re.sub(r"^api_\d+_?", "", raw, flags=re.I)
+        return raw.replace("_", " ").strip().title()
+
+    if re.match(r"RADIO_24_\d+", test_id, re.I):
+        raw = re.sub(r"^radio_24_\d+_?", "", raw, flags=re.I)
+        return raw.replace("_", " ").strip().title()
+
+    if re.match(r"W_SECURITY_\d+", test_id, re.I):
+        raw = re.sub(r"^w_security_\d+_?", "", raw, flags=re.I)
+        return raw.replace("_", " ").strip().title()
+
+    if re.match(r"ARPBRIDGE_\d+", test_id, re.I):
+        raw = re.sub(r"^arpbridge_\d+_?", "", raw, flags=re.I)
+        raw = re.sub(r"_ipv4$", "", raw, flags=re.I)
+        return raw.replace("_", " ").strip().title()
+
     return raw.replace("_", " ").strip().title()
 
 
@@ -45,12 +66,34 @@ def get_group_marker(keywords):
     """
     Extracts the logical group name from pytest markers.
     """
-    ignore_list = {'pytestmark', 'asyncio', 'usefixtures', 'parametrize', 'filterwarnings'}
+    ignore_list = {
+        "pytestmark",
+        "asyncio",
+        "usefixtures",
+        "parametrize",
+        "filterwarnings",
+        "sanity",
+        "smoke",
+        "order",
+    }
 
     if isinstance(keywords, dict):
-        kw_list = keywords.keys()
+        kw_list = list(keywords.keys())
     else:
-        kw_list = keywords
+        kw_list = list(keywords)
+
+    # Prefer suite-specific markers (module also carries sanity).
+    for kw in kw_list:
+        if re.match(r"W_SECURITY_\d+", kw, re.I) or kw.lower() in ("wirelesssecurity", "wireless_security"):
+            return "WirelessSecurity"
+        if re.match(r"FT_\d+", kw, re.I) or kw.lower() == "functional":
+            return "Functional"
+        if re.match(r"RADIO_24_\d+", kw, re.I) or kw.lower() in ("radio24scan", "radio24"):
+            return "Radio24Scan"
+        if re.match(r"API_\d+", kw, re.I) or kw.lower() == "api":
+            return "API"
+        if re.match(r"ARPBRIDGE_\d+", kw, re.I) or kw.lower() in ("arpbridgetable", "arp_bridge_table"):
+            return "ArpBridgeTable"
 
     for kw in kw_list:
         if kw not in ignore_list and not kw.startswith('GUI_') and not kw.startswith('test_') and '.py' not in kw:
@@ -77,6 +120,15 @@ OFFICIAL_PROCESS_REPORT_ORDER: tuple[int, ...] = tuple(range(1, 20))
 def _process_case_number(test_id: str) -> int | None:
     match = re.match(r"PROCESS_(\d+)", str(test_id), re.I)
     return int(match.group(1)) if match else None
+
+
+def _functional_case_number(test_id: str) -> int | None:
+    match = re.match(r"FT_(\d+)", str(test_id), re.I)
+    return int(match.group(1)) if match else None
+
+
+def _sort_functional_records(records: list[dict]) -> list[dict]:
+    return sorted(records, key=lambda record: _functional_case_number(record.get("id", "")) or 999)
 
 
 def _sort_process_monitor_records(records: list[dict]) -> list[dict]:
@@ -222,6 +274,400 @@ def _process_monitor_pass_summary(test: dict, case_id: str) -> str:
     return candidates[-1]
 
 
+def _is_functional_test(test: dict) -> bool:
+    keywords = test.get("keywords") or []
+    return "Functional" in keywords or any(re.match(r"FT_\d+", str(k), re.I) for k in keywords)
+
+
+def _is_arpbridge_test(test: dict) -> bool:
+    keywords = test.get("keywords") or []
+    return "ArpBridgeTable" in keywords or any(re.match(r"ARPBRIDGE_\d+", str(k), re.I) for k in keywords)
+
+
+_FT_REPORT_NOISE = (
+    "SSH session reopened",
+    "SSH interrupted during",
+    "waiting BTS↔CPE link up",
+    "PC LAN untagged cleanup OK",
+    "clearing PC LAN VLANs before verification",
+    "opening BTS=",
+    "SSH ready",
+    "BTS VLAN mode transparent OK",
+    "RF Link Down .. Waiting for link up",
+    "Navigation retry failed",
+    "Executing Triple-Apply sequence",
+    "[DEBUG]",
+    "CPE hop SSH retry",
+    "post-reset settle",
+    "VLAN apply SSH dropped",
+    "PC LAN untagged enp1s0",
+    "PC LAN tagged enp1s0",
+    "PC LAN restored untagged",
+    "address type already static",
+    "client association time",
+    "precheck heal",
+    "mgmt VLAN apply dropped",
+    "BTS mgmt IPv6 unavailable",
+    "original BTS bandwidth",
+    "wait 30s after change",
+    "then backend verify",
+    "not accepted by DUT",
+    "skipped by design",
+    "baseline unreadable",
+    "no alternate bandwidth",
+    "post-reload settle",
+    "waiting for reload",
+    "reload process",
+    "SSH ended during",
+    "SSH responsive after",
+    "SSH back on",
+    "restore hop closed",
+    "factory reset command closed",
+    "GUI set ",
+    "forcing backend apply",
+    "disabling ATPC",
+    "baseline —",
+    "values:",
+)
+
+
+def _functional_line_ok(message: str) -> bool:
+    detail = str(message or "").strip()
+    if not detail:
+        return False
+    low = detail.lower()
+    if any(noise in detail for noise in _FT_REPORT_NOISE):
+        return False
+    if low.startswith("wait ") and "after" in low:
+        return False
+    return True
+
+
+def _simplify_functional_line(line: str) -> str:
+    """Compact verbose [FUNCTIONAL] text for customer-facing report logs."""
+    text = str(line or "").strip()
+    if not text:
+        return ""
+    low = text.lower()
+    if low.startswith("pc lan ") or "address type already" in low:
+        return ""
+
+    # done / complete → short result
+    m = re.match(r"^(?:done|complete)\s+[—-]\s*(.+)$", text, re.I)
+    if m:
+        tail = m.group(1).strip()
+        if len(tail) > 48:
+            tail = tail[:45].rstrip() + "…"
+        return f"DONE: {tail}"
+
+    rules: list[tuple[re.Pattern[str], str | callable]] = [
+        (re.compile(r"^mgmt VLAN BTS=\d+ CPE=\d+\s*->\s*random\s+(\d+)$", re.I), r"VLAN→\1"),
+        (re.compile(r"^mgmt VLAN BTS=\d+ CPE=\d+\s*\|\s*.+$", re.I), lambda m: _short_vlan_change(m.group(0))),
+        (re.compile(r"^applying mgmt VLAN (\d+) on CPE then BTS$", re.I), r"Apply VLAN \1"),
+        (re.compile(r"^restoring mgmt VLAN CPE=\d+ then BTS=\d+$", re.I), "VLAN restore"),
+        (re.compile(r"^post[-\w]* link=(PASS(?: \(UNSTABLE\))?)(?:\s*\|\s*.+)?$", re.I), r"Link \1"),
+        (re.compile(r"^applying bandwidth (\w+) on BTS only$", re.I), r"BW→\1"),
+        (re.compile(r"^BTS BW verify (\w+) actual=\w+ \((ok|FAIL)\)$", re.I), lambda m: f"BW {m.group(1).upper()} {m.group(2).upper()}"),
+        (re.compile(r"^BTS BW (\w+) not accepted.*$", re.I), r"BW \1 skip"),
+        (re.compile(r"^reverting BTS bandwidth to original (\w+)$", re.I), r"BW revert \1"),
+        (re.compile(r"^BTS BW revert verify actual=\w+ \((ok|FAIL)\)$", re.I), r"BW revert \1"),
+        (re.compile(r"^applying prefix change on CPE then BTS$", re.I), "Apply prefix"),
+        (re.compile(r"^applying IPv6 gateway change on CPE then BTS$", re.I), "Apply IPv6 GW"),
+        (re.compile(r"^applying IPv6 address change on CPE then BTS$", re.I), "Apply IPv6"),
+        (re.compile(r"^applying IPv4 gateway change on CPE then BTS$", re.I), "Apply IPv4 GW"),
+        (re.compile(r"^applying IPv4 netmask change on CPE then BTS$", re.I), "Apply netmask"),
+        (re.compile(r"^applying IPv4 change on (CPE|BTS)$", re.I), r"Apply IPv4 \1"),
+        (re.compile(r"^reverting IPv6 (?:gateway )?BTS=.*$", re.I), "Revert IPv6"),
+        (re.compile(r"^reverting IPv4 GW BTS=.*$", re.I), "Revert IPv4 GW"),
+        (re.compile(r"^reverting IPv4 BTS=.*$", re.I), "Revert IPv4"),
+        (re.compile(r"^reverting netmask BTS=.*$", re.I), "Revert netmask"),
+        (re.compile(r"^step (\d+) dBm — link up, CPE=(PASS|FAIL), BTS=(PASS|FAIL)$", re.I), r"Tx \1 CPE=\2 BTS=\3"),
+        (re.compile(r"^\[\d+/\d+\] Tx power (\d+) dBm —.*$", re.I), r"Tx \1 dBm"),
+        (re.compile(r"^sampled TX=(\d+) RX=(\d+) over \d+s$", re.I), r"RF TX=\1 RX=\2"),
+        (re.compile(r"^apply backend @ (\w+).*$", re.I), r"Backend \1"),
+        (re.compile(r"^hard reboot via PDU$", re.I), "Hard reboot"),
+        (re.compile(r"^soft reset —.*$", re.I), "Soft reset"),
+        (re.compile(r"^SSH reboot —.*$", re.I), "Reboot"),
+        (re.compile(r"^MAX — dd /tmp/ram_eater count=(\d+MB).*$", re.I), r"RAM load \1"),
+    ]
+
+    for pattern, repl in rules:
+        m = pattern.match(text)
+        if not m:
+            continue
+        if callable(repl):
+            return repl(m).strip()
+        return pattern.sub(repl, text, count=1).strip()
+
+    # Generic trims
+    text = re.sub(r"\s*\|\s*RF Interface Restarts,By design\s*", "", text, flags=re.I)
+    text = re.sub(r"\s*\(ok\)$", " OK", text, flags=re.I)
+    text = re.sub(r"\s*\(FAIL\)$", " FAIL", text, flags=re.I)
+    if len(text) > 72:
+        text = text[:69].rstrip() + "…"
+    return text
+
+
+def _short_vlan_change(raw: str) -> str:
+    """e.g. mgmt VLAN BTS=1 CPE=1 | IPv4 BTS ... -> VLAN 1 | IPv4 ..."""
+    text = raw.strip()
+    text = re.sub(r"^mgmt VLAN BTS=\d+ CPE=\d+\s*\|\s*", "VLAN 1 | ", text, flags=re.I)
+    text = re.sub(r"\s*->\s*", "→", text)
+    text = re.sub(r"\s*\|\s*", " | ", text)
+    if len(text) > 72:
+        text = text[:69].rstrip() + "…"
+    return text
+
+
+def _curate_functional_lines(
+    lines: list[str],
+    *,
+    case_id: str = "",
+    max_lines: int = 14,
+) -> list[str]:
+    """Short chronological log — compact text, no grouping."""
+    if not lines:
+        return []
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        mgmt_inline = re.match(r"^mgmt VLAN BTS=(\d+) CPE=(\d+)\s*\|\s*(.+)$", str(line).strip(), re.I)
+        if mgmt_inline:
+            mgmt_line = f"Mgmt VLAN case BTS={mgmt_inline.group(1)} CPE={mgmt_inline.group(2)}"
+            if mgmt_line not in seen:
+                seen.add(mgmt_line)
+                ordered.append(mgmt_line)
+            detail_line = mgmt_inline.group(3).strip()
+            text = _simplify_functional_line(detail_line)
+            if text and text not in seen:
+                seen.add(text)
+                ordered.append(text)
+            continue
+        text = _simplify_functional_line(line)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        ordered.append(text)
+    if re.match(r"FT_(1[7-9]|2[0-3])$", str(case_id or "").upper()) and not any(
+        item.startswith("Mgmt VLAN case ") for item in ordered
+    ):
+        ordered.insert(0, "Mgmt VLAN case verified in backend flow")
+    if len(ordered) > max_lines:
+        ordered = ordered[:2] + ["…"] + ordered[-(max_lines - 3):]
+    return ordered
+
+
+def _arpbridge_case_number(test_id: str) -> int | None:
+    match = re.match(r"ARPBRIDGE_(\d+)", str(test_id), re.I)
+    return int(match.group(1)) if match else None
+
+
+def _sort_arpbridge_records(records: list[dict]) -> list[dict]:
+    return sorted(records, key=lambda record: _arpbridge_case_number(record.get("id", "")) or 999)
+
+
+def _iter_functional_messages(test: dict, case_id: str):
+    """Yield [FT][CASE_ID] / [FUNCTIONAL] CASE_ID lines from captured pytest output."""
+    line_patterns = (
+        re.compile(rf"^\[FT\]\[{re.escape(case_id)}\]\s+(.+)$", re.I),
+        re.compile(rf"^\[FUNCTIONAL\]\s+{re.escape(case_id)}:\s*(.+)$", re.I),
+        re.compile(rf"^\[FUNCTIONAL\]\s+{re.escape(case_id)}\s+done\s+[—-]\s*(.+)$", re.I),
+        re.compile(rf"^\[FUNCTIONAL\]\s+{re.escape(case_id)}\s+complete\s+[—-]\s*(.+)$", re.I),
+        re.compile(rf"^\[FUNCTIONAL\]\s+{re.escape(case_id)}\s+\[[^\]]+\]\s*(.+)$", re.I),
+    )
+    for phase in ("setup", "call", "teardown"):
+        section = test.get(phase) or {}
+        stdout = str(section.get("stdout") or "")
+        for raw in stdout.splitlines():
+            line = raw.strip()
+            for idx, pattern in enumerate(line_patterns):
+                match = pattern.match(line)
+                if not match:
+                    continue
+                detail = match.group(1).strip(" :—-")
+                if idx == 2:
+                    detail = f"done — {detail}"
+                elif idx == 3:
+                    detail = f"complete — {detail}"
+                if _functional_line_ok(detail):
+                    yield detail
+                break
+        for record in section.get("log") or []:
+            msg = str(record.get("msg") or record.get("message") or "").strip()
+            for idx, pattern in enumerate(line_patterns):
+                match = pattern.match(msg)
+                if not match:
+                    continue
+                detail = match.group(1).strip(" :—-")
+                if idx == 2:
+                    detail = f"done — {detail}"
+                elif idx == 3:
+                    detail = f"complete — {detail}"
+                if _functional_line_ok(detail):
+                    yield detail
+                break
+
+
+def _simplify_arpbridge_line(line: str) -> str:
+    text = str(line or "").strip()
+    if not text:
+        return ""
+    text = re.sub(rf"^ARPBRIDGE_\d+\s*", "", text, flags=re.I)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > 96:
+        text = text[:93].rstrip() + "..."
+    return text
+
+
+def _iter_arpbridge_messages(test: dict, case_id: str):
+    line_patterns = (
+        re.compile(rf"^\[ARP_BRIDGE\]\s+{re.escape(case_id)}\s*:\s*(.+)$", re.I),
+        re.compile(rf"^\[ARP_BRIDGE\]\s+{re.escape(case_id)}\s+\[[^\]]+\]\s*:\s*(.+)$", re.I),
+        re.compile(r"^\[ARP_BRIDGE\]\s+(.+)$", re.I),
+    )
+    for phase in ("setup", "call", "teardown"):
+        section = test.get(phase) or {}
+        stdout = str(section.get("stdout") or "")
+        for raw in stdout.splitlines():
+            line = raw.strip()
+            for pattern in line_patterns:
+                match = pattern.match(line)
+                if not match:
+                    continue
+                detail = match.group(1).strip(" :—-")
+                simplified = _simplify_arpbridge_line(detail)
+                if simplified:
+                    yield simplified
+                break
+        for record in section.get("log") or []:
+            msg = str(record.get("msg") or record.get("message") or "").strip()
+            for pattern in line_patterns:
+                match = pattern.match(msg)
+                if not match:
+                    continue
+                detail = match.group(1).strip(" :—-")
+                simplified = _simplify_arpbridge_line(detail)
+                if simplified:
+                    yield simplified
+                break
+
+
+def _arpbridge_terminal_lines(test: dict, case_id: str) -> list[str]:
+    """Pull terminal-style stdout (section tables + [ARP_BRIDGE] lines) into report log lines."""
+    stdout = str((test.get("call") or {}).get("stdout") or "")
+    if not stdout.strip():
+        return list(_iter_arpbridge_messages(test, case_id))
+
+    lines: list[str] = []
+    for raw in stdout.splitlines():
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if re.match(r"^=+$", stripped):
+            continue
+        if re.match(r"^-{10,}", stripped) and "GUI" not in stripped:
+            continue
+        if stripped.startswith("Field ") and "Result" in stripped:
+            continue
+        lines.append(line)
+    return lines[:120]
+
+
+def _format_arpbridge_reason_html(
+    *,
+    case_id: str = "",
+    terminal_text: str = "",
+) -> tuple[str, str]:
+    text = terminal_text.strip()
+    if not text:
+        return "", ""
+    reason_html = (
+        f"<div class='ft-exec-panel' data-case='{html_module.escape(case_id)}'>"
+        f"<details class='ft-log-simple'>"
+        f"<summary>Logs</summary>"
+        f"<pre class='ft-terminal-log'>{html_module.escape(text)}</pre>"
+        f"</details>"
+        f"</div>"
+    )
+    flat_lines = text.splitlines()
+    reason_csv = "Logs:\n- " + "\n- ".join(flat_lines[:40])
+    return reason_html, reason_csv
+
+
+def _arpbridge_execution_details(test: dict, case_id: str) -> tuple[str, str]:
+    terminal_lines = _arpbridge_terminal_lines(test, case_id)
+    terminal_text = "\n".join(terminal_lines)
+    return _format_arpbridge_reason_html(case_id=case_id, terminal_text=terminal_text)
+
+
+def _format_functional_reason_html(
+    lines: list[str],
+    *,
+    duration_s: float | None = None,
+    case_id: str = "",
+) -> tuple[str, str]:
+    curated = _curate_functional_lines(lines, case_id=case_id)
+    if not curated:
+        return "", ""
+    runtime_html = ""
+    if duration_s and duration_s > 0:
+        mins, secs = divmod(int(duration_s), 60)
+        runtime = f"{mins}m {secs}s" if mins else f"{secs}s"
+        runtime_html = f"<div class='ft-runtime-chip'>Runtime: {html_module.escape(runtime)}</div>"
+
+    items = "".join(f"<li>{html_module.escape(line)}</li>" for line in curated)
+    reason_html = (
+        f"<div class='ft-exec-panel' data-case='{html_module.escape(case_id)}'>"
+        f"{runtime_html}"
+        f"<details class='ft-log-simple'>"
+        f"<summary>Log</summary>"
+        f"<ul class='ft-log-list'>{items}</ul>"
+        f"</details>"
+        f"</div>"
+    )
+    flat_title = "Log"
+    if duration_s and duration_s > 0:
+        mins, secs = divmod(int(duration_s), 60)
+        runtime = f"{mins}m {secs}s" if mins else f"{secs}s"
+        flat_title = f"Runtime: {runtime} | Log"
+    reason_csv = flat_title + ":\n- " + "\n- ".join(curated)
+    return reason_html, reason_csv
+
+
+def _functional_execution_details(
+    test: dict,
+    case_id: str,
+    *,
+    functional_logs: dict[str, list[str]],
+    progress_meta: dict[str, dict],
+) -> tuple[str, str]:
+    lines = list(_iter_functional_messages(test, case_id))
+    if not lines:
+        lines = list(functional_logs.get(case_id, []))
+    nodeid = str(test.get("nodeid") or "")
+    duration_s = float((progress_meta.get(nodeid) or {}).get("duration_s") or 0.0)
+    if not duration_s:
+        duration_s = float((test.get("call") or {}).get("duration") or 0.0)
+    return _format_functional_reason_html(lines, duration_s=duration_s or None, case_id=case_id)
+
+
+def _load_functional_progress_meta() -> dict[str, dict]:
+    path = ARTIFACTS_DIR / "ip_suite_progress.json"
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    meta: dict[str, dict] = {}
+    for row in payload.get("tests") or []:
+        nodeid = str(row.get("nodeid") or "")
+        if nodeid:
+            meta[nodeid] = row
+    return meta
+
+
 def _effective_outcome_for_report(test: dict) -> str:
     """
     Map pytest-json-report outcome for customer reports.
@@ -313,6 +759,45 @@ def _load_testbed_summary(profile_name: str | None, local_ip: str) -> dict:
         return {}
 
 
+def _cpe_ipv4_from_profile(profile_name: str | None, local_ip: str) -> str:
+    if not profile_name:
+        return "192.168.2.11"
+    try:
+        from utils.profile_manager import load_profile_bundle
+
+        bundle = load_profile_bundle(profile_name=profile_name, local_ip=local_ip or None)
+        remote_ips = bundle.active.get("dut", {}).get("remote_ips") or []
+        for ip in remote_ips:
+            clean = str(ip).strip()
+            if clean and ":" not in clean:
+                return clean
+    except Exception:
+        pass
+    return "192.168.2.11"
+
+
+def _arpbridge_ipv4_testbed_summary(
+    summary: dict,
+    *,
+    bts_ipv4: str,
+    cpe_ipv4: str,
+    cpe_model: str = "UBR650",
+) -> dict:
+    """Force IPv4 lab addresses in testbed summary (no mgmt IPv6 from cached artifacts)."""
+    out = dict(summary or {})
+    bts = dict(out.get("bts") or {})
+    cpe = dict(out.get("cpe") or {})
+    bts["ip"] = bts_ipv4
+    cpe["ip"] = cpe_ipv4
+    cpe["model"] = cpe_model
+    out["bts"] = bts
+    out["cpe"] = cpe
+    out["ip_mode"] = "IPv4 only"
+    out.pop("cpes", None)
+    out.pop("su_count", None)
+    return out
+
+
 def generate():
     parser = argparse.ArgumentParser(description="Generate Senao customer HTML/CSV from report.json")
     parser.add_argument("build_no")
@@ -347,6 +832,8 @@ def generate():
     groups = {}
     stats = {'total': 0, 'passed': 0, 'partial': 0, 'failed': 0}
     jumbo_capture_index = load_jumbo_capture_index()
+    functional_logs = load_functional_case_logs()
+    functional_progress = _load_functional_progress_meta()
 
     for test in data.get('tests', []):
         stats['total'] += 1
@@ -387,18 +874,91 @@ def generate():
                 test_id = jmb_id
                 test_name = _humanize_module_name(nodeid, test_id)
             else:
-                match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
-                if match:
-                    test_id = match.group(1).upper()
-                    raw_name = match.group(2)
-                    parts = raw_name.split('_')
-                    if len(parts) >= 2 and parts[0] == 'summary':
-                        test_name = '-'.join(p.capitalize() for p in parts[::-1])
-                    else:
-                        test_name = '-'.join(p.capitalize() for p in parts)
+                ft_kw = next(
+                    (str(k).upper() for k in test.get("keywords", []) if re.match(r"FT_\d+", str(k), re.I)),
+                    None,
+                )
+                ft_fn = re.search(r"test_ft_(\d+)_", nodeid, re.I)
+                if ft_kw or ft_fn:
+                    test_id = ft_kw if ft_kw else f"FT_{int(ft_fn.group(1)):02d}"
+                    test_name = _humanize_module_name(nodeid, test_id)
                 else:
-                    test_id = "N/A"
-                    test_name = nodeid.split('::')[-1]
+                    api_kw = next(
+                        (
+                            str(k).upper()
+                            for k in test.get("keywords", [])
+                            if re.match(r"API_\d+", str(k), re.I)
+                        ),
+                        None,
+                    )
+                    api_fn = re.search(r"test_api_(\d+)_", nodeid, re.I)
+                    if api_kw or api_fn:
+                        test_id = api_kw if api_kw else f"API_{int(api_fn.group(1)):02d}"
+                        test_name = _humanize_module_name(nodeid, test_id)
+                    else:
+                        radio_kw = next(
+                            (
+                                str(k).upper()
+                                for k in test.get("keywords", [])
+                                if re.match(r"RADIO_24_\d+", str(k), re.I)
+                            ),
+                            None,
+                        )
+                        radio_fn = re.search(r"test_radio_24_(\d+)_", nodeid, re.I)
+                        if radio_kw or radio_fn:
+                            test_id = (
+                                radio_kw
+                                if radio_kw
+                                else f"RADIO_24_{int(radio_fn.group(1)):02d}"
+                            )
+                            test_name = _humanize_module_name(nodeid, test_id)
+                        else:
+                            arp_kw = next(
+                                (
+                                    str(k).upper()
+                                    for k in test.get("keywords", [])
+                                    if re.match(r"ARPBRIDGE_\d+", str(k), re.I)
+                                ),
+                                None,
+                            )
+                            arp_fn = re.search(r"test_arpbridge_(\d+)_", nodeid, re.I)
+                            if arp_kw or arp_fn:
+                                test_id = (
+                                    arp_kw
+                                    if arp_kw
+                                    else f"ARPBRIDGE_{int(arp_fn.group(1)):02d}"
+                                )
+                                test_name = _humanize_module_name(nodeid, test_id)
+                            else:
+                                wsec_kw = next(
+                                    (
+                                        str(k).upper()
+                                        for k in test.get("keywords", [])
+                                        if re.match(r"W_SECURITY_\d+", str(k), re.I)
+                                    ),
+                                    None,
+                                )
+                                wsec_fn = re.search(r"test_w_security_(\d+)_", nodeid, re.I)
+                                if wsec_kw or wsec_fn:
+                                    test_id = (
+                                        wsec_kw
+                                        if wsec_kw
+                                        else f"W_SECURITY_{int(wsec_fn.group(1)):02d}"
+                                    )
+                                    test_name = _humanize_module_name(nodeid, test_id)
+                                else:
+                                    match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
+                                    if match:
+                                        test_id = match.group(1).upper()
+                                        raw_name = match.group(2)
+                                        parts = raw_name.split('_')
+                                        if len(parts) >= 2 and parts[0] == 'summary':
+                                            test_name = '-'.join(p.capitalize() for p in parts[::-1])
+                                        else:
+                                            test_name = '-'.join(p.capitalize() for p in parts)
+                                    else:
+                                        test_id = "N/A"
+                                        test_name = nodeid.split('::')[-1]
 
         group_name = get_group_marker(test.get('keywords', []))
         outcome = _effective_outcome_for_report(test).upper()
@@ -421,6 +981,35 @@ def generate():
                     f"<div class='failure-list'><div class='failure-item'>{proc_summary}</div></div>"
                 )
                 reason_csv = f"Outcome:\n- {proc_summary}"
+            elif _is_functional_test(test):
+                ft_html, ft_csv = _functional_execution_details(
+                    test,
+                    test_id,
+                    functional_logs=functional_logs,
+                    progress_meta=functional_progress,
+                )
+                if ft_html:
+                    reason_html = ft_html
+                    reason_csv = ft_csv
+                else:
+                    reason_html = (
+                        "<div class='reason-title'>Outcome:</div>"
+                        "<div class='failure-list'><div class='failure-item'>Functional case passed; "
+                        "step log unavailable (re-run with --capture=tee-sys to capture console output).</div></div>"
+                    )
+                    reason_csv = "Functional case passed; step log unavailable."
+            elif _is_arpbridge_test(test):
+                arp_html, arp_csv = _arpbridge_execution_details(test, test_id)
+                if arp_html:
+                    reason_html = arp_html
+                    reason_csv = arp_csv
+                else:
+                    reason_html = (
+                        "<div class='reason-title'>Outcome:</div>"
+                        "<div class='failure-list'><div class='failure-item'>ARP/Bridge case passed; "
+                        "step log unavailable (re-run with --capture=tee-sys to capture console output).</div></div>"
+                    )
+                    reason_csv = "ARP/Bridge case passed; step log unavailable."
             elif validated_params:
                 pills = "".join([f"<span class='param-pill'>{p}</span>" for p in validated_params])
                 reason_html = f"<div class='reason-title'>Successfully Verified ({len(validated_params)} parameters):</div><div class='param-container'>{pills}</div>"
@@ -512,14 +1101,38 @@ def generate():
             color = "#ef4444"
             bg = "#fef2f2"
 
+        if _is_functional_test(test) and str(test_id).upper().startswith("FT_") and status == "FAILED":
+            ft_html, ft_csv = _functional_execution_details(
+                test,
+                test_id,
+                functional_logs=functional_logs,
+                progress_meta=functional_progress,
+            )
+            if ft_html:
+                reason_html = f"{reason_html}{ft_html}"
+                reason_csv = f"{reason_csv}\n{ft_csv}".strip()
+
         capture_html, capture_csv = render_jumbo_capture_evidence_html(test_id, jumbo_capture_index)
         if capture_html:
             reason_html = f"{reason_html}{capture_html}"
             reason_csv = f"{reason_csv}\n{capture_csv}".strip()
 
+        if (
+            _is_arpbridge_test(test)
+            and re.match(r"ARPBRIDGE_\d+", str(test_id), re.I)
+            and status == "FAILED"
+        ):
+            arp_html, arp_csv = _arpbridge_execution_details(test, test_id)
+            if arp_html:
+                reason_html = f"{reason_html}{arp_html}"
+                reason_csv = f"{reason_csv}\n{arp_csv}".strip()
+
+        device_scope = "BTS & CPE" if _is_arpbridge_test(test) else ""
+
         record = {
             'id': test_id,
             'name': test_name,
+            'device': device_scope,
             'status': status,
             'reason': reason_html,
             'reason_csv': reason_csv,
@@ -534,6 +1147,10 @@ def generate():
     for group_name, records in groups.items():
         if group_name == "ProcessMonitor":
             groups[group_name] = _sort_process_monitor_records(records)
+        elif group_name == "Functional":
+            groups[group_name] = _sort_functional_records(records)
+        elif group_name == "ArpBridgeTable":
+            groups[group_name] = _sort_arpbridge_records(records)
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     html_filename = ARTIFACTS_DIR / f"{output_prefix}_{build_no}_Report_{date_str}.html"
@@ -542,10 +1159,17 @@ def generate():
     # Generate CSV
     with csv_filename.open('w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['Test Group', 'Module ID', 'Module Name', 'Status', 'Execution Details'])
+        writer.writerow(['Test Group', 'Module ID', 'Module Name', 'Device', 'Status', 'Execution Details'])
         for group_name, records in groups.items():
             for r in records:
-                writer.writerow([group_name, r['id'], r['name'], r['status'], r['reason_csv']])
+                writer.writerow([
+                    group_name,
+                    r['id'],
+                    r['name'],
+                    r.get('device', ''),
+                    r['status'],
+                    r['reason_csv'],
+                ])
 
     # Generate Group Filter Options
     group_options = ""
@@ -554,7 +1178,30 @@ def generate():
 
     report_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     testbed_summary = _load_testbed_summary(profile_name, ip_addr)
+    is_arpbridge_report = (
+        "ArpBridgeTable" in groups
+        or str(build_no).strip().lower() in {"arpbridgetable", "arpbridge", "arp_bridge"}
+    )
+    arpbridge_bts_ipv4 = ip_addr if ip_addr and ":" not in ip_addr else "192.168.2.10"
+    arpbridge_cpe_ipv4 = _cpe_ipv4_from_profile(profile_name, arpbridge_bts_ipv4)
+    if is_arpbridge_report:
+        testbed_summary = _arpbridge_ipv4_testbed_summary(
+            testbed_summary,
+            bts_ipv4=arpbridge_bts_ipv4,
+            cpe_ipv4=arpbridge_cpe_ipv4,
+            cpe_model="UBR650",
+        )
     testbed_table = _render_testbed_summary_table(testbed_summary)
+    run_meta_extra = ""
+    run_meta_target = f'<span><strong>Target device:</strong> {ip_addr}</span>'
+    if is_arpbridge_report:
+        run_meta_target = ""
+        run_meta_extra = (
+            f"<span><strong>IP mode:</strong> IPv4 only</span>"
+            f"<span><strong>BTS IPv4:</strong> {html_module.escape(arpbridge_bts_ipv4)}</span>"
+            f"<span><strong>CPE IPv4:</strong> {html_module.escape(arpbridge_cpe_ipv4)}</span>"
+            f"<span><strong>CPE model:</strong> UBR650</span>"
+        )
     is_partial_run = bool(data.get("partial") or (data.get("summary") or {}).get("partial"))
     partial_banner = ""
     if is_partial_run:
@@ -649,6 +1296,41 @@ def generate():
             .failure-item b {{ color: #0f172a; }}
             .proc-bullet-list {{ margin: 4px 0 8px 18px; padding-left: 18px; }}
             .proc-bullet-list li {{ margin: 2px 0; font-family: 'Consolas', monospace; font-size: 12px; color: #334155; list-style-type: disc; }}
+            .ft-exec-panel {{ display: flex; flex-direction: column; gap: 8px; }}
+            .ft-runtime-chip {{
+              display: inline-flex; align-self: flex-start; align-items: center;
+              background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe;
+              border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 700;
+            }}
+            .ft-log-simple {{
+              border: 1px solid #dbeafe; border-radius: 8px; background: #f8fbff;
+              overflow: hidden;
+            }}
+            .ft-log-simple > summary {{
+              list-style: none; cursor: pointer; padding: 8px 12px;
+              font-size: 12px; font-weight: 700; color: #1e3a8a; background: #eef4ff;
+              user-select: none;
+            }}
+            .ft-log-simple > summary:hover {{ background: #e0ebff; }}
+            .ft-log-simple > summary::-webkit-details-marker {{ display: none; }}
+            .ft-log-simple > summary::after {{
+              content: " ▾"; color: #64748b; font-size: 11px;
+            }}
+            .ft-log-simple[open] > summary::after {{ content: " ▴"; }}
+            .ft-log-list {{
+              margin: 0; padding: 8px 12px 10px 28px; background: #ffffff;
+              border-top: 1px solid #e2e8f0;
+            }}
+            .ft-log-list li {{
+              margin: 4px 0; font-family: 'Consolas', monospace; font-size: 12px;
+              color: #334155; line-height: 1.45;
+            }}
+            .ft-terminal-log {{
+              margin: 0; padding: 10px 12px; background: #0f172a; color: #e2e8f0;
+              font-family: 'Consolas', monospace; font-size: 11px; line-height: 1.4;
+              overflow-x: auto; white-space: pre-wrap; word-break: break-word;
+              border-top: 1px solid #1e293b; max-height: 420px;
+            }}
             {JUMBO_CAPTURE_REPORT_CSS}
         </style>
         <script>
@@ -706,7 +1388,7 @@ def generate():
                     <p class="hero-date">{report_timestamp}</p>
                 </div>
                 <div class="hero-logo">
-                    <img src="{SENAO_LOGO_URL}" alt="Senao Networks"/>
+                    <img src="{senao_logo_src()}" alt="Senao Networks"/>
                 </div>
             </header>
             {partial_banner}
@@ -718,7 +1400,8 @@ def generate():
                 <h3>Run Summary</h3>
                 <div class="run-meta">
                     <span><strong>Build release:</strong> #{build_no}</span>
-                    <span><strong>Target device:</strong> {ip_addr}</span>
+                    {run_meta_target}
+                    {run_meta_extra}
                 </div>
             </section>
 
@@ -751,10 +1434,11 @@ def generate():
                 <table>
                     <thead>
                         <tr>
-                            <th width="12%">Module ID</th>
-                            <th width="20%">Module Name</th>
-                            <th width="12%">Status</th>
-                            <th width="56%">Execution Details</th>
+                            <th width="10%">Module ID</th>
+                            <th width="18%">Module Name</th>
+                            <th width="10%">Device</th>
+                            <th width="10%">Status</th>
+                            <th width="52%">Execution Details</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -763,14 +1447,16 @@ def generate():
     for group_name, records in groups.items():
         html += f"""
                         <tr class="group-header-row" data-group="{group_name}">
-                            <td colspan="4" class="group-header">↳ Test Group: {group_name}</td>
+                            <td colspan="5" class="group-header">↳ Test Group: {group_name}</td>
                         </tr>
         """
         for r in records:
+            device_cell = html_module.escape(r.get("device") or "—")
             html += f"""
                             <tr class="test-row" data-group="{group_name}" data-status="{r['status']}">
                                 <td style="font-weight: 600; color: #0f172a;">{r['id']}</td>
                                 <td style="font-weight: 500; color: #334155;">{r['name']}</td>
+                                <td style="font-weight: 500; color: #475569;">{device_cell}</td>
                                 <td><span class="badge" style="background-color: {r['bg']}; color: {r['color']}; border: 1px solid {r['color']}40;">{r['status']}</span></td>
                                 <td class="reason-cell">{r['reason']}</td>
                             </tr>

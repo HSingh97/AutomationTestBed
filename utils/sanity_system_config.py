@@ -7,8 +7,8 @@ import secrets
 from dataclasses import dataclass
 
 from pages.commands import RootCommands
-from pages.locators import CommonLocators, ManagementLocators, UITimeouts
-from utils.management_flows import apply_triple, open_management_system
+from pages.locators import ManagementLocators, TopPanelLocators, UITimeouts
+from utils.management_flows import open_management_system
 from utils.net_utils import format_luci_url
 from utils.network_flows import _goto_admin_path
 from utils.sanity_gui import sanity_login_if_needed
@@ -244,11 +244,11 @@ async def read_sanity_timezone_snapshot(
 ) -> SanityTimezoneSnapshot:
     await open_sanity_system_general(gui_page, host=host, device_creds=device_creds)
     dropdown = await _timezone_dropdown(gui_page)
-    timezone = (await dropdown.input_value()).strip()
+    gui_timezone = (await dropdown.input_value()).strip()
     local_time_gui = await _read_gui_local_time(gui_page)
     backend = await read_sanity_timezone_backend(ssh)
-    if backend and not timezone:
-        timezone = backend
+    # Restore the committed zone. A stale dropdown must not become the revert target.
+    timezone = backend or gui_timezone
     offset_ssh = await read_sanity_ssh_offset(ssh)
     return SanityTimezoneSnapshot(
         timezone=timezone or backend,
@@ -297,15 +297,43 @@ async def apply_sanity_timezone(
         await open_sanity_system_general(gui_page, host=host, device_creds=device_creds)
     dropdown = await _timezone_dropdown(gui_page)
     await dropdown.select_option(timezone_value)
-    await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
-    await apply_triple(
-        gui_page,
-        ManagementLocators.SAVE_BUTTON,
-        CommonLocators.APPLY_ICON,
-        CommonLocators.CONFIRM_APPLY,
-        settle_seconds=10,
+    # This page's Save reads select.value inside set_form_elements(). Set that
+    # exact control. A header Apply that reloads first posts the first zone
+    # (BIT12) while the locator still shows the value we picked.
+    await gui_page.evaluate(
+        """(value) => {
+            const el = document.querySelector("select[name='system.@system[0].timezone']");
+            if (!el) return;
+            el.value = value;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }""",
+        timezone_value,
     )
-    await gui_page.wait_for_timeout(UITimeouts.MEDIUM_WAIT_MS)
+    await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
+    save = gui_page.locator("input.cbi-button[value='Save']").first
+    try:
+        async with gui_page.expect_response(
+            lambda response: "cfg_set_json" in (response.url or ""),
+            timeout=25000,
+        ):
+            await save.click()
+        print("    -> timezone Save committed (cfg_set_json)", flush=True)
+    except Exception as exc:
+        print(f"    -> timezone Save did not confirm cfg_set_json ({exc})", flush=True)
+    await gui_page.wait_for_timeout(1500)
+    for selector, name in (
+        (TopPanelLocators.APPLY_BUTTON, "Top Apply"),
+        (TopPanelLocators.SUPER_APPLY_BUTTON, "Super Apply"),
+    ):
+        button = gui_page.locator(selector).first
+        try:
+            if await button.is_visible(timeout=3000):
+                await button.click(force=True)
+                print(f"    -> {name} clicked", flush=True)
+                await gui_page.wait_for_timeout(2000)
+        except Exception:
+            continue
+    await open_sanity_system_general(gui_page, host=host, device_creds=device_creds)
 
 
 async def read_sanity_timezone_backend(ssh) -> str:

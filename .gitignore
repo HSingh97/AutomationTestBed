@@ -30,3 +30,15 @@ tests/HTTPS/__pycache__
 tests/SMTP/__pycache__
 tests/POP3/__pycache__
 tests/IMAP/__pycache__
+
+# Cursor agent / local debug dumps
+.cursor/debug-*.log
+.cursor/
+
+# Local run artifacts
+*.log
+*.out
+traffic/.jumbo_watch_start
+traffic/*_watch.log
+radio24_*.log
+radio24_*.out

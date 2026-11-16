@@ -176,10 +176,12 @@ async def open_sanity_ssh(
     source_v6: str = "",
     label: str = "device",
     timeout_s: int = 30,
+    retries: int = 4,
 ) -> AsyncGenericDriver:
     host = normalize_ip(host)
     last_error = ""
-    for wait_s in (0, 5, 10, 20):
+    waits = (0, 5, 10, 20)[: max(1, retries)]
+    for wait_s in waits:
         if wait_s:
             await asyncio.sleep(wait_s)
         conn = AsyncGenericDriver(
@@ -385,14 +387,17 @@ async def wait_sanity_reboot_cycle(
         await asyncio.sleep(settle_s)
 
     last_err: Exception | None = None
-    # Prefer recovered host, then every candidate (IPv4 often comes up before IPv6).
-    settle_order: list[tuple[str, str]] = [(recovered_host, recovered_bind)]
-    for h, b in hosts:
-        if (h, b) not in settle_order:
-            settle_order.append((h, b))
+    # Lab IPv4 answers across the RF bridge before IPv6 ND. A long IPv6
+    # retry burns the settle window while 192.168.2.11 is already up.
+    settle_order: list[tuple[str, str]] = [
+        (h, b) for h, b in hosts if not is_ipv6_literal(h)
+    ]
+    settle_order.extend((h, b) for h, b in hosts if is_ipv6_literal(h))
+    if not settle_order:
+        settle_order = [(recovered_host, recovered_bind)]
     conn = None
-    # Post-reboot SSH can lag well beyond settle_s — retry each host several times.
-    settle_deadline = time.monotonic() + max(120, settle_s + 90)
+    # The RF bridge often comes up well after boot_id changes.
+    settle_deadline = time.monotonic() + max(300, settle_s + 240)
     while time.monotonic() < settle_deadline and conn is None:
         for settle_host, settle_bind in settle_order:
             try:
@@ -401,7 +406,8 @@ async def wait_sanity_reboot_cycle(
                     password,
                     source_v6=settle_bind,
                     label=f"{label} post-settle",
-                    timeout_s=min(60, max(30, poll_s + 20)),
+                    timeout_s=12,
+                    retries=1,
                 )
                 recovered_host = settle_host
                 recovered_bind = settle_bind
@@ -578,7 +584,17 @@ async def wait_host_offline(
 async def close_sanity_ssh(ssh: AsyncGenericDriver | None) -> None:
     if ssh is None:
         return
+    hop = getattr(ssh, "_sanity_cpe_pc_hop", None)
     try:
         await ssh.close()
     except Exception:
         pass
+    if hop is not None:
+        try:
+            hop.close()
+        except Exception:
+            pass
+        try:
+            delattr(ssh, "_sanity_cpe_pc_hop")
+        except Exception:
+            pass

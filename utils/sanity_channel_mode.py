@@ -244,28 +244,63 @@ def frequency_and_channel_match(expected_label: str, *observed: str) -> bool:
     return True
 
 
+def _lab_ipv4_fallback(host: str) -> str | None:
+    """Lab IPv4 when the management IPv6 page is unreachable after a channel change."""
+    text = host or ""
+    if "0:331" in text:
+        return "192.168.2.11"
+    if "0:330" in text:
+        return "192.168.2.10"
+    return None
+
+
 async def open_sanity_radio_properties(
     gui_page,
     *,
     host: str,
     device_creds: dict | None = None,
 ) -> RadioPropertiesPage:
-    if host and device_creds:
-        bare = f"{format_luci_url(host).rstrip('/')}/admin/wireless/radio1"
-        await gui_page.goto(bare, timeout=60000, wait_until="domcontentloaded")
-        await sanity_login_if_needed(gui_page, host, device_creds, wait_ms=5000)
-        stok = await resolve_luci_stok(gui_page)
-        url = (
-            f"{format_luci_url(host).rstrip('/')}/{stok}/admin/wireless/radio1"
-            if stok
-            else bare
-        )
-        await gui_page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        await sanity_login_if_needed(gui_page, host, device_creds, wait_ms=3000)
-    page = RadioPropertiesPage(gui_page, local_ip=host or "192.168.2.1")
-    await page.navigate()
-    await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
-    return page
+    candidates = [host] if host else []
+    ipv4 = _lab_ipv4_fallback(host)
+    if ipv4 and ipv4 not in candidates:
+        candidates.append(ipv4)
+    if not candidates:
+        candidates = ["192.168.2.10"]
+    last_exc: Exception | None = None
+    for index, attempt_host in enumerate(candidates):
+        try:
+            if attempt_host and device_creds:
+                timeout = 20000 if index == 0 and len(candidates) > 1 else 45000
+                bare = f"{format_luci_url(attempt_host).rstrip('/')}/admin/wireless/radio1"
+                await gui_page.goto(bare, timeout=timeout, wait_until="domcontentloaded")
+                landed = gui_page.url or ""
+                if "chrome-error" in landed or "chromewebdata" in landed:
+                    raise RuntimeError(f"chrome error page at {attempt_host}")
+                await sanity_login_if_needed(gui_page, attempt_host, device_creds, wait_ms=5000)
+                stok = await resolve_luci_stok(gui_page)
+                url = (
+                    f"{format_luci_url(attempt_host).rstrip('/')}/{stok}/admin/wireless/radio1"
+                    if stok
+                    else bare
+                )
+                await gui_page.goto(url, timeout=timeout, wait_until="domcontentloaded")
+                landed = gui_page.url or ""
+                if "chrome-error" in landed or "chromewebdata" in landed:
+                    raise RuntimeError(f"chrome error page at {attempt_host}")
+                await sanity_login_if_needed(gui_page, attempt_host, device_creds, wait_ms=3000)
+            page = RadioPropertiesPage(gui_page, local_ip=attempt_host or "192.168.2.10")
+            await page.navigate()
+            await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
+            return page
+        except Exception as exc:
+            last_exc = exc
+            print(
+                f"[sanity] radio properties via {attempt_host} failed: {type(exc).__name__}",
+                flush=True,
+            )
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("[sanity] radio properties page did not open")
 
 
 async def _channel_dropdown(gui_page):
@@ -554,14 +589,17 @@ async def force_radio_channel_reload(
     ch = str(channel or "").strip()
     if not ch:
         return
+    explicit = channel_number(ch)
     if is_auto_label(ch):
         value = "auto"
+    elif explicit and explicit.isdigit():
+        # Keep an explicit channel. This lab link is channel 36.
+        value = explicit
     else:
         value = normalize_lab_channel(ch, default=LAB_STABLE_CHANNEL)
-        if value != (channel_number(ch) or ch):
+        if value != (explicit or ch):
             print(
-                f"[sanity] force_radio_channel_reload: remapped {ch!r} → {value} "
-                f"(lab avoids 36/37/170+)",
+                f"[sanity] force_radio_channel_reload: remapped {ch!r} → {value}",
                 flush=True,
             )
 
@@ -663,13 +701,8 @@ async def force_radio_channel_reload(
 
     snap = await read_channel_snap(ssh)
     # ACS sometimes rewrites UCI back to 36 after wifi up even when on-air is 149.
-    if value != "auto" and (
-        is_lab_avoid_channel(snap.wifi_uci)
-        or (
-            channel_number(snap.wifi_uci)
-            and channel_number(snap.wifi_uci) != value
-        )
-    ):
+    uci_ch = channel_number(snap.wifi_uci)
+    if value != "auto" and uci_ch and uci_ch != value:
         print(
             f"[sanity] force_radio_channel_reload: UCI drifted to {snap.wifi_uci!r} "
             f"— re-pin {value}/{keep_ht}",

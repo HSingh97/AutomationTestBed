@@ -31,6 +31,7 @@ class CommonLocators:
     SUBMENU_NETWORK_IP = "ul.dropdown-menu a[href*='/network/ip']"
     SUBMENU_NETWORK_DHCP = "ul.dropdown-menu a[href*='/network/dhcp']"
     SUBMENU_NETWORK_ETH = "ul.dropdown-menu a[href*='/network/eth']"
+    SUBMENU_NETWORK_VLAN = "ul.dropdown-menu a[href*='/network/vlan']"
     SUBMENU_MANAGEMENT_SYSTEM = "ul.dropdown-menu a[href*='/system/system']"
 
     @staticmethod
@@ -96,6 +97,17 @@ class NetworkLocators:
     SUBMENU_IP_CONFIG = CommonLocators.SUBMENU_NETWORK_IP
     SUBMENU_DHCP = CommonLocators.SUBMENU_NETWORK_DHCP
     SUBMENU_ETHERNET = CommonLocators.SUBMENU_NETWORK_ETH
+    SUBMENU_VLAN = CommonLocators.SUBMENU_NETWORK_VLAN
+
+    VLAN_MODE_SELECT = "select[name*='vlan.ath1.mode'], select[name*='.mode']"
+    VLAN_MGMT_INPUT = (
+        "input[name*='mgmtvlan'], select[name*='mgmtvlan'], "
+        "input[id*='mgmtvlan'], [name*='vlan.ath1.mgmtvlan']"
+    )
+    VLAN_ENABLE_CHECKBOX = (
+        "input[type='checkbox'][name*='vlan'], "
+        "input[type='checkbox'][name*='enable']"
+    )
 
     # IPv4 Configuration Fields (Using 'contains' for better cbid prefix handling)
     IPv4_PROTO = "select[name*='network.lan.proto']"
@@ -181,7 +193,7 @@ class TopPanelLocators:
     HOME_BUTTON = "li[title='Home']"
     APPLY_BUTTON = "//*[@id='header_apply']"
     REBOOT_BUTTON = "//*[@id='header_reboot']"
-    REBOOT_CONFIRM = "//*[@id='maincontent']/div/p[3]/a"
+    REBOOT_CONFIRM = "//a[contains(@class,'btn') and contains(@href,'reboot=1')]"
     LOGOUT_BUTTON = "li[title='Logout']"
 
     SUPER_APPLY_BUTTON = "//*[@id='super_apply']"
@@ -212,6 +224,16 @@ class RadioPropertiesLocators:
     NETWORK_SECRET_INPUT = "input[id*='nwksec'], input[name*='nwksecret']"
     DISTANCE_INPUT = "//*[@name='wireless.wifi1.distance']"
     MAXIMUM_SU_INPUT = "//*[@name='wireless.@wifi-iface[1].maxsta']"
+
+    TAB_DDRS_ATPC = "ul.cbi-tabmenu > li > a[href*='ddrs']"
+    DDRS_STATUS_DROPDOWN = "select[name='txparam.ath1.ddrsstatus']"
+    ATPC_STATUS_DROPDOWN = "select[name='txparam.ath1.atpcstatus']"
+    SPATIAL_STREAM_DROPDOWN = "select[name='txparam.ath1.spatialstream']"
+    MODULATION_INDEX_DROPDOWN = "#modrateid, select[name='txparam.ath1.ddrsrate']"
+    DL_UL_RATIO_DROPDOWN = "select[name='ath1qos.qoscfg.dlulratio']"
+    TRANSMIT_POWER_INPUT = "input[name='txparam.ath1.atpcpower']"
+    MAX_EIRP_INPUT = "input[name='txparam.ath1.maxeirp']"
+    FORM_SAVE_BUTTON = CommonLocators.SAVE_BUTTON
 
 
 class Radio24Locators:
@@ -288,6 +310,7 @@ class MonitorLocators:
     TAB_DIAGNOSTICS = "ul.cbi-tabmenu > li > a[href*='/monitor/tools']:not([href*='testtool']):not([href*='spectrum']):not([href*='scans']):not([href*='survey'])"
     TAB_LINK_TEST_TOOL = "ul.cbi-tabmenu > li > a[href*='/monitor/tools/testtool']"
     TAB_LINK_STATS = "ul.cbi-tabmenu > li > a[href*='/monitor/radio']:not([href*='rtx']):not([href*='interface']):not([href*='logs']):not([href*='idu'])"
+    TAB_INTERFACE_STATS = "ul.cbi-tabmenu > li > a[href*='/monitor/radio1/interface']"
 
     # Radio 1 (5 GHz) link table — intf id "5" in firmware JS
     RADIO1_LINK_TABLE = "#linkstats5-tbl"
@@ -446,4 +469,21 @@ class LinkTestToolLocators:
     RESULTS_CONTAINER = "#testtool_results"
 
     LINK_TEST_FORM = "form[name='formTable'], #test_tool"
+
+
+class SpectrumAnalyserLocators:
+    """Monitor → Tools → Spectrum Analyzer (adv_sascan / sascan)."""
+
+    TAB_SPECTRUM = DiagnosticsLocators.TAB_SPECTRUM
+    START_FREQ = "#start"
+    END_FREQ = "#end"
+    START_BUTTON = "#start_button input[value='Start'], #start_button .cbi-button"
+    STOP_BUTTON = "#stop_button input[value='Stop'], #stop_button .cbi-button"
+    STATUS_MSG = "#msg"
+    SURVEY_TABLE = "#advscan-list"
+    CHANNEL_TABLE = "#channel-tbl"
+    INTERFERENCE_TABLE = "#intf-tbl"
+    SURVEY_ROWS = "#advscan-list tr.cbi-section-table-row"
+    CHANNEL_ROWS = "#channel-tbl tr.cbi-section-table-row"
+    INTERFERENCE_ROWS = "#intf-tbl tr.cbi-section-table-row"
 

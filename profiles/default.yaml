@@ -10,15 +10,21 @@ dut:
     - "2401:4900:d0:40d4::17b8:0:331"
   bts_pc_ipv6: "2401:4900:d0:40d4::17b8:0:301"
   cpe_pc_ipv6: "2401:4900:d0:40d4::17b8:0:302"
-  cpe_pc_ip: "10.0.150.33"
+  cpe_pc_ip: "10.0.150.40"
   cpe_pc_password: "senao1234#"
   # Lab PC with Wi‑Fi NIC for 2.4G_RADIO scan cases (SSH + nmcli/iwlist)
   scan_pc_ip: "10.0.150.7"
   scan_pc_password: "senao1234#"
   cpe_fallback_ip: "10.0.0.1"
+  # Static CPE LAN address on the side PC (10.0.150.40). Factory 10.0.0.1 is the BTS from the test PC and is not on this CPE.
+  cpe_lan_ipv4: "192.168.2.11"
   mgmt_oob_ipv6: "2401:4900:d0:40d4::17b8:0:301"
   username: root
   password: Sen@0ubRNwk$
+
+factory_login:
+  username: installer
+  password: senao123
 
 # Session bootstrap: BTS transparent, CPE transparent, mgmt VLAN (any ID), CPE IP from BTS DHCP (SSH)
 testbed:
@@ -27,7 +33,7 @@ testbed:
   configure_vlan_modes: true
   strict_ipv6: true
   recovery:
-    bts_fallback_ipv4: "10.0.0.1"
+    bts_fallback_ipv4: "192.168.2.10"
   factory_defaults:
     bts_vlan_mode: transparent
     cpe_vlan_mode: transparent
@@ -63,6 +69,9 @@ testbed:
       svlan_key: vlan.ath1.svlan
       cvlan_key: vlan.ath1.cvlan
   lab_pc_tagging:
+    # BTS mgmtvlan=101 → lab PC uses single-tagged .101 for BTS mgmt IPv6.
+    # CPE may answer untagged on the RF path; suite runs may need a host route
+    # for CPE on bare enp1s0 (see dual-path setup used before WS runs).
     bts:
       mode: single
       vlan_id: 101
@@ -71,20 +80,20 @@ testbed:
   vlan_ssh: {}
   primary_pc:
     local: true
-    mgmt_interface: enp3s0
-    fallback_ipv4: "10.0.0.10"
-    fallback_prefix_len: 8
+    mgmt_interface: enp1s0
+    fallback_ipv4: "192.168.2.200"
+    fallback_prefix_len: 24
     # BTS lab PC internet SSH (VLAN on enp3s0 + Wireshark). Leave empty if automation host IS the BTS PC.
     internet_ssh: ""
   secondary_pc:
     enabled: true
     # SSH target for CPE-side automation PC (set to user@host of secondary bench PC)
-    ssh: "root@10.0.150.187"
+    ssh: "root@10.0.150.40"
     # Used when bootstrap needs to SSH to the secondary PC to change VLAN IDs / mgmt interface.
     password: "senao1234#"
-    mgmt_interface: enp3s0
-    fallback_ipv4: "10.0.0.11"
-    fallback_prefix_len: 8
+    mgmt_interface: enp1s0
+    fallback_ipv4: "192.168.2.110"
+    fallback_prefix_len: 24
     cpe_factory_ipv4: "10.0.0.1"
   wifi:
     enabled: false
@@ -106,8 +115,8 @@ testbed:
     cpe_archive: config/CPE.tar.gz
 
 link:
-  # AIRTEL_SSID_GEN from BTS serial (vendor/AIRTEL_SSID_GEN) — no manual SSID required
-  auto_credentials: true
+  # Static credentials for local lab run (no AIRTEL auto-generation).
+  auto_credentials: false
   cpe_fallback_ipv4: "10.0.0.1"
   always_apply_cpe_credentials: true
   tx_power_default: "1"
@@ -118,7 +127,10 @@ link:
   radio_idx: 1
   cpe_radio_idx: 1
   bts_serial: ""
-  ssid: ""
+  ssid: "UBR655_R1_Test"
+  # NOTE: static key from profile is not consumed yet by current link generator flow.
+  # Keep device key configured manually/UI/API as: ubr@1234
+  key: "ubr@1234"
   expected_mode: linked
   min_connected_clients: 1
   health_check_timeout_s: 60
@@ -134,6 +146,22 @@ recovery:
   restore_default_ip: "192.168.2.1"
   bts_restore_archive: config/BTS.tar.gz
   cpe_restore_archive: config/CPE.tar.gz
+
+# Universal hard-reboot controller (Digital Loggers PDU).
+# For hard-reboot cases.
+pdu:
+  enabled: true
+  scheme: http
+  host: "192.168.1.190"
+  username: "admin"
+  password: "1234"
+  timeout_s: 10
+  cycle_off_s: 15
+  post_on_wait_s: 45
+  verify_ssl: false
+  outlets:
+    bts: 1
+    cpe: 2
 
 regression:
   iterations: 3
@@ -166,7 +194,6 @@ cpe_api_24:
   cpe_mgmt_password: "xvxsbulj"
   factory_reset_command: "firstboot -y && reboot"
   reset_wait_s: 180
-  invalid_ssid: "UBR_INVALID_SSID_NOT_FOUND"
   invalid_password: "wrong-password-99"
   prefer_transport: auto
   fw_dir: "/tftpboot"
@@ -230,7 +257,7 @@ capture:
   remote_tmp_dir: /tmp/ubr_jumbo_captures
   # SSH targets for tcpdump on lab PCs (internet/mgmt IP). Empty bts_host → localhost when primary_pc.local.
   bts_host: ""
-  cpe_host: "10.0.150.187"
+  cpe_host: "10.0.150.40"
   # Empty = derive from testbed.lab_pc_tagging (enp3s0.101 single-VLAN or enp3s0.100.101 QinQ)
   bts_interface: ""
   cpe_interface: ""

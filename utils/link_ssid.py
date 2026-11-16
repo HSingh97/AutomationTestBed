@@ -11,7 +11,7 @@ from utils.link_formation import (
     link_auto_enabled,
     resolve_link_credentials_ssh,
 )
-from utils.parsers import extract_uci_value
+from utils.parsers import clean_ssh_output
 from pages.commands import RootCommands
 from utils.ui_helpers import execute_triple_apply
 
@@ -30,7 +30,8 @@ def resolve_link_ssid(profile_bundle=None) -> str:
 
 async def _current_bts_ssid(root_ssh, radio_idx: int = 1) -> str:
     raw = (await root_ssh.send_command(RootCommands.get_ssid(radio_idx))).result
-    return extract_uci_value(str(raw or "").strip())
+    # uci get has no key=value form — strip MOTD/prompt via clean_ssh_output.
+    return clean_ssh_output(str(raw or ""))
 
 
 async def ensure_bts_link_ssid_ssh(
@@ -53,8 +54,14 @@ async def ensure_bts_link_ssid_ssh(
         )
         return True
 
-    target = ssid or LINK_SSID
     current = await _current_bts_ssid(root_ssh, radio_idx)
+    # Keep the SSID already on the radio. LINK_SSID (ATUMNAWJ) is only a
+    # fallback when the radio has none; overwriting a live lab SSID drops the CPE.
+    requested = (ssid or "").strip()
+    if not requested or requested == LINK_SSID:
+        target = (current or "").strip() or LINK_SSID
+    else:
+        target = requested
     if current == target:
         print(f"[link] BTS SSID already '{target}'.")
         return False
@@ -62,7 +69,11 @@ async def ensure_bts_link_ssid_ssh(
     print(f"[link] Restoring BTS SSID '{current}' -> '{target}' via SSH.")
     await root_ssh.send_command(f"uci set wireless.@wifi-iface[{radio_idx}].ssid='{target}'")
     await root_ssh.send_command("uci commit wireless")
-    await root_ssh.send_command("wifi reload 2>/dev/null || /etc/init.d/network reload")
+    # wifi reload is often a no-op on live ESSID; full wifi (or ucidyn apply) applies airface.
+    await root_ssh.send_command(
+        "ucidyn apply 2>/dev/null || wifi 2>/dev/null || wifi reload 2>/dev/null "
+        "|| /etc/init.d/network reload"
+    )
     restored = await _current_bts_ssid(root_ssh, radio_idx)
     if restored != target:
         print(f"[link] WARN: BTS SSID after SSH apply is '{restored}' (wanted '{target}').")

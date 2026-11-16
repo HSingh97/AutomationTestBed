@@ -12,6 +12,25 @@ from scrapli.driver.generic import AsyncGenericDriver
 from utils.net_utils import normalize_ip
 
 
+def _ipv6_onlink_route_cmd(cidr: str, iface: str) -> str:
+    """Ensure on-link IPv6 route exists (NM often adds addr with noprefixroute)."""
+    import ipaddress
+
+    clean = str(cidr or "").strip()
+    if not clean:
+        return "true"
+    if "/" not in clean:
+        clean = f"{normalize_ip(clean)}/120"
+    try:
+        network = str(ipaddress.IPv6Interface(clean).network)
+    except ValueError:
+        return "true"
+    return (
+        f"ip -6 route replace {shlex.quote(network)} "
+        f"dev {shlex.quote(iface)} 2>/dev/null || true"
+    )
+
+
 def _parse_ssh_target(target: str) -> tuple[str, str]:
     """Return (host, user). target may be user@host or host."""
     target = (target or "").strip()
@@ -37,6 +56,197 @@ def _run_local(command: str) -> tuple[int, str]:
     proc = subprocess.run(command, shell=True, capture_output=True, text=True)
     out = (proc.stdout or "") + (proc.stderr or "")
     return proc.returncode, out
+
+
+def _nm_parent_connection(iface: str) -> str:
+    """Active NetworkManager profile bound to iface, if any."""
+    proc = subprocess.run(
+        ["nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show", "--active"],
+        capture_output=True,
+        text=True,
+    )
+    for line in (proc.stdout or "").splitlines():
+        if ":" not in line:
+            continue
+        name, device = line.split(":", 1)
+        if device.strip() == iface:
+            return name.strip()
+    return ""
+
+
+def _nmcli_ok(args: list[str]) -> bool:
+    proc = subprocess.run(["nmcli", *args], capture_output=True, text=True)
+    if proc.returncode != 0:
+        err = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        print(f"[lab-pc-local] nmcli {' '.join(args[:4])} failed: {err[:200]}")
+        return False
+    return True
+
+
+def nmcli_move_ipv4_to_vlan(iface: str, vlan_id: int, cidr: str) -> bool:
+    """Create iface.vlan and move cidr onto it when ip link is not permitted.
+
+    NetworkManager applies the VLAN. The same subnet stays off the parent so
+    management traffic uses the tag.
+    """
+    parent = _nm_parent_connection(iface)
+    if not parent:
+        print(f"[lab-pc-local] no NetworkManager profile on {iface}")
+        return False
+    vlan_if = f"{iface}.{int(vlan_id)}"
+    con = f"ft-mgmt-{int(vlan_id)}"
+    subprocess.run(["nmcli", "connection", "delete", con], capture_output=True, text=True)
+    if not _nmcli_ok(["connection", "modify", parent, "-ipv4.addresses", cidr]):
+        return False
+    if not _nmcli_ok(["device", "reapply", iface]):
+        return False
+    if not _nmcli_ok(
+        [
+            "connection", "add", "type", "vlan",
+            "con-name", con,
+            "ifname", vlan_if,
+            "dev", iface,
+            "id", str(int(vlan_id)),
+            "ipv4.method", "manual",
+            "ipv4.addresses", cidr,
+            "ipv6.method", "disabled",
+        ]
+    ):
+        _nmcli_ok(["connection", "modify", parent, "+ipv4.addresses", cidr])
+        _nmcli_ok(["device", "reapply", iface])
+        return False
+    if not _nmcli_ok(["connection", "up", con]):
+        subprocess.run(["nmcli", "connection", "delete", con], capture_output=True, text=True)
+        _nmcli_ok(["connection", "modify", parent, "+ipv4.addresses", cidr])
+        _nmcli_ok(["device", "reapply", iface])
+        return False
+    print(f"[lab-pc-local] {vlan_if} IPv4 {cidr} via NetworkManager")
+    return True
+
+
+def _nm_vlan_connection(iface: str, vlan_id: int) -> str:
+    """NetworkManager profile for iface.vlan, whichever name created it."""
+    vlan_if = f"{iface}.{int(vlan_id)}"
+    wanted = {f"ft-mgmt-{int(vlan_id)}", vlan_if}
+    proc = subprocess.run(
+        ["nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show"],
+        capture_output=True,
+        text=True,
+    )
+    for line in (proc.stdout or "").splitlines():
+        if ":" not in line:
+            continue
+        name, device = line.split(":", 1)
+        name = name.strip()
+        if name in wanted or device.strip() == vlan_if:
+            return name
+    return ""
+
+
+def _vlan_ipv4_cidr(vlan_if: str) -> str:
+    proc = subprocess.run(
+        ["ip", "-4", "-o", "addr", "show", "dev", vlan_if],
+        capture_output=True,
+        text=True,
+    )
+    for line in (proc.stdout or "").splitlines():
+        parts = line.split()
+        if "inet" in parts:
+            return parts[parts.index("inet") + 1]
+    return ""
+
+
+def _ensure_nm_vlan_connection(iface: str, vlan_id: int, ipv6_cidr: str) -> str:
+    """Return a VLAN profile, creating one when ip link made the device first."""
+    found = _nm_vlan_connection(iface, vlan_id)
+    if found:
+        return found
+    vlan_if = f"{iface}.{int(vlan_id)}"
+    con = f"ft-mgmt-{int(vlan_id)}"
+    ipv4 = _vlan_ipv4_cidr(vlan_if)
+    args = [
+        "connection", "add", "type", "vlan",
+        "con-name", con,
+        "ifname", vlan_if,
+        "dev", iface,
+        "id", str(int(vlan_id)),
+        "ipv6.method", "manual",
+        "ipv6.addresses", ipv6_cidr,
+    ]
+    if ipv4:
+        args.extend(["ipv4.method", "manual", "ipv4.addresses", ipv4])
+    else:
+        args.extend(["ipv4.method", "disabled"])
+    if _nmcli_ok(args):
+        return con
+    subprocess.run(["nmcli", "device", "connect", vlan_if], capture_output=True, text=True)
+    return _nm_vlan_connection(iface, vlan_id)
+
+
+def nmcli_move_ipv6_onto_vlan(iface: str, vlan_id: int, cidr: str) -> bool:
+    """Move the lab IPv6 onto the VLAN so live :330/:331 stay reachable.
+
+    ip addr del is not permitted on this PC. NetworkManager must take the
+    address off the parent, or the kernel keeps using the untagged port.
+    """
+    con = _ensure_nm_vlan_connection(iface, vlan_id, cidr)
+    parent = _nm_parent_connection(iface)
+    if not con:
+        print(f"[lab-pc-local] no NetworkManager VLAN profile for {iface}.{int(vlan_id)}")
+        return False
+    if not _nmcli_ok(
+        ["connection", "modify", con, "ipv6.method", "manual", "ipv6.addresses", cidr]
+    ):
+        return False
+    if not _nmcli_ok(["connection", "up", con]):
+        return False
+    if parent:
+        # method=manual rejects an empty address list, so switch to auto first.
+        if not _nmcli_ok(["connection", "modify", parent, "ipv6.method", "auto"]):
+            return False
+        _nmcli_ok(["connection", "modify", parent, "ipv6.addresses", ""])
+        if not _nmcli_ok(["device", "reapply", iface]):
+            return False
+    print(f"[lab-pc-local] {iface}.{int(vlan_id)} IPv6 {cidr} via NetworkManager")
+    return True
+
+
+def nmcli_restore_parent_ipv6(iface: str, cidr: str) -> bool:
+    """Put the lab IPv6 back on the untagged parent after a VLAN case."""
+    parent = _nm_parent_connection(iface)
+    if not parent or not cidr:
+        return False
+    if not _nmcli_ok(
+        ["connection", "modify", parent, "ipv6.method", "manual", "ipv6.addresses", cidr]
+    ):
+        return False
+    if not _nmcli_ok(["device", "reapply", iface]):
+        return False
+    print(f"[lab-pc-local] {iface} untagged IPv6 {cidr} via NetworkManager")
+    return True
+
+
+def nmcli_restore_parent_ipv4(iface: str, cidr: str) -> bool:
+    """Drop ft-mgmt VLAN profiles and put cidr back on the parent."""
+    proc = subprocess.run(
+        ["nmcli", "-t", "-f", "NAME", "connection", "show"],
+        capture_output=True,
+        text=True,
+    )
+    for name in (proc.stdout or "").splitlines():
+        name = name.strip()
+        if name.startswith("ft-mgmt-") or name.startswith(f"{iface}."):
+            subprocess.run(["nmcli", "connection", "delete", name], capture_output=True, text=True)
+    parent = _nm_parent_connection(iface)
+    if not parent:
+        print(f"[lab-pc-local] no NetworkManager profile on {iface} to restore {cidr}")
+        return False
+    if not _nmcli_ok(["connection", "modify", parent, "+ipv4.addresses", cidr]):
+        return False
+    if not _nmcli_ok(["device", "reapply", iface]):
+        return False
+    print(f"[lab-pc-local] {iface} untagged IPv4 {cidr} via NetworkManager")
+    return True
 
 
 def _lab_pc_log_prefix(pc_cfg: dict[str, Any] | None) -> str:
@@ -78,6 +288,7 @@ def _build_pc_link_commands(
             *cleanup_known_vlan_globals,
             f"ip -6 addr flush dev {shlex.quote(iface)} 2>/dev/null || true",
             f"ip -6 addr add {shlex.quote(cidr)} dev {shlex.quote(iface)} 2>/dev/null || true",
+            _ipv6_onlink_route_cmd(cidr, iface),
             f"ip link set {shlex.quote(iface)} up",
         ]
         return " && ".join(cmds), vlan_if
@@ -91,6 +302,7 @@ def _build_pc_link_commands(
             f"ip link add link {shlex.quote(iface)} name {shlex.quote(vlan_if)} type vlan id {vlan_id} 2>/dev/null || true",
             f"ip -6 addr flush dev {shlex.quote(vlan_if)} 2>/dev/null || true",
             f"ip -6 addr add {shlex.quote(cidr)} dev {shlex.quote(vlan_if)} 2>/dev/null || true",
+            _ipv6_onlink_route_cmd(cidr, vlan_if),
             f"ip link set {shlex.quote(vlan_if)} up",
             f"ip link set {shlex.quote(iface)} up",
         ]
@@ -110,6 +322,7 @@ def _build_pc_link_commands(
         f"ip -6 addr flush dev {shlex.quote(outer)} 2>/dev/null || true",
         f"ip -6 addr flush dev {shlex.quote(inner)} 2>/dev/null || true",
         f"ip -6 addr add {shlex.quote(cidr)} dev {shlex.quote(inner)} 2>/dev/null || true",
+        _ipv6_onlink_route_cmd(cidr, inner),
         f"ip link set {shlex.quote(outer)} up",
         f"ip link set {shlex.quote(inner)} up",
         f"ip link set {shlex.quote(iface)} up",
@@ -117,23 +330,35 @@ def _build_pc_link_commands(
     return " && ".join(cmds), inner
 
 
-def build_restore_untagged_commands(iface: str) -> str:
-    """Remove QinQ subifs; keep native enp3s0 up (IPv4 10.0.0.xx for fallback stays)."""
+def build_restore_untagged_commands(iface: str, *, flush_ipv6: bool = True) -> str:
+    """Remove VLAN subinterfaces; keep native parent up for untagged lab/CPE LAN.
+
+    When ``flush_ipv6`` is False, VLAN subifs are still removed but global IPv6 on
+    the parent is preserved (suite heal paths that must not drop the SSH bind).
+    """
     iface_q = shlex.quote(iface)
-    return " && ".join(
-        [
-            f"ip link set {iface_q}.200.201 down 2>/dev/null || true",
-            f"ip link del {iface_q}.200.201 2>/dev/null || true",
-            f"ip link set {iface_q}.200 down 2>/dev/null || true",
-            f"ip link del {iface_q}.200 2>/dev/null || true",
-            f"ip link set {iface_q}.100.101 down 2>/dev/null || true",
-            f"ip link del {iface_q}.100.101 2>/dev/null || true",
-            f"ip link set {iface_q}.100 down 2>/dev/null || true",
-            f"ip link del {iface_q}.100 2>/dev/null || true",
-            f"ip -6 addr flush dev {iface_q} 2>/dev/null || true",
-            f"ip link set {iface_q} up",
-        ]
-    )
+    prefix_q = shlex.quote(f"{iface}.")
+    parts = [
+        (
+            "for vlan_if in $(ip -o link show | awk -F': ' "
+            f"'$2 ~ /^{prefix_q}/ {{print $2}}' | cut -d@ -f1 | sort -r); do "
+            'ip link set "$vlan_if" down 2>/dev/null || true; '
+            'ip link del "$vlan_if" 2>/dev/null || true; '
+            "done"
+        ),
+        f"ip link set {iface_q}.200.201 down 2>/dev/null || true",
+        f"ip link del {iface_q}.200.201 2>/dev/null || true",
+        f"ip link set {iface_q}.200 down 2>/dev/null || true",
+        f"ip link del {iface_q}.200 2>/dev/null || true",
+        f"ip link set {iface_q}.100.101 down 2>/dev/null || true",
+        f"ip link del {iface_q}.100.101 2>/dev/null || true",
+        f"ip link set {iface_q}.100 down 2>/dev/null || true",
+        f"ip link del {iface_q}.100 2>/dev/null || true",
+    ]
+    if flush_ipv6:
+        parts.append(f"ip -6 addr flush dev {iface_q} 2>/dev/null || true")
+    parts.append(f"ip link set {iface_q} up")
+    return " && ".join(parts)
 
 
 def build_fallback_ipv4_commands(iface: str, ipv4_cidr: str) -> str:
@@ -183,10 +408,15 @@ async def _run_pc_network_command(pc_cfg: dict[str, Any], password: str, joined:
         await conn.close()
 
 
-async def restore_untagged_lab_pc(pc_cfg: dict[str, Any], password: str) -> bool:
+async def restore_untagged_lab_pc(
+    pc_cfg: dict[str, Any],
+    password: str,
+    *,
+    flush_ipv6: bool = True,
+) -> bool:
     """Drop stacked VLANs on BTS lab PC; native enp3s0 stays up for 10.0.0.x fallback."""
     iface = str(pc_cfg.get("mgmt_interface", "enp3s0"))
-    joined = build_restore_untagged_commands(iface)
+    joined = build_restore_untagged_commands(iface, flush_ipv6=flush_ipv6)
     return await _run_pc_network_command(pc_cfg, password, joined, label=f"restored untagged {iface}")
 
 
@@ -210,6 +440,76 @@ async def ensure_fallback_ethernet(pc_cfg: dict[str, Any], password: str) -> boo
     )
 
 
+def build_add_ipv4_if_missing(iface: str, ipv4_cidr: str) -> str:
+    """Add IPv4 on parent iface if missing — does not flush IPv6 or remove VLAN subifs."""
+    import ipaddress
+
+    iface_q = shlex.quote(iface)
+    cidr_q = shlex.quote(ipv4_cidr)
+    net = ipaddress.IPv4Network(
+        ipv4_cidr if "/" in ipv4_cidr else f"{ipv4_cidr}/24",
+        strict=False,
+    )
+    host = str(net.network_address)
+    if net.prefixlen >= 24:
+        grep_prefix = ".".join(host.split(".")[:3])
+        grep_pat = f"inet {grep_prefix}\\."
+    elif net.prefixlen >= 16:
+        grep_prefix = ".".join(host.split(".")[:2])
+        grep_pat = f"inet {grep_prefix}\\."
+    else:
+        grep_pat = f"inet {host.split('.')[0]}\\."
+    return " && ".join(
+        [
+            f"ip link set {iface_q} up",
+            (
+                f"ip -4 addr show dev {iface_q} | grep -qE '{grep_pat}' "
+                f"|| ip -4 addr add {cidr_q} dev {iface_q} 2>/dev/null || true"
+            ),
+        ]
+    )
+
+
+async def ensure_pc_ipv4_on_interface(
+    pc_cfg: dict[str, Any],
+    password: str,
+    *,
+    cidr: str | None = None,
+) -> bool:
+    """Ensure an IPv4 address on the lab PC parent NIC without tearing down VLAN/IPv6."""
+    iface = str(pc_cfg.get("mgmt_interface", "enp3s0"))
+    if cidr is None:
+        prefix = int(pc_cfg.get("fallback_prefix_len", 8))
+        fallback_v4 = str(pc_cfg.get("fallback_ipv4", "10.0.0.10")).strip()
+        cidr = fallback_v4 if "/" in fallback_v4 else f"{fallback_v4}/{prefix}"
+    joined = build_add_ipv4_if_missing(iface, cidr)
+    return await _run_pc_network_command(
+        pc_cfg,
+        password,
+        joined,
+        label=f"{iface} add IPv4 {cidr} (keep LAN up)",
+    )
+
+
+async def ensure_pc_interface_up(pc_cfg: dict[str, Any], password: str) -> bool:
+    """Bring the lab PC parent Ethernet up — never flush addresses or delete VLAN subifs."""
+    iface = str(pc_cfg.get("mgmt_interface", "enp3s0"))
+    iface_q = shlex.quote(iface)
+    joined = " && ".join(
+        [
+            f"ip link set {iface_q} up",
+            f"nmcli dev connect {iface_q} 2>/dev/null || true",
+            f"nmcli dev set {iface_q} managed yes 2>/dev/null || true",
+        ]
+    )
+    return await _run_pc_network_command(
+        pc_cfg,
+        password,
+        joined,
+        label=f"{iface} link up (keep LAN)",
+    )
+
+
 async def ensure_fallback_subnet(pc_cfg: dict[str, Any], password: str) -> bool:
     """
     Ensure a 10.0.0.x address exists on the given PC interface.
@@ -219,7 +519,7 @@ async def ensure_fallback_subnet(pc_cfg: dict[str, Any], password: str) -> bool:
     prefix = int(pc_cfg.get("fallback_prefix_len", 8))
     fallback_v4 = str(pc_cfg.get("fallback_ipv4", "10.0.0.10")).strip()
     cidr = fallback_v4 if "/" in fallback_v4 else f"{fallback_v4}/{prefix}"
-    joined = build_fallback_ipv4_commands(iface, cidr)
+    joined = " && ".join([build_restore_untagged_commands(iface), build_fallback_ipv4_commands(iface, cidr)])
     return await _run_pc_network_command(
         pc_cfg,
         password,
@@ -248,14 +548,26 @@ def build_mgmt_vlan_ipv4_commands(
     iface_q = shlex.quote(iface)
     vlan_q = shlex.quote(vlan_if)
     cidr_q = shlex.quote(cidr)
+    network = ipaddress.IPv4Network(cidr, strict=False)
+    parent_cleanup = " ".join(
+        [
+            f"for cidr in $(ip -4 -o addr show dev {iface_q} | awk '{{print $4}}'); do",
+            f"case \"$cidr\" in {network.network_address}/*|{host}/*|192.168.2.*)",
+            f"ip -4 addr del \"$cidr\" dev {iface_q} 2>/dev/null || true ;;",
+            "esac;",
+            "done",
+        ]
+    )
     joined = " && ".join(
         [
             f"ip link set {iface_q} up",
+            parent_cleanup,
             f"ip link show {vlan_q} >/dev/null 2>&1 || "
             f"ip link add link {iface_q} name {vlan_q} type vlan id {int(vlan_id)}",
             f"ip -4 addr flush dev {vlan_q} 2>/dev/null || true",
             f"ip -4 addr add {cidr_q} dev {vlan_q} 2>/dev/null || true",
             f"ip link set {vlan_q} up",
+            f"ip route replace {network.with_prefixlen} dev {vlan_q} src {shlex.quote(host)}",
         ]
     )
     return joined, vlan_if
@@ -385,6 +697,7 @@ def build_lab_pc_mtu_apply_script(iface: str, mtu: int, *, mgmt_ipv6_cidr: str =
             'if [[ -n "$CID" ]]; then',
             '  ip -6 addr flush dev "$IFACE" 2>/dev/null || true',
             '  ip -6 addr add "$CID" dev "$IFACE" 2>/dev/null || true',
+            f"  {_ipv6_onlink_route_cmd(mgmt_ipv6_cidr, iface)}" if mgmt_ipv6_cidr else "  true",
             "fi",
         ]
     )
@@ -423,6 +736,7 @@ def build_lab_pc_mtu_restore_script(
             'if [[ -n "$CID" ]]; then',
             '  ip -6 addr flush dev "$IFACE" 2>/dev/null || true',
             '  ip -6 addr add "$CID" dev "$IFACE" 2>/dev/null || true',
+            f"  {_ipv6_onlink_route_cmd(mgmt_ipv6_cidr, iface)}" if mgmt_ipv6_cidr else "  true",
             "fi",
         ]
     )
@@ -602,6 +916,14 @@ async def ensure_lab_pc_mgmt_vlan_ipv4(
         joined,
         label=f"{vlan_if} IPv4 {ipv4} (mgmt VLAN {vlan_id})",
     )
+    if not ok and pc_cfg.get("local", True) and not str(pc_cfg.get("ssh", "")).strip():
+        import ipaddress
+
+        host = normalize_ip(str(ipv4).split("/")[0])
+        mask = str(netmask).strip() or "255.255.255.0"
+        prefix = ipaddress.IPv4Network(f"0.0.0.0/{mask}", strict=False).prefixlen
+        cidr = ipv4 if "/" in str(ipv4) else f"{host}/{prefix}"
+        ok = await asyncio.to_thread(nmcli_move_ipv4_to_vlan, iface, int(vlan_id), cidr)
     return vlan_if if ok else None
 
 
@@ -611,8 +933,18 @@ def _mgmt_vlan_id_from_profile(profile: dict[str, Any]) -> int:
     return int(mgmt.get("lab_pc_vlan_id", mgmt.get("uci_value", 101)))
 
 
-def build_untagged_ipv4_commands(iface: str, ipv4: str, netmask: str) -> tuple[str, str]:
-    """Assign IPv4 on native port (CPE side — untagged), e.g. enp3s0 + 192.168.2.20/24."""
+def build_untagged_ipv4_commands(
+    iface: str,
+    ipv4: str,
+    netmask: str,
+    *,
+    mgmt_ipv6_cidr: str = "",
+) -> tuple[str, str]:
+    """Assign IPv4 on native port (CPE side — untagged), e.g. enp3s0 + 192.168.2.20/24.
+
+    ``build_restore_untagged_commands`` flushes parent IPv6; when ``mgmt_ipv6_cidr``
+    is set, re-add it so Functional/IPv6 SSH bind addresses survive cleanup.
+    """
     import ipaddress
 
     host = normalize_ip(ipv4.split("/")[0])
@@ -622,16 +954,71 @@ def build_untagged_ipv4_commands(iface: str, ipv4: str, netmask: str) -> tuple[s
     iface_q = shlex.quote(iface)
     cidr_q = shlex.quote(cidr)
     host_re = host.replace(".", r"\.")
-    joined = " && ".join(
-        [
-            f"ip link set {iface_q} up",
-            (
-                f"ip -4 addr show dev {iface_q} | grep -qE 'inet {host_re}/' "
-                f"|| ip -4 addr add {cidr_q} dev {iface_q} 2>/dev/null || true"
-            ),
-        ]
-    )
+    parts = [
+        build_restore_untagged_commands(iface),
+        f"ip link set {iface_q} up",
+        (
+            f"ip -4 addr show dev {iface_q} | grep -qE 'inet {host_re}/' "
+            f"|| ip -4 addr add {cidr_q} dev {iface_q} 2>/dev/null || true"
+        ),
+    ]
+    v6 = str(mgmt_ipv6_cidr or "").strip()
+    if v6:
+        host6 = normalize_ip(v6.split("/")[0])
+        cidr6 = v6 if "/" in v6 else f"{host6}/120"
+        cidr6_q = shlex.quote(cidr6)
+        # Always attempt add; "file exists" is ignored so compressed/expanded forms both work.
+        parts.append(f"ip -6 addr add {cidr6_q} dev {iface_q} 2>/dev/null || true")
+        parts.append(_ipv6_onlink_route_cmd(cidr6, iface))
+        parts.append(f"ip neigh flush dev {iface_q} >/dev/null 2>&1 || true")
+    joined = " && ".join(parts)
     return joined, iface
+
+
+async def ensure_lab_pc_untagged_ipv4(
+    pc_cfg: dict[str, Any],
+    *,
+    ipv4: str,
+    netmask: str,
+    password: str,
+    mgmt_ipv6_cidr: str = "",
+) -> str | None:
+    """Remove PC VLAN subinterfaces and assign IPv4 on the native parent."""
+    iface = str(pc_cfg.get("mgmt_interface", "enp3s0"))
+    joined, if_name = build_untagged_ipv4_commands(
+        iface, ipv4, netmask, mgmt_ipv6_cidr=mgmt_ipv6_cidr
+    )
+    ok = await _run_pc_network_command(
+        pc_cfg,
+        password,
+        joined,
+        label=f"{if_name} untagged IPv4 {ipv4}",
+    )
+    local = pc_cfg.get("local", True) and not str(pc_cfg.get("ssh", "")).strip()
+    if not ok and local:
+        import ipaddress
+
+        host = normalize_ip(str(ipv4).split("/")[0])
+        mask = str(netmask).strip() or "255.255.255.0"
+        prefix = ipaddress.IPv4Network(f"0.0.0.0/{mask}", strict=False).prefixlen
+        cidr = str(ipv4) if "/" in str(ipv4) else f"{host}/{prefix}"
+        ok = await asyncio.to_thread(nmcli_restore_parent_ipv4, iface, cidr)
+    elif ok and local:
+        # ip link often exits 0 via "|| true" and leaves the NetworkManager VLAN up.
+        leftover = subprocess.run(
+            ["nmcli", "-t", "-f", "NAME", "connection", "show"],
+            capture_output=True,
+            text=True,
+        )
+        if any(line.strip().startswith("ft-mgmt-") for line in (leftover.stdout or "").splitlines()):
+            import ipaddress
+
+            host = normalize_ip(str(ipv4).split("/")[0])
+            mask = str(netmask).strip() or "255.255.255.0"
+            prefix = ipaddress.IPv4Network(f"0.0.0.0/{mask}", strict=False).prefixlen
+            cidr = str(ipv4) if "/" in str(ipv4) else f"{host}/{prefix}"
+            ok = await asyncio.to_thread(nmcli_restore_parent_ipv4, iface, cidr)
+    return if_name if ok else None
 
 
 def build_secondary_pc_parent_prepare_commands(

@@ -11,7 +11,31 @@ from scrapli.driver.generic import AsyncGenericDriver
 
 from pages.commands import RootCommands
 from utils.cpe_api_24_config import DEFAULT_CPE_SSH_HOST
+from utils.net_utils import normalize_ip
 from utils.parsers import extract_uci_value, ssh_scalar
+
+# When mgmt IPv6 SSH is down, match testbed bootstrap / root_ssh recovery order.
+_DEFAULT_BTS_SSH_FALLBACKS: tuple[str, ...] = (
+    "10.0.0.1",
+    "192.168.2.10",
+    "192.168.2.1",
+)
+
+
+def bts_ssh_host_candidates(
+    bts_host: str,
+    *,
+    extra_hosts: tuple[str, ...] | list[str] = (),
+) -> list[str]:
+    """Ordered unique BTS SSH targets: primary mgmt IP, then factory/recovery IPv4."""
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for raw in (bts_host, *extra_hosts, *_DEFAULT_BTS_SSH_FALLBACKS):
+        host = normalize_ip(str(raw or "").strip())
+        if host and host not in seen:
+            seen.add(host)
+            ordered.append(host)
+    return ordered
 
 RADIO_24_IDX = 0
 BTS_RADIO_IDX = 1
@@ -416,32 +440,33 @@ async def fetch_cpe_mgmt_ap_credentials(
             return creds
 
     if bts_host:
-        bts_conn: asyncssh.SSHClientConnection | None = None
-        try:
-            bts_conn = await asyncssh.connect(
-                bts_host,
-                username=username,
-                password=password,
-                known_hosts=None,
-                connect_timeout=connect_timeout,
-            )
-            su_idx = await _resolve_cpe_remote_exec_index(
-                bts_conn, mgmt_ssid=known_mgmt_ssid
-            )
-            if su_idx is not None:
-                return await _read_cpe_mgmt_ap_via_remote_exec(
-                    bts_conn,
-                    su_index=su_idx,
-                    bts_ssid=bts_ssid,
-                    known_mgmt_ssid=known_mgmt_ssid,
-                    log_prefix=f"SSH CPE via BTS remote_exec SU{su_idx}",
+        for bts_try in bts_ssh_host_candidates(bts_host):
+            bts_conn: asyncssh.SSHClientConnection | None = None
+            try:
+                bts_conn = await asyncssh.connect(
+                    bts_try,
+                    username=username,
+                    password=password,
+                    known_hosts=None,
+                    connect_timeout=connect_timeout,
                 )
-            errors.append(f"BTS {bts_host}: no remote_exec SU index for CPE")
-        except Exception as exc:
-            errors.append(f"BTS remote_exec @ {bts_host}: {exc}")
-        finally:
-            if bts_conn is not None:
-                bts_conn.close()
+                su_idx = await _resolve_cpe_remote_exec_index(
+                    bts_conn, mgmt_ssid=known_mgmt_ssid
+                )
+                if su_idx is not None:
+                    return await _read_cpe_mgmt_ap_via_remote_exec(
+                        bts_conn,
+                        su_index=su_idx,
+                        bts_ssid=bts_ssid,
+                        known_mgmt_ssid=known_mgmt_ssid,
+                        log_prefix=f"SSH CPE via BTS remote_exec SU{su_idx} @ {bts_try}",
+                    )
+                errors.append(f"BTS {bts_try}: no remote_exec SU index for CPE")
+            except Exception as exc:
+                errors.append(f"BTS remote_exec @ {bts_try}: {exc}")
+            finally:
+                if bts_conn is not None:
+                    bts_conn.close()
 
     detail = "\n  ".join(errors) if errors else "(no paths attempted)"
     raise RuntimeError(
@@ -490,34 +515,38 @@ async def fetch_cpe_mgmt_ap_bssid(
             print(f"    -> [CPE BSSID] skip {cpe_v6}: {exc}")
 
     if bts_host:
-        bts_conn: asyncssh.SSHClientConnection | None = None
-        try:
-            bts_conn = await asyncssh.connect(
-                bts_host,
-                username=username,
-                password=password,
-                known_hosts=None,
-                connect_timeout=connect_timeout,
-            )
-            su_idx = await _resolve_cpe_remote_exec_index(
-                bts_conn, mgmt_ssid=known_mgmt_ssid
-            )
-            if su_idx is not None:
-                code, out = await _ssh_run(
-                    bts_conn,
-                    _remote_exec_bts_command(su_idx, cmd),
-                    timeout_s=25.0,
+        for bts_try in bts_ssh_host_candidates(bts_host):
+            bts_conn: asyncssh.SSHClientConnection | None = None
+            try:
+                bts_conn = await asyncssh.connect(
+                    bts_try,
+                    username=username,
+                    password=password,
+                    known_hosts=None,
+                    connect_timeout=connect_timeout,
                 )
-                if code == 0:
-                    bssid = _parse_bssid(out)
-                    if bssid:
-                        print(f"    -> [CPE BSSID] {bssid} from remote_exec SU{su_idx}")
-                        return bssid
-        except Exception as exc:
-            print(f"    -> [CPE BSSID] skip BTS remote_exec: {exc}")
-        finally:
-            if bts_conn is not None:
-                bts_conn.close()
+                su_idx = await _resolve_cpe_remote_exec_index(
+                    bts_conn, mgmt_ssid=known_mgmt_ssid
+                )
+                if su_idx is not None:
+                    code, out = await _ssh_run(
+                        bts_conn,
+                        _remote_exec_bts_command(su_idx, cmd),
+                        timeout_s=25.0,
+                    )
+                    if code == 0:
+                        bssid = _parse_bssid(out)
+                        if bssid:
+                            print(
+                                f"    -> [CPE BSSID] {bssid} from remote_exec SU{su_idx} @ {bts_try}"
+                            )
+                            return bssid
+                print(f"    -> [CPE BSSID] no SU/BSSID via BTS {bts_try}")
+            except Exception as exc:
+                print(f"    -> [CPE BSSID] skip BTS {bts_try}: {exc}")
+            finally:
+                if bts_conn is not None:
+                    bts_conn.close()
     return None
 
 
@@ -587,26 +616,30 @@ async def fetch_bts_credentials_for_api(
     password: str,
     radio_idx: int = BTS_RADIO_IDX,
 ) -> FetchedWifiCredentials:
-    """Prefer BTS SSH; fall back to CPE mgmt SSH when PC is on CPE Wi‑Fi only."""
-    try:
-        return await fetch_bts_credentials_via_asyncssh(
-            bts_host,
-            username=username,
-            password=password,
-            label="BTS",
-            radio_idx=radio_idx,
-            connect_timeout=10.0,
-        )
-    except Exception as exc:
-        print(
-            f"    -> [Preflight] BTS SSH to {bts_host} unavailable ({exc}). "
-            f"Trying CPE mgmt SSH @ {cpe_mgmt_host}..."
-        )
-        return await fetch_bts_sta_credentials_from_cpe_mgmt(
-            username=username,
-            password=password,
-            cpe_host=cpe_mgmt_host,
-        )
+    """Prefer BTS SSH (with recovery IPv4 fallbacks); fall back to CPE mgmt SSH."""
+    last_exc: Exception | None = None
+    for host in bts_ssh_host_candidates(bts_host):
+        try:
+            return await fetch_bts_credentials_via_asyncssh(
+                host,
+                username=username,
+                password=password,
+                label="BTS",
+                radio_idx=radio_idx,
+                connect_timeout=10.0,
+            )
+        except Exception as exc:
+            last_exc = exc
+            print(f"    -> [Preflight] BTS SSH to {host} unavailable ({exc}).")
+    print(
+        f"    -> [Preflight] BTS SSH failed for all targets (last: {last_exc}). "
+        f"Trying CPE mgmt SSH @ {cpe_mgmt_host}..."
+    )
+    return await fetch_bts_sta_credentials_from_cpe_mgmt(
+        username=username,
+        password=password,
+        cpe_host=cpe_mgmt_host,
+    )
 
 
 async def is_bts_link_broken(
@@ -619,29 +652,39 @@ async def is_bts_link_broken(
 ) -> bool:
     """
     Return True when BTS reports zero remote partners on the radio.
+    Tries factory/recovery IPv4 when mgmt IPv6 SSH is unreachable.
     """
-    async with asyncssh.connect(
-        bts_host,
-        username=username,
-        password=password,
-        known_hosts=None,
-        connect_timeout=10.0,
-    ) as conn:
-        result = await conn.run(
-            f"cat /sys/class/kwn/wifi{radio_idx}/statistics/links 2>/dev/null || echo -1",
-            check=False,
-            timeout=8,
-        )
-        raw = (result.stdout or "").strip()
+    last_exc: Exception | None = None
+    for host in bts_ssh_host_candidates(bts_host):
         try:
-            partners = int(raw.splitlines()[-1]) if raw else -1
-        except Exception:
-            partners = -1
-        if log:
-            print(
-                f"    -> [SSH BTS @ {bts_host}] radio {radio_idx} remote partners={partners}"
-            )
-        return partners == 0
+            async with asyncssh.connect(
+                host,
+                username=username,
+                password=password,
+                known_hosts=None,
+                connect_timeout=10.0,
+            ) as conn:
+                result = await conn.run(
+                    f"cat /sys/class/kwn/wifi{radio_idx}/statistics/links 2>/dev/null || echo -1",
+                    check=False,
+                    timeout=8,
+                )
+                raw = (result.stdout or "").strip()
+                try:
+                    partners = int(raw.splitlines()[-1]) if raw else -1
+                except Exception:
+                    partners = -1
+                if log:
+                    note = f" (primary {bts_host} via {host})" if host != normalize_ip(bts_host) else ""
+                    print(
+                        f"    -> [SSH BTS @ {host}] radio {radio_idx} remote partners={partners}{note}"
+                    )
+                return partners == 0
+        except Exception as exc:
+            last_exc = exc
+            if log:
+                print(f"    -> [SSH BTS] {host} unavailable ({exc}); trying next host...")
+    raise OSError(f"BTS SSH failed for {bts_ssh_host_candidates(bts_host)}: {last_exc}")
 
 
 async def wait_bts_link_up(
@@ -702,38 +745,45 @@ async def fetch_attached_cpe_ipv6_candidates_from_bts(
     """
     Read attached CPE IPv6 candidates from BTS neighbor table.
     """
-    async with asyncssh.connect(
-        bts_host,
-        username=username,
-        password=password,
-        known_hosts=None,
-        connect_timeout=10.0,
-    ) as conn:
-        result = await conn.run("ip -6 neigh show", check=False, timeout=12)
-        lines = (result.stdout or "").splitlines()
-        candidates: list[str] = []
-        for line in lines:
-            line = line.strip()
-            if "FAILED" in line:
-                continue
-            parts = line.split()
-            if not parts:
-                continue
-            try:
-                ip = str(ipaddress.IPv6Address(parts[0]))
-            except Exception:
-                continue
-            if ip.startswith("fe80:"):
-                continue
-            candidates.append(ip)
+    last_exc: Exception | None = None
+    for host in bts_ssh_host_candidates(bts_host):
+        try:
+            async with asyncssh.connect(
+                host,
+                username=username,
+                password=password,
+                known_hosts=None,
+                connect_timeout=10.0,
+            ) as conn:
+                result = await conn.run("ip -6 neigh show", check=False, timeout=12)
+                lines = (result.stdout or "").splitlines()
+                candidates: list[str] = []
+                for line in lines:
+                    line = line.strip()
+                    if "FAILED" in line:
+                        continue
+                    parts = line.split()
+                    if not parts:
+                        continue
+                    try:
+                        ip = str(ipaddress.IPv6Address(parts[0]))
+                    except Exception:
+                        continue
+                    if ip.startswith("fe80:"):
+                        continue
+                    candidates.append(ip)
 
-        if not candidates:
-            raise RuntimeError(
-                f"No global IPv6 neighbors found on BTS {bts_host}; cannot derive attached CPE IPv6."
-            )
-        uniq: list[str] = []
-        for ip in candidates:
-            if ip not in uniq:
-                uniq.append(ip)
-        print(f"    -> [SSH BTS @ {bts_host}] attached IPv6 candidates: {', '.join(uniq)}")
-        return uniq
+                if not candidates:
+                    raise RuntimeError(
+                        f"No global IPv6 neighbors found on BTS {host}; cannot derive attached CPE IPv6."
+                    )
+                uniq: list[str] = []
+                for ip in candidates:
+                    if ip not in uniq:
+                        uniq.append(ip)
+                print(f"    -> [SSH BTS @ {host}] attached IPv6 candidates: {', '.join(uniq)}")
+                return uniq
+        except Exception as exc:
+            last_exc = exc
+            print(f"    -> [SSH BTS] {host} unavailable ({exc}); trying next host...")
+    raise RuntimeError(f"BTS SSH failed for {bts_ssh_host_candidates(bts_host)}: {last_exc}")

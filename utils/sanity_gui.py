@@ -3,37 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from pathlib import Path
 
 from pages.locators import CommonLocators, LoginPageLocators, UITimeouts
 
 from utils.net_utils import format_http_host, format_luci_url, is_ipv6_literal
-
-_DEBUG_LOG = Path(
-    "/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-5d791c.log"
-)
-
-
-def _dbg(hypothesis_id: str, location: str, message: str, data: dict | None = None) -> None:
-    # region agent log
-    try:
-        entry = {
-            "sessionId": "5d791c",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data or {},
-            "timestamp": int(time.time() * 1000),
-        }
-        _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with _DEBUG_LOG.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=True) + "\n")
-    except Exception:
-        pass
-    # endregion
-
 
 async def sanity_login_if_needed(gui_page, host: str, device_creds: dict, *, wait_ms: int = 4000) -> None:
     """Log into LuCI when session expired / page is on chrome-error / wrong host."""
@@ -109,7 +84,6 @@ async def sanity_login_if_needed(gui_page, host: str, device_creds: dict, *, wai
         except Exception:
             pass
 
-
 async def verify_sanity_gui_authenticated(gui_page, *, timeout_ms: int = 20000) -> bool:
     """True when LuCI main menu is visible and the login form is not."""
     login = gui_page.locator(LoginPageLocators.USERNAME_INPUT)
@@ -128,7 +102,6 @@ async def verify_sanity_gui_authenticated(gui_page, *, timeout_ms: int = 20000) 
         except Exception:
             continue
     return False
-
 
 async def sanity_gui_login_and_verify(
     gui_page,
@@ -162,7 +135,6 @@ async def sanity_gui_login_and_verify(
                 last_error = str(exc)
     print(f"[sanity] {label} GUI login failed at {host}: {last_error}", flush=True)
     return False
-
 
 async def force_luci_session_with_stok(
     gui_page,
@@ -396,7 +368,6 @@ async def open_cpe_gui_page(
             return None
         raise
 
-
 async def close_cpe_gui_page(page) -> None:
     """Close CPE page and any isolated Playwright stack attached to it."""
     if page is None:
@@ -421,14 +392,12 @@ async def close_cpe_gui_page(page) -> None:
         except Exception:
             pass
 
-
 def _luci_stok_from_url(url: str) -> str:
     """Return ``;stok=TOKEN`` segment from a LuCI URL, or empty."""
     import re as _re
 
     m = _re.search(r";stok=[A-Za-z0-9]+", url or "")
     return m.group(0) if m else ""
-
 
 async def resolve_luci_stok(gui_page) -> str:
     """Return ``;stok=TOKEN`` from the page URL or any authenticated href."""
@@ -448,7 +417,6 @@ async def resolve_luci_stok(gui_page) -> str:
     except Exception:
         pass
     return ""
-
 
 async def navigate_to_flashops(
     gui_page,
@@ -602,7 +570,6 @@ async def navigate_to_flashops(
     await gui_page.wait_for_load_state("networkidle")
     await gui_page.wait_for_timeout(1200)
 
-
 async def open_upgrade_tab(
     gui_page,
     *,
@@ -636,12 +603,6 @@ async def open_upgrade_tab(
         ).first
         if await http_tab.count() and await http_tab.is_visible(timeout=2000):
             await http_tab.click()
-            _dbg(
-                "B",
-                "sanity_gui.py:open_upgrade_tab",
-                "HTTP sub-tab clicked",
-                {"url": gui_page.url or ""},
-            )
 
     async def _upgrade_form_ready() -> bool:
         for sel in ("#image", "input[type='file'][name='image']", "input[type='file']", "#keep"):
@@ -676,7 +637,6 @@ async def open_upgrade_tab(
     file_input = gui_page.locator("#image, input[type='file'][name='image'], input[type='file']").first
     await file_input.wait_for(state="attached", timeout=45000)
 
-
 async def _keep_settings_checked(gui_page) -> bool:
     keep_cb = gui_page.locator("#keep, input[name='keep']")
     if await keep_cb.count():
@@ -696,7 +656,6 @@ async def _keep_settings_checked(gui_page) -> bool:
                 return True
     return False
 
-
 async def _set_keep_settings(gui_page) -> bool:
     keep_cb = gui_page.locator("#keep, input[name='keep']")
     if await keep_cb.count() and await keep_cb.first.is_visible(timeout=3000):
@@ -704,7 +663,6 @@ async def _set_keep_settings(gui_page) -> bool:
             await keep_cb.first.check()
         print("[sanity] Keep settings: #keep checked", flush=True)
         checked = await _keep_settings_checked(gui_page)
-        _dbg("A", "sanity_gui.py:_set_keep_settings", "keep via #keep", {"checked": checked})
         return checked
 
     for pattern in ("keep settings", "keep", "retain", "preserve"):
@@ -719,7 +677,6 @@ async def _set_keep_settings(gui_page) -> bool:
                 await checkbox.check()
             print(f"[sanity] Keep settings: label '{pattern}' checked", flush=True)
             checked = await _keep_settings_checked(gui_page)
-            _dbg("A", "sanity_gui.py:_set_keep_settings", "keep via label", {"pattern": pattern, "checked": checked})
             return checked
 
     checkbox = gui_page.locator("input[type='checkbox']").first
@@ -727,13 +684,10 @@ async def _set_keep_settings(gui_page) -> bool:
         await checkbox.check()
         print("[sanity] Keep settings: first visible checkbox checked", flush=True)
         checked = await _keep_settings_checked(gui_page)
-        _dbg("A", "sanity_gui.py:_set_keep_settings", "keep via first checkbox", {"checked": checked})
         return checked
 
     checked = await _keep_settings_checked(gui_page)
-    _dbg("A", "sanity_gui.py:_set_keep_settings", "keep settings not found", {"checked": checked})
     return checked
-
 
 async def _wait_for_verify_page(gui_page, *, timeout_s: int = 180) -> str:
     deadline = time.monotonic() + timeout_s
@@ -748,47 +702,19 @@ async def _wait_for_verify_page(gui_page, *, timeout_s: int = 180) -> str:
             continue
         last_body = body
         lower = body.lower()
-        if any(token in lower for token in ("error", "invalid", "failed", "mismatch", "not allowed")):
-            _dbg(
-                "D",
-                "sanity_gui.py:_wait_for_verify_page",
-                "inline upgrade error detected",
-                {"body": body[:400], "url": gui_page.url or ""},
-            )
         if ("flash firmware" in lower and "verify" in lower) or (
             "checksum" in lower and ("proceed" in lower or "size:" in lower)
         ):
-            _dbg("C", "sanity_gui.py:_wait_for_verify_page", "verify page matched text", {"attempt": attempt})
             return body
         if await gui_page.locator(
             "input[value*='Proceed' i]:visible, button:has-text('Proceed'):visible"
         ).count():
-            _dbg("C", "sanity_gui.py:_wait_for_verify_page", "verify page matched Proceed button", {"attempt": attempt})
             return body
-        if attempt == 1 or attempt % 10 == 0:
-            _dbg(
-                "C",
-                "sanity_gui.py:_wait_for_verify_page",
-                "still waiting for verify page",
-                {
-                    "attempt": attempt,
-                    "url": gui_page.url or "",
-                    "body": body[:240],
-                    "seconds_left": int(deadline - time.monotonic()),
-                },
-            )
         await asyncio.sleep(3)
-    _dbg(
-        "C",
-        "sanity_gui.py:_wait_for_verify_page",
-        "verify page timeout",
-        {"last_body": last_body[:400], "url": gui_page.url or ""},
-    )
     raise TimeoutError(
         f"[sanity] Firmware verify page did not appear ({timeout_s}s). "
         f"Last body: {last_body[:240]}"
     )
-
 
 async def _click_proceed(gui_page) -> None:
     async def _accept_dialog(dialog):
@@ -803,7 +729,6 @@ async def _click_proceed(gui_page) -> None:
     await proceed.wait_for(state="visible", timeout=180000)
     await proceed.click(no_wait_after=True)
     print("[sanity] Clicked Proceed — flashing started", flush=True)
-
 
 async def gui_http_firmware_start_install(
     gui_page,
@@ -859,7 +784,6 @@ async def gui_http_firmware_start_install(
     await _wait_for_verify_page(gui_page, timeout_s=upload_timeout_s)
     await _click_proceed(gui_page)
     print("[sanity] Flash/install started — ready for PDU power cut", flush=True)
-
 
 async def gui_http_firmware_upgrade_keep_settings(
     gui_page,
@@ -921,7 +845,6 @@ async def gui_http_firmware_upgrade_keep_settings(
         )
     await _click_proceed(gui_page)
 
-
 async def _unset_keep_settings(gui_page) -> bool:
     keep_cb = gui_page.locator("#keep, input[name='keep']")
     if await keep_cb.count() and await keep_cb.first.is_visible(timeout=3000):
@@ -929,7 +852,6 @@ async def _unset_keep_settings(gui_page) -> bool:
             await keep_cb.first.uncheck()
         print("[sanity] Keep settings: #keep unchecked", flush=True)
         checked = await _keep_settings_checked(gui_page)
-        _dbg("A", "sanity_gui.py:_unset_keep_settings", "unkeep via #keep", {"checked": checked})
         return not checked
 
     for pattern in ("keep settings", "keep", "retain", "preserve"):
@@ -944,18 +866,10 @@ async def _unset_keep_settings(gui_page) -> bool:
                 await checkbox.uncheck()
             print(f"[sanity] Keep settings: label '{pattern}' unchecked", flush=True)
             checked = await _keep_settings_checked(gui_page)
-            _dbg(
-                "A",
-                "sanity_gui.py:_unset_keep_settings",
-                "unkeep via label",
-                {"pattern": pattern, "checked": checked},
-            )
             return not checked
 
     checked = await _keep_settings_checked(gui_page)
-    _dbg("A", "sanity_gui.py:_unset_keep_settings", "keep settings not found", {"checked": checked})
     return not checked
-
 
 async def gui_http_firmware_upgrade_without_keep_settings(
     gui_page,
@@ -983,12 +897,6 @@ async def gui_http_firmware_upgrade_without_keep_settings(
     image_abs = str(image_path.resolve())
     await file_input.set_input_files(image_abs)
     print(f"[sanity] Selected firmware: {image_path.name}", flush=True)
-    _dbg(
-        "E",
-        "sanity_gui.py:gui_http_firmware_upgrade_without_keep_settings",
-        "firmware file selected",
-        {"image": image_path.name, "keep_cleared": keep_cleared, "url": gui_page.url or ""},
-    )
 
     async def _accept_dialog(dialog):
         await dialog.accept()
@@ -1005,12 +913,6 @@ async def gui_http_firmware_upgrade_without_keep_settings(
             "button:has-text('Flash'):visible"
         ).first
     await flash_btn.wait_for(state="visible", timeout=45000)
-    _dbg(
-        "B",
-        "sanity_gui.py:gui_http_firmware_upgrade_without_keep_settings",
-        "about to click upgrade",
-        {"selector": btn_selector, "url": gui_page.url or ""},
-    )
     print("[sanity] Clicked Upgrade — uploading, waiting for verify page", flush=True)
     try:
         async with gui_page.expect_navigation(
@@ -1019,12 +921,6 @@ async def gui_http_firmware_upgrade_without_keep_settings(
         ):
             await flash_btn.click(no_wait_after=True)
     except Exception as exc:
-        _dbg(
-            "B",
-            "sanity_gui.py:gui_http_firmware_upgrade_without_keep_settings",
-            "navigation not immediate after upgrade click",
-            {"error": str(exc), "url": gui_page.url or ""},
-        )
         await flash_btn.click(no_wait_after=True)
 
     verify_body = await _wait_for_verify_page(gui_page, timeout_s=upload_timeout_s)
@@ -1037,7 +933,6 @@ async def gui_http_firmware_upgrade_without_keep_settings(
         )
     await _click_proceed(gui_page)
 
-
 WRONG_MODEL_REJECTION_PATTERNS: tuple[str, ...] = (
     "does not contain a supported format",
     "generic image format for your platform",
@@ -1047,7 +942,6 @@ WRONG_MODEL_REJECTION_PATTERNS: tuple[str, ...] = (
     "image check failed",
     "mismatch",
 )
-
 
 async def _wait_for_upgrade_rejection(gui_page, *, timeout_s: int = 120) -> str:
     """Wait for LuCI to reject a bad firmware upload (no verify / Proceed page)."""
@@ -1087,13 +981,6 @@ async def _wait_for_upgrade_rejection(gui_page, *, timeout_s: int = 120) -> str:
         if any(pattern in lower for pattern in WRONG_MODEL_REJECTION_PATTERNS):
             return body
 
-        if attempt == 1 or attempt % 8 == 0:
-            _dbg(
-                "F",
-                "sanity_gui.py:_wait_for_upgrade_rejection",
-                "waiting for rejection",
-                {"attempt": attempt, "url": gui_page.url or "", "body": body[:200]},
-            )
         await asyncio.sleep(2)
 
     raise TimeoutError(
@@ -1101,11 +988,9 @@ async def _wait_for_upgrade_rejection(gui_page, *, timeout_s: int = 120) -> str:
         f"Last body: {last_body[:240]}"
     )
 
-
 def rejection_message_ok(text: str) -> bool:
     lower = (text or "").lower()
     return any(pattern in lower for pattern in WRONG_MODEL_REJECTION_PATTERNS)
-
 
 async def gui_http_firmware_upload_wrong_model_rejected(
     gui_page,
@@ -1158,7 +1043,6 @@ async def gui_http_firmware_upload_wrong_model_rejected(
     print(f"[sanity] Wrong-model upload rejected: {rejection[:220]}", flush=True)
     return rejection
 
-
 async def _wait_for_upload_aborted_ui(gui_page, *, timeout_s: int = 60) -> None:
     """After route abort, ensure we did not reach verify / Proceed."""
     url = (gui_page.url or "").lower()
@@ -1191,7 +1075,6 @@ async def _wait_for_upload_aborted_ui(gui_page, *, timeout_s: int = 60) -> None:
         await asyncio.sleep(2)
     print("[sanity] Uploading indicator still visible after abort window — continuing checks", flush=True)
 
-
 def _is_firmware_upload_post(request) -> bool:
     url = (request.url or "").lower()
     if request.method != "POST" or "flashops" not in url:
@@ -1200,7 +1083,6 @@ def _is_firmware_upload_post(request) -> bool:
         return True
     content_type = (request.headers.get("content-type") or "").lower()
     return "multipart/form-data" in content_type
-
 
 async def gui_http_firmware_upload_abort_midway(
     gui_page,
@@ -1232,12 +1114,6 @@ async def gui_http_firmware_upload_abort_midway(
             await asyncio.sleep(abort_delay_s)
         await route.abort("failed")
         upload_aborted.set()
-        _dbg(
-            "G",
-            "sanity_gui.py:intercept_upload",
-            "flashops POST aborted",
-            {"url": request.url or ""},
-        )
 
     await gui_page.route("**/*", intercept_upload)
     try:
@@ -1299,7 +1175,6 @@ async def gui_http_firmware_upload_abort_midway(
             "upload_aborted": upload_aborted.is_set(),
             "uploading_seen": uploading_seen,
         }
-        _dbg("G", "sanity_gui.py:gui_http_firmware_upload_abort_midway", "abort complete", result)
         print(f"[sanity] Upload abort signals: {result}", flush=True)
         return result
     finally:

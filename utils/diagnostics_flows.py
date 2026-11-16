@@ -51,22 +51,36 @@ async def _goto_admin_path(gui_page, path_fragment: str) -> bool:
 
 async def open_diagnostics(gui_page):
     """Navigate Monitor -> Tools (Diagnostics tab is default on /monitor/tools)."""
-    try:
-        menu = gui_page.locator(CommonLocators.MENU_MONITOR).first
-        await menu.wait_for(state="visible", timeout=UITimeouts.ELEMENT_WAIT_MS)
-        await menu.click(timeout=UITimeouts.ELEMENT_WAIT_MS)
-        await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
-        submenu = gui_page.locator(MonitorLocators.SUBMENU_TOOLS).first
-        await submenu.click(timeout=UITimeouts.ELEMENT_WAIT_MS)
-        await gui_page.wait_for_load_state("domcontentloaded")
-    except Exception:
-        if not await _goto_admin_path(gui_page, "/monitor/tools"):
-            raise
-
-    await gui_page.locator(DiagnosticsLocators.NETWORK_UTILITIES_HEADING).wait_for(
-        state="visible", timeout=UITimeouts.ELEMENT_WAIT_MS
-    )
-    await gui_page.wait_for_timeout(UITimeouts.MEDIUM_WAIT_MS)
+    menu_timeout = max(UITimeouts.ELEMENT_WAIT_MS, 20000)
+    last_exc: Exception | None = None
+    for attempt in range(1, 3):
+        try:
+            menu = gui_page.locator(CommonLocators.MENU_MONITOR).first
+            await menu.wait_for(state="visible", timeout=menu_timeout)
+            await menu.click(timeout=UITimeouts.ELEMENT_WAIT_MS)
+            await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
+            submenu = gui_page.locator(MonitorLocators.SUBMENU_TOOLS).first
+            await submenu.click(timeout=UITimeouts.ELEMENT_WAIT_MS)
+            await gui_page.wait_for_load_state("domcontentloaded")
+            await gui_page.locator(DiagnosticsLocators.NETWORK_UTILITIES_HEADING).wait_for(
+                state="visible", timeout=menu_timeout
+            )
+            await gui_page.wait_for_timeout(UITimeouts.MEDIUM_WAIT_MS)
+            return
+        except Exception as exc:
+            last_exc = exc
+            if await _goto_admin_path(gui_page, "/monitor/tools"):
+                try:
+                    await gui_page.locator(
+                        DiagnosticsLocators.NETWORK_UTILITIES_HEADING
+                    ).wait_for(state="visible", timeout=menu_timeout)
+                    await gui_page.wait_for_timeout(UITimeouts.MEDIUM_WAIT_MS)
+                    return
+                except Exception as goto_exc:
+                    last_exc = goto_exc
+            await gui_page.wait_for_timeout(UITimeouts.LONG_WAIT_MS)
+    if last_exc is not None:
+        raise last_exc
 
 
 async def _select_util(gui_page, util_selector: str):

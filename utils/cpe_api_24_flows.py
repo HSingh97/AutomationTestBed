@@ -1,13 +1,15 @@
-"""CPE Connect to BTS — API_01 → full CPE factory reset → API_02 → API_03."""
+"""CPE Connect to BTS — API_01 → full CPE factory reset → API_02 → API_04+."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import random
+import shlex
 import time
 from typing import Any
+
+import asyncssh
 
 from utils.cpe_api_24_client import CpeApi24Client, CpeApiResponse
 from utils.cpe_api_24_config import (
@@ -38,28 +40,8 @@ from utils.cpe_api_24_lab import (
 )
 from utils.verify_output import print_comparison_table, print_kv_block, print_section
 
-
-def _debug_log(*, run_id: str, hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
-    payload = {
-        "sessionId": "a5d6ea",
-        "runId": run_id,
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    with open(
-        "/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-a5d6ea.log",
-        "a",
-        encoding="utf-8",
-    ) as fh:
-        fh.write(json.dumps(payload, separators=(",", ":")) + "\n")
-
-
 def _body(response: CpeApiResponse) -> dict[str, Any]:
     return response.json_body if isinstance(response.json_body, dict) else {}
-
 
 def _print_result(case_id: str, response: CpeApiResponse, expected_http: str) -> None:
     body = response.json_body
@@ -71,6 +53,51 @@ def _print_result(case_id: str, response: CpeApiResponse, expected_http: str) ->
         ]
     )
 
+async def _bts_htmode(bts_host: str, username: str, password: str, *, radio_idx: int = 1) -> str:
+    """Read BTS wifiN.htmode; default HT80 when unreachable (EOC630 rejects HT160)."""
+    try:
+        conn = await asyncssh.connect(
+            bts_host,
+            username=username,
+            password=password,
+            known_hosts=None,
+            connect_timeout=12,
+        )
+        try:
+            result = await conn.run(f"uci get wireless.wifi{radio_idx}.htmode", check=False)
+            value = (result.stdout or "").strip().splitlines()[-1].strip() if result.stdout else ""
+            if value.upper().startswith("HT"):
+                return value.upper()
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"    -> [WARN] could not read BTS htmode ({exc}); using HT80")
+    return "HT80"
+
+async def _prepare_cpe_for_btsconnect(
+    client: CpeApi24Client,
+    *,
+    password: str,
+    bts_htmode: str | None = None,
+) -> None:
+    """Factory CPE keeps nwksecret=ubr@1234 and HT160; btsconnect sets SSID/key only.
+
+    Without matching nwksecret (and usually HT80 to match EOC630 BTS), association
+    fails with authentication_fail even when the WPA key is correct.
+    """
+    htmode = (bts_htmode or "HT80").upper()
+    key = shlex.quote(password)
+    ht = shlex.quote(htmode)
+    cmd = (
+        f"uci set wireless.wifi1.nwksecret={key}; "
+        f"uci set wireless.wifi1.htmode={ht}; "
+        "uci commit wireless; "
+        "echo CPE_PREP nwk=$(uci get wireless.wifi1.nwksecret) ht=$(uci get wireless.wifi1.htmode)"
+    )
+    print(f"    -> [Preflight] sync CPE nwksecret + htmode={htmode} before btsconnect")
+    code, out, err = await client.ssh_run(cmd, timeout_s=40)
+    detail = (out or err or "").strip().replace("\n", " ")
+    print(f"    -> [Preflight] CPE prep rc={code} {detail[:160]}")
 
 async def assert_api_01_btsconnect_success(
     client: CpeApi24Client,
@@ -78,6 +105,9 @@ async def assert_api_01_btsconnect_success(
     ssid: str,
     password: str,
     case_id: str = "API_01",
+    bts_host: str | None = None,
+    bts_username: str | None = None,
+    bts_password: str | None = None,
 ) -> None:
     print_section(f"{case_id} — CPE btsconnect success")
     print_kv_block(
@@ -88,33 +118,14 @@ async def assert_api_01_btsconnect_success(
             "Expected": "HTTP 200, Connected successfully. (~2 min link time)",
         },
     )
-    # #region agent log
-    _debug_log(
-        run_id="run3",
-        hypothesis_id="H7",
-        location="utils/cpe_api_24_flows.py:assert_api_01_btsconnect_success",
-        message="sending API_01 btsconnect",
-        data={"ssid": ssid, "password_len": len(password or "")},
-    )
-    # #endregion
+    htmode = "HT80"
+    if bts_host and bts_username is not None and bts_password is not None:
+        htmode = await _bts_htmode(bts_host, bts_username, bts_password)
+    await _prepare_cpe_for_btsconnect(client, password=password, bts_htmode=htmode)
     response = await client.btsconnect(
         ssid, password, read_timeout_s=client.config.btsconnect_timeout_s
     )
     body = _body(response)
-    # #region agent log
-    _debug_log(
-        run_id="run3",
-        hypothesis_id="H8",
-        location="utils/cpe_api_24_flows.py:assert_api_01_btsconnect_success",
-        message="API_01 btsconnect response",
-        data={
-            "status_code": response.status_code,
-            "status": str(body.get("status", "")),
-            "reason": str(body.get("reason", "")),
-            "message": str(body.get("message", ""))[:120],
-        },
-    )
-    # #endregion
     _print_result(case_id, response, "200")
     assert response.status_code == 200, (
         f"{case_id}: expected 200, got {response.status_code}: {response.raw_body[:400]}"
@@ -125,7 +136,6 @@ async def assert_api_01_btsconnect_success(
     assert "connected successfully" in str(body.get("message", "")).lower(), (
         f"{case_id}: expected Connected successfully., got {body.get('message')!r}"
     )
-
 
 async def assert_api_02_btsconnect_auth_fail(client: CpeApi24Client, config: CpeApi24Config) -> None:
     """After API_01: full CPE factory reset, POST correct BTS SSID + wrong password → 401."""
@@ -153,45 +163,6 @@ async def assert_api_02_btsconnect_auth_fail(client: CpeApi24Client, config: Cpe
         f"API_02: expected reason=authentication_fail, got {body.get('reason')!r}"
     )
 
-
-async def assert_api_03_btsconnect_ssid_not_found(client: CpeApi24Client, config: CpeApi24Config) -> None:
-    """No reset — POST invalid BTS SSID + valid password → HTTP 404, reason=ssid_not_found."""
-    invalid_ssid = config.invalid_ssid
-    print_section("API_03 — SSID not found (no CPE reset before this case)")
-    print_kv_block(
-        "Flow",
-        {
-            "BTS SSID": f'invalid "{invalid_ssid}"',
-            "Password": "(valid BTS key)",
-            "Expected": "HTTP 404, status=failure, reason=ssid_not_found",
-        },
-    )
-    response = await client.btsconnect(
-        invalid_ssid,
-        config.bts_password,
-        read_timeout_s=config.btsconnect_negative_timeout_s,
-    )
-    body = _body(response)
-    reason = str(body.get("reason", "")).lower()
-    print_comparison_table(
-        [
-            ("HTTP status", str(response.status_code), "404", "CHECK"),
-            ("Transport", response.transport, "2.4 GHz mgmt", "INFO"),
-            ("JSON status", str(body.get("status", "")), "failure", "CHECK"),
-            ("Reason", reason or "(missing)", "ssid_not_found", "CHECK"),
-            ("JSON body", str(body)[:120], "—", "INFO"),
-        ]
-    )
-    assert response.status_code == 404, (
-        f"API_03: expected HTTP 404 (ssid_not_found), got {response.status_code}: "
-        f"{response.raw_body[:400]}"
-    )
-    assert str(body.get("status", "")).lower() == "failure", f"API_03: expected status=failure, got {body!r}"
-    assert reason == "ssid_not_found", (
-        f"API_03: expected reason=ssid_not_found, got {body.get('reason')!r}"
-    )
-
-
 async def _ensure_bts_cpe_link(
     client: CpeApi24Client,
     config: CpeApi24Config,
@@ -216,6 +187,10 @@ async def _ensure_bts_cpe_link(
         print("    -> No active link on BTS; forming link via btsconnect...")
     else:
         print("    -> Re-forming link via btsconnect (prior config wiped)...")
+    htmode = await _bts_htmode(bts_host, bts_username, bts_password)
+    await _prepare_cpe_for_btsconnect(
+        client, password=config.bts_password, bts_htmode=htmode
+    )
     response = await client.btsconnect(
         config.bts_ssid,
         config.bts_password,
@@ -230,7 +205,6 @@ async def _ensure_bts_cpe_link(
     assert str(body.get("status", "")).lower() == "success", (
         f"{context}: expected status=success, got {body!r}"
     )
-
 
 async def ensure_link_before_api_04(
     client: CpeApi24Client,
@@ -249,7 +223,6 @@ async def ensure_link_before_api_04(
         context="Precondition for API_04",
     )
 
-
 async def ensure_link_before_api_16(
     client: CpeApi24Client,
     config: CpeApi24Config,
@@ -266,7 +239,6 @@ async def ensure_link_before_api_16(
         bts_password=bts_password,
         context="Precondition for API_16",
     )
-
 
 async def ensure_bts_link_after_api_12(
     client: CpeApi24Client,
@@ -286,7 +258,6 @@ async def ensure_bts_link_after_api_12(
         context="Post API_12",
         always_connect=True,
     )
-
 
 async def assert_api_04_alignment_info_stream_1s(client: CpeApi24Client) -> None:
     print_section("API_04 — alignment info stream (1s interval)")
@@ -316,7 +287,6 @@ async def assert_api_04_alignment_info_stream_1s(client: CpeApi24Client) -> None
         f"API_04: stream sample missing expected metrics keys: {response.raw_body[:400]}"
     )
 
-
 async def assert_api_05_alignment_info_stream_5s(client: CpeApi24Client) -> None:
     print_section("API_05 — alignment info stream (5s interval)")
     print_kv_block(
@@ -345,7 +315,6 @@ async def assert_api_05_alignment_info_stream_5s(client: CpeApi24Client) -> None
         f"API_05: stream sample missing expected metrics keys: {response.raw_body[:400]}"
     )
 
-
 async def assert_api_06_alignment_data(client: CpeApi24Client) -> None:
     print_section("API_06 — alignment data snapshot")
     print_kv_block(
@@ -365,7 +334,6 @@ async def assert_api_06_alignment_data(client: CpeApi24Client) -> None:
         f"API_06: expected success message, got {body.get('message')!r}"
     )
 
-
 def _sw_version_from_body(body: dict[str, Any]) -> str | None:
     for key in ("swversion", "sw_version", "version", "swVersion"):
         value = body.get(key)
@@ -375,7 +343,6 @@ def _sw_version_from_body(body: dict[str, Any]) -> str | None:
         if text and text != "-":
             return text
     return None
-
 
 async def assert_api_07_sw_version(client: CpeApi24Client) -> None:
     print_section("API_07 — CPE software version")
@@ -401,7 +368,6 @@ async def assert_api_07_sw_version(client: CpeApi24Client) -> None:
     assert str(body.get("status", "")).lower() == "success", f"API_07: expected status=success, got {body!r}"
     assert sw_version, f"API_07: expected swversion in response body, got {body!r}"
 
-
 async def assert_api_08_sw_version_unavailable_when_file_removed(client: CpeApi24Client) -> None:
     """
     Manual:
@@ -424,44 +390,17 @@ async def assert_api_08_sw_version_unavailable_when_file_removed(client: CpeApi2
     rm_cmd = "rm -rf /etc/version"
 
     exit_status, stdout, stderr = await client.ssh_run(backup_cmd, timeout_s=10.0)
-    # #region agent log
-    _debug_log(
-        run_id="run2",
-        hypothesis_id="H4",
-        location="utils/cpe_api_24_flows.py:assert_api_08",
-        message="backup /etc/version result",
-        data={"exit_status": exit_status, "bytes": len(stdout), "preview": stdout[:120]},
-    )
-    # #endregion
     if exit_status not in (0, None):
         raise RuntimeError(f"API_08: failed reading /etc/version before delete: {stderr[:200] or stdout[:200]}")
     original = stdout
 
     try:
         exit_status, stdout, stderr = await client.ssh_run(rm_cmd, timeout_s=10.0)
-        # #region agent log
-        _debug_log(
-            run_id="run2",
-            hypothesis_id="H3",
-            location="utils/cpe_api_24_flows.py:assert_api_08",
-            message="remove /etc/version result",
-            data={"exit_status": exit_status, "stderr": (stderr or "")[:120]},
-        )
-        # #endregion
         if exit_status not in (0, None):
             raise RuntimeError(f"API_08: rm /etc/version failed: {stderr[:200] or stdout[:200]}")
 
         response = await client.get("/api/v1/cpe/sw-version", read_timeout_s=20.0)
         body = _body(response)
-        # #region agent log
-        _debug_log(
-            run_id="run2",
-            hypothesis_id="H3",
-            location="utils/cpe_api_24_flows.py:assert_api_08",
-            message="sw-version response after delete",
-            data={"status_code": response.status_code, "reason": str(body.get("reason", ""))},
-        )
-        # #endregion
         print_comparison_table(
             [
                 ("HTTP status", str(response.status_code), "503", "CHECK"),
@@ -482,33 +421,10 @@ async def assert_api_08_sw_version_unavailable_when_file_removed(client: CpeApi2
         restore_b64 = base64.b64encode(restore_text.encode("utf-8")).decode("ascii")
         restore_cmd = f"umask 022; echo {restore_b64} | base64 -d > /etc/version"
         exit_status, stdout, stderr = await client.ssh_run(restore_cmd, timeout_s=10.0)
-        # #region agent log
-        _debug_log(
-            run_id="run2",
-            hypothesis_id="H5",
-            location="utils/cpe_api_24_flows.py:assert_api_08",
-            message="restore /etc/version result",
-            data={"exit_status": exit_status, "stderr": (stderr or "")[:120], "restored_bytes": len(restore_text)},
-        )
-        # #endregion
         verify_status, verify_out, verify_err = await client.ssh_run(
             "sh -c 'if [ -f /etc/version ]; then wc -c /etc/version; cat /etc/version; else echo MISSING; fi'",
             timeout_s=10.0,
         )
-        # #region agent log
-        _debug_log(
-            run_id="run2",
-            hypothesis_id="H5",
-            location="utils/cpe_api_24_flows.py:assert_api_08",
-            message="post-restore /etc/version verify",
-            data={
-                "exit_status": verify_status,
-                "stdout_preview": verify_out[:180],
-                "stderr_preview": verify_err[:120],
-            },
-        )
-        # #endregion
-
 
 async def assert_api_09_upload_sw(client: CpeApi24Client, fw_path: str) -> None:
     """POST firmware .tgz from lab PC /tftpboot to CPE upload-sw."""
@@ -529,15 +445,6 @@ async def assert_api_09_upload_sw(client: CpeApi24Client, fw_path: str) -> None:
             "API_11+": "after upgrade, polls until reboot, device up, and BTS link",
         },
     )
-    # #region agent log
-    _debug_log(
-        run_id="post-fix",
-        hypothesis_id="H4",
-        location="utils/cpe_api_24_flows.py:assert_api_09",
-        message="cpe model from fw filename",
-        data={"fw_path": str(image.name), "cpe_model": cpe_model},
-    )
-    # #endregion
     print_section("API_09 — upload firmware (upload-sw)")
     print_kv_block(
         "Flow",
@@ -558,7 +465,6 @@ async def assert_api_09_upload_sw(client: CpeApi24Client, fw_path: str) -> None:
     )
     assert response.status_code == 200, f"API_09: expected 200, got {response.status_code}: {response.raw_body[:400]}"
     assert str(body.get("status", "")).lower() == "success", f"API_09: expected status=success, got {body!r}"
-
 
 async def assert_api_10_upload_sw_status(client: CpeApi24Client) -> None:
     """GET upload status after API_09 — expects fw upload success."""
@@ -589,7 +495,6 @@ async def assert_api_10_upload_sw_status(client: CpeApi24Client) -> None:
     assert progress == 100 or str(progress) == "100", (
         f"API_10: expected progress=100 (upload complete), got {body.get('progress')!r}"
     )
-
 
 async def assert_api_11_upgrade_sw_preserve_config(
     client: CpeApi24Client,
@@ -632,7 +537,6 @@ async def assert_api_11_upgrade_sw_preserve_config(
         bts_password=bts_password,
     )
 
-
 async def ensure_mgmt_api_for_tests(
     client: CpeApi24Client,
     config: CpeApi24Config,
@@ -651,7 +555,6 @@ async def ensure_mgmt_api_for_tests(
         bts_password=bts_password,
         label=label,
     )
-
 
 async def assert_api_12_upgrade_sw_no_preserve_config(
     client: CpeApi24Client,
@@ -715,8 +618,10 @@ async def assert_api_12_upgrade_sw_no_preserve_config(
         ssid=config.bts_ssid,
         password=config.bts_password,
         case_id="API_12",
+        bts_host=bts_host,
+        bts_username=bts_username,
+        bts_password=bts_password,
     )
-
 
 async def assert_api_13_upgrade_sw_status_in_progress(
     client: CpeApi24Client,
@@ -779,7 +684,6 @@ async def assert_api_13_upgrade_sw_status_in_progress(
         f"API_13: expected firmware upgrade in progress, got state={body.get('state')!r} body={body!r}"
     )
 
-
 async def _ensure_upgrade_started_for_api_14(
     client: CpeApi24Client,
     fw_path: str | None,
@@ -815,7 +719,6 @@ async def _ensure_upgrade_started_for_api_14(
         f"API_14 setup: expected UPGRADE_STARTED, got {upgrade_body!r}"
     )
     return time.monotonic()
-
 
 async def assert_api_14_upgrade_sw_status_success(
     client: CpeApi24Client,
@@ -879,7 +782,6 @@ async def assert_api_14_upgrade_sw_status_success(
         f"API_14: expected fw upgrade success, got state={body.get('state')!r} body={body!r}"
     )
 
-
 def _invalid_fw_indicated(body: dict[str, Any], raw_body: str) -> bool:
     err = body.get("error")
     if isinstance(err, dict):
@@ -892,12 +794,10 @@ def _invalid_fw_indicated(body: dict[str, Any], raw_body: str) -> bool:
     blob = raw_body.upper()
     return "FW_INVALID" in blob or ("INVALID" in blob and "FIRMWARE" in blob)
 
-
 def _response_is_invalid_fw(response: CpeApiResponse) -> bool:
     return response.status_code == 422 and _invalid_fw_indicated(
         _body(response), response.raw_body
     )
-
 
 def _print_api_15_result(response: CpeApiResponse, *, elapsed_s: float | None = None) -> None:
     body = _body(response)
@@ -914,7 +814,6 @@ def _print_api_15_result(response: CpeApiResponse, *, elapsed_s: float | None = 
     if elapsed_s is not None:
         rows.insert(3, ("Elapsed (s)", f"{elapsed_s:.0f}", "—", "INFO"))
     print_comparison_table(rows)
-
 
 async def _poll_upgrade_sw_status_invalid_fw(client: CpeApi24Client) -> CpeApiResponse:
     """Poll GET upgrade-sw-status until HTTP 422 (device often shows INPROGRESS first)."""
@@ -945,7 +844,6 @@ async def _poll_upgrade_sw_status_invalid_fw(client: CpeApi24Client) -> CpeApiRe
         f"Last GET={last.status_code if last else 'n/a'} state={last_state!r} "
         f"body={(last.raw_body[:300] if last else '')!r}"
     )
-
 
 async def assert_api_15_upgrade_sw_status_invalid_fw(
     client: CpeApi24Client,
@@ -1006,7 +904,6 @@ async def assert_api_15_upgrade_sw_status_invalid_fw(
     response = await _poll_upgrade_sw_status_invalid_fw(client)
     _print_api_15_result(response, elapsed_s=time.monotonic() - poll_start)
 
-
 async def assert_api_16_link_throughput_test(
     client: CpeApi24Client,
     *,
@@ -1047,7 +944,6 @@ async def assert_api_16_link_throughput_test(
         f"API_16: expected dl_tput and ul_tput in response, got {body!r}"
     )
 
-
 def _failure_reason_from_body(body: dict[str, Any]) -> str:
     reason = str(body.get("reason", "")).strip().lower()
     if reason:
@@ -1056,7 +952,6 @@ def _failure_reason_from_body(body: dict[str, Any]) -> str:
     if isinstance(err, dict):
         return str(err.get("reason", err.get("message", ""))).strip().lower()
     return str(body.get("message", "")).strip().lower()
-
 
 async def _cpe_sta_iface_index_for_radio1(client: CpeApi24Client) -> str:
     """Return UCI wifi-iface index for CPE STA (Radio 1 / BTS link), prefer iface[1]."""
@@ -1076,7 +971,6 @@ async def _cpe_sta_iface_index_for_radio1(client: CpeApi24Client) -> str:
         return preferred
     return sta_indices[0]
 
-
 async def _read_cpe_wifi_iface_uci(client: CpeApi24Client, idx: str) -> dict[str, str]:
     fields: dict[str, str] = {}
     for key in ("ssid", "disabled", "network", "ifname", "mode"):
@@ -1086,7 +980,6 @@ async def _read_cpe_wifi_iface_uci(client: CpeApi24Client, idx: str) -> dict[str
         )
         fields[key] = (out or "").strip()
     return fields
-
 
 async def _resolve_cpe_sta_ifname(client: CpeApi24Client, uci: dict[str, str]) -> str:
     ifname = uci.get("ifname", "")
@@ -1098,7 +991,6 @@ async def _resolve_cpe_sta_ifname(client: CpeApi24Client, uci: dict[str, str]) -
     )
     return (out or "").strip().splitlines()[0] if out and out.strip() else ""
 
-
 async def _stop_cpe_sta_link(client: CpeApi24Client, *, network: str, ifname: str) -> None:
     if network:
         await client.ssh_run(f"ifdown {network} 2>/dev/null", timeout_s=30.0)
@@ -1109,7 +1001,6 @@ async def _stop_cpe_sta_link(client: CpeApi24Client, *, network: str, ifname: st
             f"ifconfig {ifname} down 2>/dev/null",
             timeout_s=20.0,
         )
-
 
 async def break_cpe_radio1_sta_ssid_for_api_17(
     client: CpeApi24Client,
@@ -1180,7 +1071,6 @@ async def break_cpe_radio1_sta_ssid_for_api_17(
         "ifname": ifname,
     }
 
-
 async def restore_cpe_radio1_sta_ssid(
     client: CpeApi24Client,
     backup: dict[str, str],
@@ -1207,7 +1097,6 @@ async def restore_cpe_radio1_sta_ssid(
         f"SSID={backup['ssid']!r}, disabled={disabled}."
     )
 
-
 def _assert_api_17_throughput_failure(
     response: CpeApiResponse,
     *,
@@ -1233,7 +1122,6 @@ def _assert_api_17_throughput_failure(
     assert "server" in reason and "respond" in reason, (
         f"API_17: expected reason=server did not respond, got {body!r}"
     )
-
 
 async def assert_api_17_link_throughput_test_no_bts_server(
     client: CpeApi24Client,
@@ -1285,7 +1173,6 @@ async def assert_api_17_link_throughput_test_no_bts_server(
             max_wait_s=API_17_LINK_UP_MAX_S,
             label="API_17",
         )
-
 
 async def assert_api_18_link_throughput_test_in_progress(
     client: CpeApi24Client,

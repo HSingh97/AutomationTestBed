@@ -1,7 +1,6 @@
 # Sanity — one-by-one (Alpha 2 / UBR655↔UBR655)
 
-**One file for the whole Sanity suite.**  
-You say which case → agent reads this → runs that nodeid only → verifies PASS + bench still healthy → updates the **Results** column here. No per-case MD files.
+Moved. The suite playbook is `docs/TestSuitreadme.md`. Read that file. Do not update this one.
 
 ---
 

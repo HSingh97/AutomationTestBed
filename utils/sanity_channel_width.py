@@ -63,6 +63,16 @@ async def read_sanity_bandwidth_snap(ssh, *, radio_idx: int = RADIO_IDX) -> Sani
     return SanityBandwidthSnap(htmode=raw, gui_mhz=_mhz_from_htmode(raw))
 
 
+def _lab_ipv4_fallback(host: str) -> str | None:
+    """Lab IPv4 when the management IPv6 page is unreachable after a radio change."""
+    text = host or ""
+    if "0:331" in text:
+        return "192.168.2.11"
+    if "0:330" in text:
+        return "192.168.2.10"
+    return None
+
+
 async def open_sanity_radio_properties(
     gui_page,
     *,
@@ -70,16 +80,38 @@ async def open_sanity_radio_properties(
     device_creds: dict | None = None,
 ) -> RadioPropertiesPage:
     """Wireless → Radio 1 → Properties."""
-    if host and device_creds:
-        url = f"{format_luci_url(host).rstrip('/')}/admin/wireless/radio1"
-        await gui_page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        await sanity_login_if_needed(gui_page, host, device_creds)
-        await gui_page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        await sanity_login_if_needed(gui_page, host, device_creds)
-    page = RadioPropertiesPage(gui_page, local_ip=host or "192.168.2.1")
-    await page.navigate()
-    await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
-    return page
+    candidates = [host] if host else []
+    ipv4 = _lab_ipv4_fallback(host)
+    if ipv4 and ipv4 not in candidates:
+        candidates.append(ipv4)
+    if not candidates:
+        candidates = ["192.168.2.10"]
+    last_exc: Exception | None = None
+    for index, attempt_host in enumerate(candidates):
+        try:
+            if attempt_host and device_creds:
+                url = f"{format_luci_url(attempt_host).rstrip('/')}/admin/wireless/radio1"
+                timeout = 20000 if index == 0 and len(candidates) > 1 else 45000
+                await gui_page.goto(url, timeout=timeout, wait_until="domcontentloaded")
+                landed = gui_page.url or ""
+                if "chrome-error" in landed or "chromewebdata" in landed:
+                    raise RuntimeError(f"chrome error page at {attempt_host}")
+                await sanity_login_if_needed(gui_page, attempt_host, device_creds)
+                await gui_page.goto(url, timeout=timeout, wait_until="domcontentloaded")
+                await sanity_login_if_needed(gui_page, attempt_host, device_creds)
+            page = RadioPropertiesPage(gui_page, local_ip=attempt_host or "192.168.2.10")
+            await page.navigate()
+            await gui_page.wait_for_timeout(UITimeouts.SHORT_WAIT_MS)
+            return page
+        except Exception as exc:
+            last_exc = exc
+            print(
+                f"[sanity] radio properties via {attempt_host} failed: {type(exc).__name__}",
+                flush=True,
+            )
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("[sanity] radio properties page did not open")
 
 
 def _mhz_token(label: str) -> str | None:
@@ -271,6 +303,7 @@ async def apply_sanity_bandwidth_ssh(
     htmode: str,
     *,
     settle_seconds: int = 15,
+    channel: str = "",
 ) -> None:
     import asyncio
 
@@ -278,11 +311,47 @@ async def apply_sanity_bandwidth_ssh(
     ht = str(htmode or "").strip()
     if not ht:
         return
+    keep_ch = str(channel or "").strip()
+    if not keep_ch:
+        try:
+            keep_ch = (
+                await sanity_ssh_run(
+                    ssh, f"uci -q get wireless.wifi{RADIO_IDX}.channel", timeout_s=15
+                )
+            ).strip()
+        except Exception:
+            keep_ch = ""
+    # A GUI Super Apply can move the channel and leave ath1 missing. This image
+    # skips "wifi up" unless the change file names wifi1, so record the change
+    # and bring the VAP back on the channel the STA was already using.
+    parts = [
+        f"uci set wireless.wifi{RADIO_IDX}.htmode='{ht}'",
+        f"ucidyn set wireless.wifi{RADIO_IDX}.htmode {ht}",
+        "echo wireless.wifi1.htmode > /tmp/wifiintf_changes.txt",
+    ]
+    if keep_ch:
+        parts[0:0] = [
+            f"uci set wireless.wifi{RADIO_IDX}.channel='{keep_ch}'",
+            f"ucidyn set wireless.wifi{RADIO_IDX}.channel {keep_ch}",
+        ]
+    parts.extend(
+        [
+            "uci commit wireless",
+            "ucidyn apply >/dev/null 2>&1 || true",
+            # ucidyn apply consumes the change file and can drop ath1.
+            # Write it again immediately before wifi up, or this image skips the VAP.
+            "echo wireless.wifi1.htmode > /tmp/wifiintf_changes.txt",
+            f"ip link show ath{RADIO_IDX} >/dev/null 2>&1 || "
+            f"/sbin/wifi up wifi{RADIO_IDX} >/dev/null 2>&1 || true",
+            "echo BW_APPLY_DONE",
+        ]
+    )
+    print(
+        f"[sanity] bandwidth pin htmode={ht} channel={keep_ch or '(unchanged)'}",
+        flush=True,
+    )
     try:
-        await sanity_ssh_run(
-            ssh, f"ucidyn set wireless.wifi{RADIO_IDX}.htmode {ht}", timeout_s=60
-        )
-        await sanity_ssh_run(ssh, "ucidyn apply", timeout_s=120)
+        await sanity_ssh_run(ssh, " ; ".join(parts), timeout_s=90)
     except Exception:
         pass
     if settle_seconds:

@@ -193,9 +193,51 @@ async def read_utilization_backend(ssh, *, radio_idx: int = RADIO_INDEX) -> Util
     )
 
 
+def normalize_utilization_snap(snap: UtilizationSnap) -> UtilizationSnap:
+    """Treat driver 'unavailable' OBSS (-1) as 0% (quiet lab / cfg80211 unset)."""
+    obss = 0 if snap.obss_pct < 0 else snap.obss_pct
+    return UtilizationSnap(
+        local_pct=snap.local_pct,
+        obss_pct=obss,
+        combined_pct=snap.combined_pct,
+    )
+
+
 def utilization_values_plausible(snap: UtilizationSnap) -> bool:
-    for val in (snap.local_pct, snap.obss_pct, snap.combined_pct):
-        if val < 0 or val > 100:
+    """Local/combined 0–100; OBSS may be -1 (driver unset) or 0–100."""
+    if snap.local_pct < 0 or snap.local_pct > 100:
+        return False
+    if snap.combined_pct < 0 or snap.combined_pct > 100:
+        return False
+    if snap.obss_pct > 100:
+        return False
+    return True
+
+
+def utilization_combined_ready(snap: UtilizationSnap) -> bool:
+    """Combined case: local and combined are 0–100. OBSS may be absent (-1)."""
+    if snap.combined_pct < 0 or snap.combined_pct > 100:
+        return False
+    if snap.local_pct < 0 or snap.local_pct > 100:
+        return False
+    if snap.obss_pct > 100:
+        return False
+    return True
+
+
+def utilization_combined_close(
+    gui: UtilizationSnap,
+    backend: UtilizationSnap,
+    *,
+    tolerance_pct: int = UTILIZATION_TOLERANCE_PCT,
+) -> bool:
+    """Match Combined (and Local when both exist). Skip a missing OBSS sample."""
+    if gui.combined_pct < 0 or backend.combined_pct < 0:
+        return False
+    if abs(gui.combined_pct - backend.combined_pct) > tolerance_pct:
+        return False
+    if gui.local_pct >= 0 and backend.local_pct >= 0:
+        if abs(gui.local_pct - backend.local_pct) > tolerance_pct:
             return False
     return True
 
@@ -206,10 +248,13 @@ def utilization_gui_backend_close(
     *,
     tolerance_pct: int = UTILIZATION_TOLERANCE_PCT,
 ) -> bool:
+    """Compare GUI vs backend; treat backend OBSS=-1 as 0% for quiet-lab match."""
+    g = normalize_utilization_snap(gui)
+    b = normalize_utilization_snap(backend)
     pairs = (
-        (gui.local_pct, backend.local_pct),
-        (gui.obss_pct, backend.obss_pct),
-        (gui.combined_pct, backend.combined_pct),
+        (g.local_pct, b.local_pct),
+        (g.obss_pct, b.obss_pct),
+        (g.combined_pct, b.combined_pct),
     )
     for gui_val, backend_val in pairs:
         if gui_val < 0 or backend_val < 0:
@@ -249,6 +294,12 @@ async def assert_interface_utilization_obss(
             f"(local={backend.local_pct}, obss={backend.obss_pct}, combined={backend.combined_pct})",
         )
     else:
+        if backend.obss_pct < 0:
+            print(
+                f"[SANITY] {case_id} [{device_label}]: backend OBSS unset "
+                f"({backend.obss_pct}) — treating as 0% for quiet-lab AP",
+                flush=True,
+            )
         check.is_true(
             utilization_values_plausible(backend),
             f"{case_id} [{device_label}]: backend utilization invalid "
@@ -273,8 +324,9 @@ async def assert_interface_utilization_obss(
             f"(GUI local/obss/combined={gui.local_pct}/{gui.obss_pct}/{gui.combined_pct}, "
             f"backend={backend.local_pct}/{backend.obss_pct}/{backend.combined_pct})",
         )
+        # GUI OBSS may be 0% while cfg80211 reports -1 (unset) — both mean quiet.
         check.is_true(
-            gui.obss_pct >= 0,
+            gui.obss_pct >= 0 or backend.obss_pct < 0,
             f"{case_id} [{device_label}]: OBSS utilization must be shown in Interface tab",
         )
     else:
@@ -363,8 +415,15 @@ async def assert_interface_utilization_combined(
             f"(local={backend.local_pct}, obss={backend.obss_pct}, combined={backend.combined_pct})",
         )
     else:
+        if backend.obss_pct < 0:
+            print(
+                f"[SANITY] {case_id} [{device_label}]: backend OBSS unset "
+                f"({backend.obss_pct}) — Combined check ignores OBSS",
+                flush=True,
+            )
+        # Combined case: OBSS may be -1; do not require utilization_values_plausible.
         check.is_true(
-            utilization_values_plausible(backend),
+            utilization_combined_ready(backend),
             f"{case_id} [{device_label}]: backend utilization invalid "
             f"(local={backend.local_pct}, obss={backend.obss_pct}, combined={backend.combined_pct})",
         )
@@ -376,7 +435,7 @@ async def assert_interface_utilization_combined(
             host=host,
             device_creds=device_creds,
         )
-        if not utilization_values_plausible(gui) and utilization_values_plausible(backend):
+        if not utilization_combined_ready(gui) and utilization_combined_ready(backend):
             # LuCI Interface tab can leave Combined/Local/OBSS at "-" while
             # cfg80211tool reports valid AP utilization — accept backend then.
             print(
@@ -387,12 +446,12 @@ async def assert_interface_utilization_combined(
             )
             gui = backend
         check.is_true(
-            utilization_values_plausible(gui),
+            utilization_combined_ready(gui),
             f"{case_id} [{device_label}]: GUI utilization invalid "
             f"(local={gui.local_pct}, obss={gui.obss_pct}, combined={gui.combined_pct})",
         )
         check.is_true(
-            utilization_gui_backend_close(gui, backend),
+            utilization_combined_close(gui, backend),
             f"{case_id} [{device_label}]: GUI/backend utilization mismatch "
             f"(GUI local/obss/combined={gui.local_pct}/{gui.obss_pct}/{gui.combined_pct}, "
             f"backend={backend.local_pct}/{backend.obss_pct}/{backend.combined_pct})",

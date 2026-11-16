@@ -75,10 +75,11 @@ def derive_sanity_alt_mgmt_vlan(current: str) -> int:
         base = int(str(current or "1").strip())
     except Exception:
         base = 1
-    for candidate in (101, 102, 103, 201, 301):
+    # VLAN 101 is a leftover QinQ tag on this bench. Do not use it.
+    for candidate in (102, 103, 201, 301):
         if candidate != base:
             return candidate
-    return 201 if base != 201 else 202
+    return 202 if base != 202 else 203
 
 
 async def open_sanity_ip_config(

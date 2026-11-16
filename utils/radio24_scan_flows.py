@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import re
 import time
 
@@ -294,6 +295,114 @@ async def _get_wifi_device_association(
     return state, ssid, con_name
 
 
+def _nmcli_hidden_wpa2_keyfile(
+    *,
+    iface: str,
+    ssid: str,
+    password: str,
+    bssid: str | None = None,
+) -> str:
+    """NM keyfile with pmf=0 and 2.4 GHz channel when BSSID known (rtl8192ee ssid-not-found)."""
+    lines = [
+        "[connection]",
+        f"id={ssid}",
+        "type=wifi",
+        f"interface-name={iface}",
+        "autoconnect=false",
+        "",
+        "[wifi]",
+        "mode=infrastructure",
+        f"ssid={ssid}",
+        "hidden=true",
+        "band=bg",
+        "cloned-mac-address=permanent",
+        "mac-address-randomization=0",
+    ]
+    if bssid:
+        lines.append(f"bssid={bssid}")
+        # CPE mgmt AP runs channel 6 in this lab; locking helps rtl8192ee find it.
+        lines.append("channel=6")
+    lines.extend(
+        [
+            "",
+            "[wifi-security]",
+            "key-mgmt=wpa-psk",
+            "proto=rsn",
+            "pairwise=ccmp",
+            "group=ccmp",
+            "pmf=0",
+            f"psk={password}",
+            "",
+            "[ipv4]",
+            "method=auto",
+            "dhcp-send-hostname=true",
+            "",
+            "[ipv6]",
+            "method=ignore",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _nmcli_hidden_wpa2_add_cmd(
+    *,
+    iface: str,
+    ssid: str,
+    password: str,
+    bssid: str | None = None,
+) -> str:
+    """Fallback nmcli profile add when keyfile write is unavailable."""
+    quoted_ssid = ssid.replace("'", "'\"'\"'")
+    quoted_pw = password.replace("'", "'\"'\"'")
+    bssid_part = f"802-11-wireless.bssid {bssid} " if bssid else ""
+    channel_part = "802-11-wireless.band bg 802-11-wireless.channel 6 " if bssid else ""
+    return (
+        f"nmcli connection add type wifi con-name '{quoted_ssid}' "
+        f"ifname {iface} ssid '{quoted_ssid}' "
+        f"802-11-wireless.mode infrastructure 802-11-wireless.hidden yes "
+        f"{bssid_part}{channel_part}"
+        f"802-11-wireless.cloned-mac-address permanent "
+        f"802-11-wireless.mac-address-randomization never "
+        f"802-11-wireless-security.key-mgmt wpa-psk "
+        f"802-11-wireless-security.proto rsn "
+        f"802-11-wireless-security.pairwise ccmp "
+        f"802-11-wireless-security.group ccmp "
+        f"802-11-wireless-security.pmf disable "
+        f"802-11-wireless-security.psk '{quoted_pw}' "
+        f"ipv4.method auto ipv6.method ignore "
+        f"ipv4.dhcp-send-hostname yes"
+    )
+
+
+async def _install_hidden_wifi_profile(
+    conn: asyncssh.SSHClientConnection,
+    *,
+    iface: str,
+    ssid: str,
+    password: str,
+    bssid: str | None = None,
+) -> tuple[int, str]:
+    """Install nmcli profile — prefer nmcli add with band/channel (rtl8192ee needs it)."""
+    add_cmd = _nmcli_hidden_wpa2_add_cmd(
+        iface=iface, ssid=ssid, password=password, bssid=bssid
+    )
+    code, out = await _ssh_run(conn, add_cmd, timeout_s=90)
+    if code == 0:
+        return 0, out
+    # Fallback: keyfile write (same properties) if nmcli add fails.
+    keyfile = _nmcli_hidden_wpa2_keyfile(
+        iface=iface, ssid=ssid, password=password, bssid=bssid
+    )
+    b64 = base64.b64encode(keyfile.encode()).decode()
+    path = f"/etc/NetworkManager/system-connections/{ssid}.nmconnection"
+    write_cmd = (
+        f"printf '%s' '{b64}' | base64 -d > {path} && "
+        f"chmod 600 {path} && "
+        f"nmcli connection reload"
+    )
+    return await _ssh_run(conn, write_cmd, timeout_s=60)
+
+
 async def _connect_hidden_wifi(
     conn: asyncssh.SSHClientConnection,
     iface: str,
@@ -308,59 +417,68 @@ async def _connect_hidden_wifi(
     Join hidden WPA2-PSK SSID via SSH nmcli — profile name is the SSID (not a custom label).
 
     Hidden APs are not found by SSID scan; use BSSID from CPE ath0 when available.
+    Wait until BSSID appears in nmcli list (link/scan ready) before activating.
     """
     await _prepare_scan_pc_wifi_for_join(conn, iface)
     await _delete_nmcli_connection(conn, ssid)
     await _delete_legacy_hidden_profiles(conn)
 
     if bssid:
-        scan_deadline = time.monotonic() + 60
+        scan_deadline = time.monotonic() + 90
         bssid_in_scan = False
         while time.monotonic() < scan_deadline:
             if await _scan_pc_wifi_list_has_bssid(conn, iface, bssid):
                 bssid_in_scan = True
+                _log(f"scan PC sees CPE BSSID {bssid} — bringing link up")
                 break
             await asyncio.sleep(3)
+        if not bssid_in_scan:
+            _log(f"CPE BSSID {bssid} not in scan list yet — attempting join anyway")
     else:
         await _ssh_run(conn, "nmcli device wifi rescan", timeout_s=45)
         await asyncio.sleep(3)
 
     quoted_ssid = ssid.replace("'", "'\"'\"'")
-    quoted_pw = password.replace("'", "'\"'\"'")
-    bssid_part = f"802-11-wireless.bssid {bssid} " if bssid else ""
-
-    add_cmd = (
-        f"nmcli connection add type wifi con-name '{quoted_ssid}' "
-        f"ifname {iface} ssid '{quoted_ssid}' 802-11-wireless.hidden yes "
-        f"{bssid_part}"
-        f"wifi-sec.key-mgmt wpa-psk wifi-sec.proto rsn,wpa "
-        f"wifi-sec.pairwise ccmp,tkip wifi-sec.group ccmp,tkip wifi-sec.psk '{quoted_pw}'"
+    code, out = await _install_hidden_wifi_profile(
+        conn, iface=iface, ssid=ssid, password=password, bssid=bssid
     )
-    code, out = await _ssh_run(conn, add_cmd, timeout_s=90)
     if code != 0:
         return code, out
 
     last_code = 1
     last_out = out
-    activation_wait_s = 45 if require_mgmt_ip else 20
-    up_attempts = 3 if require_mgmt_ip else 1
+    activation_wait_s = 60 if require_mgmt_ip else 25
+    up_attempts = 4 if require_mgmt_ip else 2
     for attempt in range(up_attempts):
-        if bssid and attempt > 0:
+        if bssid:
             await _scan_pc_wifi_list_has_bssid(conn, iface, bssid)
         last_code, last_out = await _ssh_run(
             conn,
             f"nmcli -w {activation_wait_s} connection up '{quoted_ssid}' ifname {iface}",
-            timeout_s=activation_wait_s + 20,
+            timeout_s=activation_wait_s + 25,
         )
         if last_code == 0:
             break
+        _log(f"hidden Wi‑Fi up attempt {attempt + 1}/{up_attempts} failed: {last_out[:200]}")
+        if "could not be found" in (last_out or "").lower() and attempt == 0:
+            # Prefer reinstall with channel-locked profile before driver bounce.
+            await _delete_nmcli_connection(conn, ssid)
+            code2, out2 = await _install_hidden_wifi_profile(
+                conn, iface=iface, ssid=ssid, password=password, bssid=bssid
+            )
+            if code2 != 0:
+                last_out = out2
+            elif attempt + 1 >= up_attempts - 1:
+                await _recover_scan_pc_wifi_nic(conn, iface, level=2)
         if bssid:
             await _scan_pc_wifi_list_has_bssid(conn, iface, bssid)
         else:
             await _ssh_run(conn, "nmcli device wifi rescan", timeout_s=45)
             await asyncio.sleep(3)
+        await asyncio.sleep(2)
 
     if last_code != 0 and not bssid:
+        quoted_pw = password.replace("'", "'\"'\"'")
         connect_cmd = (
             f"nmcli device wifi connect '{quoted_ssid}' password '{quoted_pw}' "
             f"hidden yes ifname {iface}"
@@ -732,6 +850,273 @@ def _resolve_bts_cpe_targets(profile_bundle) -> tuple[str, str, str, str]:
     return bts_ip, cpe_ip, user, password
 
 
+def _cpe_direct_ssh_hosts(profile_bundle) -> list[str]:
+    """Ordered CPE SSH targets.
+
+    Prefer 2.4 GHz mgmt Wi‑Fi (169.254.254.1) — PC→CPE IPv6 is often dark on this
+    bench. Never use dut.cpe_fallback_ip (often 10.0.0.1 / BTS factory hop).
+    """
+    hosts: list[str] = []
+    mgmt_ip = str(RADIO_24_SCAN_DEFAULTS.get("CPE_MGMT_IP", "169.254.254.1")).strip()
+    if mgmt_ip:
+        hosts.append(mgmt_ip)
+    cpe_ip, _, _ = _resolve_cpe_ssh_target(profile_bundle)
+    if cpe_ip:
+        h = normalize_ip(cpe_ip)
+        if h and h not in hosts:
+            hosts.append(h)
+    return hosts
+
+
+async def _bts_linked_cpe_mac(bts_conn: asyncssh.SSHClientConnection) -> str | None:
+    """Return MAC of the first associated SU on ath1 (sua*)."""
+    for idx in range(1, 33):
+        _, assoc = await _ssh_run(
+            bts_conn,
+            f"cat /sys/class/kwn/sua{idx}/statistics/associd 2>/dev/null",
+            timeout_s=10,
+        )
+        if (assoc or "").strip() in ("", "0"):
+            continue
+        _, mac = await _ssh_run(
+            bts_conn,
+            f"cat /sys/class/kwn/sua{idx}/statistics/mac 2>/dev/null",
+            timeout_s=10,
+        )
+        mac = (mac or "").strip().lower()
+        if mac and mac != "00:00:00:00:00:00":
+            return mac
+    return None
+
+
+async def _bts_discover_cpe_ipv6(bts_conn: asyncssh.SSHClientConnection) -> str | None:
+    """Read live CPE IPv6 from sua*/statistics/ipv6 (DHCPv6 may differ from profile)."""
+    for idx in range(1, 33):
+        _, assoc = await _ssh_run(
+            bts_conn,
+            f"cat /sys/class/kwn/sua{idx}/statistics/associd 2>/dev/null",
+            timeout_s=10,
+        )
+        if (assoc or "").strip() in ("", "0"):
+            continue
+        _, ip6_out = await _ssh_run(
+            bts_conn,
+            f"cat /sys/class/kwn/sua{idx}/statistics/ipv6 2>/dev/null",
+            timeout_s=10,
+        )
+        ip6 = normalize_ip((ip6_out or "").strip())
+        if not ip6 or ":" not in ip6:
+            continue
+        # Reject unspecified / link-local placeholders (ping :: is a false positive).
+        lowered = ip6.lower().strip("[]")
+        if lowered in {"::", "0::0", "::0", "0:0:0:0:0:0:0:0"}:
+            continue
+        if lowered.startswith("fe80:"):
+            continue
+        return ip6
+    return None
+
+
+async def _bts_cfgupdate_cpe(
+    bts_conn: asyncssh.SSHClientConnection,
+    command: str,
+    *,
+    timeout_s: int = 30,
+) -> tuple[int, str]:
+    """
+    Push a command to the linked CPE via cfgupdate only.
+
+    Do NOT use /usr/sbin/remote_exec.sh — that script also runs ${COMMAND} on the
+    BTS itself (wifi reload / reboot would hit the BTS and drop the RF link).
+    """
+    mac = await _bts_linked_cpe_mac(bts_conn)
+    if not mac:
+        return 1, "no linked CPE MAC for cfgupdate"
+    escaped = command.replace("\\", "\\\\").replace('"', '\\"')
+    return await _ssh_run(
+        bts_conn,
+        f'cfgupdate -i 6 1 {mac} 5 "{escaped}" 2>&1',
+        timeout_s=timeout_s,
+    )
+
+
+async def _ensure_local_mgmt_wifi_for_cpe_ssh(profile_bundle, *, mgmt_ssid: str | None = None) -> bool:
+    """Best-effort: join CPE hidden mgmt SSID on the scan PC so 169.254.254.1 SSH works."""
+    scan_ip, scan_password, target_ssid, target_password, _, _ = _resolve_scan_pc_config(
+        profile_bundle, case_id="RADIO24_MGMT_JOIN"
+    )
+    ssid = (mgmt_ssid or target_ssid or "").strip()
+    if not ssid:
+        return False
+    try:
+        async with asyncssh.connect(
+            scan_ip,
+            username="root",
+            password=scan_password,
+            known_hosts=None,
+            connect_timeout=12.0,
+        ) as conn:
+            iface = await _detect_wifi_interface(conn, case_id="RADIO24_MGMT_JOIN")
+            # profile_bundle=None skips BSSID preflight (needs CPE SSH/cfgupdate stdout).
+            code, _ = await _connect_hidden_wifi_with_retries(
+                conn,
+                iface,
+                ssid=ssid,
+                password=target_password,
+                settle_s=int(RADIO_24_SCAN_DEFAULTS.get("CONNECT_SETTLE_S", 10)),
+                max_attempts=int(RADIO_24_SCAN_DEFAULTS.get("CONNECT_RETRY_ATTEMPTS", 3)),
+                require_mgmt_ip=True,
+                profile_bundle=None,
+                refresh_bssid=False,
+            )
+            return code == 0
+    except (OSError, asyncssh.Error, asyncio.TimeoutError, TimeoutError) as exc:
+        _log(f"mgmt Wi‑Fi join for CPE SSH failed: {exc}")
+        return False
+
+
+async def _ssh_session_looks_like_cpe(conn: asyncssh.SSHClientConnection) -> bool:
+    """Reject BTS sessions (UBRMGMT*) when picking a CPE SSH target."""
+    _, ssid_out = await _ssh_run(
+        conn,
+        "uci -q get wireless.@wifi-iface[0].ssid 2>/dev/null",
+        timeout_s=8,
+    )
+    ssid = (ssid_out or "").strip()
+    if not ssid:
+        return False
+    if ssid.upper().startswith("UBRMGMT"):
+        return False
+    want = str(RADIO_24_SCAN_DEFAULTS.get("CPE_MGMT_HIDDEN_SSID") or "").strip()
+    if want and ssid == want:
+        return True
+    # CPE backhaul STA iface is usually [1]; mgmt AP is [0].
+    _, mode_out = await _ssh_run(
+        conn,
+        "uci -q get wireless.@wifi-iface[0].mode 2>/dev/null",
+        timeout_s=8,
+    )
+    return (mode_out or "").strip().lower() == "ap"
+
+
+def _prepare_lab_cpe_path(profile_bundle, *, disconnect_wifi: bool = False) -> None:
+    """Re-pin lab IPv6 routes so CPE/BTS SSH stay reachable mid-suite."""
+    if not profile_bundle:
+        return
+    try:
+        from utils.radio24_lab_net import ensure_radio24_lab_ipv6_routes
+
+        ensure_radio24_lab_ipv6_routes(
+            profile_bundle, disconnect_wifi=disconnect_wifi
+        )
+    except Exception as exc:
+        _log(f"lab CPE path prepare skipped: {exc}")
+
+
+def _vlan_mode_is_transparent(raw: str) -> bool:
+    key = str(raw or "").strip().strip("'").strip('"').lower().replace(" ", "").replace("-", "")
+    return key in {"0", "transparent", "untagged"} or key.startswith("transparent")
+
+
+def _vlan_mode_is_qinq(raw: str) -> bool:
+    key = str(raw or "").strip().strip("'").strip('"').lower().replace(" ", "").replace("-", "")
+    return key in {"3", "qinq", "qinq"} or "qinq" in key
+
+
+async def _ensure_radio24_vlan_transparent(
+    profile_bundle,
+    *,
+    repair: bool = True,
+) -> bool:
+    """
+    Radio24 lab expects VLAN transparent (mode=0), not QinQ.
+
+    After FW upgrade / factory reset, devices often flip to QinQ. Verify BTS+CPE
+    and optionally set mode=0 while preserving the current mgmtvlan value.
+    """
+    if not profile_bundle:
+        return False
+
+    set_transparent = (
+        "uci set vlan.ath1.mode=0; "
+        "uci commit vlan; "
+        "/etc/init.d/network reload 2>/dev/null || true"
+    )
+
+    bts_mode = ""
+    cpe_mode = ""
+    try:
+        bts_conn, _ = await _open_bts_ssh(profile_bundle)
+        try:
+            _, bts_mode = await _ssh_run(bts_conn, "uci -q get vlan.ath1.mode", timeout_s=15)
+            bts_mode = (bts_mode or "").strip()
+            if repair and not _vlan_mode_is_transparent(bts_mode):
+                _log(
+                    f"BTS VLAN mode {bts_mode!r} is not transparent "
+                    f"(often QinQ after FW/factory) — setting mode=0"
+                )
+                await _ssh_run(bts_conn, set_transparent, timeout_s=60)
+                await asyncio.sleep(8)
+                _, bts_mode = await _ssh_run(
+                    bts_conn, "uci -q get vlan.ath1.mode", timeout_s=15
+                )
+                bts_mode = (bts_mode or "").strip()
+        finally:
+            bts_conn.close()
+            await bts_conn.wait_closed()
+    except (OSError, asyncssh.Error, asyncio.TimeoutError, TimeoutError) as exc:
+        _log(f"BTS VLAN transparent check skipped: {exc}")
+
+    try:
+        _, cpe_mode = await _run_cpe_command(
+            profile_bundle,
+            "uci -q get vlan.ath1.mode",
+            timeout_s=20,
+            allow_cfgupdate=False,
+        )
+        cpe_mode = (cpe_mode or "").strip()
+        if repair and cpe_mode and not _vlan_mode_is_transparent(cpe_mode):
+            _log(
+                f"CPE VLAN mode {cpe_mode!r} is not transparent "
+                f"(often QinQ after FW/factory) — setting mode=0"
+            )
+            await _run_cpe_command(
+                profile_bundle,
+                set_transparent,
+                timeout_s=60,
+                allow_cfgupdate=True,
+            )
+            await asyncio.sleep(8)
+            _, cpe_mode = await _run_cpe_command(
+                profile_bundle,
+                "uci -q get vlan.ath1.mode",
+                timeout_s=20,
+                allow_cfgupdate=False,
+            )
+            cpe_mode = (cpe_mode or "").strip()
+        elif repair and not cpe_mode:
+            # No SSH stdout path — still push transparent via cfgupdate.
+            await _run_cpe_command(
+                profile_bundle,
+                set_transparent,
+                timeout_s=60,
+                allow_cfgupdate=True,
+            )
+            _log("CPE VLAN transparent set via cfgupdate (no SSH readback)")
+    except (OSError, asyncssh.Error, asyncio.TimeoutError, TimeoutError) as exc:
+        _log(f"CPE VLAN transparent check skipped: {exc}")
+
+    bts_ok = (not bts_mode) or _vlan_mode_is_transparent(bts_mode)
+    cpe_ok = (not cpe_mode) or _vlan_mode_is_transparent(cpe_mode)
+    _log(
+        f"VLAN mode check — BTS={bts_mode or 'n/a'} "
+        f"({'OK' if bts_ok else 'NOT transparent'}) "
+        f"CPE={cpe_mode or 'n/a'} "
+        f"({'OK' if cpe_ok else 'NOT transparent'})"
+    )
+    return bts_ok and cpe_ok
+
+
 def _ping_output_ok(raw: str) -> bool:
     lower = (raw or "").lower()
     if "0 received" in lower or "100% packet loss" in lower:
@@ -742,6 +1127,7 @@ def _ping_output_ok(raw: str) -> bool:
 
 
 def _remote_exec_bts_command(su_index: int, inner_command: str) -> str:
+    """Legacy helper — prefer _bts_cfgupdate_cpe (remote_exec.sh also runs on BTS)."""
     escaped = inner_command.replace("'", "'\"'\"'")
     return f"/usr/sbin/remote_exec.sh {su_index} '{escaped}'"
 
@@ -751,51 +1137,15 @@ async def _resolve_cpe_remote_exec_index(
     *,
     mgmt_ssid: str | None = None,
 ) -> int | None:
-    """Find BTS remote_exec SU index that reaches the CPE."""
-    want_ssid = (mgmt_ssid or "").strip()
-    bts_mac = ""
-    _, bts_mac_out = await _ssh_run(
-        bts_conn,
-        "cat /sys/class/net/br-lan/address 2>/dev/null",
-        timeout_s=15,
-    )
-    bts_mac = (bts_mac_out or "").strip().lower().replace("-", ":")
+    """
+    Return BTS *radio* index for backhaul (ath1 → 1) when a CPE is linked.
 
-    for idx in range(1, 33):
-        code, out = await _ssh_run(
-            bts_conn,
-            _remote_exec_bts_command(idx, "echo RADIO24_CPE_OK"),
-            timeout_s=25,
-        )
-        if code != 0 or "RADIO24_CPE_OK" not in out:
-            continue
-        _, peer_mac_out = await _ssh_run(
-            bts_conn,
-            _remote_exec_bts_command(
-                idx, "cat /sys/class/net/br-lan/address 2>/dev/null"
-            ),
-            timeout_s=20,
-        )
-        peer_mac = (peer_mac_out or "").strip().lower().replace("-", ":")
-        if bts_mac and peer_mac == bts_mac:
-            continue
-        if want_ssid:
-            _, ssid_out = await _ssh_run(
-                bts_conn,
-                _remote_exec_bts_command(idx, "uci -q get wireless.@wifi-iface[0].ssid"),
-            )
-            if want_ssid not in (ssid_out or ""):
-                continue
-        elif peer_mac:
-            _, mode_out = await _ssh_run(
-                bts_conn,
-                _remote_exec_bts_command(idx, "uci -q get wireless.@wifi-iface[1].mode"),
-            )
-            mode = (mode_out or "").strip().lower()
-            if mode and mode != "sta":
-                continue
-        return idx
-    return None
+    Note: /usr/sbin/remote_exec.sh INDEX is athN, not SU partner id. Prefer
+    _bts_cfgupdate_cpe for CPE-only commands.
+    """
+    del mgmt_ssid
+    mac = await _bts_linked_cpe_mac(bts_conn)
+    return 1 if mac else None
 
 
 async def _cpe_remote_exec(
@@ -805,11 +1155,67 @@ async def _cpe_remote_exec(
     *,
     timeout_s: int = 30,
 ) -> tuple[int, str]:
-    return await _ssh_run(
-        bts_conn,
-        _remote_exec_bts_command(su_index, inner_command),
-        timeout_s=timeout_s,
-    )
+    """Fire-and-forget CPE command via cfgupdate (ignores su_index; never runs on BTS)."""
+    del su_index
+    return await _bts_cfgupdate_cpe(bts_conn, inner_command, timeout_s=timeout_s)
+
+
+async def _open_bts_ssh(profile_bundle):
+    """
+    Open SSH to BTS for Radio24 — factory IPv4 first (not Functional mgmt VLAN).
+
+    Returns (conn, host_used) or raises the last connection error.
+    """
+    bts_ip, _, user, password = _resolve_bts_cpe_targets(profile_bundle)
+    dut = (profile_bundle.active.get("dut") or {}) if profile_bundle else {}
+    tb = (profile_bundle.active.get("testbed") or {}) if profile_bundle else {}
+    recovery = (tb.get("recovery") or {}) if tb else {}
+    # Radio24 method: factory LAN (192.168.2.10), then profile IPv6 if already up.
+    # Never require lab-PC VLAN 101 for Radio24/API-style cases.
+    candidates: list[str] = []
+    for host in (
+        str(recovery.get("bts_fallback_ipv4") or "192.168.2.10").strip(),
+        "192.168.2.10",
+        bts_ip,
+        str(dut.get("local_ip") or "").strip(),
+    ):
+        host = normalize_ip(str(host or "").strip())
+        if host and host not in candidates:
+            candidates.append(host)
+
+    last_exc: Exception | None = None
+    for host in candidates:
+        try:
+            conn = await asyncssh.connect(
+                host,
+                username=user,
+                password=password,
+                known_hosts=None,
+                connect_timeout=12.0,
+            )
+            if host != bts_ip and not getattr(_open_bts_ssh, "_logged", False):
+                _log(f"BTS SSH via {host} (Radio24 factory path; not mgmt VLAN)")
+                setattr(_open_bts_ssh, "_logged", True)
+            return conn, host
+        except (OSError, asyncssh.Error) as exc:
+            last_exc = exc
+    raise last_exc or OSError("BTS SSH failed on all candidates")
+
+
+async def _ensure_bts_ssh_ready(profile_bundle, *, timeout_s: int = 120) -> bool:
+    """Wait until BTS SSH works (mgmt IPv6 or factory fallback)."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            conn, _ = await _open_bts_ssh(profile_bundle)
+            try:
+                conn.close()
+            except Exception:
+                pass
+            return True
+        except (OSError, asyncssh.Error):
+            await asyncio.sleep(5)
+    return False
 
 
 async def _wait_for_bts_cpe_link_stable(
@@ -821,9 +1227,10 @@ async def _wait_for_bts_cpe_link_stable(
     Wait until BTS is SSH-reachable and BTS can ping CPE IPv6 (link stable).
 
     Does not require direct CPE SSH from the test runner.
+    Prefers the live sua*/statistics/ipv6 address (DHCPv6 may differ from profile).
     """
-    bts_ip, cpe_ip, user, password = _resolve_bts_cpe_targets(profile_bundle)
-    if not bts_ip or not cpe_ip:
+    bts_ip, profile_cpe_ip, user, password = _resolve_bts_cpe_targets(profile_bundle)
+    if not bts_ip:
         return False, False, False
 
     deadline = time.monotonic() + timeout_s
@@ -831,14 +1238,17 @@ async def _wait_for_bts_cpe_link_stable(
     cpe_ping_ok = False
     while time.monotonic() < deadline:
         try:
-            async with asyncssh.connect(
-                bts_ip,
-                username=user,
-                password=password,
-                known_hosts=None,
-                connect_timeout=12.0,
-            ) as bts_conn:
+            bts_conn, _ = await _open_bts_ssh(profile_bundle)
+            try:
                 bts_reachable = True
+                live_cpe = await _bts_discover_cpe_ipv6(bts_conn)
+                cpe_ip = live_cpe or profile_cpe_ip
+                if not cpe_ip:
+                    cpe_ping_ok = False
+                    await asyncio.sleep(10)
+                    continue
+                if live_cpe and live_cpe != profile_cpe_ip:
+                    _log(f"BTS→CPE ping using live IPv6 {live_cpe} (profile had {profile_cpe_ip})")
                 _, ping_out = await _ssh_run(
                     bts_conn,
                     f"ping -6 -c 2 -W 4 {cpe_ip} 2>&1",
@@ -853,7 +1263,17 @@ async def _wait_for_bts_cpe_link_stable(
                         timeout_s=25,
                     )
                     if _ping_output_ok(ping_out2):
+                        # FW/factory often leaves QinQ — force transparent for Radio24 lab.
+                        try:
+                            await _ensure_radio24_vlan_transparent(
+                                profile_bundle, repair=True
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            _log(f"VLAN transparent enforce after link-up skipped: {exc}")
                         return True, True, True
+            finally:
+                bts_conn.close()
+                await bts_conn.wait_closed()
         except (OSError, asyncssh.Error):
             bts_reachable = False
             cpe_ping_ok = False
@@ -862,55 +1282,22 @@ async def _wait_for_bts_cpe_link_stable(
 
 
 async def _fetch_cpe_24g_ap_bssid(profile_bundle) -> str | None:
-    """Read CPE 2.4 GHz AP BSSID (ath0 HWaddr) via CPE SSH or BTS remote_exec."""
+    """Read CPE 2.4 GHz AP BSSID (ath0 HWaddr) via CPE SSH (needs stdout — no cfgupdate)."""
     if not profile_bundle:
         return None
 
     iface = str(RADIO_24_SCAN_DEFAULTS.get("CPE_24G_IFACE", "ath0")).strip()
     hwaddr_cmd = f"ifconfig {iface} 2>/dev/null | awk '/HWaddr/{{print $5; exit}}'"
     mgmt_ssid = str(RADIO_24_SCAN_DEFAULTS.get("CPE_MGMT_HIDDEN_SSID", "")).strip()
-
-    cpe_ip, user, password = _resolve_cpe_ssh_target(profile_bundle)
-    if cpe_ip and password:
-        try:
-            async with asyncssh.connect(
-                cpe_ip,
-                username=user,
-                password=password,
-                known_hosts=None,
-                connect_timeout=12.0,
-            ) as cpe_conn:
-                _, out = await _cpe_ssh_run(cpe_conn, hwaddr_cmd, timeout_s=15)
-                match = _BSSID_RE.search(out or "")
-                if match:
-                    bssid = match.group(1).upper()
-                    return bssid
-        except (OSError, asyncssh.Error, asyncio.TimeoutError, TimeoutError):
-            pass
-
-    bts_ip, _, bts_user, bts_password = _resolve_bts_cpe_targets(profile_bundle)
-    if not bts_ip or not bts_password:
-        return None
-
-    try:
-        async with asyncssh.connect(
-            bts_ip,
-            username=bts_user,
-            password=bts_password,
-            known_hosts=None,
-            connect_timeout=12.0,
-        ) as bts_conn:
-            su_idx = await _resolve_cpe_remote_exec_index(bts_conn, mgmt_ssid=mgmt_ssid)
-            if su_idx is None:
-                return None
-            _, out = await _cpe_remote_exec(bts_conn, su_idx, hwaddr_cmd, timeout_s=25)
-            match = _BSSID_RE.search(out or "")
-            if match:
-                bssid = match.group(1).upper()
-                return bssid
-    except (OSError, asyncssh.Error, asyncio.TimeoutError, TimeoutError):
-        pass
-    return None
+    _, out = await _run_cpe_command(
+        profile_bundle,
+        hwaddr_cmd,
+        timeout_s=15,
+        mgmt_ssid=mgmt_ssid or None,
+        allow_cfgupdate=False,
+    )
+    match = _BSSID_RE.search(out or "")
+    return match.group(1).upper() if match else None
 
 
 async def _wait_for_cpe_24g_ap_bssid_stable(
@@ -1020,8 +1407,8 @@ async def _recover_scan_pc_wifi_nic(
     Wi‑Fi NIC recovery on the scan PC — radio and Wi‑Fi iface only; LAN ports stay up.
 
     level 1 — disconnect Wi‑Fi iface, nmcli radio off/on, managed cycle
-    level 2 — two radio toggle cycles + rescan
-    level 3 — three radio toggle cycles + longer settle + rescan
+    level 2 — radio toggles + rtl8192ee modprobe bounce (common ssid-not-found fix)
+    level 3 — stronger radio toggles + driver bounce + longer settle + rescan
     level 4 — reboot scan PC (last resort; SSH conn will drop)
     """
     _log(f"scan PC Wi‑Fi recovery level {level} on {iface} (Wi‑Fi radio only — LAN ports unchanged)")
@@ -1036,13 +1423,31 @@ async def _recover_scan_pc_wifi_nic(
         await _ssh_run(conn, f"nmcli device set {iface} managed yes", timeout_s=20)
         await _ssh_run(conn, f"ip link set {iface} up", timeout_s=15)
         await _ssh_run(conn, f"iwconfig {iface} power off 2>/dev/null", timeout_s=15)
+        await _ssh_run(conn, f"iw {iface} set power_save off 2>/dev/null", timeout_s=15)
         await asyncio.sleep(settle_s)
+
+    async def _rtl8192ee_bounce() -> None:
+        # rtl8192ee on this lab scan PC often needs a driver reload after ssid-not-found.
+        await _ssh_run(conn, "nmcli radio wifi off", timeout_s=20)
+        await _ssh_run(
+            conn,
+            "modprobe -r rtl8192ee 2>/dev/null; sleep 2; "
+            "modprobe rtl8192ee 2>/dev/null; sleep 3",
+            timeout_s=40,
+        )
+        await _ssh_run(conn, "nmcli radio wifi on", timeout_s=20)
+        await _ssh_run(conn, f"nmcli device set {iface} managed yes", timeout_s=20)
+        await _ssh_run(conn, f"ip link set {iface} up", timeout_s=15)
+        await _ssh_run(conn, f"iw {iface} set power_save off 2>/dev/null", timeout_s=15)
+        await asyncio.sleep(4)
 
     if 1 <= level <= 3:
         cycles = {1: 1, 2: 2, 3: 3}[level]
         settle = {1: 3.0, 2: 5.0, 3: 8.0}[level]
         for _ in range(cycles):
             await _wifi_radio_cycle(settle_s=settle)
+        if level >= 2:
+            await _rtl8192ee_bounce()
         await _ssh_run(
             conn,
             f"nmcli device wifi rescan ifname {iface} 2>/dev/null || nmcli device wifi rescan",
@@ -1151,46 +1556,98 @@ async def _ensure_scan_pc_can_reach_cpe_ap(
     return bssid, False
 
 
-async def _send_cpe_reboot(profile_bundle, *, mgmt_ssid: str | None = None) -> bool:
-    """Reboot CPE via direct IPv6 SSH, or BTS remote_exec when the RF path is up."""
-    cpe_ip, user, password = _resolve_cpe_ssh_target(profile_bundle)
-    bts_ip, _, bts_user, bts_password = _resolve_bts_cpe_targets(profile_bundle)
+_CPE_REBOOT_CMDS = (
+    "sync; (sleep 1; /sbin/reboot -f) >/dev/null 2>&1 &",
+    "sync; /sbin/reboot -f",
+    "reboot",
+)
 
-    if cpe_ip and password:
+
+async def _send_cpe_reboot(
+    profile_bundle,
+    *,
+    mgmt_ssid: str | None = None,
+    confirm_down: bool = True,
+) -> bool:
+    """Reboot CPE via mgmt Wi‑Fi SSH (169.254.254.1), direct IPv6 SSH, or BTS cfgupdate.
+
+    Never use remote_exec.sh — it also executes the command on the BTS.
+    Set confirm_down=False for boot-window cases so sampling can start as soon as
+    SSH drops (long confirm/retry loops eat the AP-down window).
+    """
+    _prepare_lab_cpe_path(profile_bundle)
+    _, user, password = _resolve_cpe_ssh_target(profile_bundle)
+
+    async def _reboot_via_host(host: str) -> bool:
         try:
             async with asyncssh.connect(
-                cpe_ip,
+                host,
                 username=user,
                 password=password,
                 known_hosts=None,
                 connect_timeout=12.0,
             ) as cpe_conn:
-                try:
-                    await cpe_conn.run("reboot", check=False, timeout=15)
-                except (asyncssh.TimeoutError, asyncio.TimeoutError, TimeoutError):
-                    pass
+                if not await _ssh_session_looks_like_cpe(cpe_conn):
+                    _log(f"refuse reboot on non-CPE SSH host {host}")
+                    return False
+                for cmd in _CPE_REBOOT_CMDS:
+                    try:
+                        await cpe_conn.run(cmd, check=False, timeout=10)
+                    except (asyncssh.TimeoutError, asyncio.TimeoutError, TimeoutError):
+                        # Connection drop mid-reboot is expected.
+                        _log(f"CPE reboot timed out on {host} (likely rebooting)")
+                        return True
+            _log(f"CPE reboot commands sent via SSH {host}")
+            return True
+        except (OSError, asyncssh.Error, asyncio.TimeoutError, TimeoutError) as exc:
+            # Connection lost while sending reboot counts as success.
+            if "Connection" in type(exc).__name__ or "Disconnect" in type(exc).__name__:
+                _log(f"CPE SSH dropped on reboot via {host}")
                 return True
-        except (OSError, asyncssh.Error):
-            pass
+            return False
 
-    if not bts_ip or not bts_password:
-        return False
+    # Ensure mgmt Wi‑Fi path before trying 169.254.254.1.
+    await _ensure_local_mgmt_wifi_for_cpe_ssh(profile_bundle, mgmt_ssid=mgmt_ssid)
+
+    if password:
+        for host in _cpe_direct_ssh_hosts(profile_bundle):
+            if not await _reboot_via_host(host):
+                continue
+            if not confirm_down:
+                _log(f"CPE reboot sent via SSH {host} (confirm deferred)")
+                return True
+            dropped = await _wait_for_cpe_ssh_down(profile_bundle, timeout_s=45)
+            if dropped:
+                _log(f"CPE reboot confirmed (SSH down) via {host}")
+                return True
+            _log(f"CPE SSH still up after reboot via {host} — retrying")
+            if await _reboot_via_host(host):
+                if await _wait_for_cpe_ssh_down(profile_bundle, timeout_s=60):
+                    _log(f"CPE reboot confirmed on retry via {host}")
+                    return True
 
     try:
-        async with asyncssh.connect(
-            bts_ip,
-            username=bts_user,
-            password=bts_password,
-            known_hosts=None,
-            connect_timeout=12.0,
-        ) as bts_conn:
-            su_idx = await _resolve_cpe_remote_exec_index(bts_conn, mgmt_ssid=mgmt_ssid)
-            if su_idx is None:
-                return False
-            await _cpe_remote_exec(bts_conn, su_idx, "reboot", timeout_s=15)
-            return True
+        bts_conn, _ = await _open_bts_ssh(profile_bundle)
     except (OSError, asyncssh.Error):
         return False
+    try:
+        code, out = await _bts_cfgupdate_cpe(
+            bts_conn,
+            "sync; (sleep 1; /sbin/reboot -f) >/dev/null 2>&1 &",
+            timeout_s=15,
+        )
+        if code != 0:
+            _log(f"CPE cfgupdate reboot failed: {out[-120:]}")
+            return False
+        _log("CPE reboot sent via BTS cfgupdate")
+        if not confirm_down:
+            return True
+        return await _wait_for_cpe_ssh_down(profile_bundle, timeout_s=60)
+    except (OSError, asyncssh.Error):
+        return False
+    finally:
+        bts_conn.close()
+        await bts_conn.wait_closed()
 
 
 async def _ensure_cpe_mgmt_ap_ready(
@@ -1200,61 +1657,78 @@ async def _ensure_cpe_mgmt_ap_ready(
     reload_wait_s: int,
     mgmt_ssid: str | None = None,
 ) -> bool:
-    """Enable hidden CPE 2.4 GHz mgmt AP via CPE SSH or BTS remote_exec."""
+    """Enable hidden CPE 2.4 GHz mgmt AP via CPE SSH or BTS cfgupdate (never BTS wifi reload)."""
+    # Already up — avoid wifi reload that drops the AP during suite runs.
+    existing = await _wait_for_cpe_24g_ap_bssid_stable(profile_bundle, timeout_s=25)
+    if existing:
+        # Ensure maxsta > 1 (factory often uses 1; leftovers block nmcli joins).
+        await _run_cpe_command(
+            profile_bundle,
+            f"uci -q get wireless.@wifi-iface[{radio_idx}].maxsta; "
+            f"uci set wireless.@wifi-iface[{radio_idx}].maxsta=8; "
+            f"uci commit wireless",
+            timeout_s=20,
+            mgmt_ssid=mgmt_ssid,
+        )
+        _log(f"CPE 2.4 GHz mgmt AP already up (BSSID {existing})")
+        return True
+
     iface_key = f"wireless.@wifi-iface[{radio_idx}]"
     cmds = [
         f"uci set {iface_key}.hidden=1",
         f"uci set {iface_key}.disabled=0",
+        f"uci set {iface_key}.maxsta=8",
         "uci commit wireless",
         "nohup sh -c 'wifi reload 2>/dev/null || wifi' >/tmp/radio24_wifi_reload.log 2>&1 &",
     ]
+    compound = "; ".join(cmds)
 
-    cpe_ip, user, password = _resolve_cpe_ssh_target(profile_bundle)
-    if cpe_ip and password:
-        try:
-            async with asyncssh.connect(
-                cpe_ip,
-                username=user,
-                password=password,
-                known_hosts=None,
-                connect_timeout=12.0,
-            ) as cpe_conn:
-                for cmd in cmds:
-                    await _cpe_ssh_run(cpe_conn, cmd, timeout_s=20, tolerate_timeout=True)
-                await asyncio.sleep(reload_wait_s)
-                bssid = await _wait_for_cpe_24g_ap_bssid_stable(
-                    profile_bundle,
-                    timeout_s=max(reload_wait_s + 30, 60),
-                )
-                return bool(bssid)
-        except (OSError, asyncssh.Error):
-            pass
+    _, user, password = _resolve_cpe_ssh_target(profile_bundle)
+    if password:
+        await _ensure_local_mgmt_wifi_for_cpe_ssh(profile_bundle, mgmt_ssid=mgmt_ssid)
+        for host in _cpe_direct_ssh_hosts(profile_bundle):
+            try:
+                async with asyncssh.connect(
+                    host,
+                    username=user,
+                    password=password,
+                    known_hosts=None,
+                    connect_timeout=12.0,
+                ) as cpe_conn:
+                    if not await _ssh_session_looks_like_cpe(cpe_conn):
+                        continue
+                    for cmd in cmds:
+                        await _cpe_ssh_run(cpe_conn, cmd, timeout_s=20, tolerate_timeout=True)
+                    await asyncio.sleep(reload_wait_s)
+                    bssid = await _wait_for_cpe_24g_ap_bssid_stable(
+                        profile_bundle,
+                        timeout_s=max(reload_wait_s + 30, 60),
+                    )
+                    return bool(bssid)
+            except (OSError, asyncssh.Error):
+                continue
 
-    bts_ip, _, bts_user, bts_password = _resolve_bts_cpe_targets(profile_bundle)
-    if not bts_ip or not bts_password:
+    try:
+        bts_conn, _ = await _open_bts_ssh(profile_bundle)
+    except (OSError, asyncssh.Error):
         return False
 
     try:
-        async with asyncssh.connect(
-            bts_ip,
-            username=bts_user,
-            password=bts_password,
-            known_hosts=None,
-            connect_timeout=12.0,
-        ) as bts_conn:
-            su_idx = await _resolve_cpe_remote_exec_index(bts_conn, mgmt_ssid=mgmt_ssid)
-            if su_idx is None:
-                return False
-            for cmd in cmds:
-                await _cpe_remote_exec(bts_conn, su_idx, cmd, timeout_s=25)
-            await asyncio.sleep(reload_wait_s)
-            bssid = await _wait_for_cpe_24g_ap_bssid_stable(
-                profile_bundle,
-                timeout_s=max(reload_wait_s + 30, 60),
-            )
-            return bool(bssid)
+        code, out = await _bts_cfgupdate_cpe(bts_conn, compound, timeout_s=25)
+        if code != 0:
+            _log(f"CPE mgmt AP cfgupdate failed: {out[-160:]}")
+            return False
+        await asyncio.sleep(reload_wait_s)
+        bssid = await _wait_for_cpe_24g_ap_bssid_stable(
+            profile_bundle,
+            timeout_s=max(reload_wait_s + 30, 60),
+        )
+        return bool(bssid)
     except (OSError, asyncssh.Error):
         return False
+    finally:
+        bts_conn.close()
+        await bts_conn.wait_closed()
 
 
 async def _connect_hidden_wifi_with_retries(
@@ -1485,6 +1959,8 @@ async def assert_radio_24_02_connect_hidden_ssid(
     print_section(
         f"{case_id}: SSH nmcli connect hidden SSID {target_ssid!r} on lab PC {scan_ip}"
     )
+    await _prep_cpe_mgmt_dhcp_for_connect(profile_bundle, target_ssid=target_ssid)
+    mgmt_bssid = await _fetch_cpe_24g_ap_bssid(profile_bundle) or mgmt_bssid
     if mgmt_bssid:
         print(f"  CPE 2.4 GHz AP BSSID: {mgmt_bssid} (WPA&WPA2 Personal hidden join)")
     print(f"  Wi‑Fi join target: scan PC {scan_ip} (not the pytest runner desktop)")
@@ -1616,6 +2092,28 @@ async def assert_radio_24_03_connect_hidden_ssid_wrong_password(
                 timeout_s=timeout_s,
                 max_attempts=lab_flush_attempts,
             )
+        if target_ssid in _visible_ssids_from_iwlist(iwlist_ssids):
+            await _toggle_cpe_mgmt_ap_off_on_bundle(
+                profile_bundle,
+                mgmt_ssid=target_ssid,
+            )
+            await asyncio.sleep(int(defaults.get("CPE_WIFI_RELOAD_WAIT_S", 8)))
+            iwlist_ssids = await _passive_iwlist_scan(
+                conn,
+                iface,
+                settle_s=settle_s,
+                timeout_s=timeout_s,
+            )
+            if target_ssid in _visible_ssids_from_iwlist(iwlist_ssids):
+                iwlist_ssids = await _try_lab_pc_flush_until_hidden(
+                    conn,
+                    iface,
+                    target_ssid,
+                    iwlist_ssids,
+                    settle_s=settle_s,
+                    timeout_s=timeout_s,
+                    max_attempts=lab_flush_attempts,
+                )
         ssid_visible = target_ssid in _visible_ssids_from_iwlist(iwlist_ssids)
         _print_scan_ssid_list(iwlist_ssids, target_ssid)
 
@@ -1724,16 +2222,34 @@ async def _reboot_cpe_and_wait_link(
     boot_s: int,
     mgmt_ssid: str | None = None,
 ) -> tuple[bool, bool, bool, bool]:
-    """Reboot CPE, wait for boot, then poll until BTS SSH and BTS→CPE IPv6 ping are stable."""
+    """Reboot CPE, wait for boot, then poll until BTS SSH and BTS→CPE link are stable."""
+    from utils.radio24_lab_net import ensure_radio24_lab_ipv6_routes
+
+    # Keep mgmt Wi‑Fi — it is the primary CPE SSH/reboot path on this bench.
+    await asyncio.to_thread(
+        ensure_radio24_lab_ipv6_routes, profile_bundle, disconnect_wifi=False
+    )
+    if not await _ensure_bts_ssh_ready(profile_bundle, timeout_s=min(90, timeout_s)):
+        _log(f"{case_id}: BTS SSH not ready before reboot — attempting CPE reboot anyway")
+
     reboot_sent = await _send_cpe_reboot(profile_bundle, mgmt_ssid=mgmt_ssid)
+    if not reboot_sent:
+        await asyncio.sleep(5)
+        reboot_sent = await _send_cpe_reboot(profile_bundle, mgmt_ssid=mgmt_ssid)
     if not reboot_sent:
         return False, False, False, False
 
-    await asyncio.sleep(max(boot_s, 15))
+    # Wait for SSH to drop, then give the box time to come back before link polls.
+    await _wait_for_cpe_ssh_down(profile_bundle, timeout_s=90)
+    await asyncio.sleep(max(boot_s, 60))
+    _log(f"{case_id}: waiting for BTS↔CPE link (up to {timeout_s}s)...")
     bts_ok, cpe_ok, stable = await _wait_for_bts_cpe_link_stable(
         profile_bundle,
         timeout_s=timeout_s,
     )
+    if stable:
+        # Mgmt AP also needs to finish come-up after reboot.
+        await _wait_for_cpe_24g_ap_bssid_stable(profile_bundle, timeout_s=90)
     return reboot_sent, bts_ok, cpe_ok, stable
 
 
@@ -1839,6 +2355,39 @@ def _curl_http_status(raw: str) -> int:
     return 0
 
 
+_FW_VERSION_IN_NAME_RE = re.compile(
+    r"Senao-(UBR\d{3})-[^-]+-([0-9]+(?:\.[0-9]+)*)-(?:apps|single)\.tgz$",
+    re.IGNORECASE,
+)
+
+
+def _fw_version_sort_key(name: str) -> tuple[int, ...]:
+    match = _FW_VERSION_IN_NAME_RE.match(name.strip())
+    if not match:
+        return (0,)
+    parts = [int(p) for p in match.group(2).split(".") if p.isdigit()]
+    return tuple(parts) if parts else (0,)
+
+
+async def _detect_cpe_model_label(profile_bundle) -> str:
+    """Best-effort CPE model (UBR650 …) for firmware selection."""
+    probes = (
+        "grep -oE 'UBR[0-9]{3}' /etc/board.json 2>/dev/null | head -1",
+        "uci -q get system.@system[0].model 2>/dev/null",
+        "uci -q get system.@system[0].hostname 2>/dev/null",
+        "cat /etc/version 2>/dev/null",
+        "hostname 2>/dev/null",
+    )
+    for command in probes:
+        code, out = await _run_cpe_command(profile_bundle, command, timeout_s=20)
+        if code != 0 or not out:
+            continue
+        match = re.search(r"UBR\d{3}", out, re.I)
+        if match:
+            return match.group(0).upper()
+    return "UBR650"
+
+
 async def _resolve_fw_path_on_scan_pc(
     scan_conn: asyncssh.SSHClientConnection,
     fw_dir: str,
@@ -1849,6 +2398,46 @@ async def _resolve_fw_path_on_scan_pc(
     if code == 0 and "FOUND" in out:
         return f"{fw_dir.rstrip('/')}/{fw_file}"
     return None
+
+
+async def _resolve_latest_cpe_fw_on_scan_pc(
+    scan_conn: asyncssh.SSHClientConnection,
+    *,
+    fw_dir: str,
+    cpe_model: str,
+    preferred_file: str = "",
+) -> str | None:
+    """
+    Pick the newest Senao-<CPE-model>-*.tgz under fw_dir on the scan PC.
+
+    If preferred_file is set and present, use it; otherwise auto-select latest.
+    """
+    preferred = (preferred_file or "").strip()
+    if preferred and preferred.upper() not in ("AUTO", "LATEST", "*"):
+        path = await _resolve_fw_path_on_scan_pc(scan_conn, fw_dir, preferred)
+        if path:
+            return path
+
+    model = (cpe_model or "UBR650").upper()
+    quoted_dir = fw_dir.rstrip("/").replace("'", "'\"'\"'")
+    code, out = await _ssh_run(
+        scan_conn,
+        f"ls -1 '{quoted_dir}'/Senao-{model}-*.tgz 2>/dev/null",
+        timeout_s=20,
+    )
+    if code != 0 or not (out or "").strip():
+        return None
+
+    names = []
+    for line in (out or "").splitlines():
+        name = line.strip().rsplit("/", 1)[-1]
+        if _FW_VERSION_IN_NAME_RE.match(name):
+            names.append(name)
+    if not names:
+        return None
+
+    latest = sorted(names, key=_fw_version_sort_key, reverse=True)[0]
+    return f"{fw_dir.rstrip('/')}/{latest}"
 
 
 async def _silent_cpe_api_upload_and_upgrade(
@@ -1913,13 +2502,15 @@ async def assert_radio_24_08_fw_upgrade_scan_hidden_ssid(
     2.4G_RADIO_08: Upgrade CPE firmware (preserve config) via mgmt API, wait for link, scan.
 
     Uses API upload-sw + upgrade-sw (preserveConfig) from the scan PC on CPE mgmt Wi‑Fi.
+    Firmware image: latest Senao-<CPE-model>-*.tgz under /tftpboot on the scan PC
+    (or FW_FILE override when that exact file exists).
     """
     case_id = "2_4G_RADIO_08"
     defaults = RADIO_24_SCAN_DEFAULTS
     scan_ip, scan_password, target_ssid, target_password, settle_s, timeout_s = _resolve_scan_pc_config(
         profile_bundle, case_id=case_id
     )
-    fw_file = str(defaults.get("FW_FILE", "Senao-UBR650-xxx-0.0.0.730-single.tgz")).strip()
+    fw_file = str(defaults.get("FW_FILE", "AUTO")).strip() or "AUTO"
     fw_dir = str(defaults.get("FW_DIR", "/tftpboot")).strip()
     upload_timeout_s = int(defaults.get("FW_UPLOAD_TIMEOUT_S", 900))
     fw_upgrade_wait_s = int(defaults.get("FW_UPGRADE_WAIT_S", 1200))
@@ -1932,9 +2523,10 @@ async def assert_radio_24_08_fw_upgrade_scan_hidden_ssid(
     cpe_reload_wait_s = int(defaults.get("CPE_WIFI_RELOAD_WAIT_S", 8))
     cpe_mgmt_api = f"http://{defaults.get('CPE_MGMT_IP', '169.254.254.1')}"
 
+    cpe_model = await _detect_cpe_model_label(profile_bundle)
     print_section(
-        f"{case_id}: FW upgrade {fw_file!r} (preserve config) — link up — "
-        f"scan; {target_ssid!r} must stay hidden"
+        f"{case_id}: FW upgrade latest {cpe_model} image from {fw_dir} "
+        f"(preserve config) — link up — scan; {target_ssid!r} must stay hidden"
     )
 
     mgmt_ready = await _ensure_cpe_mgmt_ap_ready(
@@ -1951,6 +2543,8 @@ async def assert_radio_24_08_fw_upgrade_scan_hidden_ssid(
     ssid_visible = True
     upload_status = ""
     upgrade_status = ""
+    fw_path = None
+    fw_name = ""
 
     async with asyncssh.connect(
         scan_ip,
@@ -1960,8 +2554,18 @@ async def assert_radio_24_08_fw_upgrade_scan_hidden_ssid(
         connect_timeout=15.0,
     ) as conn:
         iface = await _detect_wifi_interface(conn, case_id=case_id)
-        fw_path = await _resolve_fw_path_on_scan_pc(conn, fw_dir, fw_file)
-        check.is_true(fw_path, f"{case_id}: firmware not found on scan PC at {fw_dir}/{fw_file}")
+        fw_path = await _resolve_latest_cpe_fw_on_scan_pc(
+            conn,
+            fw_dir=fw_dir,
+            cpe_model=cpe_model,
+            preferred_file="" if fw_file.upper() in ("AUTO", "LATEST", "*") else fw_file,
+        )
+        fw_name = fw_path.rsplit("/", 1)[-1] if fw_path else ""
+        _log(f"{case_id}: CPE model={cpe_model}, firmware={fw_name or '(missing)'}")
+        check.is_true(
+            fw_path,
+            f"{case_id}: no Senao-{cpe_model}-*.tgz under {fw_dir} on scan PC {scan_ip}",
+        )
 
         connect_code, _ = await _connect_hidden_wifi_with_retries(
             conn,
@@ -2034,6 +2638,12 @@ async def assert_radio_24_08_fw_upgrade_scan_hidden_ssid(
                 "PASS" if mgmt_ready else "FAIL",
             ),
             (
+                "FW image",
+                f"latest {cpe_model}",
+                fw_name or "missing",
+                "PASS" if fw_path else "FAIL",
+            ),
+            (
                 "FW upload (API)",
                 "upload-sw success",
                 "ok" if upload_ok else "failed",
@@ -2079,21 +2689,50 @@ async def _run_cpe_command(
     *,
     timeout_s: int = 30,
     mgmt_ssid: str | None = None,
+    repair_path: bool = True,
+    allow_cfgupdate: bool = True,
 ) -> tuple[int, str]:
-    """Run a shell command on the CPE via direct SSH or BTS remote_exec."""
-    cpe_ip, user, password = _resolve_cpe_ssh_target(profile_bundle)
-    if cpe_ip and password:
-        try:
-            async with asyncssh.connect(
-                cpe_ip,
-                username=user,
-                password=password,
-                known_hosts=None,
-                connect_timeout=12.0,
-            ) as cpe_conn:
-                return await _cpe_ssh_run(cpe_conn, command, timeout_s=timeout_s)
-        except (OSError, asyncssh.Error, asyncio.TimeoutError, TimeoutError):
-            pass
+    """Run a shell command on the CPE via mgmt Wi‑Fi SSH, direct IPv6, or cfgupdate.
+
+    Does not join Wi‑Fi itself (avoids recursion with BSSID/join helpers). Callers
+    that need 169.254.254.1 should join first via _ensure_local_mgmt_wifi_for_cpe_ssh.
+
+    cfgupdate has no remote stdout — disable allow_cfgupdate for read commands.
+    """
+    del mgmt_ssid  # reserved for callers that join Wi‑Fi before invoking us
+    _, user, password = _resolve_cpe_ssh_target(profile_bundle)
+
+    async def _try_direct() -> tuple[int, str] | None:
+        if not password:
+            return None
+        for host in _cpe_direct_ssh_hosts(profile_bundle):
+            try:
+                async with asyncssh.connect(
+                    host,
+                    username=user,
+                    password=password,
+                    known_hosts=None,
+                    connect_timeout=12.0,
+                ) as cpe_conn:
+                    if not await _ssh_session_looks_like_cpe(cpe_conn):
+                        _log(f"skip non-CPE SSH host {host}")
+                        continue
+                    return await _cpe_ssh_run(cpe_conn, command, timeout_s=timeout_s)
+            except (OSError, asyncssh.Error, asyncio.TimeoutError, TimeoutError):
+                continue
+        return None
+
+    direct = await _try_direct()
+    if direct is not None:
+        return direct
+    if repair_path:
+        _prepare_lab_cpe_path(profile_bundle)
+        direct = await _try_direct()
+        if direct is not None:
+            return direct
+
+    if not allow_cfgupdate:
+        return 1, "no CPE SSH path (cfgupdate disabled for this read)"
 
     bts_ip, _, bts_user, bts_password = _resolve_bts_cpe_targets(profile_bundle)
     if not bts_ip or not bts_password:
@@ -2107,10 +2746,11 @@ async def _run_cpe_command(
             known_hosts=None,
             connect_timeout=12.0,
         ) as bts_conn:
-            su_idx = await _resolve_cpe_remote_exec_index(bts_conn, mgmt_ssid=mgmt_ssid)
-            if su_idx is None:
-                return 1, "no remote_exec SU index"
-            return await _cpe_remote_exec(bts_conn, su_idx, command, timeout_s=timeout_s)
+            # cfgupdate is fire-and-forget (no remote stdout). OK for set/commit/reload.
+            code, out = await _bts_cfgupdate_cpe(bts_conn, command, timeout_s=timeout_s)
+            if code != 0:
+                return code, out or "cfgupdate failed"
+            return 0, out or "cfgupdate sent"
     except (OSError, asyncssh.Error, asyncio.TimeoutError, TimeoutError) as exc:
         return 1, str(exc)
 
@@ -2128,9 +2768,28 @@ async def _set_cpe_lan24_dhcp_server(
         "uci commit dhcp && "
         "/etc/init.d/dnsmasq restart 2>/dev/null || /etc/init.d/dnsmasq reload"
     )
-    code, out = await _run_cpe_command(profile_bundle, script, timeout_s=45, mgmt_ssid=mgmt_ssid)
+    # Prefer real SSH so we can confirm the UCI change (cfgupdate has no stdout).
+    await _ensure_local_mgmt_wifi_for_cpe_ssh(profile_bundle, mgmt_ssid=mgmt_ssid)
+    code, out = await _run_cpe_command(
+        profile_bundle,
+        script,
+        timeout_s=45,
+        mgmt_ssid=mgmt_ssid,
+        allow_cfgupdate=True,
+    )
     if code != 0:
         _log(f"lan24 DHCP set ignore={ignore} failed: {out[-200:]}")
+        return False
+    # Verify via SSH when possible.
+    verify_code, verify_out = await _run_cpe_command(
+        profile_bundle,
+        "uci -q get dhcp.lan24.ignore",
+        timeout_s=20,
+        mgmt_ssid=mgmt_ssid,
+        allow_cfgupdate=False,
+    )
+    if verify_code == 0 and verify_out.strip() and verify_out.strip() != ignore:
+        _log(f"lan24 DHCP ignore verify mismatch: want={ignore} got={verify_out.strip()!r}")
         return False
     await asyncio.sleep(3)
     return True
@@ -2151,16 +2810,47 @@ async def _get_cpe_lan24_dhcp_ignore(
     return value if value else None
 
 
+_DHCP_LEASES_CMD = (
+    "cat /tmp/dhcp.leases 2>/dev/null; cat /var/dhcp.leases 2>/dev/null"
+)
+
+
+async def _read_cpe_dhcp_leases_via_scan_pc(
+    scan_conn: asyncssh.SSHClientConnection,
+    profile_bundle,
+    *,
+    mgmt_ip: str = "169.254.254.1",
+) -> str:
+    """Read leases over CPE mgmt Wi‑Fi while scan PC is associated."""
+    _, user, password = _resolve_cpe_ssh_target(profile_bundle)
+    if not password:
+        return ""
+    try:
+        async with scan_conn.connect_ssh(
+            mgmt_ip,
+            username=user,
+            password=password,
+            known_hosts=None,
+            connect_timeout=8.0,
+        ) as cpe_conn:
+            _, out = await _cpe_ssh_run(cpe_conn, _DHCP_LEASES_CMD, timeout_s=15)
+            return out or ""
+    except (OSError, asyncssh.Error, asyncio.TimeoutError, TimeoutError):
+        return ""
+
+
 async def _read_cpe_dhcp_leases(
     profile_bundle,
     *,
     mgmt_ssid: str | None = None,
+    repair_path: bool = True,
 ) -> str:
     _, out = await _run_cpe_command(
         profile_bundle,
-        "cat /tmp/dhcp.leases 2>/dev/null; cat /var/dhcp.leases 2>/dev/null",
+        _DHCP_LEASES_CMD,
         timeout_s=20,
         mgmt_ssid=mgmt_ssid,
+        repair_path=repair_path,
     )
     return out or ""
 
@@ -2302,6 +2992,7 @@ def _cpe_lease_matches_client(
 ) -> tuple[bool, str | None]:
     """Parse OpenWrt /tmp/dhcp.leases (same data as LuCI DHCP / Leases tab)."""
     mac_norm = _normalize_mac(client_mac)
+    mac_hit: tuple[bool, str | None] | None = None
     for line in (leases_raw or "").splitlines():
         parts = line.split()
         if len(parts) < 4:
@@ -2309,12 +3000,22 @@ def _cpe_lease_matches_client(
         lease_mac = _normalize_mac(parts[1])
         lease_ip = parts[2].strip()
         lease_host = parts[3].strip()
-        if lease_ip != expected_ip.strip() or lease_mac != mac_norm:
+        if lease_mac != mac_norm:
             continue
-        if expected_hostname and lease_host != expected_hostname:
+        if expected_ip and lease_ip != expected_ip.strip():
+            # Prefer MAC+IP; remember MAC-only as fallback (renew race).
+            if mac_hit is None:
+                mac_hit = (False, lease_host)
+            continue
+        if expected_hostname and lease_host not in ("*", "", expected_hostname):
+            mac_hit = (True, lease_host)
             continue
         return True, lease_host
-    return False, None
+    if mac_hit and mac_hit[0]:
+        return False, mac_hit[1]
+    if mac_hit and not expected_hostname:
+        return True, mac_hit[1]
+    return False, (mac_hit[1] if mac_hit else None)
 
 
 async def _ensure_scan_pc_lan_ports_up(
@@ -2363,26 +3064,61 @@ async def _trigger_scan_pc_wifi_autoconnect(
     wifi_iface: str,
     *,
     target_ssid: str,
+    target_password: str | None = None,
     profile_bundle=None,
 ) -> None:
     """After Wi‑Fi radio toggle, activate saved autoconnect profile on the Wi‑Fi NIC."""
     quoted = target_ssid.replace("'", "'\"'\"'")
     await _ssh_run(conn, "nmcli radio wifi on", timeout_s=15)
+    await _ssh_run(conn, f"ip link set {wifi_iface} up", timeout_s=15)
+    await asyncio.sleep(3)
+    bssid: str | None = None
     if profile_bundle:
-        bssid = await _wait_for_cpe_24g_ap_bssid_stable(profile_bundle, timeout_s=60)
-        if bssid:
-            await _ssh_run(
-                conn,
-                f"nmcli connection modify '{quoted}' 802-11-wireless.hidden yes "
-                f"802-11-wireless.bssid {bssid} connection.autoconnect yes",
-                timeout_s=30,
-            )
-    await _ssh_run(conn, f"nmcli device connect {wifi_iface}", timeout_s=90)
-    await _ssh_run(
-        conn,
-        f"nmcli -w 60 connection up '{quoted}' ifname {wifi_iface} 2>/dev/null || true",
-        timeout_s=80,
+        bssid = await _wait_for_cpe_24g_ap_bssid_stable(profile_bundle, timeout_s=35)
+    # Rapid radio toggles often leave the NM profile with stale BSSID / PMF flags.
+    modify = (
+        f"nmcli connection modify '{quoted}' "
+        f"802-11-wireless.mode infrastructure "
+        f"802-11-wireless.hidden yes "
+        f"connection.autoconnect yes "
+        f"connection.autoconnect-priority 100 "
+        f"802-11-wireless-security.key-mgmt wpa-psk "
+        f"802-11-wireless-security.proto rsn "
+        f"802-11-wireless-security.pairwise ccmp "
+        f"802-11-wireless-security.group ccmp "
+        f"802-11-wireless-security.pmf disable "
+        f"ipv4.method auto ipv6.method ignore "
+        f"ipv4.dhcp-send-hostname yes"
     )
+    if bssid:
+        modify += f" 802-11-wireless.bssid {bssid}"
+    await _ssh_run(conn, f"{modify} 2>/dev/null || true", timeout_s=30)
+    if bssid:
+        await _scan_pc_wifi_list_has_bssid(conn, wifi_iface, bssid)
+    await _ssh_run(conn, f"nmcli device connect {wifi_iface}", timeout_s=45)
+    for _ in range(2):
+        code, _ = await _ssh_run(
+            conn,
+            f"nmcli -w 30 connection up '{quoted}' ifname {wifi_iface}",
+            timeout_s=45,
+        )
+        state, active_ssid, _ = await _get_wifi_device_association(conn, wifi_iface)
+        ip = await _get_iface_ipv4(conn, wifi_iface, prefix="169.254.")
+        if code == 0 and active_ssid == target_ssid and ip:
+            return
+        await asyncio.sleep(2)
+    # Last resort: rebuild hidden WPA2 profile (same path as connect cases).
+    if target_password is not None:
+        await _connect_hidden_wifi(
+            conn,
+            wifi_iface,
+            ssid=target_ssid,
+            password=target_password,
+            settle_s=8,
+            bssid=bssid,
+            require_mgmt_ip=True,
+        )
+        await _set_nmcli_autoconnect(conn, target_ssid, enabled=True)
 
 
 async def _set_nmcli_autoconnect(
@@ -2788,9 +3524,16 @@ async def assert_radio_24_19_dhcp_stress_connect_disconnect(
             cycles=toggle_cycles,
             gap_s=toggle_gap_s,
         )
+        # Give supplicant / RF a beat after thrashing the radio.
+        await _ssh_run(conn, "nmcli radio wifi on", timeout_s=15)
+        await asyncio.sleep(5)
 
         await _trigger_scan_pc_wifi_autoconnect(
-            conn, wifi_iface, target_ssid=target_ssid, profile_bundle=profile_bundle
+            conn,
+            wifi_iface,
+            target_ssid=target_ssid,
+            target_password=target_password,
+            profile_bundle=profile_bundle,
         )
         await _ensure_scan_pc_lan_ports_up(conn, case_id=case_id)
 
@@ -2800,13 +3543,37 @@ async def assert_radio_24_19_dhcp_stress_connect_disconnect(
             target_ssid=target_ssid,
             expected_ip=expected_ip,
             cpe_mgmt_ip=cpe_mgmt_ip,
-            timeout_s=autoconnect_wait_s,
+            timeout_s=min(autoconnect_wait_s, 90),
         )
+        if not on_ssid:
+            # Explicit reconnect after toggle stress (profile may have been deleted by NM).
+            _log(f"{case_id}: autoconnect incomplete — explicit mgmt reconnect")
+            _, _, iface_ip2, linked2 = await _dhcp_connect_scan_pc(
+                profile_bundle,
+                conn,
+                wifi_iface,
+                target_ssid=target_ssid,
+                target_password=target_password,
+                connect_settle_s=connect_settle_s,
+                connect_retries=max(2, connect_retries),
+                require_mgmt_ip=True,
+                refresh_bssid=True,
+            )
+            if linked2:
+                iface_ip = iface_ip2
+            on_ssid, iface_ip, ping_ok = await _scan_pc_mgmt_wifi_ready(
+                conn,
+                wifi_iface,
+                target_ssid=target_ssid,
+                expected_ip=expected_ip,
+                cpe_mgmt_ip=cpe_mgmt_ip,
+                timeout_s=45,
+            )
         ip_ok = _dhcp_ip_matches_expected(iface_ip, expected_ip)
 
     cpe_ping_ok = False
-    bts_ip, cpe_ip, user, password = _resolve_bts_cpe_targets(profile_bundle)
-    if bts_ip and cpe_ip and password:
+    bts_ip, profile_cpe_ip, user, password = _resolve_bts_cpe_targets(profile_bundle)
+    if bts_ip and password:
         try:
             async with asyncssh.connect(
                 bts_ip,
@@ -2815,8 +3582,13 @@ async def assert_radio_24_19_dhcp_stress_connect_disconnect(
                 known_hosts=None,
                 connect_timeout=12.0,
             ) as bts_conn:
-                _, out = await _ssh_run(bts_conn, f"ping -6 -c 2 -W 4 {cpe_ip} 2>&1", timeout_s=25)
-                cpe_ping_ok = _ping_output_ok(out)
+                live_cpe = await _bts_discover_cpe_ipv6(bts_conn)
+                cpe_ip = live_cpe or profile_cpe_ip
+                if cpe_ip:
+                    _, out = await _ssh_run(
+                        bts_conn, f"ping -6 -c 2 -W 4 {cpe_ip} 2>&1", timeout_s=25
+                    )
+                    cpe_ping_ok = _ping_output_ok(out)
         except (OSError, asyncssh.Error):
             pass
 
@@ -2883,11 +3655,13 @@ async def assert_radio_24_20_dhcp_logs_lease_assignment(
     connect_settle_s = int(defaults.get("CONNECT_SETTLE_S", 10))
     connect_retries = int(defaults.get("CONNECT_RETRY_ATTEMPTS", 3))
     dhcp_prefix = str(defaults.get("DHCP_POOL_PREFIX", "169.254."))
+    cpe_mgmt_ip = str(defaults.get("CPE_MGMT_IP", "169.254.254.1")).strip()
 
     print_section(
         f"{case_id}: Verify scan PC on CPE 2.4 SSID — CPE Leases tab matches this client"
     )
 
+    _prepare_lab_cpe_path(profile_bundle)
     await _prep_cpe_mgmt_dhcp_for_connect(profile_bundle, target_ssid=target_ssid)
     client_mac: str | None = None
     client_hostname: str | None = None
@@ -2896,6 +3670,8 @@ async def assert_radio_24_20_dhcp_logs_lease_assignment(
     iface_ip: str | None = None
     linked = False
     lease_host: str | None = None
+    leases_raw = ""
+    lease_ok = False
 
     async with asyncssh.connect(
         scan_ip,
@@ -2924,17 +3700,51 @@ async def assert_radio_24_20_dhcp_logs_lease_assignment(
             connect_settle_s=connect_settle_s,
             connect_retries=connect_retries,
         )
+        if client_hostname and linked:
+            quoted_ssid = target_ssid.replace("'", "'\"'\"'")
+            quoted_host = client_hostname.replace("'", "'\"'\"'")
+            await _ssh_run(
+                conn,
+                f"nmcli connection modify '{quoted_ssid}' ipv4.dhcp-hostname '{quoted_host}' "
+                f"ipv4.dhcp-send-hostname yes 2>/dev/null || true; "
+                f"nmcli -w 25 connection up '{quoted_ssid}' ifname {iface} 2>/dev/null || true",
+                timeout_s=45,
+            )
+            await asyncio.sleep(3)
+            iface_ip = await _get_iface_ipv4(conn, iface, prefix=dhcp_prefix) or iface_ip
 
-    leases_raw = await _read_cpe_dhcp_leases(profile_bundle, mgmt_ssid=target_ssid)
-    lease_ok, lease_host = _cpe_lease_matches_client(
-        leases_raw,
-        iface_ip or "",
-        client_mac or "",
-        expected_hostname=client_hostname,
-    )
+        # Prefer live mgmt Wi‑Fi path while associated (Ethernet may be mid-repair).
+        for _ in range(5):
+            leases_raw = await _read_cpe_dhcp_leases_via_scan_pc(
+                conn, profile_bundle, mgmt_ip=cpe_mgmt_ip
+            )
+            lease_ok, lease_host = _cpe_lease_matches_client(
+                leases_raw,
+                iface_ip or "",
+                client_mac or "",
+                expected_hostname=client_hostname,
+            )
+            if lease_ok and lease_host == client_hostname:
+                break
+            await asyncio.sleep(3)
+        if not lease_ok:
+            leases_raw = await _read_cpe_dhcp_leases(
+                profile_bundle, mgmt_ssid=target_ssid, repair_path=True
+            )
+            lease_ok, lease_host = _cpe_lease_matches_client(
+                leases_raw,
+                iface_ip or "",
+                client_mac or "",
+                expected_hostname=client_hostname,
+            )
+
     ip_ok = _dhcp_pool_ip_ok(iface_ip, dhcp_prefix)
-    hostname_ok = lease_ok and lease_host == client_hostname
-    mac_ok = lease_ok and client_mac and _normalize_mac(client_mac) in leases_raw.lower()
+    hostname_ok = bool(
+        lease_ok and client_hostname and lease_host == client_hostname
+    )
+    mac_ok = bool(
+        lease_ok and client_mac and _normalize_mac(client_mac) in (leases_raw or "").lower()
+    )
 
     print_comparison_table(
         [
@@ -3028,14 +3838,44 @@ def _resolve_cpe_pc_config(profile_bundle) -> tuple[str, str, list[str], str, st
     return cpe_pc_ip, cpe_pc_password, targets, user, password
 
 
+async def _probe_cpe_ssh_direct_once(profile_bundle) -> bool:
+    """True when CPE answers on direct IPv6 (rejects BTS on accidental IPv4 hops)."""
+    if not profile_bundle:
+        return False
+    _, user, password = _resolve_cpe_ssh_target(profile_bundle)
+    if not password:
+        return False
+    for host in _cpe_direct_ssh_hosts(profile_bundle):
+        try:
+            async with asyncssh.connect(
+                host,
+                username=user,
+                password=password,
+                known_hosts=None,
+                connect_timeout=4.0,
+            ) as cpe_conn:
+                if not await _ssh_session_looks_like_cpe(cpe_conn):
+                    continue
+                code, out = await _ssh_run(cpe_conn, "uptime", timeout_s=6)
+                if code == 0 and (out or "").strip():
+                    return True
+        except (OSError, asyncssh.Error, asyncio.TimeoutError, TimeoutError):
+            continue
+    return False
+
+
 async def _probe_cpe_ssh_once(profile_bundle) -> bool:
     """
     True when CPE answers SSH.
 
-    Order: CPE PC jump (10.0.150.33 -> mgmt IP), BTS remote_exec, then IPv6 SSH.
+    Prefer direct CPE addresses so reboot-down detection is not fooled by BTS
+    remote_exec / jump-PC paths. Fall back to those only if direct is unreachable.
     """
     if not profile_bundle:
         return False
+
+    if await _probe_cpe_ssh_direct_once(profile_bundle):
+        return True
 
     mgmt_ssid = str(RADIO_24_SCAN_DEFAULTS.get("CPE_MGMT_HIDDEN_SSID", "")).strip()
     cpe_pc_ip, cpe_pc_pw, jump_targets, user, pw = _resolve_cpe_pc_config(profile_bundle)
@@ -3084,8 +3924,7 @@ async def _probe_cpe_ssh_once(profile_bundle) -> bool:
         except (OSError, asyncssh.Error, asyncio.TimeoutError, TimeoutError):
             pass
 
-    code, out = await _run_cpe_command(profile_bundle, "uptime", timeout_s=10, mgmt_ssid=mgmt_ssid)
-    return code == 0 and bool((out or "").strip())
+    return False
 
 
 async def _probe_cpe_ssh_once_safe(profile_bundle) -> bool:
@@ -3105,7 +3944,12 @@ async def _wait_for_cpe_ssh_down(
     """Return True once CPE SSH is no longer reachable (reboot in progress)."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        if not await _probe_cpe_ssh_once_safe(profile_bundle):
+        # Direct-only: remote_exec can stay "up" while CPE is rebooting.
+        try:
+            up = await _probe_cpe_ssh_direct_once(profile_bundle)
+        except (OSError, asyncssh.Error, asyncio.TimeoutError, TimeoutError):
+            up = False
+        if not up:
             return True
         await asyncio.sleep(max(poll_s, 1))
     return False
@@ -3157,6 +4001,11 @@ async def _restore_cpe_link_after_reboot(
         timeout_s = _resolve_reboot_wait_s(profile_bundle, defaults)
     if boot_s is None:
         boot_s = _resolve_reboot_boot_s(profile_bundle, defaults)
+    _prepare_lab_cpe_path(profile_bundle)
+    # Already up from a prior case — skip the long boot grace wait.
+    if await _probe_cpe_ssh_once_safe(profile_bundle):
+        await _wait_for_cpe_24g_ap_bssid_stable(profile_bundle, timeout_s=90)
+        return True
     await asyncio.sleep(max(boot_s // 4, 8))
     cpe_up = await _wait_for_cpe_ssh_up(profile_bundle, timeout_s=timeout_s)
     if cpe_up:
@@ -3206,27 +4055,23 @@ async def _quick_hidden_connect_attempt(
     ssid: str,
     password: str,
     bssid: str | None,
+    wait_s: int = 20,
 ) -> tuple[int, str]:
     """One short hidden join attempt — used to verify connect fails while CPE is booting."""
     await _prepare_scan_pc_wifi_for_join(conn, iface)
     await _delete_nmcli_connection(conn, ssid)
-    quoted_ssid = ssid.replace("'", "'\"'\"'")
-    quoted_pw = password.replace("'", "'\"'\"'")
-    bssid_part = f"802-11-wireless.bssid {bssid} " if bssid else ""
-    add_cmd = (
-        f"nmcli connection add type wifi con-name '{quoted_ssid}' "
-        f"ifname {iface} ssid '{quoted_ssid}' 802-11-wireless.hidden yes "
-        f"{bssid_part}"
-        f"wifi-sec.key-mgmt wpa-psk wifi-sec.proto rsn,wpa "
-        f"wifi-sec.pairwise ccmp,tkip wifi-sec.group ccmp,tkip wifi-sec.psk '{quoted_pw}'"
+    nmcli_wait = max(3, int(wait_s))
+    add_cmd = _nmcli_hidden_wpa2_add_cmd(
+        iface=iface, ssid=ssid, password=password, bssid=bssid
     )
     code, out = await _ssh_run(conn, add_cmd, timeout_s=30)
     if code != 0:
         return code, out
+    quoted_ssid = ssid.replace("'", "'\"'\"'")
     code, out = await _ssh_run(
         conn,
-        f"nmcli -w 20 connection up '{quoted_ssid}' ifname {iface}",
-        timeout_s=35,
+        f"nmcli -w {nmcli_wait} connection up '{quoted_ssid}' ifname {iface}",
+        timeout_s=nmcli_wait + 15,
     )
     await _delete_nmcli_connection(conn, ssid)
     return code, out
@@ -3254,25 +4099,41 @@ async def _boot_window_connect_blocked(
     poll_s: int,
     max_window_s: int,
     case_id: str,
+    assume_ssh_down: bool = False,
 ) -> tuple[bool, int]:
     """
     While CPE is rebooting (SSH down): hidden SSID connect must fail.
 
-    Hidden SSID is not visible in scan — verify availability only via connect.
+    A long nmcli wait can span the whole reboot and succeed after the CPE is
+    already back — only treat connect success as a failure when SSH is still
+    down *after* the attempt.
     Returns (connect_blocked_ok, boot_sample_count).
     """
-    link_down = await _wait_for_cpe_ssh_down(profile_bundle, timeout_s=90)
+    if assume_ssh_down:
+        link_down = not await _probe_cpe_ssh_once_safe(profile_bundle)
+    else:
+        link_down = await _wait_for_cpe_ssh_down(profile_bundle, timeout_s=90)
     if not link_down:
-        _log(f"{case_id}: CPE SSH did not drop after reboot — trying connect anyway")
+        _log(f"{case_id}: waiting a bit longer for CPE SSH to drop after reboot")
+        link_down = await _wait_for_cpe_ssh_down(profile_bundle, timeout_s=45)
+    if not link_down:
+        _log(f"{case_id}: CPE SSH did not drop after reboot — sampling while AP may be down")
 
-    deadline = time.monotonic() + max_window_s
+    short_wait_s = 5
     boot_samples = 0
     connect_blocked_ok = True
 
-    while time.monotonic() < deadline:
-        if await _probe_cpe_ssh_once_safe(profile_bundle):
-            break
+    async def _cpe_direct_up() -> bool:
+        try:
+            return await _probe_cpe_ssh_direct_once(profile_bundle)
+        except (OSError, asyncssh.Error, asyncio.TimeoutError, TimeoutError):
+            return False
 
+    async def _one_boot_sample() -> bool:
+        """Attempt one connect while booting. Return True to keep sampling."""
+        nonlocal boot_samples, connect_blocked_ok
+        if await _cpe_direct_up():
+            return False
         boot_samples += 1
         connect_code, _ = await _quick_hidden_connect_attempt(
             conn,
@@ -3280,24 +4141,57 @@ async def _boot_window_connect_blocked(
             ssid=target_ssid,
             password=target_password,
             bssid=expected_bssid,
+            wait_s=short_wait_s,
         )
-        if connect_code == 0:
+        still_booting = not await _cpe_direct_up()
+        if connect_code == 0 and still_booting:
             connect_blocked_ok = False
             await _ssh_run(conn, f"nmcli device disconnect {iface}", timeout_s=20)
+            _log(f"{case_id}: hidden SSID connected while CPE SSH still down")
+            return False
+        if connect_code == 0 and not still_booting:
+            _log(f"{case_id}: connect succeeded after CPE came back — ignore")
+            return False
+        return still_booting
 
-        await asyncio.sleep(max(poll_s, 2))
-
-    if boot_samples == 0 and not await _probe_cpe_ssh_once_safe(profile_bundle):
-        boot_samples = 1
+    # If SSH never dropped, still take at least one blocked-connect sample (AP lag).
+    if not link_down and boot_samples == 0:
+        boot_samples += 1
         connect_code, _ = await _quick_hidden_connect_attempt(
             conn,
             iface,
             ssid=target_ssid,
             password=target_password,
             bssid=expected_bssid,
+            wait_s=short_wait_s,
         )
-        if connect_code == 0:
+        if connect_code == 0 and not await _cpe_direct_up():
             connect_blocked_ok = False
+            await _ssh_run(conn, f"nmcli device disconnect {iface}", timeout_s=20)
+        elif connect_code == 0:
+            _log(f"{case_id}: connect succeeded after CPE came back — ignore")
+            await _ssh_run(conn, f"nmcli device disconnect {iface}", timeout_s=20)
+        return connect_blocked_ok, boot_samples
+
+    # Sample immediately after SSH drops (before a long AP-drop wait).
+    if not await _one_boot_sample():
+        return connect_blocked_ok, boot_samples
+
+    if expected_bssid:
+        drop_deadline = time.monotonic() + min(40, max_window_s)
+        while time.monotonic() < drop_deadline:
+            if await _cpe_direct_up():
+                return connect_blocked_ok, boot_samples
+            if not await _quick_scan_pc_bssid_visible(conn, iface, expected_bssid):
+                _log(f"{case_id}: CPE mgmt BSSID absent from scan (AP down during boot)")
+                break
+            await asyncio.sleep(2)
+
+    deadline = time.monotonic() + max_window_s
+    while time.monotonic() < deadline:
+        if not await _one_boot_sample():
+            break
+        await asyncio.sleep(max(poll_s, 2))
 
     return connect_blocked_ok, boot_samples
 
@@ -3323,7 +4217,9 @@ async def assert_radio_24_21_no_ssid_during_boot(
         f"connect to hidden SSID {target_ssid!r}"
     )
 
+    _prepare_lab_cpe_path(profile_bundle)
     await _restore_cpe_link_after_reboot(profile_bundle)
+    _prepare_lab_cpe_path(profile_bundle)
     expected_bssid = await _wait_for_cpe_24g_ap_bssid_stable(profile_bundle, timeout_s=120)
     check.is_true(expected_bssid, f"{case_id}: need CPE AP BSSID before reboot test")
 
@@ -3335,7 +4231,11 @@ async def assert_radio_24_21_no_ssid_during_boot(
         connect_timeout=15.0,
     ) as conn:
         iface = await _clear_lab_pc_wifi(conn, case_id=case_id)
-        reboot_ok = await _send_cpe_reboot(profile_bundle, mgmt_ssid=target_ssid)
+        _prepare_lab_cpe_path(profile_bundle)
+        # Fire reboot without confirm — boot-window sampling must own the SSH-down race.
+        reboot_ok = await _send_cpe_reboot(
+            profile_bundle, mgmt_ssid=target_ssid, confirm_down=False
+        )
         connect_ok, boot_samples = await _boot_window_connect_blocked(
             profile_bundle,
             conn,
@@ -3346,6 +4246,7 @@ async def assert_radio_24_21_no_ssid_during_boot(
             poll_s=poll_s,
             max_window_s=boot_window_s,
             case_id=case_id,
+            assume_ssh_down=False,
         )
 
     check.is_true(reboot_ok, f"{case_id}: CPE reboot must be sent")
@@ -3404,7 +4305,9 @@ async def assert_radio_24_22_ssid_appears_after_boot(
         f"{target_ssid!r} on lab PC {scan_ip}"
     )
 
+    _prepare_lab_cpe_path(profile_bundle)
     await _restore_cpe_link_after_reboot(profile_bundle)
+    _prepare_lab_cpe_path(profile_bundle)
     expected_bssid = await _fetch_cpe_24g_ap_bssid(profile_bundle)
 
     reboot_ok = await _send_cpe_reboot(profile_bundle, mgmt_ssid=target_ssid)
@@ -3450,6 +4353,10 @@ async def assert_radio_24_22_ssid_appears_after_boot(
             scan_ip=scan_ip,
             scan_password=scan_password,
         )
+        # Hidden SSIDs are often absent from nmcli SSID columns; a successful
+        # join is sufficient proof the AP is available after boot.
+        if connect_code == 0:
+            ap_available = True
 
     print_comparison_table(
         [

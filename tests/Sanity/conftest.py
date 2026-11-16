@@ -140,7 +140,6 @@ async def root_ssh(request, bsu_ip, device_creds, sanity_bts_bind, profile_bundl
     fallbacks = [
         normalize_ip(str(rec.get("bts_fallback_ipv4") or "").split("/")[0]),
         normalize_ip(str(values.get("bts_lab_ipv4") or "192.168.2.10")),
-        normalize_ip(str(values.get("bts_factory_ipv4") or "")),
         "10.0.0.1",
     ]
 

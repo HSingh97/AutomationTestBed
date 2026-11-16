@@ -140,8 +140,24 @@ async def recover_testbed_link_ssh(
     else:
         await ensure_bts_link_ssid_ssh(bts_ssh, radio_idx=bts_idx, profile=profile)
         await apply_bts_tx_power(bts_ssh, profile, radio_idx=bts_idx)
-        creds = await resolve_link_credentials_ssh(bts_ssh, profile)
-        notes.append(f"link BTS static SSID={creds.ssid}")
+        from utils.airtel_ssid_gen import LinkCredentials
+        from utils.link_formation import _read_radio_key, _read_radio_ssid
+
+        live_ssid = (await _read_radio_ssid(bts_ssh, bts_idx)).strip()
+        live_key = (await _read_radio_key(bts_ssh, bts_idx)).strip()
+        if live_ssid and live_key:
+            creds = LinkCredentials(
+                serial="",
+                radio_type="",
+                auth_mode="",
+                encryption_mode="",
+                ssid=live_ssid,
+                password=live_key,
+            )
+            notes.append(f"link BTS live SSID={live_ssid}")
+        else:
+            creds = await resolve_link_credentials_ssh(bts_ssh, profile)
+            notes.append(f"link BTS generated SSID={creds.ssid}")
 
     if creds is not None:
         try:

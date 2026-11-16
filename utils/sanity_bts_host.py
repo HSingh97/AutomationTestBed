@@ -92,7 +92,6 @@ def _bts_fallback_candidates(request, profile_bundle, bts_v6: str) -> list[str]:
         rec.get("bts_fallback_ipv4") or "",
         dut.get("local_ip") or "",
         "10.0.0.1",
-        bts_factory_ipv4(values),
     ]
     return bts_ssh_host_candidates(bts_v6, extra_hosts=extras)
 

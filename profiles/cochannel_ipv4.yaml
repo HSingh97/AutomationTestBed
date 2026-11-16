@@ -1,0 +1,125 @@
+name: cochannel_ipv4
+description: >
+  Co-channel interference matrix on qa-lab-01 (10.0.150.116).
+  Primary: BTS 192.168.2.20 + CPE 192.168.2.21–26 (VLAN 21–26).
+  Secondary interferer: BTS 192.168.3.20 + CPE 192.168.3.21 (same ch 152).
+  TX power sets RSSI location (1/15/26 dBm); OBSS bands: Mid ~25%, High ~32%
+  (Low soft); primary traffic duration 180s (3 min).
+
+dut:
+  ip_mode: ipv4
+  strict_ipv6: false
+  local_ip: "192.168.2.20"
+  remote_ips:
+    - "192.168.2.21"
+    - "192.168.2.22"
+    - "192.168.2.23"
+    - "192.168.2.24"
+    - "192.168.2.25"
+    - "192.168.2.26"
+  username: root
+  password: Sen@0ubRNwk$
+
+link:
+  expected_mode: linked
+  min_connected_clients: 2
+  health_check_timeout_s: 30
+  radio_idx: 1
+
+recovery:
+  max_retries: 1
+  retry_backoff_seconds:
+    - 3
+  allow_factory_reset: false
+  factory_reset_command: firstboot && reboot
+  reboot_wait_seconds: 120
+
+traffic:
+  benchmark_backend: mac_vlan
+  stats_backend: mac_vlan
+
+testbed:
+  enabled: true
+  bootstrap_on_start: false
+  primary_pc:
+    local: false
+    mgmt_interface: enp4s0
+    internet_ssh: "qa-lab-01@10.0.150.116"
+    internet_ssh_password: "senao1234#"
+  secondary_pc:
+    enabled: false
+
+cochannel:
+  lab_pc_ssh: "qa-lab-01@10.0.150.116"
+  lab_pc_password: "senao1234#"
+  device_password: "Sen@0ubRNwk$"
+  primary_bts: "192.168.2.20"
+  primary_cpes:
+    - "192.168.2.21"
+    - "192.168.2.22"
+    - "192.168.2.23"
+    - "192.168.2.24"
+    - "192.168.2.25"
+    - "192.168.2.26"
+  secondary_bts: "192.168.3.20"
+  secondary_cpe: "192.168.3.21"
+  wifi_iface: "wifi1"
+  wlan_iface: "ath1"
+  mac_vlan_script: "/home/qa-lab-01/Desktop/Automation Scripts/mac_vlan_traffic_test_mf.py"
+  bts_iface: "enp4s0"
+  cpe_iface: "enx8cae4cdd4da8"
+  dl_mbps_per_su: 40.0
+  ul_mbps_per_su: 10.0
+  # Primary throughput duration — 3 minutes
+  duration_s: 180
+  buffer_s: 3
+  # Auto-detect CPE count on BTS → test 2, 4, 6, … up to all connected
+  su_counts: auto
+  su_step: 2
+  su_start: 2
+  # TX = RSSI location; OBSS = interference intensity
+  interference_mode: obss
+  secondary_traffic_backend: trex
+  secondary_throughput_max_mbps: 400
+  secondary_throughput_step_mbps: 2
+  trex:
+    host: "192.168.1.1"
+    user: root
+    password: ubuntu
+    directory: /opt/v3.06
+    pythonpath: /opt/v3.06/automation/trex_control_plane/interactive/
+    client_script: /root/master_script_extended_16SU.py
+    ports: "0,1"
+    duration_s: 7200
+    su: 1
+  interference:
+    low:
+      # Location: weak TX; light OBSS (link only — low band is soft)
+      secondary_tx_power_dbm: 1
+      obss_min: 5
+      obss_max: 20
+      secondary_iperf_mbps: 0
+      tune_obss: false
+    mid:
+      # Location: mid TX; ramp secondary load until OBSS ~25%
+      secondary_tx_power_dbm: 15
+      obss_min: 22
+      obss_max: 28
+      secondary_iperf_mbps: 3
+      tune_obss: true
+    high:
+      # Location: high TX; ramp secondary load until OBSS ~32%
+      secondary_tx_power_dbm: 26
+      obss_min: 30
+      obss_max: 35
+      secondary_iperf_mbps: 5
+      tune_obss: true
+  secondary_tx_power_min_dbm: 1
+  secondary_tx_power_max_dbm: 26
+  iperf_port: 5201
+  iperf_port_ul: 5202
+  rssi_settle_s: 10
+  # During 180s primary throughput: sample OBSS/util/free every 5s → avg
+  rf_sample_interval_s: 5
+  rf_settle_before_sample_s: 0
+  results_dir: "reports/artifacts"

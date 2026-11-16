@@ -78,7 +78,7 @@ testbed:
     internet_ssh: ""
   secondary_pc:
     enabled: true
-    ssh: "root@10.0.150.187"
+    ssh: "root@10.0.150.7"
     password: "senao1234#"
     mgmt_interface: enp3s0
     fallback_ipv4: "10.0.0.11"
@@ -113,7 +113,7 @@ traffic:
   enabled: false
 
 capture:
-  cpe_host: "10.0.150.187"
+  cpe_host: "10.0.150.7"
   bts_interface: enp3s0.200.201
 
 ip_tests:

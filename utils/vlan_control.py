@@ -135,15 +135,20 @@ async def ensure_bts_qinq_ssh(ssh, profile_tb: dict[str, Any]) -> bool:
     return ok and _verify_bts_qinq(after, profile_tb)
 
 
-async def ensure_bts_transparent_ssh(ssh, profile_tb: dict[str, Any]) -> bool:
+async def ensure_bts_transparent_ssh(
+    ssh, profile_tb: dict[str, Any], *, mgmt_vlan_id: int | None = None,
+) -> bool:
     current = await read_vlan_uci_ssh(ssh, profile_tb, "bts")
-    exp_mgmt = str(int((profile_tb.get("mgmt_vlan", {}) or {}).get("uci_value", 101)))
+    mgmt = profile_tb.get("mgmt_vlan", {}) or {}
+    exp_mgmt = str(
+        int(mgmt_vlan_id if mgmt_vlan_id is not None else mgmt.get("uci_value", 101))
+    )
     mode = _normalize_mode_name(current.get("mode", "transparent"))
-    mgmt = str(current.get("mgmtvlan", "")).strip()
-    if mode == "transparent" and mgmt == exp_mgmt:
-        print(f"[vlan] BTS transparent OK (mgmtvlan={mgmt})")
+    mgmt_cur = str(current.get("mgmtvlan", "")).strip()
+    if mode == "transparent" and mgmt_cur == exp_mgmt:
+        print(f"[vlan] BTS transparent OK (mgmtvlan={mgmt_cur})")
         return True
-    cmds = build_bts_transparent_mgmt_commands(profile_tb)
+    cmds = build_bts_transparent_mgmt_commands(profile_tb, mgmt_vlan_id=mgmt_vlan_id)
     print(f"[vlan] BTS applying transparent+mgmtvlan={exp_mgmt} ({len(cmds)} commands)")
     ok = await apply_vlan_commands_ssh(ssh, cmds)
     await asyncio.sleep(15)

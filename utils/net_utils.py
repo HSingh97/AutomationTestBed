@@ -41,8 +41,12 @@ def format_snmp_host(ip_text: str) -> str:
     return f"udp6:[{clean}]" if is_ipv6_literal(clean) else clean
 
 
-def format_luci_url(ip_text: str, *, scheme: str = "https") -> str:
-    """LuCI base URL with bracketed IPv6 host when needed."""
+def format_luci_url(ip_text: str, *, scheme: str = "http") -> str:
+    """LuCI base URL with bracketed IPv6 host when needed.
+
+    Default HTTP — CPE Chromium hangs on HTTPS (uhttpd TLS), and lab BTS
+    is also reachable over HTTP once redirect_https is disabled.
+    """
     return f"{scheme}://{format_http_host(ip_text)}/cgi-bin/luci/"
 
 

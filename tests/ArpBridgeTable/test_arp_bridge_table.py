@@ -3,6 +3,7 @@ import pytest
 from utils.arp_bridge_table_flows import (
     assert_arpbridge_01_basic_arp_resolution,
     assert_arpbridge_02_duplicate_ip_handling,
+    assert_arpbridge_06_dynamic_ip_allocation,
     assert_arpbridge_07_gratuitous_arp_handling,
     assert_arpbridge_08_bridge_interface,
     assert_arpbridge_09_bridge_traffic,
@@ -39,6 +40,19 @@ async def test_arpbridge_02_duplicate_ip_handling_ipv4(root_ssh, cpe_ips, bsu_ip
         cpe_ips,
         bsu_ip=bsu_ip,
         device_creds=device_creds,
+    )
+
+
+@pytest.mark.order(6)
+@pytest.mark.asyncio(scope="session")
+@pytest.mark.ARPBRIDGE_06
+@pytest.mark.ArpBridgeTable
+async def test_arpbridge_06_dynamic_ip_allocation_ipv4(root_ssh, cpe_ips, bsu_ip, device_creds):
+    await assert_arpbridge_06_dynamic_ip_allocation(
+        cpe_ips,
+        bsu_ip=bsu_ip,
+        device_creds=device_creds,
+        root_ssh=root_ssh,
     )
 
 

@@ -89,6 +89,55 @@ def _format_temp_display(raw: str, parsed: float | None) -> str:
     return display
 
 
+def _lab_ipv4_fallback(host: str) -> str | None:
+    """Lab IPv4 when the management IPv6 Overview page does not show temperature."""
+    text = host or ""
+    if "0:331" in text:
+        return "192.168.2.11"
+    if "0:330" in text:
+        return "192.168.2.10"
+    return None
+
+
+async def _temperature_visible(gui_page, timeout_ms: int) -> bool:
+    try:
+        await gui_page.locator(SummaryLocators.TEMPERATURE).first.wait_for(
+            state="visible", timeout=timeout_ms
+        )
+        return True
+    except Exception:
+        return False
+
+
+async def _open_overview_on_host(
+    gui_page,
+    host: str,
+    device_creds: dict | None,
+    *,
+    goto_timeout_ms: int,
+) -> bool:
+    if host and device_creds:
+        await sanity_login_if_needed(gui_page, host, device_creds)
+    opened = False
+    for path in ("/admin/status/overview", "/"):
+        try:
+            await gui_page.goto(
+                f"{format_luci_url(host).rstrip('/')}{path}",
+                timeout=goto_timeout_ms,
+                wait_until="domcontentloaded",
+            )
+            landed = gui_page.url or ""
+            if "chrome-error" in landed or "chromewebdata" in landed:
+                continue
+            opened = True
+            break
+        except Exception:
+            continue
+    if device_creds and host:
+        await sanity_login_if_needed(gui_page, host, device_creds)
+    return opened
+
+
 async def open_sanity_summary_system(
     gui_page,
     *,
@@ -96,26 +145,32 @@ async def open_sanity_summary_system(
     device_creds: dict | None = None,
 ) -> None:
     """Dashboard / Summary / System (home logo → summary page)."""
-    if host and device_creds:
-        await sanity_login_if_needed(gui_page, host, device_creds)
-
-    opened = False
+    candidates: list[str] = []
     if host:
-        for path in ("/admin/status/overview", "/"):
-            try:
-                await gui_page.goto(
-                    f"{format_luci_url(host).rstrip('/')}{path}",
-                    timeout=90000,
-                    wait_until="domcontentloaded",
-                )
-                opened = True
-                break
-            except Exception:
-                continue
-        if device_creds:
-            await sanity_login_if_needed(gui_page, host, device_creds)
+        candidates.append(host)
+        ipv4 = _lab_ipv4_fallback(host)
+        if ipv4 and ipv4 not in candidates:
+            candidates.append(ipv4)
 
-    if not opened:
+    saw_temp = False
+    if candidates:
+        for index, attempt in enumerate(candidates):
+            goto_timeout = 20000 if index == 0 and len(candidates) > 1 else 45000
+            await _open_overview_on_host(
+                gui_page,
+                attempt,
+                device_creds,
+                goto_timeout_ms=goto_timeout,
+            )
+            wait_ms = 8000 if index == 0 and len(candidates) > 1 else 20000
+            if await _temperature_visible(gui_page, wait_ms):
+                saw_temp = True
+                break
+            print(
+                f"[sanity] summary temperature via {attempt} not visible — trying next",
+                flush=True,
+            )
+    else:
         logo = gui_page.locator(TopPanelLocators.LOGO).first
         try:
             if await logo.is_visible(timeout=5000):
@@ -125,16 +180,11 @@ async def open_sanity_summary_system(
         except Exception:
             pass
 
-    temp = gui_page.locator(SummaryLocators.TEMPERATURE).first
-    # LuCI summary widgets can take >10s after ACS/reboot; wait longer.
-    # Lab boards often leave temperature as "-" / hidden — don't hard-fail navigation.
-    try:
-        await temp.wait_for(state="visible", timeout=max(UITimeouts.ELEMENT_WAIT_MS, 45000))
-    except Exception:
-        # Fall back to any Overview anchor (model / local time).
+    if not saw_temp:
+        # Lab boards often leave temperature as "-" / hidden — don't hard-fail navigation.
         for loc in (SummaryLocators.MODEL, SummaryLocators.LOCAL_TIME, SummaryLocators.HW_VERSION):
             try:
-                await gui_page.locator(loc).first.wait_for(state="attached", timeout=15000)
+                await gui_page.locator(loc).first.wait_for(state="attached", timeout=8000)
                 break
             except Exception:
                 continue
@@ -142,9 +192,23 @@ async def open_sanity_summary_system(
 
 
 async def read_gui_temperature(gui_page) -> tuple[str, float | None]:
+    """
+    Read Overview ``#temp``.
+
+    A missing or hidden widget is unavailable (None), not a navigation failure.
+    Callers compare against SSH or accept an in-range SSH reading alone.
+    """
     loc = gui_page.locator(SummaryLocators.TEMPERATURE).first
-    await loc.wait_for(state="visible", timeout=UITimeouts.ELEMENT_WAIT_MS)
-    raw = (await loc.inner_text()).strip()
+    raw = ""
+    try:
+        await loc.wait_for(state="visible", timeout=UITimeouts.ELEMENT_WAIT_MS)
+        raw = (await loc.inner_text()).strip()
+    except Exception:
+        try:
+            if await loc.count():
+                raw = (await loc.inner_text(timeout=2000)).strip()
+        except Exception:
+            raw = ""
     return raw, parse_temp_celsius(raw)
 
 

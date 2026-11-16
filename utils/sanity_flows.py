@@ -44,7 +44,6 @@ SANITY_115 — Installer login; GUI top-panel soft reboot on BTS & CPE; RF link 
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -276,39 +275,8 @@ from utils.sanity_ssh import (
     wait_stable_ssh_after_power_loss,
 )
 
-
 def _log(message: str) -> None:
     print(f"[SANITY] {message}", flush=True)
-
-
-_DEBUG_LOG = Path(
-    "/home/senao/Desktop/Puneet/Automation TestBed/AutomationTestBed/.cursor/debug-5d791c.log"
-)
-
-
-def _dbg03(
-    hypothesis_id: str,
-    location: str,
-    message: str,
-    data: dict | None = None,
-) -> None:
-    # region agent log
-    try:
-        entry = {
-            "sessionId": "5d791c",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data or {},
-            "timestamp": int(time.time() * 1000),
-        }
-        _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with _DEBUG_LOG.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=True) + "\n")
-    except Exception:
-        pass
-    # endregion
-
 
 async def _open_fresh_bts_ssh(
     root_ssh,
@@ -339,22 +307,10 @@ async def _open_fresh_bts_ssh(
 
     try:
         await sanity_ssh_run(root_ssh, "echo ready", timeout_s=10)
-        _dbg03(
-            "A",
-            "sanity_flows.py:_open_fresh_bts_ssh",
-            "root_ssh session alive",
-            {"bts_host": bts_host},
-        )
         return root_ssh
     except Exception as exc:
         if not quiet:
             _log(f"{case_id}: BTS SSH stale after prior case — reconnecting at {bts_host}")
-        _dbg03(
-            "A",
-            "sanity_flows.py:_open_fresh_bts_ssh",
-            "root_ssh stale, reconnecting",
-            {"bts_host": bts_host, "error": str(exc)},
-        )
 
     if profile:
         try:
@@ -418,7 +374,6 @@ async def _open_fresh_bts_ssh(
             last_error = str(err)
     raise TimeoutError(f"[sanity] {case_id}: BTS SSH not ready at {hosts} ({last_error})")
 
-
 async def _close_case_bts_ssh(bts_ssh, root_ssh=None) -> None:
     """Close a case-local BTS SSH handle — never the session-scoped root_ssh."""
     if bts_ssh is None:
@@ -430,7 +385,6 @@ async def _close_case_bts_ssh(bts_ssh, root_ssh=None) -> None:
         if inner is not None and bts_ssh is inner:
             return
     await close_sanity_ssh(bts_ssh)
-
 
 async def _sanity_clear_lab_pc_vlans(profile: dict, password: str, *, case_id: str) -> str | None:
     """Remove PC VLAN subifs and restore untagged IPv4 (+ mgmt IPv6 bind)."""
@@ -470,7 +424,6 @@ async def _sanity_clear_lab_pc_vlans(profile: dict, password: str, *, case_id: s
         _log(f"{case_id}: lab PC untagged {pc_if} ({pc_ipv4})")
     return pc_if
 
-
 async def _sanity_heal_lab_pc_ipv6(profile: dict, password: str, *, case_id: str) -> None:
     """Ensure lab PC still has the IPv6 bind used for BTS SSH after VLAN cases."""
     from utils.lab_pc_net import ensure_lab_pc_untagged_ipv4
@@ -498,12 +451,10 @@ async def _sanity_heal_lab_pc_ipv6(profile: dict, password: str, *, case_id: str
     if pc_if:
         _log(f"{case_id}: healed lab PC IPv6 bind on {pc_if} ({pc_v6})")
 
-
 def _source_bind_ipv6(profile_bundle) -> str:
     dut = profile_bundle.active.get("dut", {}) or {}
     mgmt = (profile_bundle.active.get("testbed", {}) or {}).get("mgmt_vlan", {}) or {}
     return normalize_ip(str(dut.get("bts_pc_ipv6") or mgmt.get("ipv6_bts_pc") or ""))
-
 
 def _require_mgmt_ip(ip: str, *, case_id: str, role: str, ipv6_only: bool = False) -> str:
     clean = normalize_ip(ip)
@@ -512,10 +463,8 @@ def _require_mgmt_ip(ip: str, *, case_id: str, role: str, ipv6_only: bool = Fals
         check.is_true(is_ipv6_literal(clean), f"{case_id}: {role} IPv6 required; got {clean}")
     return clean
 
-
 def _print_section(title: str) -> None:
     print(f"\n{'=' * 72}\n  {title}\n{'=' * 72}", flush=True)
-
 
 def _print_kv(title: str, rows: dict[str, str]) -> None:
     print(f"\n--- {title} ---", flush=True)
@@ -523,17 +472,14 @@ def _print_kv(title: str, rows: dict[str, str]) -> None:
     for key, value in rows.items():
         print(f"  {key:<{width}} : {value}", flush=True)
 
-
 def _print_comparison(rows: list[tuple[str, str, str, str]]) -> None:
     print(f"\n{'Field':<28} {'Before':<22} {'After':<22} Result", flush=True)
     print("-" * 100, flush=True)
     for field, before, after, result in rows:
         print(f"{field:<28} {before:<22} {after:<22} {result}", flush=True)
 
-
 def _pass_fail(ok: bool) -> str:
     return "PASS" if ok else "FAIL"
-
 
 def _print_ntp_slots_table(
     title: str,
@@ -574,8 +520,6 @@ def _print_ntp_slots_table(
             status = "—"
         print(f"  {sno:<6} {idx:<8} {b:<32} {a:<36} {status}", flush=True)
 
-
-
 def _print_dual_device_table(case_id: str, rows: list[tuple[str, str, str]]) -> None:
     """Print BTS & CPE side-by-side result table for dual-device sanity cases."""
     label_w = max(10, len(case_id), max((len(r[0]) for r in rows), default=0))
@@ -587,7 +531,6 @@ def _print_dual_device_table(case_id: str, rows: list[tuple[str, str, str]]) -> 
     for field, bts_val, cpe_val in rows:
         print(f"| {field:<{label_w}} | {bts_val:<{col_w}} | {cpe_val:<{col_w}} |", flush=True)
     print(sep, flush=True)
-
 
 async def _capture_config_snapshot(ssh: AsyncGenericDriver) -> dict[str, str]:
     snap: dict[str, str] = {}
@@ -603,7 +546,6 @@ async def _capture_config_snapshot(ssh: AsyncGenericDriver) -> dict[str, str]:
     except Exception:
         snap["firmware"] = ""
     return snap
-
 
 def _values_match(before: str, after: str) -> bool:
     b = (before or "").strip()
@@ -631,10 +573,8 @@ def _values_match(before: str, after: str) -> bool:
         pass
     return False
 
-
 def _is_prompt_garbage(value: str) -> bool:
     return bool(value) and ("root@" in value and ":" in value)
-
 
 @dataclass(frozen=True)
 class KeepSettingsDeviceResult:
@@ -647,7 +587,6 @@ class KeepSettingsDeviceResult:
     def overall(self) -> str:
         return "PASS" if self.fw_ok and self.config_ok else "FAIL"
 
-
 @dataclass(frozen=True)
 class WithoutKeepRestoreResult:
     label: str
@@ -658,7 +597,6 @@ class WithoutKeepRestoreResult:
     @property
     def overall(self) -> str:
         return "PASS" if self.ssh_ok and self.config_ok and bool(self.firmware) else "FAIL"
-
 
 _SANITY_03_RESTORE_KEYS: tuple[str, ...] = (
     "network.lan.ipaddr",
@@ -674,7 +612,6 @@ _SANITY_03_BTS_RADIO_KEYS: tuple[str, ...] = (
     "wireless.nwksecret",
 )
 
-
 def _config_restore_ok(before: dict[str, str], after: dict[str, str], keys: tuple[str, ...]) -> bool:
     ok = True
     for key in keys:
@@ -686,7 +623,6 @@ def _config_restore_ok(before: dict[str, str], after: dict[str, str], keys: tupl
             _log(f"restore mismatch {key}: before={b!r} after={a!r}")
             ok = False
     return ok
-
 
 async def _verify_keep_settings(
     before: dict[str, str],
@@ -758,7 +694,6 @@ async def _verify_keep_settings(
         config_ok=config_ok,
     )
 
-
 def _print_keep_settings_dual_summary(
     case_id: str,
     *,
@@ -776,7 +711,6 @@ def _print_keep_settings_dual_summary(
             ("Overall", bts.overall, cpe.overall),
         ],
     )
-
 
 def _print_without_keep_dual_summary(
     case_id: str,
@@ -833,7 +767,6 @@ def _print_without_keep_dual_summary(
             ("Overall", bts_restore.overall, cpe_restore.overall),
         ],
     )
-
 
 async def _flash_device_keep_settings(
     *,
@@ -959,7 +892,6 @@ async def _flash_device_keep_settings(
     _log(f"{label}: upgrade complete — reboot verified and SSH stable at {host_v6}")
     return recovered_ssh
 
-
 async def _ssh_kwnupd_keep_settings_flash(
     ssh: AsyncGenericDriver,
     pick: SanityFirmwarePick,
@@ -1031,8 +963,6 @@ async def _ssh_kwnupd_keep_settings_flash(
     ):
         _log(f"{label}: kwnupd trigger note: {(out or '')[-240:]}")
     _log(f"{label}: kwnupd local-upgrade triggered")
-
-
 
 async def assert_sanity_02_firmware_upgrade_keep_settings(
     gui_page,
@@ -1256,12 +1186,10 @@ async def assert_sanity_02_firmware_upgrade_keep_settings(
     await _close_case_bts_ssh(bts_ssh, root_ssh)
     _log(f"{case_id} PASS — CPE & BTS upgraded; link up; config retained on both")
 
-
 def _print_baseline(case_id: str, label: str, snap: dict[str, str]) -> None:
     _print_section(f"{case_id} — {label} baseline (full config before upgrade)")
     rows = {k: (v or "—") for k, v in snap.items()}
     _print_kv(f"{label} snapshot", rows)
-
 
 def _host_pingable(host: str) -> bool:
     import subprocess
@@ -1276,7 +1204,6 @@ def _host_pingable(host: str) -> bool:
         ).returncode
         == 0
     )
-
 
 async def _flash_device_without_keep_settings(
     *,
@@ -1347,7 +1274,6 @@ async def _flash_device_without_keep_settings(
     )
     _log(f"{label}: original management host offline — factory wipe confirmed")
 
-
 async def _ssh_sysupgrade_without_keep_flash(
     ssh: AsyncGenericDriver,
     pick: SanityFirmwarePick,
@@ -1409,7 +1335,6 @@ async def _ssh_sysupgrade_without_keep_flash(
         raise RuntimeError(f"{label}: image missing after SCP")
     _log(f"{label}: sysupgrade -n triggered ({(out or '')[:120]})")
 
-
 async def _enrich_bts_radio1_snapshot(
     bts_ssh: AsyncGenericDriver,
     snap: dict[str, str],
@@ -1431,7 +1356,6 @@ async def _enrich_bts_radio1_snapshot(
         except Exception:
             pass
     return enriched
-
 
 async def _capture_sanity_03_baseline(
     *,
@@ -1477,21 +1401,7 @@ async def _capture_sanity_03_baseline(
     bts_before = await _enrich_bts_radio1_snapshot(
         bts_ssh, bts_before, radio_idx=radio_idx
     )
-    _dbg03(
-        "A",
-        "sanity_flows.py:_capture_sanity_03_baseline",
-        "baseline captured",
-        {
-            "bts_ip": bts_before.get("network.lan.ipaddr", ""),
-            "bts_ip6": bts_before.get("network.lan.ip6addr", ""),
-            "cpe_ip": cpe_before.get("network.lan.ipaddr", ""),
-            "cpe_ip6": cpe_before.get("network.lan.ip6addr", ""),
-            "bts_radio1_ssid": bts_before.get("wireless.ssid", ""),
-            "bts_radio1_key_set": bool(bts_before.get("wireless.key")),
-        },
-    )
     return bts_ssh, cpe_ssh, bts_before, cpe_before
-
 
 async def _verify_sanity_03_post_restore_backend(
     *,
@@ -1646,7 +1556,6 @@ async def _verify_sanity_03_post_restore_backend(
         ping_ok,
     )
 
-
 async def assert_sanity_03_firmware_upgrade_without_keep_settings(
     gui_page,
     root_ssh,
@@ -1749,12 +1658,6 @@ async def assert_sanity_03_firmware_upgrade_without_keep_settings(
             poll_s=poll_s,
             offline_consecutive=offline_consecutive,
         )
-        _dbg03(
-            "B",
-            "sanity_flows.py:assert_sanity_03",
-            "CPE without-keep flash complete",
-            {"cpe_v6": cpe_v6},
-        )
     finally:
         if cpe_page is not None:
             try:
@@ -1779,12 +1682,6 @@ async def assert_sanity_03_firmware_upgrade_without_keep_settings(
         poll_s=poll_s,
         offline_consecutive=offline_consecutive,
     )
-    _dbg03(
-        "B",
-        "sanity_flows.py:assert_sanity_03",
-        "BTS without-keep flash complete",
-        {"bts_host": bts_host},
-    )
 
     # --- Step 3: Verify factory state / no link ---
     _print_section(f"{case_id}: Step 3 — Verify factory defaults (no keep settings)")
@@ -1792,16 +1689,6 @@ async def assert_sanity_03_firmware_upgrade_without_keep_settings(
 
     old_bts_unreachable = not _host_pingable(bts_host)
     old_bts_pingable = not old_bts_unreachable
-    _dbg03(
-        "C",
-        "sanity_flows.py:assert_sanity_03",
-        "factory verify ping check",
-        {
-            "old_bts_host": bts_host,
-            "old_bts_unreachable": old_bts_unreachable,
-            "factory_bts": factory_bts,
-        },
-    )
     check.is_true(
         old_bts_unreachable,
         f"{case_id}: original BTS IP {bts_host} should be unreachable after without-keep",
@@ -1824,18 +1711,6 @@ async def assert_sanity_03_firmware_upgrade_without_keep_settings(
         await sanity_ssh_run(bts_factory_ssh, SanityCommands.GET_FW_VERSION)
     )
     link_up, stations = await sanity_link_health_bts(bts_factory_ssh, profile)
-    _dbg03(
-        "C",
-        "sanity_flows.py:assert_sanity_03",
-        "factory verify SSH results",
-        {
-            "lan_ip": (lan_ip or "").strip(),
-            "fw_after": fw_after,
-            "link_up": link_up,
-            "stations": stations,
-            "old_bts_pingable": old_bts_pingable,
-        },
-    )
     _print_kv(
         f"{case_id} — factory verification",
         {
@@ -1859,12 +1734,6 @@ async def assert_sanity_03_firmware_upgrade_without_keep_settings(
 
     # --- Step 4: Restore original link ---
     _print_section(f"{case_id}: Step 4 — Restore BTS & CPE config and re-form link")
-    _dbg03(
-        "D",
-        "sanity_flows.py:assert_sanity_03",
-        "starting link restore",
-        {"bts_original": bts_host, "cpe_original": cpe_v6},
-    )
     await sanity_03_restore_link(
         profile=profile,
         values=values,
@@ -1903,12 +1772,6 @@ async def assert_sanity_03_firmware_upgrade_without_keep_settings(
         await sanity_login_if_needed(gui_page, bts_host, device_creds)
     except Exception:
         pass
-    _dbg03(
-        "E",
-        "sanity_flows.py:assert_sanity_03",
-        "SANITY_03 complete",
-        {"bts_host": bts_host, "cpe_v6": cpe_v6},
-    )
     _print_without_keep_dual_summary(
         case_id,
         bts_before=bts_before,
@@ -1925,7 +1788,6 @@ async def assert_sanity_03_firmware_upgrade_without_keep_settings(
         f"{case_id} PASS — without-keep upgrade verified; "
         "factory wipe OK; backend restore verified on BTS & CPE"
     )
-
 
 async def _verify_fw_unchanged_after_rejection(
     ssh: AsyncGenericDriver,
@@ -1962,7 +1824,6 @@ async def _verify_fw_unchanged_after_rejection(
         check.is_true(boot_ok, f"{case_id} [{label}]: device rebooted after rejected wrong-model upload")
     return fw_ok, boot_ok
 
-
 @dataclass(frozen=True)
 class WrongModelDeviceResult:
     label: str
@@ -1978,7 +1839,6 @@ class WrongModelDeviceResult:
         fw_ok = bool(self.firmware_after) and self.firmware_before == self.firmware_after
         ok = fw_ok and self.boot_unchanged and self.rejection_ok
         return "PASS" if ok else "FAIL"
-
 
 @dataclass(frozen=True)
 class PowerLossDeviceResult:
@@ -2006,7 +1866,6 @@ class PowerLossDeviceResult:
         )
         return "PASS" if ok else "FAIL"
 
-
 async def _heal_luci_webui(ssh: AsyncGenericDriver, *, label: str = "device") -> None:
     """Clear corrupt LuCI caches after power-cut / factory flash (dispatcher pairs-nil)."""
     try:
@@ -2023,7 +1882,6 @@ async def _heal_luci_webui(ssh: AsyncGenericDriver, *, label: str = "device") ->
     except Exception as exc:
         _log(f"{label}: LuCI heal skipped ({exc})")
 
-
 async def _prepare_flashops_gui(
     gui_page,
     ssh: AsyncGenericDriver | None,
@@ -2039,7 +1897,6 @@ async def _prepare_flashops_gui(
     await force_luci_session_with_stok(
         gui_page, host, device_creds, label=label, retries=3
     )
-
 
 async def _attempt_wrong_model_on_device(
     gui_page,
@@ -2102,7 +1959,6 @@ async def _attempt_wrong_model_on_device(
     _log(f"{label}: wrong-model upload rejected; firmware unchanged")
     return result
 
-
 def _print_wrong_model_dual_summary(
     case_id: str,
     *,
@@ -2135,7 +1991,6 @@ def _print_wrong_model_dual_summary(
             ("Overall", bts.overall, cpe.overall),
         ],
     )
-
 
 async def assert_sanity_04_wrong_model_firmware_rejected(
     gui_page,
@@ -2261,7 +2116,6 @@ async def assert_sanity_04_wrong_model_firmware_rejected(
     await _close_case_bts_ssh(bts_ssh, root_ssh)
     _log(f"{case_id} PASS — wrong-model rejected on CPE & BTS; firmware unchanged on both")
 
-
 async def _attempt_abort_upgrade_on_device(
     gui_page,
     ssh: AsyncGenericDriver,
@@ -2341,7 +2195,6 @@ async def _attempt_abort_upgrade_on_device(
     _log(f"{label}: upload aborted midway; backend stable; firmware unchanged")
     return result
 
-
 def _print_abort_dual_summary(
     case_id: str,
     *,
@@ -2379,7 +2232,6 @@ def _print_abort_dual_summary(
             ("Overall", bts.overall, cpe.overall),
         ],
     )
-
 
 async def assert_sanity_05_abort_upgrade_handling(
     gui_page,
@@ -2551,7 +2403,6 @@ async def assert_sanity_05_abort_upgrade_handling(
     await _close_case_bts_ssh(bts_ssh, root_ssh)
     _log(f"{case_id} PASS — abort midway on CPE & BTS; backend stable; link OK")
 
-
 async def _attempt_power_loss_on_device(
     gui_page,
     ssh: AsyncGenericDriver,
@@ -2720,7 +2571,6 @@ async def _attempt_power_loss_on_device(
     )
     return recovered_ssh, result
 
-
 def _print_power_loss_dual_summary(
     case_id: str,
     *,
@@ -2756,7 +2606,6 @@ def _print_power_loss_dual_summary(
             ("Overall", bts.overall, cpe.overall),
         ],
     )
-
 
 async def assert_sanity_06_power_loss_during_upgrade(
     gui_page,
@@ -2952,7 +2801,6 @@ async def assert_sanity_06_power_loss_during_upgrade(
     await _close_case_bts_ssh(bts_ssh, root_ssh)
     _log(f"{case_id} PASS — power loss during install on CPE & BTS; both recovered; link OK")
 
-
 @dataclass(frozen=True)
 class GuiLoginDeviceResult:
     label: str
@@ -2962,7 +2810,6 @@ class GuiLoginDeviceResult:
     @property
     def overall(self) -> str:
         return "PASS" if self.gui_ok else "FAIL"
-
 
 async def assert_sanity_07_gui_login_validation(
     gui_page,
@@ -3032,7 +2879,6 @@ async def assert_sanity_07_gui_login_validation(
     )
     _log(f"{case_id} PASS — BTS & CPE GUI login validated")
 
-
 @dataclass(frozen=True)
 class SystemConfigDeviceResult:
     label: str
@@ -3047,7 +2893,6 @@ class SystemConfigDeviceResult:
     @property
     def overall(self) -> str:
         return "PASS" if self.apply_ok and self.verify_ok and self.revert_ok else "FAIL"
-
 
 async def _sanity_location_apply_verify_revert(
     gui_page,
@@ -3164,7 +3009,6 @@ async def _sanity_location_apply_verify_revert(
         verify_ok=verify_ok,
         revert_ok=revert_ok,
     )
-
 
 async def assert_sanity_17_system_location_config(
     gui_page,
@@ -3288,7 +3132,6 @@ async def assert_sanity_17_system_location_config(
     await _close_case_bts_ssh(bts_ssh, root_ssh)
     _log(f"{case_id} PASS — BTS & CPE Location config applied, verified, reverted; link OK")
 
-
 @dataclass(frozen=True)
 class TimezoneDeviceResult:
     label: str
@@ -3301,7 +3144,6 @@ class TimezoneDeviceResult:
     @property
     def overall(self) -> str:
         return "PASS" if self.apply_ok and self.verify_ok and self.revert_ok else "FAIL"
-
 
 async def _sanity_timezone_apply_verify_revert(
     gui_page,
@@ -3401,7 +3243,6 @@ async def _sanity_timezone_apply_verify_revert(
         verify_ok=verify_ok,
         revert_ok=revert_ok,
     )
-
 
 async def assert_sanity_18_system_timezone_config(
     gui_page,
@@ -3531,11 +3372,9 @@ async def assert_sanity_18_system_timezone_config(
         f"{case_id}: timezone config failed (BTS={bts_result.overall}, CPE={cpe_result.overall})",
     )
 
-
 # ---------------------------------------------------------------------------
 # SANITY_19 — Static IPv4 (CPE → BTS → link → revert)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_19_static_ipv4_config(
     gui_page,
@@ -3726,10 +3565,8 @@ async def assert_sanity_19_static_ipv4_config(
 
     _log(f"{case_id} PASS — CPE→BTS static IPv4, link up, reverted")
 
-
 def _sanity_ip6_host(ip6_cidr: str) -> str:
     return normalize_ip(str(ip6_cidr or "").split("/")[0].strip())
-
 
 def _sanity_bts_ipv4_fallbacks(profile: dict | None = None) -> list[str]:
     hosts: list[str] = []
@@ -3756,7 +3593,6 @@ def _sanity_bts_ipv4_fallbacks(profile: dict | None = None) -> list[str]:
         if host and host not in hosts:
             hosts.append(host)
     return hosts
-
 
 async def _emergency_restore_ipv6_via_any_ssh(
     *,
@@ -3824,7 +3660,6 @@ async def _emergency_restore_ipv6_via_any_ssh(
                     pass
     _log(f"{case_id}: emergency {label} IPv6 restore failed ({last_error})")
     return False
-
 
 async def _apply_ipv6_gui_then_confirm_ssh(
     *,
@@ -3987,11 +3822,9 @@ async def _apply_ipv6_gui_then_confirm_ssh(
                 f"after apply: {exc}"
             ) from exc
 
-
 # ---------------------------------------------------------------------------
 # SANITY_20 — Static IPv6 (CPE → BTS → link → GUI/CLI → revert)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_20_static_ipv6_config(
     gui_page,
@@ -4402,11 +4235,9 @@ async def assert_sanity_20_static_ipv6_config(
 
     _log(f"{case_id} PASS — CPE→BTS static IPv6, GUI/CLI OK, reverted")
 
-
 # ---------------------------------------------------------------------------
 # SANITY_23 — Management VLAN (FT_10-style); clear PC VLANs, apply, tagged verify, revert
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_23_mgmt_vlan_config(
     gui_page,
@@ -4710,11 +4541,9 @@ async def assert_sanity_23_mgmt_vlan_config(
 
     _log(f"{case_id} PASS — mgmt VLAN apply, tagged verify, reverted")
 
-
 # ---------------------------------------------------------------------------
 # SANITY_25 — Dual stack (dynamic → static IPv4+IPv6, CPE → BTS, ping, revert)
 # ---------------------------------------------------------------------------
-
 
 def _dual_stack_ping_targets(
     *,
@@ -4733,7 +4562,6 @@ def _dual_stack_ping_targets(
     if cpe_v4:
         targets["CPE-IPv4"] = normalize_ip(cpe_v4.split("/")[0])
     return targets
-
 
 async def assert_sanity_25_dual_stack_config(
     gui_page,
@@ -4961,11 +4789,9 @@ async def assert_sanity_25_dual_stack_config(
 
     _log(f"{case_id} PASS — dual stack verified, original config restored")
 
-
 # ---------------------------------------------------------------------------
 # SANITY_27 — Link Security (None → AES-256 → revert); CPE then BTS each phase
 # ---------------------------------------------------------------------------
-
 
 def _sanity_27_random_secret(length: int = 8) -> str:
     """Alphanumeric secret safe for LuCI / UCI (Network Secret is typically 8 chars)."""
@@ -4974,7 +4800,6 @@ def _sanity_27_random_secret(length: int = 8) -> str:
 
     alphabet = string.ascii_letters + string.digits
     return "".join(random.choice(alphabet) for _ in range(length))
-
 
 async def assert_sanity_27_link_security(
     gui_page,
@@ -5287,11 +5112,9 @@ async def assert_sanity_27_link_security(
 
     _log(f"{case_id} PASS — None + AES-256 backend verified, original restored")
 
-
 # ---------------------------------------------------------------------------
 # SANITY_28 — DDRS MCS modes (Spatial Single → wait reload → Max MCS; revert)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_28_ddrs_mcs_modes(
     gui_page,
@@ -5589,11 +5412,9 @@ async def assert_sanity_28_ddrs_mcs_modes(
 
     _log(f"{case_id} PASS — Case1 + Case2 MCS modes verified, original restored")
 
-
 # ---------------------------------------------------------------------------
 # SANITY_29 — DDRS MCS Manual Mode (Disable + Dual → MCS 12–23; revert)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_29_ddrs_mcs_manual(
     gui_page,
@@ -5846,7 +5667,6 @@ async def assert_sanity_29_ddrs_mcs_manual(
 
     _log(f"{case_id} PASS — Manual MCS Dual verified, original restored")
 
-
 # ---------------------------------------------------------------------------
 # SANITY_30 — Spatial Stream MCS ranges (Single 0–11 / Dual 12–23)
 # ---------------------------------------------------------------------------
@@ -5856,10 +5676,8 @@ _MCS_DUAL_RANGE = frozenset(range(12, 24))
 # UBR655 / HE GUI often lists Dual as MCS0–11 (same PHY map as MCS12–23).
 _MCS_DUAL_RANGE_HE = frozenset(range(0, 12))
 
-
 def _dual_mcs_range_ok(dual_mcs: set[int]) -> bool:
     return dual_mcs == _MCS_DUAL_RANGE or dual_mcs == _MCS_DUAL_RANGE_HE
-
 
 async def assert_sanity_30_spatial_stream_mcs_ranges(
     gui_page,
@@ -6108,11 +5926,9 @@ async def assert_sanity_30_spatial_stream_mcs_ranges(
 
     _log(f"{case_id} PASS — Single/Dual MCS ranges verified on BTS & CPE")
 
-
 # ---------------------------------------------------------------------------
 # SANITY_31 — Channel Width (BTS set 20/40/80/160; CPE follows)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_31_channel_width(
     gui_page,
@@ -6507,11 +6323,9 @@ async def assert_sanity_31_channel_width(
 
     _log(f"{case_id} PASS — Channel Width verified on BTS; CPE RF followed")
 
-
 # ---------------------------------------------------------------------------
 # SANITY_32 — Configured Channel Auto / Manual
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_32_channel_mode(
     gui_page,
@@ -7193,11 +7007,9 @@ async def assert_sanity_32_channel_mode(
 
     _log(f"{case_id} PASS — Configured Channel {FIXED_CHANNEL} then Auto verified")
 
-
 # ---------------------------------------------------------------------------
 # SANITY_33 — Frequency Range (UBR630 comment: 5180–5855 MHz)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_33_frequency_range(
     gui_page,
@@ -7558,11 +7370,9 @@ async def assert_sanity_33_frequency_range(
 
     _log(f"{case_id} PASS — Frequency Range verified ({UBR_FREQ_MIN_MHZ}–{UBR_FREQ_MAX_MHZ} MHz)")
 
-
 # ---------------------------------------------------------------------------
 # SANITY_35 — ACS (Auto Channel Selection)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_35_acs_auto(
     gui_page,
@@ -7857,11 +7667,9 @@ async def assert_sanity_35_acs_auto(
 
     _log(f"{case_id} PASS — ACS Auto verified")
 
-
 # ---------------------------------------------------------------------------
 # SANITY_36 — Tx Power (DDRS/ATPC, 1–26 dBm)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_36_tx_power(
     gui_page,
@@ -8163,11 +7971,9 @@ async def assert_sanity_36_tx_power(
 
     _log(f"{case_id} PASS — Tx Power verified on CPE & BTS")
 
-
 # ---------------------------------------------------------------------------
 # SANITY_37 — DCS Status + RTx Threshold
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_37_dcs_config(
     gui_page,
@@ -8447,11 +8253,9 @@ async def assert_sanity_37_dcs_config(
 
     _log(f"{case_id} PASS — DCS Enable/Disable + RTx Threshold verified")
 
-
 # ---------------------------------------------------------------------------
 # SANITY_38 — NTP synchronisation (lab laptop NTP)
 # ---------------------------------------------------------------------------
-
 
 @dataclass
 class NtpDeviceResult:
@@ -8476,7 +8280,6 @@ class NtpDeviceResult:
             if self.apply_ok and self.uci_ok and self.sync_ok and self.revert_ok
             else "FAIL"
         )
-
 
 async def _sanity_ntp_apply_verify_revert(
     gui_page,
@@ -8677,7 +8480,6 @@ async def _sanity_ntp_apply_verify_revert(
 
     return result
 
-
 async def assert_sanity_38_ntp_sync(
     gui_page,
     root_ssh,
@@ -8859,11 +8661,9 @@ async def assert_sanity_38_ntp_sync(
         f"{case_id}: NTP sync failed (BTS={bts_result.overall}, CPE={cpe_result.overall})",
     )
 
-
 # ---------------------------------------------------------------------------
 # SANITY_42 — Board temperature (Dashboard → Summary → System)
 # ---------------------------------------------------------------------------
-
 
 @dataclass
 class TempDeviceResult:
@@ -8879,7 +8679,6 @@ class TempDeviceResult:
     @property
     def overall(self) -> str:
         return "PASS" if self.range_ok and self.match_ok else "FAIL"
-
 
 async def _sanity_temp_check_device(
     gui_page,
@@ -8954,7 +8753,6 @@ async def _sanity_temp_check_device(
         f"(GUI={snap.gui_c}, SSH={snap.ssh_c}, Δ={delta}, tol={tolerance})",
     )
     return result
-
 
 async def assert_sanity_42_board_temperature(
     gui_page,
@@ -9092,11 +8890,9 @@ async def assert_sanity_42_board_temperature(
         f"(BTS={bts_result.overall}, CPE={cpe_result.overall})",
     )
 
-
 # ---------------------------------------------------------------------------
 # SANITY_45 — Spectrum Analyser / Spectrum Report
 # ---------------------------------------------------------------------------
-
 
 @dataclass
 class SpectrumDeviceResult:
@@ -9114,7 +8910,6 @@ class SpectrumDeviceResult:
     @property
     def overall(self) -> str:
         return "PASS" if self.apply_ok and self.results_ok else "FAIL"
-
 
 async def _sanity_spectrum_run_device(
     gui_page,
@@ -9222,7 +9017,6 @@ async def _sanity_spectrum_run_device(
         f"intf={result.intf_rows}, csv={len(report.ssh_intf_lines)})",
     )
     return result
-
 
 async def assert_sanity_45_spectrum_report(
     gui_page,
@@ -9385,11 +9179,9 @@ async def assert_sanity_45_spectrum_report(
         f"(BTS={bts_result.overall}, CPE={cpe_result.overall})",
     )
 
-
 # ---------------------------------------------------------------------------
 # SANITY_49 — Wireless link ping (BTS ↔ CPE over SSH)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_49_wireless_link_ping(
     root_ssh,
@@ -9510,11 +9302,9 @@ async def assert_sanity_49_wireless_link_ping(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_50 — RF Link Statistics / System Name (BTS & CPE GUI)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_50_rf_link_system_name(
     gui_page,
@@ -9660,11 +9450,9 @@ async def assert_sanity_50_rf_link_system_name(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_52 — RF Link Statistics / Link Uptime reset (CPE soft reboot)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_52_rf_link_uptime_reset(
     gui_page,
@@ -9826,11 +9614,9 @@ async def assert_sanity_52_rf_link_uptime_reset(
                 pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_54 — RF Link Statistics / Rate MCS (DL) per channel width
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_54_rf_link_rate_mcs(
     gui_page,
@@ -10113,11 +9899,9 @@ async def assert_sanity_54_rf_link_rate_mcs(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_55 — RF Link Statistics / MCS (DL UL) auto-range
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_55_rf_link_mcs_auto_range(
     gui_page,
@@ -10358,11 +10142,9 @@ async def assert_sanity_55_rf_link_mcs_auto_range(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_57 — Tx Power in detailed link statistics (BTS & CPE)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_57_tx_power_detailed_stats(
     gui_page,
@@ -10607,11 +10389,9 @@ async def assert_sanity_57_tx_power_detailed_stats(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_60 — Interface Utilization / OBSS (BTS & CPE)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_60_obss_utilization(
     gui_page,
@@ -10782,11 +10562,9 @@ async def assert_sanity_60_obss_utilization(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_61 — Interface Combined Channel Utilization (BTS & CPE)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_61_combined_utilization(
     gui_page,
@@ -10952,11 +10730,9 @@ async def assert_sanity_61_combined_utilization(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_62 — System Summary / Overview (BTS & CPE)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_62_system_summary(
     gui_page,
@@ -11066,11 +10842,9 @@ async def assert_sanity_62_system_summary(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_76 — Soft and Hard Reboot (BTS & CPE)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_76_soft_hard_reboot(
     gui_page,
@@ -11346,11 +11120,9 @@ async def assert_sanity_76_soft_hard_reboot(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_77 — Factory reset with keep settings (BTS & CPE)
 # ---------------------------------------------------------------------------
-
 
 def _vlan_mode_equiv(before: str, after: str) -> bool:
     """Treat transparent/0 as the same VLAN mode (UCI may store either form)."""
@@ -11368,7 +11140,6 @@ def _vlan_mode_equiv(before: str, after: str) -> bool:
     a = aliases.get((after or "").strip().lower(), (after or "").strip().lower())
     return bool(b) and b == a
 
-
 async def _normalize_vlan_mode_for_retain(ssh: AsyncGenericDriver, *, label: str) -> None:
     """Ensure vlan.ath1.mode is numeric so factory_reset.sh can retain it."""
     try:
@@ -11383,7 +11154,6 @@ async def _normalize_vlan_mode_for_retain(ssh: AsyncGenericDriver, *, label: str
             _log(f"{label}: normalized vlan.ath1.mode {mode!r} → 0 for retain round-trip")
         except Exception as exc:
             _log(f"{label}: vlan mode normalize skipped ({exc})")
-
 
 async def _verify_factory_reset_keep_settings(
     before: dict[str, str],
@@ -11445,7 +11215,6 @@ async def _verify_factory_reset_keep_settings(
         f"with keep settings",
     )
     return config_ok
-
 
 async def assert_sanity_77_factory_reset_keep_settings(
     gui_page,
@@ -11669,11 +11438,9 @@ async def assert_sanity_77_factory_reset_keep_settings(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_81 — LLDP enable/disable (CPE only)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_81_lldp_enable_disable(
     gui_page,
@@ -11893,11 +11660,9 @@ async def assert_sanity_81_lldp_enable_disable(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_82 — LLDP neighbour detection (CPE only)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_82_lldp_neighbor_detection(
     gui_page,
@@ -12042,11 +11807,9 @@ async def assert_sanity_82_lldp_neighbor_detection(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_83 — LLDP discovery table parameters (CPE only)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_83_lldp_discovery_table(
     gui_page,
@@ -12197,11 +11960,9 @@ async def assert_sanity_83_lldp_discovery_table(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_84 — Link Test Tool throughput estimation (BTS & CPE)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_84_link_test_tool(
     gui_page,
@@ -12587,11 +12348,9 @@ async def assert_sanity_84_link_test_tool(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_85 — Audit / config logs (BTS & CPE)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_85_audit_config_logs(
     gui_page,
@@ -12689,11 +12448,9 @@ async def assert_sanity_85_audit_config_logs(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_86 — ARP / Bridge Learn Table (BTS & CPE)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_86_arp_bridge_table(
     gui_page,
@@ -13059,11 +12816,9 @@ async def assert_sanity_86_arp_bridge_table(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_111 — Installer login → Dashboard (BTS & CPE)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_111_installer_dashboard(
     gui_page,
@@ -13190,11 +12945,9 @@ async def assert_sanity_111_installer_dashboard(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_112 — Installer login → Quick Start (BTS & CPE)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_112_installer_quickstart(
     gui_page,
@@ -13321,11 +13074,9 @@ async def assert_sanity_112_installer_quickstart(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_113 — Installer login → Quick Start Link Statistics (BTS & CPE)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_113_installer_link_statistics(
     gui_page,
@@ -13460,11 +13211,9 @@ async def assert_sanity_113_installer_link_statistics(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_114 — Installer login → Quick Start Site Survey (BTS & CPE)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_114_installer_site_survey(
     gui_page,
@@ -13606,11 +13355,9 @@ async def assert_sanity_114_installer_site_survey(
             pass
         await _close_case_bts_ssh(bts_ssh, root_ssh)
 
-
 # ---------------------------------------------------------------------------
 # SANITY_115 — Installer login → GUI soft reboot (BTS & CPE)
 # ---------------------------------------------------------------------------
-
 
 async def assert_sanity_115_installer_soft_reboot(
     gui_page,

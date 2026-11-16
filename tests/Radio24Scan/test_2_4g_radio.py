@@ -173,13 +173,16 @@ async def test_radio_24_45_api_under_load(cpe_api_24_client):
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.RADIO_24_46
 @pytest.mark.Radio24Scan
-async def test_radio_24_46_api_after_reboot(cpe_api_24_client, bsu_ip, device_creds):
+async def test_radio_24_46_api_after_reboot(
+    cpe_api_24_client, bsu_ip, device_creds, profile_bundle
+):
     """2.4G_RADIO_46 — reboot; backend SSH + GET sw-version; wait BTS↔CPE link."""
     await assert_radio_24_46_api_after_reboot(
         cpe_api_24_client,
         bts_host=bsu_ip,
         bts_username=device_creds["user"],
         bts_password=device_creds["pass"],
+        profile_bundle=profile_bundle,
     )
 
 

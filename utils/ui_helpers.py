@@ -78,6 +78,19 @@ async def read_luci_input_value(gui_page, locator: str) -> str:
     return values[0] if values else ""
 
 
+def lab_ipv4_luci_url(url: str) -> str | None:
+    """Same LuCI path on the lab IPv4 address when the IPv6 page is unreachable."""
+    text = url or ""
+    if "0:331" in text:
+        host = "192.168.2.11"
+    elif "0:330" in text:
+        host = "192.168.2.10"
+    else:
+        return None
+    rewritten = re.sub(r"https?://\[[^\]]+\]", f"http://{host}", text, count=1)
+    return rewritten if rewritten != text else None
+
+
 def luci_base_url(page_url: str) -> str | None:
     """Extract a single LuCI base URL (handles IPv6 and duplicated navigation URLs)."""
     match = re.search(
@@ -173,23 +186,63 @@ async def execute_triple_apply(gui_page, fallback_url):
         await gui_page.wait_for_url(f"**{fallback_url}*", timeout=25000)
     except Exception:
         print(f"    -> WARNING: Did not automatically return. Forcing navigation to {fallback_url}")
-        base_url_with_token = luci_base_url(gui_page.url or "")
+        if str(fallback_url).startswith(("http://", "https://")):
+            full_target_url = fallback_url
+            base_url_with_token = fallback_url
+        else:
+            base_url_with_token = luci_base_url(gui_page.url or "")
+            full_target_url = (base_url_with_token or "") + str(fallback_url)
         if base_url_with_token:
-            full_target_url = base_url_with_token + fallback_url
-            last_exc = None
-            for attempt in range(4):
-                try:
-                    if attempt:
-                        wait_ms = 10000 if attempt < 3 else 15000
-                        print(f"    -> [DEBUG] Retry {attempt + 1}/4 after {wait_ms // 1000}s wait...")
-                        await gui_page.wait_for_timeout(wait_ms)
-                    await gui_page.goto(full_target_url, timeout=20000)
-                    await gui_page.wait_for_load_state("domcontentloaded", timeout=10000)
-                    break
-                except Exception as e:
-                    last_exc = e
-                    print("    -> [DEBUG] Navigation retry failed while services restarted.")
+            ipv4_url = lab_ipv4_luci_url(full_target_url)
+            # CPE IPv6 from the test PC drops while the radio restarts, so
+            # stay on 192.168.2.11 and keep retrying. BTS is on the wire;
+            # its original URL must be tried first. A login redirect that
+            # drops ;stok= is not a recovered admin page.
+            cpe = bool(ipv4_url and "192.168.2.11" in ipv4_url)
+            if cpe:
+                targets = [ipv4_url, full_target_url]
             else:
+                targets = [full_target_url]
+                if ipv4_url and ipv4_url not in targets:
+                    targets.append(ipv4_url)
+            last_exc = None
+            recovered = False
+            for target in targets:
+                if cpe and target == ipv4_url:
+                    tries, pause_ms = 8, 12000
+                elif target == full_target_url:
+                    tries, pause_ms = 4, 8000
+                else:
+                    tries, pause_ms = 2, 8000
+                for attempt in range(tries):
+                    try:
+                        if attempt or (cpe and target == ipv4_url):
+                            print(
+                                f"    -> [DEBUG] Retry navigation via {target} "
+                                f"({attempt + 1}/{tries})..."
+                            )
+                            await gui_page.wait_for_timeout(pause_ms)
+                        await gui_page.goto(target, timeout=20000)
+                        await gui_page.wait_for_load_state("domcontentloaded", timeout=10000)
+                        url_now = gui_page.url or ""
+                        if (
+                            "chrome-error" in url_now
+                            or "chromewebdata" in url_now
+                            or "stok=" not in url_now
+                        ):
+                            raise RuntimeError(f"session not on admin page ({url_now})")
+                        recovered = True
+                        print(f"    -> [DEBUG] Page recovered at {url_now}")
+                        break
+                    except Exception as e:
+                        last_exc = e
+                        print(
+                            "    -> [DEBUG] Navigation retry failed while services restarted: "
+                            f"{type(e).__name__}"
+                        )
+                if recovered:
+                    break
+            if not recovered:
                 print(f"    -> [DEBUG] Unable to recover page after apply: {last_exc}")
 
 
