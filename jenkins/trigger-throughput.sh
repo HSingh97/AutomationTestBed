@@ -17,6 +17,9 @@ JOB_PATH="job/Automation%20Framework/job/Throughput%20Test%20-%20Trex"
 TARGET_STAND="${TARGET_STAND:-test-qa-lab-01}"
 BANDWIDTH="${BANDWIDTH:-all}"
 MCS="${MCS:-all}"
+TREX_IP="${TREX_IP:-}"
+BTS_IP="${BTS_IP:-}"
+CPE_IP="${CPE_IP:-}"
 RATIO="${RATIO:-75:25}"
 DURATION="${DURATION:-30}"
 PACKET_SIZE="${PACKET_SIZE:-1500}"
@@ -32,6 +35,9 @@ Options:
   --stand STAND       TARGET_STAND / agent label (default: test-qa-lab-01)
   --bandwidth LIST    htmode list or all (default: all → HT20,HT40,HT80)
   --mcs LIST          MCS list or all (default: all → MCS0..MCS23)
+  --trex-ip IP        TRex server IP (default: stand profile)
+  --bts-ip IP         BTS management IP (default: stand profile)
+  --cpe-ip IP         CPE management IP (default: stand profile)
   --ratio RATIO       DL:UL ratio (default: 75:25)
   --time SECONDS      Per-iteration duration (default: 30)
   --packet-size N     Frame size bytes (default: 1500)
@@ -46,6 +52,9 @@ while [[ $# -gt 0 ]]; do
     --stand) TARGET_STAND="$2"; shift 2 ;;
     --bandwidth) BANDWIDTH="$2"; shift 2 ;;
     --mcs) MCS="$2"; shift 2 ;;
+    --trex-ip) TREX_IP="$2"; shift 2 ;;
+    --bts-ip) BTS_IP="$2"; shift 2 ;;
+    --cpe-ip) CPE_IP="$2"; shift 2 ;;
     --ratio) RATIO="$2"; shift 2 ;;
     --time) DURATION="$2"; shift 2 ;;
     --packet-size) PACKET_SIZE="$2"; shift 2 ;;
@@ -75,6 +84,9 @@ POST_DATA=(
   --data-urlencode "TARGET_STAND=${TARGET_STAND}"
   --data-urlencode "Bandwidth=${BANDWIDTH}"
   --data-urlencode "MCS=${MCS}"
+  --data-urlencode "TRex IP=${TREX_IP}"
+  --data-urlencode "BTS IP=${BTS_IP}"
+  --data-urlencode "CPE IP=${CPE_IP}"
   --data-urlencode "DL:UL Ratio=${RATIO}"
   --data-urlencode "Throughput Test Time=${DURATION}"
   --data-urlencode "Packet Size=${PACKET_SIZE}"

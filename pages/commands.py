@@ -166,11 +166,20 @@ class RootCommands:
     # --- THROUGHPUT CONFIG COMMANDS ---
     @staticmethod
     def mcs_ucidyn_set_commands(radio_idx, mcs_rate, spatial_stream, ddrs_rate):
-        """UCI set commands only — caller applies once via remote_exec broadcast."""
+        """UCI set commands only — caller applies once via remote_exec broadcast.
+
+        ``spatial_stream`` is the CLI stream count and is not written. The UCI
+        value comes from the MCS index: 1 = single (MCS0–11), 2 = dual
+        (MCS12–23). ``0`` is not a valid spatial stream on this radio.
+        DDRS is disabled so ``ddrsrate`` is the fixed modulation the GUI shows.
+        """
+        from utils.parsers import fixed_mcs_spatial_uci
+
         modulation_rate = ddrs_rate if ddrs_rate is not None else mcs_rate
+        spatial_uci = fixed_mcs_spatial_uci(modulation_rate)
         return [
             f"ucidyn set txparam.ath{radio_idx}.ddrsstatus 0",
-            f"ucidyn set txparam.ath{radio_idx}.spatialstream {spatial_stream}",
+            f"ucidyn set txparam.ath{radio_idx}.spatialstream {spatial_uci}",
             f"ucidyn set txparam.ath{radio_idx}.ddrsrate {modulation_rate}",
         ]
 
@@ -184,7 +193,7 @@ class RootCommands:
     @staticmethod
     def set_bandwidth_commands(radio_idx, bandwidth):
         return [
-            f"ucidyn set wireless.wifi{radio_idx}.htmode {bandwidth}",
+            f"ucidyn set advwireless.ath{radio_idx}.htmode {bandwidth}",
             "ucidyn apply",
         ]
 
@@ -209,7 +218,7 @@ class RootCommands:
         previous channel from a cached radio profile.
         """
         commands = [
-            f"ucidyn set wireless.wifi{radio_idx}.htmode {bandwidth}",
+            f"ucidyn set advwireless.ath{radio_idx}.htmode {bandwidth}",
             f"ucidyn set ath{radio_idx}qos.qoscfg.dlulratio {dl_ul_percent}",
         ]
         if channel is not None:

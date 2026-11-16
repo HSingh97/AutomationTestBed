@@ -47,6 +47,21 @@ pipeline {
             description: 'MCS list (e.g. MCS22,MCS23) or all → MCS0..MCS23'
         )
         string(
+            name: 'TRex IP',
+            defaultValue: '',
+            description: 'TRex server IP. Leave empty to use the stand profile.'
+        )
+        string(
+            name: 'BTS IP',
+            defaultValue: '',
+            description: 'BTS management IP. Leave empty to use the stand profile.'
+        )
+        string(
+            name: 'CPE IP',
+            defaultValue: '',
+            description: 'CPE / SU management IP. Leave empty to use the stand profile.'
+        )
+        string(
             name: 'Packet Size',
             defaultValue: '1500',
             description: 'TRex frame size in bytes'
@@ -79,6 +94,9 @@ pipeline {
                     echo "--- TARGET STAND: ${TARGET_STAND}"
                     echo "Bandwidth:  ${params.Bandwidth} → ${bandwidths}"
                     echo "MCS:        ${params.MCS} → ${mcsList}"
+                    echo "TRex IP:    ${params['TRex IP'] ?: '(stand profile)'}"
+                    echo "BTS IP:     ${params['BTS IP'] ?: '(stand profile)'}"
+                    echo "CPE IP:     ${params['CPE IP'] ?: '(stand profile)'}"
                     echo "Packet:     ${params['Packet Size']}"
                     echo "Ratio:      ${params['DL:UL Ratio']}"
                     echo "Duration:   ${params['Throughput Test Time']}s"
@@ -110,9 +128,13 @@ pipeline {
                     def suCount = (params['No of SU'] ?: '6').trim()
                     def packetRaw = (params['Packet Size'] ?: '1500').trim()
                     // Internal timeouts (not exposed in UI)
-                    def suLinkWait = '240'
-                    def bwApplyWait = '90'
-                    def bwRunningWait = '180'
+                    def suLinkWait = '180'
+                    def bwApplyWait = '60'
+                    def bwRunningWait = '20'
+                    def operatingMcsWait = '45'
+                    def trexIp = (params['TRex IP'] ?: '').trim()
+                    def btsIp = (params['BTS IP'] ?: '').trim()
+                    def cpeIp = (params['CPE IP'] ?: '').trim()
 
                     if (!(packetRaw ==~ /^\d+$/)) {
                         error("Packet Size must be numeric bytes (e.g. 1500), got: ${packetRaw}")
@@ -134,9 +156,22 @@ pipeline {
                     cmd.append(" --su-link-wait-s ${suLinkWait}")
                     cmd.append(" --bandwidth-apply-wait-s ${bwApplyWait}")
                     cmd.append(" --bandwidth-running-wait-s ${bwRunningWait}")
+                    cmd.append(" --operating-mcs-wait-s ${operatingMcsWait}")
                     cmd.append(' --deploy-client-script')
                     cmd.append(" --stand '${TARGET_STAND}'")
                     cmd.append(" --su-count ${suCount}")
+                    if (trexIp) {
+                        cmd.append(" --trex-server '${trexIp}'")
+                    }
+                    if (btsIp) {
+                        cmd.append(" --local-ip '${btsIp}'")
+                    }
+                    if (cpeIp) {
+                        cmd.append(" --cpe-ip '${cpeIp}'")
+                    }
+                    if (btsIp.contains('.') && !btsIp.contains(':')) {
+                        cmd.append(' --no-qinq')
+                    }
 
                     def exitCode = sh(script: cmd.toString(), returnStatus: true)
                     env.PERF_MATRIX_EXIT = "${exitCode}"
@@ -202,6 +237,9 @@ pipeline {
                     <p><strong>Stand:</strong> ${params.TARGET_STAND}</p>
                     <p><strong>Bandwidth:</strong> ${params.Bandwidth}</p>
                     <p><strong>MCS:</strong> ${params.MCS}</p>
+                    <p><strong>TRex IP:</strong> ${params['TRex IP'] ?: '(stand profile)'}</p>
+                    <p><strong>BTS IP:</strong> ${params['BTS IP'] ?: '(stand profile)'}</p>
+                    <p><strong>CPE IP:</strong> ${params['CPE IP'] ?: '(stand profile)'}</p>
                     <p><strong>Packet size:</strong> ${params['Packet Size']} bytes</p>
                     <p><strong>DL:UL ratio:</strong> ${params['DL:UL Ratio']}</p>
                     <p><strong>Duration:</strong> ${params['Throughput Test Time']}s per iteration</p>

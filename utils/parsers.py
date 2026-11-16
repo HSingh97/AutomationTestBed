@@ -264,14 +264,43 @@ def parse_spatial_stream_uci(ssh_str):
     """Normalize txparam.athN.spatialstream UCI to single/dual/auto."""
     val = extract_uci_value(ssh_str).strip().lower()
     mapping = {
-        "0": "single",
-        "1": "dual",
-        "2": "auto",
+        "1": "single",
+        "2": "dual",
         "single": "single",
         "dual": "dual",
         "auto": "auto",
     }
     return mapping.get(val, val)
+
+
+def _mcs_index(mcs_rate) -> int | None:
+    text = str(mcs_rate).strip().upper()
+    if text.startswith("MCS"):
+        text = text[3:]
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def fixed_mcs_spatial_uci(mcs_rate) -> str:
+    """UCI ``txparam.athN.spatialstream`` that locks a modulation index.
+
+    On this radio, ``1`` is single stream (MCS0–11) and ``2`` is dual stream
+    (MCS12–23). ``0`` is not a valid spatial stream.
+    """
+    index = _mcs_index(mcs_rate)
+    if index is None:
+        return "1"
+    return "2" if index >= 12 else "1"
+
+
+def sheet_spatial_streams(mcs_rate) -> int:
+    """Rate-sheet stream count for a locked MCS: 1 for MCS0–11, 2 for MCS12–23."""
+    index = _mcs_index(mcs_rate)
+    if index is None:
+        return 1
+    return 2 if index >= 12 else 1
 
 
 def parse_link_type(ssh_str):

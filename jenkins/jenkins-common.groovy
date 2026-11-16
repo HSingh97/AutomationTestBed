@@ -64,6 +64,19 @@ def copyLatestPerformanceReport(String destFile) {
     """
 }
 
+def copyLatestChannelConnectivityReport(String destFile) {
+    sh """
+        set -e
+        latest=\$(ls -t reports/artifacts/Channel_Connectivity_*_Grafana.html 2>/dev/null | head -1 || true)
+        if [ -z "\$latest" ]; then
+          echo "No reports/artifacts/Channel_Connectivity_*_Grafana.html found"
+          exit 1
+        fi
+        cp "\$latest" "${destFile}"
+        echo "Copied \$latest -> ${destFile}"
+    """
+}
+
 def publishSenaoHtmlReport(String reportFile, String reportLabel) {
     if (!reportFile || !fileExists(reportFile)) {
         echo "HTML report not found for publishHTML: ${reportFile}"

@@ -1,4 +1,4 @@
-"""Apply DUT radio settings: BTS (bandwidth, DL/UL, MCS) and CPE (MCS only) over SSH."""
+"""Apply DUT radio settings: BTS (bandwidth, DL/UL, MCS) and CPE (bandwidth and MCS) over SSH."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from traffic.operating_rate_table import (
 )
 from traffic.kwn_sua_statistics import is_sua_associated, read_operating_mcs_by_sua_slot
 from utils.net_utils import format_ssh_host, is_ipv6_literal, normalize_ip
+from utils.parsers import fixed_mcs_spatial_uci, sheet_spatial_streams
 
 
 def ratio_to_uci_dl_percent(ratio: str) -> str:
@@ -463,10 +464,14 @@ def _verify_bts_mcs(
     actual_mcs = _read_uci(ip, user, password, f"uci get txparam.ath{radio_idx}.ddrsrate")
     actual_spatial = _read_uci(ip, user, password, f"uci get txparam.ath{radio_idx}.spatialstream")
     mismatches: list[str] = []
+    expected_spatial = fixed_mcs_spatial_uci(mcs_rate)
     if actual_mcs != expected_mcs:
         mismatches.append(f"ddrsrate expected {expected_mcs}, got {actual_mcs}")
-    if actual_spatial != spatial_stream:
-        mismatches.append(f"spatialstream expected {spatial_stream}, got {actual_spatial}")
+    if actual_spatial != expected_spatial:
+        mismatches.append(f"spatialstream expected {expected_spatial}, got {actual_spatial}")
+    actual_ddrs = _read_uci(ip, user, password, f"uci get txparam.ath{radio_idx}.ddrsstatus")
+    if actual_ddrs not in {"0", "disable", "disabled"}:
+        mismatches.append(f"ddrsstatus expected 0 (disable), got {actual_ddrs}")
     if mismatches:
         raise RuntimeError(f"BTS MCS verify failed on {ip}: " + "; ".join(mismatches))
     print(f"[BTS] MCS verified on {ip}: mcs={actual_mcs}, spatial={actual_spatial}")
@@ -483,7 +488,7 @@ def _verify_bts_bandwidth_ratio(
     check_running: bool = True,
 ) -> None:
     expected_bw = normalize_bandwidth(bandwidth)
-    actual_bw = _read_uci(ip, user, password, f"uci get wireless.wifi{radio_idx}.htmode")
+    actual_bw = _read_uci(ip, user, password, f"uci get advwireless.ath{radio_idx}.htmode")
     running_bw = _read_running_bandwidth(ip, user, password, radio_idx) if check_running else None
     actual_ratio = _read_uci(ip, user, password, f"uci get ath{radio_idx}qos.qoscfg.dlulratio")
     mismatches: list[str] = []
@@ -492,8 +497,10 @@ def _verify_bts_bandwidth_ratio(
             f"htmode expected {uci_htmode_value(bandwidth)}, got {actual_bw}"
         )
     if check_running and running_bw != expected_bw:
-        mismatches.append(
-            f"running mode expected {expected_bw}, got {running_bw or 'unknown'} (cfg80211tool)"
+        print(
+            f"[WARN] cfg80211tool reports {running_bw or 'unknown'} "
+            f"while advwireless.ath{radio_idx}.htmode is {actual_bw or 'unknown'}. "
+            "The link rate follows advwireless; cfg80211tool follows wireless.wifiN.htmode."
         )
     if actual_ratio != dl_ul_percent:
         mismatches.append(f"dlulratio expected {dl_ul_percent}, got {actual_ratio}")
@@ -564,7 +571,7 @@ def _verify_bts_config(
 ) -> None:
     expected_bw = normalize_bandwidth(bandwidth)
     expected_mcs = str(mcs_number(mcs_rate))
-    actual_bw = _read_uci(ip, user, password, f"uci get wireless.wifi{radio_idx}.htmode")
+    actual_bw = _read_uci(ip, user, password, f"uci get advwireless.ath{radio_idx}.htmode")
     actual_mcs = _read_uci(ip, user, password, f"uci get txparam.ath{radio_idx}.ddrsrate")
     actual_ratio = _read_uci(ip, user, password, f"uci get ath{radio_idx}qos.qoscfg.dlulratio")
     actual_spatial = _read_uci(ip, user, password, f"uci get txparam.ath{radio_idx}.spatialstream")
@@ -576,10 +583,11 @@ def _verify_bts_config(
         )
     if actual_mcs != expected_mcs:
         mismatches.append(f"ddrsrate expected {expected_mcs}, got {actual_mcs}")
+    expected_spatial = fixed_mcs_spatial_uci(mcs_rate)
     if actual_ratio != dl_ul_percent:
         mismatches.append(f"dlulratio expected {dl_ul_percent}, got {actual_ratio}")
-    if actual_spatial != spatial_stream:
-        mismatches.append(f"spatialstream expected {spatial_stream}, got {actual_spatial}")
+    if actual_spatial != expected_spatial:
+        mismatches.append(f"spatialstream expected {expected_spatial}, got {actual_spatial}")
     if mismatches:
         raise RuntimeError(f"BTS config verify failed on {ip}: " + "; ".join(mismatches))
     print(
@@ -601,10 +609,14 @@ def _verify_cpe_mcs(
     actual_mcs = _read_uci(ip, user, password, f"uci get txparam.ath{radio_idx}.ddrsrate")
     actual_spatial = _read_uci(ip, user, password, f"uci get txparam.ath{radio_idx}.spatialstream")
     mismatches: list[str] = []
+    expected_spatial = fixed_mcs_spatial_uci(mcs_rate)
     if actual_mcs != expected_mcs:
         mismatches.append(f"ddrsrate expected {expected_mcs}, got {actual_mcs}")
-    if actual_spatial != spatial_stream:
-        mismatches.append(f"spatialstream expected {spatial_stream}, got {actual_spatial}")
+    if actual_spatial != expected_spatial:
+        mismatches.append(f"spatialstream expected {expected_spatial}, got {actual_spatial}")
+    actual_ddrs = _read_uci(ip, user, password, f"uci get txparam.ath{radio_idx}.ddrsstatus")
+    if actual_ddrs not in {"0", "disable", "disabled"}:
+        mismatches.append(f"ddrsstatus expected 0 (disable), got {actual_ddrs}")
     if mismatches:
         raise RuntimeError(f"CPE config verify failed on {ip}: " + "; ".join(mismatches))
     print(f"[CPE] Verified on {ip}: mcs={actual_mcs}, spatial={actual_spatial}")
@@ -632,7 +644,10 @@ def configure_bts_mcs_only(
 ) -> None:
     """BTS only: fixed MCS (ddrsrate) and spatial stream."""
     uci_mcs = str(mcs_number(mcs_rate))
-    print(f"[BTS] Applying MCS on {ip}: mcs={mcs_rate} (uci={uci_mcs}), spatial={spatial_stream}")
+    print(
+        f"[BTS] Applying MCS on {ip}: mcs={mcs_rate} (uci={uci_mcs}), "
+        f"ddrsstatus=0, spatialstream={fixed_mcs_spatial_uci(uci_mcs)}"
+    )
     commands = RootCommands.set_mcs_sequence_commands(radio_idx, mcs_rate, spatial_stream, uci_mcs)
     _run_ucidyn_sequence(ip, user, password, commands, ssh_timeout_s=ssh_timeout_s)
     run_ssh_command(ip, user, password, RootCommands.remote_apply_all_su(), timeout_s=ssh_timeout_s)
@@ -767,7 +782,10 @@ def configure_cpe_mcs(
 ) -> None:
     """CPE only: fixed MCS (ddrsrate) and spatial stream — no bandwidth or DL/UL."""
     uci_mcs = str(mcs_number(mcs_rate))
-    print(f"[CPE] Applying on {ip}: mcs={mcs_rate} (uci={uci_mcs}), spatial={spatial_stream}")
+    print(
+        f"[CPE] Applying on {ip}: mcs={mcs_rate} (uci={uci_mcs}), "
+        f"ddrsstatus=0, spatialstream={fixed_mcs_spatial_uci(uci_mcs)}"
+    )
     commands = RootCommands.set_mcs_sequence_commands(radio_idx, mcs_rate, spatial_stream, uci_mcs)
     _run_ucidyn_sequence(ip, user, password, commands, ssh_timeout_s=ssh_timeout_s)
     if verify:
@@ -791,10 +809,11 @@ def _verify_cpe_mcs_on_device(
 ) -> None:
     expected_mcs = str(mcs_number(mcs_rate))
     mismatches: list[str] = []
+    expected_spatial = fixed_mcs_spatial_uci(mcs_rate)
     if read_mcs != expected_mcs:
         mismatches.append(f"ddrsrate expected {expected_mcs}, got {read_mcs}")
-    if read_spatial != spatial_stream:
-        mismatches.append(f"spatialstream expected {spatial_stream}, got {read_spatial}")
+    if read_spatial != expected_spatial:
+        mismatches.append(f"spatialstream expected {expected_spatial}, got {read_spatial}")
     if mismatches:
         raise RuntimeError(f"CPE config verify failed ({label}): " + "; ".join(mismatches))
     print(f"[CPE] Verified ({label}): mcs={read_mcs}, spatial={read_spatial}")
@@ -815,7 +834,7 @@ def configure_cpe_mcs_via_bts_ssh(
     uci_mcs = str(mcs_number(mcs_rate))
     print(
         f"[CPE] Applying via BTS→CPE SSH to {cpe_ip}: "
-        f"mcs={mcs_rate} (uci={uci_mcs}), spatial={spatial_stream}"
+        f"mcs={mcs_rate} (uci={uci_mcs}), ddrsstatus=0, spatialstream={fixed_mcs_spatial_uci(uci_mcs)}"
     )
     commands = RootCommands.set_mcs_sequence_commands(radio_idx, mcs_rate, spatial_stream, uci_mcs)
     for cmd in commands:
@@ -1153,7 +1172,7 @@ def _collect_mcs_checks(
             "actual_mcs": bts_mcs,
             "spatial_stream": bts_spatial,
             "source": "uci",
-            "ok": bts_mcs == expected_mcs and bts_spatial == spatial_stream,
+            "ok": bts_mcs == expected_mcs and bts_spatial == fixed_mcs_spatial_uci(expected_mcs),
         }
     )
     sua_slots = read_operating_mcs_by_sua_slot(
@@ -1181,7 +1200,8 @@ def _collect_mcs_checks(
             continue
         actual_mcs = str(slot.get("rx_rate_mcs") or "").strip()
         rx_rate = str(slot.get("rx_rate") or "").strip()
-        if not actual_mcs or actual_mcs in {"-", "0"}:
+        # "0" is MCS0. Only a blank or "-" sysfs value means the rate is unknown.
+        if not actual_mcs or actual_mcs == "-":
             checks.append(
                 {
                     "role": "CPE",
@@ -1359,7 +1379,7 @@ def configure_cpe_mcs_via_bts_remote_exec(
     uci_mcs = str(mcs_number(mcs_rate))
     print(
         f"[CPE] Applying via BTS remote_exec (SU{su_index}): "
-        f"mcs={mcs_rate} (uci={uci_mcs}), spatial={spatial_stream}"
+        f"mcs={mcs_rate} (uci={uci_mcs}), ddrsstatus=0, spatialstream={fixed_mcs_spatial_uci(uci_mcs)}"
     )
     commands = RootCommands.mcs_ucidyn_set_commands(radio_idx, mcs_rate, spatial_stream, uci_mcs)
     for inner in commands:
@@ -1467,7 +1487,7 @@ def configure_mcs_broadcast_bts_and_all_cpes(
     uci_mcs = str(mcs_number(mcs_rate))
     print(
         f"[MCS] Broadcasting via remote_exec.sh {DEFAULT_REMOTE_EXEC_BROADCAST_SU}: "
-        f"mcs={mcs_rate} (uci={uci_mcs}), spatial={spatial_stream} → BTS + all CPEs"
+        f"mcs={mcs_rate} (uci={uci_mcs}), ddrsstatus=0, spatialstream={fixed_mcs_spatial_uci(uci_mcs)} → BTS + all CPEs"
     )
     set_commands = RootCommands.mcs_ucidyn_set_commands(
         radio_idx, mcs_rate, spatial_stream, uci_mcs
@@ -1713,7 +1733,7 @@ def radio_profile_already_matches(
     if not mcs_report.get("mcs_config_ok"):
         return False, mcs_report
 
-    actual_bw = _read_uci(bts_ip, user, password, f"uci get wireless.wifi{radio_idx}.htmode")
+    actual_bw = _read_uci(bts_ip, user, password, f"uci get advwireless.ath{radio_idx}.htmode")
     running_bw = _read_running_bandwidth(bts_ip, user, password, radio_idx)
     actual_ratio = _read_uci(
         bts_ip, user, password, f"uci get ath{radio_idx}qos.qoscfg.dlulratio"
@@ -1740,7 +1760,7 @@ def bandwidth_profile_matches(
     """Return True when BTS htmode, running mode, and DL:UL ratio already match."""
     expected_bw = normalize_bandwidth(bandwidth)
     dl_ul_percent = ratio_to_uci_dl_percent(ratio)
-    actual_bw = _read_uci(bts_ip, user, password, f"uci get wireless.wifi{radio_idx}.htmode")
+    actual_bw = _read_uci(bts_ip, user, password, f"uci get advwireless.ath{radio_idx}.htmode")
     running_bw = _read_running_bandwidth(bts_ip, user, password, radio_idx)
     actual_ratio = _read_uci(
         bts_ip, user, password, f"uci get ath{radio_idx}qos.qoscfg.dlulratio"
@@ -1752,6 +1772,104 @@ def bandwidth_profile_matches(
     )
 
 
+def _verify_cpe_bandwidth(
+    cpe_hosts: list[str] | None,
+    user: str,
+    password: str,
+    radio_idx: int,
+    bandwidth: str,
+    *,
+    bandwidth_running_wait_s: float = 120.0,
+) -> None:
+    expected = normalize_bandwidth(bandwidth)
+    htmode = uci_htmode_value(bandwidth)
+    for host in [str(item).strip() for item in (cpe_hosts or []) if str(item).strip()]:
+        if bandwidth_running_wait_s > 0:
+            _wait_for_running_bandwidth(
+                host,
+                user,
+                password,
+                radio_idx,
+                bandwidth,
+                timeout_s=bandwidth_running_wait_s,
+            )
+        actual = _read_uci(host, user, password, f"uci get advwireless.ath{radio_idx}.htmode")
+        running = _read_running_bandwidth(host, user, password, radio_idx)
+        if not uci_htmode_matches(bandwidth, actual):
+            raise RuntimeError(
+                f"CPE {host} htmode expected {htmode}, got {actual.strip() or 'unset'}"
+            )
+        if bandwidth_running_wait_s > 0 and running != expected:
+            raise RuntimeError(
+                f"CPE {host} running bandwidth {running or 'unknown'} != {expected}"
+            )
+        print(f"[CPE] Bandwidth verified on {host}: uci={actual.strip()}, running={running}")
+
+
+def _apply_cpe_bandwidth(
+    cpe_hosts: list[str] | None,
+    user: str,
+    password: str,
+    radio_idx: int,
+    bandwidth: str,
+    *,
+    ssh_timeout_s: int = 60,
+) -> bool:
+    """Set the same htmode on every CPE. The BTS-only apply leaves the link at the CPE width."""
+    changed = False
+    hosts = [str(host).strip() for host in (cpe_hosts or []) if str(host).strip()]
+    if not hosts:
+        return False
+    htmode = uci_htmode_value(bandwidth)
+    expected = normalize_bandwidth(bandwidth)
+    for host in hosts:
+        actual = _read_uci(host, user, password, f"uci get advwireless.ath{radio_idx}.htmode")
+        running = _read_running_bandwidth(host, user, password, radio_idx)
+        if uci_htmode_matches(bandwidth, actual) and running == expected:
+            print(
+                f"[CPE] Bandwidth already {expected} on {host} "
+                f"(uci={actual.strip()}, running={running})"
+            )
+            continue
+        print(
+            f"[CPE] Applying bandwidth on {host}: htmode={htmode} "
+            f"(uci was {actual.strip() or 'unset'}, running {running or 'unknown'})"
+        )
+        # Apply in the background. The CPE management path is the wireless bridge,
+        # so ucidyn apply drops SSH and a foreground apply is killed by SIGHUP
+        # before the new htmode is stored.
+        chain = (
+            f"ucidyn set advwireless.ath{radio_idx}.htmode {htmode}"
+            " && { nohup ucidyn apply >/tmp/ucidyn-apply.log 2>&1 </dev/null & }"
+            " && echo CPE_APPLY_STARTED"
+        )
+        print(f"[CPE] Bandwidth apply chain on {host}: {chain}")
+        try:
+            started = run_ssh_command(
+                host,
+                user,
+                password,
+                chain,
+                timeout_s=ssh_timeout_s,
+            )
+        except RuntimeError as exc:
+            # A station radio rejects a local htmode write (validator requires AP).
+            # The link width follows the BTS, so this is not a failed bandwidth apply.
+            print(
+                f"[CPE] {host} rejected htmode {htmode} ({exc}). "
+                "Station radios use the BTS channel width."
+            )
+            continue
+        if "CPE_APPLY_STARTED" not in started:
+            print(
+                f"[CPE] {host} did not start htmode apply. "
+                "Station radios use the BTS channel width."
+            )
+            continue
+        changed = True
+    return changed
+
+
 def configure_bandwidth_profile(
     bts_ip: str,
     user: str,
@@ -1761,6 +1879,7 @@ def configure_bandwidth_profile(
     ratio: str,
     *,
     cpe_hosts: list[str] | None = None,
+    cpe_radio_idx: int | None = None,
     su_count: int = 1,
     profile_tb: dict | None = None,
     dut_cfg: dict | None = None,
@@ -1774,15 +1893,61 @@ def configure_bandwidth_profile(
     skip_if_unchanged: bool = True,
     channel: int | None = None,
 ) -> dict[str, object]:
-    """Apply BTS htmode + DL:UL ratio once per bandwidth group (no MCS change)."""
+    """Apply htmode on the BTS and every CPE, plus the BTS DL:UL ratio, once per bandwidth group."""
     from traffic.su_link_ping import wait_for_su_links
 
     cpe_hosts = _cap_cpe_hosts(cpe_hosts, su_count)
+    cpe_radio = radio_idx if cpe_radio_idx is None else cpe_radio_idx
     require_all_su = (
         require_all_su_for_bandwidth
         if require_all_su_for_bandwidth is not None
         else su_count == 4
     )
+
+    def _finish(bts_skipped: bool) -> dict[str, object]:
+        cpe_changed = _apply_cpe_bandwidth(
+            cpe_hosts,
+            user,
+            password,
+            cpe_radio,
+            bandwidth,
+            ssh_timeout_s=ssh_timeout_s,
+        )
+        if cpe_changed and su_link_wait_s > 0:
+            post_link = wait_for_su_links(
+                cpe_hosts=cpe_hosts or [],
+                profile_tb=profile_tb,
+                bts_ip=bts_ip,
+                bts_user=user,
+                bts_password=password,
+                dut=dut_cfg,
+                timeout_s=su_link_wait_s,
+                min_responding=su_count if require_all_su else None,
+                phase="after CPE bandwidth apply",
+                strict=require_all_su,
+                link_debug_dir=link_debug_dir,
+                radio_idx=radio_idx,
+            )
+            if require_all_su and not post_link.get("ok"):
+                raise RuntimeError(
+                    f"Only {len(post_link.get('responding', []))}/{su_count} "
+                    "SUs linked after CPE bandwidth apply"
+                )
+        if verify and cpe_changed:
+            _verify_cpe_bandwidth(
+                cpe_hosts,
+                user,
+                password,
+                cpe_radio,
+                bandwidth,
+                bandwidth_running_wait_s=bandwidth_running_wait_s,
+            )
+        return {
+            "bandwidth_ok": True,
+            "bandwidth_skipped": bts_skipped and not cpe_changed,
+            "cpe_bandwidth_applied": cpe_changed,
+        }
+
     if skip_if_unchanged and bandwidth_profile_matches(
         bts_ip, user, password, radio_idx, bandwidth, ratio
     ):
@@ -1810,13 +1975,13 @@ def configure_bandwidth_profile(
                     f"[CONFIG] Bandwidth already {normalize_bandwidth(bandwidth)}, "
                     f"ratio={ratio}, channel={channel} — skipping apply"
                 )
-                return {"bandwidth_ok": True, "bandwidth_skipped": True}
+                return _finish(True)
         else:
             print(
                 f"[CONFIG] Bandwidth already {normalize_bandwidth(bandwidth)}, "
-                f"ratio={ratio} — skipping apply"
+                f"ratio={ratio} — skipping BTS apply"
             )
-            return {"bandwidth_ok": True, "bandwidth_skipped": True}
+            return _finish(True)
 
     print(
         f"[CONFIG] Applying BTS bw={normalize_bandwidth(bandwidth)}, DL:UL ratio={ratio}"
@@ -1870,7 +2035,7 @@ def configure_bandwidth_profile(
             check_running=True,
         )
 
-    return {"bandwidth_ok": True, "bandwidth_skipped": False}
+    return _finish(False)
 
 
 def _cap_cpe_hosts(cpe_hosts: list[str] | None, su_count: int) -> list[str]:
@@ -1914,7 +2079,7 @@ def configure_mcs_profile(
     """Apply MCS on BTS + all CPEs without changing bandwidth (matrix inner loop)."""
     effective_settle = _settle_seconds(bandwidth, settle_s)
     cpe_radio = cpe_radio_idx if cpe_radio_idx is not None else radio_idx
-    spec = lookup_spec(mcs_rate, bandwidth, spatial_streams=int(spatial_stream))
+    spec = lookup_spec(mcs_rate, bandwidth, spatial_streams=sheet_spatial_streams(mcs_rate))
     cpe_hosts = _cap_cpe_hosts(cpe_hosts, su_count)
 
     if skip_if_unchanged:
@@ -2066,7 +2231,7 @@ def configure_radio_profile(
     """
     effective_settle = _settle_seconds(bandwidth, settle_s)
     cpe_radio = cpe_radio_idx if cpe_radio_idx is not None else radio_idx
-    spec = lookup_spec(mcs_rate, bandwidth, spatial_streams=int(spatial_stream))
+    spec = lookup_spec(mcs_rate, bandwidth, spatial_streams=sheet_spatial_streams(mcs_rate))
     cpe_hosts = _cap_cpe_hosts(cpe_hosts, su_count)
     require_all_su = (
         require_all_su_for_bandwidth

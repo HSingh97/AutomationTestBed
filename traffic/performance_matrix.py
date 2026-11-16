@@ -54,6 +54,7 @@ from utils.vlan_uci import qinq_tags_from_profile
 from utils.bench_config import profile_for_stand, recovery_profile_for_stand
 from utils.console_output import enable_live_console_output
 from utils.net_utils import normalize_ip
+from utils.parsers import sheet_spatial_streams
 from utils.grafana_sample_report import build_matrix_grafana_payload, write_grafana_sample_html
 from utils.performance_report import write_html_report, write_summary_csv
 from utils.profile_manager import load_profile_bundle
@@ -73,9 +74,9 @@ def _apply_profile_run_defaults(args, profile_bundle) -> None:
     if args.trex_ports == trex_defaults["ports"] and traffic_trex.get("ports"):
         args.trex_ports = str(traffic_trex["ports"])
     if traffic_trex.get("host"):
-        if args.profile != PERFORMANCE_DEFAULTS["profile"] or getattr(args, "stand", ""):
-            args.trex_server = str(traffic_trex["host"])
-        elif args.trex_server == trex_defaults["host"]:
+        # An explicit --trex-server is kept. The stand profile fills the factory default.
+        current = str(args.trex_server or "").strip()
+        if not current or current == str(trex_defaults["host"]):
             args.trex_server = str(traffic_trex["host"])
     if traffic_trex.get("user") and not os.getenv("TREX_USER"):
         args.trex_user = str(traffic_trex["user"])
@@ -210,6 +211,7 @@ def _operating_rate_for_traffic(
     link_validation: dict[str, object] | None = None,
 ) -> float:
     """Operating data rate (Mbps) from MCS sheet; use measured link rate when lower."""
+    spatial_stream = sheet_spatial_streams(mcs)
     sheet_rate = operating_rate_mbps(bandwidth, mcs, spatial_streams=spatial_stream)
     if not link_validation:
         return sheet_rate
@@ -248,10 +250,11 @@ def _resolve_traffic_targets(
 ) -> dict[str, object]:
     offer_ratio = _trex_offer_ratio(ratio)
     if args.use_dynamic_target:
+        streams = sheet_spatial_streams(mcs)
         operating_rate = _operating_rate_for_traffic(
             bandwidth=bandwidth,
             mcs=mcs,
-            spatial_stream=int(args.spatial_stream),
+            spatial_stream=streams,
             link_validation=link_validation,
         )
         targets = compute_traffic_targets(
@@ -262,7 +265,7 @@ def _resolve_traffic_targets(
             target_ceiling_mbps=args.target if args.target > 0 else None,
             phy_overrides=phy_overrides,
             legacy_mcs_caps=legacy_mcs_caps if not args.ignore_legacy_caps else None,
-            spatial_streams=int(args.spatial_stream),
+            spatial_streams=streams,
             su_count=su_count,
             operating_rate_mbps=operating_rate,
         )
@@ -529,6 +532,7 @@ def _fetch_link_validation(
         ssh_password=ssh_password,
         cpe_hosts=cpe_hosts,
     )
+    spatial_stream = sheet_spatial_streams(mcs)
     return validate_operating_rates(
         bandwidth=bandwidth,
         configured_mcs=mcs,
@@ -556,6 +560,7 @@ def _wait_for_link_rate(
     cpe_hosts: list[str] | None = None,
 ) -> dict[str, object]:
     """Poll until operating Out rate matches spec (secondary); always continue to TRex."""
+    spatial_stream = sheet_spatial_streams(mcs)
     expected = operating_rate_mbps(bandwidth, mcs, spatial_streams=spatial_stream)
     deadline = time.time() + timeout_s
     last_validation: dict[str, object] = {}
@@ -630,10 +635,9 @@ def _check_bandwidth_before_trex(
     expected_bw = normalize_bandwidth(bandwidth)
     running_bw = read_running_bandwidth(dut_ip, user, password, radio_idx)
     if running_bw and running_bw != expected_bw:
-        return (
-            False,
-            f"Running bandwidth {running_bw} != requested {expected_bw}",
-            {},
+        print(
+            f"[WARN] cfg80211tool running bandwidth {running_bw} != requested {expected_bw}. "
+            "Continuing from the advwireless link rate."
         )
 
     validation = _fetch_link_validation(
@@ -968,7 +972,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         legacy_mcs_caps=mcs_caps,
                         su_count=args.su_count,
                     )
-                    spec = lookup_spec(mcs, bandwidth, spatial_streams=int(args.spatial_stream))
+                    spec = lookup_spec(mcs, bandwidth, spatial_streams=sheet_spatial_streams(mcs))
                     print(
                         f"[{iteration}/{total_iterations}] "
                         f"BW={bandwidth} MCS={mcs} Mode={profile['name']} Ratio={profile['ratio']} | "
@@ -1094,6 +1098,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         bandwidth,
                         group_ratio,
                         cpe_hosts=cpe_hosts,
+                        cpe_radio_idx=args.cpe_radio_index,
                         su_count=args.su_count,
                         bandwidth_apply_wait_s=args.bandwidth_apply_wait_s,
                         su_link_wait_s=args.su_link_wait_s,
@@ -1183,7 +1188,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                         mcs_config.get("bandwidth_skipped")
                                     ),
                                     link_wifi_idx=args.link_wifi_idx,
-                                    spatial_stream=int(args.spatial_stream),
+                                    spatial_stream=sheet_spatial_streams(mcs),
                                     tolerance_mbps=args.rate_tolerance_mbps,
                                     tolerance_pct=args.rate_tolerance_pct,
                                     source=args.link_stats_source,
@@ -1215,7 +1220,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 bandwidth=bandwidth,
                                 mcs=mcs,
                                 link_wifi_idx=args.link_wifi_idx,
-                                spatial_stream=int(args.spatial_stream),
+                                spatial_stream=sheet_spatial_streams(mcs),
                                 tolerance_mbps=args.rate_tolerance_mbps,
                                 tolerance_pct=args.rate_tolerance_pct,
                                 timeout_s=args.link_wait_s,
@@ -1228,7 +1233,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             print(f"[ERROR] Failed to configure DUT for {bandwidth}/{mcs}/{ratio}: {exc}")
                             try:
                                 failed_spec = lookup_spec(
-                                    mcs, bandwidth, spatial_streams=int(args.spatial_stream)
+                                    mcs, bandwidth, spatial_streams=sheet_spatial_streams(mcs)
                                 )
                                 link_validation = {
                                     "configured_mcs": mcs,
@@ -1270,7 +1275,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         f"\n--- [{iteration}/{total_iterations}] "
                         f"BW={bandwidth} MCS={mcs} Mode={mode} Ratio={ratio} ---"
                     )
-                    spec = lookup_spec(mcs, bandwidth, spatial_streams=int(args.spatial_stream))
+                    spec = lookup_spec(mcs, bandwidth, spatial_streams=sheet_spatial_streams(mcs))
                     print(
                         f"Targets: operating_rate={targets.get('operating_rate_mbps', spec['operating_rate_mbps'])} Mbps, "
                         f"effective={targets['effective_target_mbps']} Mbps "
@@ -1304,7 +1309,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                         "cpe_hosts": cpe_hosts,
                         "packet_size": args.packet_size,
                         "duration_s": args.time,
-                        "spatial_stream": int(args.spatial_stream),
+                        "spatial_stream": sheet_spatial_streams(mcs),
                         "started_at": datetime.now(timezone.utc).isoformat(),
                     }
                     artifact = output_dir / _artifact_name(bandwidth, mcs, mode, ratio)
@@ -1383,7 +1388,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 "duration_s": args.time,
                                 "su_count": args.su_count,
                                 "packet_size": args.packet_size,
-                                "spatial_stream": args.spatial_stream,
+                                "spatial_stream": sheet_spatial_streams(mcs),
                                 "bandwidth": bandwidth,
                                 "mcs_rate": mcs,
                             },
@@ -1406,7 +1411,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             bandwidth=bandwidth,
                             mcs=mcs,
                             link_wifi_idx=args.link_wifi_idx,
-                            spatial_stream=int(args.spatial_stream),
+                            spatial_stream=sheet_spatial_streams(mcs),
                             tolerance_mbps=args.rate_tolerance_mbps,
                             tolerance_pct=args.rate_tolerance_pct,
                             source=args.link_stats_source,
@@ -1484,7 +1489,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                                 bandwidth=bandwidth,
                                 mcs=mcs,
                                 link_wifi_idx=args.link_wifi_idx,
-                                spatial_stream=int(args.spatial_stream),
+                                spatial_stream=sheet_spatial_streams(mcs),
                                 tolerance_mbps=args.rate_tolerance_mbps,
                                 tolerance_pct=args.rate_tolerance_pct,
                                 source=args.link_stats_source,
@@ -1494,7 +1499,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
                             )
                         except Exception:
                             failed_spec = lookup_spec(
-                                mcs, bandwidth, spatial_streams=int(args.spatial_stream)
+                                mcs, bandwidth, spatial_streams=sheet_spatial_streams(mcs)
                             )
                             record["link_validation"] = {
                                 "configured_mcs": mcs,

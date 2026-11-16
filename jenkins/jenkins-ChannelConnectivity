@@ -1,0 +1,196 @@
+// Channel connectivity sweep — runs on TARGET_STAND.
+// Report: Senao_Channel_Connectivity_<build>_Report_<date>.html
+
+def archiveBuildArtifacts(pattern, allowEmpty = false) {
+    step([
+        $class: 'ArtifactArchiver',
+        artifacts: pattern,
+        fingerprint: true,
+        onlyIfSuccessful: false,
+        allowEmptyArchive: allowEmpty,
+    ])
+}
+
+def expandBandwidths(raw) {
+    def text = (raw ?: '').trim()
+    if (!text || text.equalsIgnoreCase('all')) {
+        return 'HT20,HT40,HT80'
+    }
+    return text
+}
+
+def expandChannels(raw) {
+    def text = (raw ?: '').trim()
+    if (!text || text.equalsIgnoreCase('all')) {
+        return 'all'
+    }
+    return text
+}
+
+pipeline {
+    agent { node { label "${TARGET_STAND}" } }
+
+    parameters {
+        choice(
+            name: 'TARGET_STAND',
+            choices: ['test-qa-lab-01', 'test-qa-lab-02', 'test-harman2', 'test-puneet'],
+            description: 'Jenkins agent / lab stand'
+        )
+        string(
+            name: 'BTS IP',
+            defaultValue: '',
+            description: 'BTS management IP. Leave empty to use the stand profile.'
+        )
+        string(
+            name: 'CPE IP',
+            defaultValue: '',
+            description: 'CPE / SU management IP. Leave empty to use the stand profile.'
+        )
+        string(
+            name: 'Bandwidth',
+            defaultValue: 'all',
+            description: 'htmode list (e.g. HT20 or HT20,HT40) or all → HT20,HT40,HT80'
+        )
+        string(
+            name: 'Channels',
+            defaultValue: 'all',
+            description: 'Channel list (e.g. 36,40,44) or all for the country list'
+        )
+    }
+
+    stages {
+        stage('Prepare Testbed') {
+            steps {
+                script {
+                    def bandwidths = expandBandwidths(params.Bandwidth)
+                    def channels = expandChannels(params.Channels)
+                    echo '------------------------------------------'
+                    echo 'UBR Channel Connectivity'
+                    echo "--- TARGET STAND: ${TARGET_STAND}"
+                    echo "BTS IP:     ${params['BTS IP'] ?: '(stand profile)'}"
+                    echo "CPE IP:     ${params['CPE IP'] ?: '(stand profile)'}"
+                    echo "Bandwidth:  ${params.Bandwidth} → ${bandwidths}"
+                    echo "Channels:   ${channels}"
+                    echo '------------------------------------------'
+                }
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh '''
+                    bash jenkins/ensure-system-deps.sh
+
+                    python3 -m venv venv
+                    venv/bin/pip install --upgrade pip
+                    venv/bin/pip install -r requirements.txt
+                '''
+            }
+        }
+
+        stage('Run Channel Connectivity') {
+            steps {
+                script {
+                    def bandwidths = expandBandwidths(params.Bandwidth)
+                    def channels = expandChannels(params.Channels)
+                    def btsIp = (params['BTS IP'] ?: '').trim()
+                    def cpeIp = (params['CPE IP'] ?: '').trim()
+
+                    sh 'rm -rf reports/artifacts/channel_connectivity_* reports/artifacts/Channel_Connectivity_*_Grafana.html Senao_Channel_Connectivity_*.html || true'
+
+                    def cmd = new StringBuilder('PYTHONPATH=. venv/bin/python scripts/channel_connectivity.py')
+                    cmd.append(" --stand '${TARGET_STAND}'")
+                    cmd.append(" --bandwidths '${bandwidths}'")
+                    cmd.append(" --channels '${channels}'")
+                    if (btsIp) {
+                        cmd.append(" --bts-ip '${btsIp}'")
+                    }
+                    if (cpeIp) {
+                        cmd.append(" --cpe-ip '${cpeIp}'")
+                    }
+
+                    def exitCode = sh(script: cmd.toString(), returnStatus: true)
+                    env.CHANNEL_EXIT = "${exitCode}"
+
+                    def reportPath = sh(
+                        script: '''
+                            set -e
+                            latest=$(ls -t reports/artifacts/Channel_Connectivity_*_Grafana.html 2>/dev/null | head -1 || true)
+                            echo "$latest"
+                        ''',
+                        returnStdout: true
+                    ).trim()
+                    if (!reportPath) {
+                        error('Channel connectivity finished but no Grafana HTML report was found')
+                    }
+                    env.CHANNEL_REPORT_RAW = reportPath
+                    echo "HTML report (raw): ${reportPath}"
+                    if (exitCode != 0) {
+                        unstable("Channel connectivity completed with failures (exit ${exitCode})")
+                    }
+                }
+            }
+        }
+
+        stage('Finalize Report') {
+            steps {
+                script {
+                    def senao = load 'jenkins/jenkins-common.groovy'
+                    def destFile = "${senao.standardReportBasename('Senao_Channel_Connectivity')}.html"
+                    senao.copyLatestChannelConnectivityReport(destFile)
+                    env.CHANNEL_REPORT = destFile
+                    echo "Standard report: ${destFile}"
+                }
+            }
+        }
+
+        stage('Archive Report') {
+            steps {
+                script {
+                    archiveBuildArtifacts('Senao_Channel_Connectivity_*.html')
+                    archiveBuildArtifacts('reports/artifacts/Channel_Connectivity_*_Grafana.html', true)
+                    archiveBuildArtifacts('reports/artifacts/channel_connectivity_*.csv', true)
+                    archiveBuildArtifacts('reports/artifacts/channel_connectivity_*_iwconfig.log', true)
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                def senao = load 'jenkins/jenkins-common.groovy'
+                def reportFile = env.CHANNEL_REPORT ?: "${senao.standardReportBasename('Senao_Channel_Connectivity')}.html"
+                def hasReport = fileExists(reportFile)
+
+                if (hasReport) {
+                    senao.publishSenaoHtmlReport(reportFile, "Senao Channel Connectivity Report - Build ${env.BUILD_NUMBER}")
+                }
+
+                def detailsHtml = """\
+                    <p><strong>Stand:</strong> ${params.TARGET_STAND}</p>
+                    <p><strong>BTS IP:</strong> ${params['BTS IP'] ?: '(stand profile)'}</p>
+                    <p><strong>CPE IP:</strong> ${params['CPE IP'] ?: '(stand profile)'}</p>
+                    <p><strong>Bandwidth:</strong> ${params.Bandwidth}</p>
+                    <p><strong>Channels:</strong> ${params.Channels}</p>
+                """
+
+                try {
+                    senao.sendSenaoPipelineEmail([
+                        subjectPrefix: 'UBR Channel Connectivity',
+                        reportTitle: 'UBR Channel Connectivity Report',
+                        footerNote: 'Channel sweep with SU ping and iwconfig link-rate check',
+                        reportFile: hasReport ? reportFile : '',
+                        detailsHtml: detailsHtml
+                    ])
+                } catch (Exception exc) {
+                    echo "Email notification failed: ${exc.message}"
+                }
+                echo '-----------------------------------------'
+                echo 'Channel connectivity pipeline complete.'
+                echo "Report: ${hasReport ? reportFile : 'not generated'}"
+                echo '-----------------------------------------'
+            }
+        }
+    }
+}

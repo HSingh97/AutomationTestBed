@@ -32,7 +32,7 @@ def test_bandwidth_apply_uses_single_and_chain():
     assert len(captured) == 1
     chain = captured[0]["command"]
     assert chain == (
-        "ucidyn set wireless.wifi1.htmode HT80 && "
+        "ucidyn set advwireless.ath1.htmode HT80 && "
         "ucidyn set ath1qos.qoscfg.dlulratio 75 && "
         "ucidyn apply && sleep 60 && cfg80211tool ath1 get_mode"
     )
@@ -62,7 +62,7 @@ def test_bandwidth_apply_ht40_uses_ht40_plus_uci_value():
                     verify=False,
                 )
 
-    assert "ucidyn set wireless.wifi1.htmode HT40+" in captured[0]["command"]
+    assert "ucidyn set advwireless.ath1.htmode HT40+" in captured[0]["command"]
 
 
 def test_configure_radio_profile_applies_bandwidth_without_pre_link_gate():
@@ -123,6 +123,41 @@ def test_configure_bandwidth_profile_applies_once_per_group():
 
     mock_bw.assert_called_once()
     assert report.get("bandwidth_ok") is True
+
+
+def test_configure_bandwidth_profile_sets_cpe_htmode():
+    with patch("traffic.dut_radio_config.configure_bts_bandwidth_ratio", return_value="50"):
+        with patch(
+            "traffic.su_link_ping.wait_for_su_links",
+            return_value={"ok": True, "responding": ["192.168.3.21"]},
+        ):
+            with patch("traffic.dut_radio_config.bandwidth_profile_matches", return_value=False):
+                with patch("traffic.dut_radio_config._read_uci", return_value="HT20"):
+                    with patch(
+                        "traffic.dut_radio_config._read_running_bandwidth",
+                        return_value="HT20",
+                    ):
+                        with patch(
+                            "traffic.dut_radio_config.run_ssh_command",
+                            return_value="CPE_APPLY_STARTED",
+                        ) as mock_ssh:
+                            report = configure_bandwidth_profile(
+                                "192.168.3.20",
+                                "root",
+                                "pw",
+                                1,
+                                "HT80",
+                                "50:50",
+                                cpe_hosts=["192.168.3.21"],
+                                su_count=1,
+                                verify=False,
+                            )
+
+    assert report.get("cpe_bandwidth_applied") is True
+    chain = mock_ssh.call_args.args[3]
+    assert "ucidyn set advwireless.ath1.htmode HT80" in chain
+    assert "ucidyn apply" in chain
+    assert mock_ssh.call_args.args[0] == "192.168.3.21"
 
 
 def test_configure_mcs_profile_does_not_apply_bandwidth():
