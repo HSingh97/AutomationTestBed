@@ -96,6 +96,7 @@ class IpSuiteProgress:
         failed = sum(1 for r in self._rows if r.outcome == "FAILED")
         skipped = sum(1 for r in self._rows if r.outcome == "SKIPPED")
         not_impl = sum(1 for r in self._rows if r.outcome == "Not implemented")
+        not_avail = sum(1 for r in self._rows if r.outcome == "Not available")
         errors = sum(1 for r in self._rows if r.outcome == "ERROR")
 
         table = PrettyTable()
@@ -119,7 +120,7 @@ class IpSuiteProgress:
         print(
             f"\n[suite] Progress {done}/{total} ({pct}%) | "
             f"PASS {passed} PARTIAL {partial} FAIL {failed} "
-            f"SKIP {skipped} N/I {not_impl} ERR {errors} | "
+            f"SKIP {skipped} N/I {not_impl} N/A {not_avail} ERR {errors} | "
             f"elapsed {_format_duration(int(elapsed))} | ETA ~{eta_txt}\n"
         )
         print(table)
@@ -193,6 +194,8 @@ def flush_ip_suite_progress(config) -> None:
 def outcome_from_report(report) -> str:
     if report.skipped:
         longrepr = str(getattr(report, "longrepr", "") or "")
+        if "not available" in longrepr.lower() or "not_available" in longrepr.lower():
+            return "Not available"
         # Catalog N/A / manual / pending — show as Not implemented (not SKIPPED).
         if "not implemented" in longrepr.lower():
             return "Not implemented"

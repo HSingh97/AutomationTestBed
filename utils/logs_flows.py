@@ -8,7 +8,6 @@ from typing import Any, Callable
 
 from config.logs_test_cases import case_by_id
 from utils.logs_lab import (
-    NMS_PENDING_NOTE,
     delta_lines,
     logging_alive,
     prepare_mgmt,
@@ -94,65 +93,6 @@ def _apply_and_prove_logs(
         f"{case['id']}: no DUT log evidence after apply "
         f"(marker={alive}, new_logread={len(new_logread)}, matched={matched[:3]})"
     )
-
-
-def _mode_dut_log_extract(case: dict[str, Any], profile_active: dict[str, Any]) -> None:
-    """NMS extract cases — DUT collect only; NMS validation pending."""
-    prepare_mgmt(profile_active)
-    snap = snapshot_logs(profile_active)
-    logread = str(snap.get("logread") or "")
-    snlog = str(snap.get("snlog_tail") or "")
-    session = str(snap.get("session") or "")
-    assert logread.strip() or snlog.strip() or session.strip(), (
-        f"{case['id']}: DUT produced no log artifacts (logread/snlog/session empty)"
-    )
-    # Case-specific light checks on DUT side.
-    cid = case["id"]
-    if cid == "LOGS_02":
-        # Invalid BTS ID is an NMS concern; DUT still has extractable logs.
-        pass
-    if cid == "LOGS_04":
-        # Large log — require meaningful volume on DUT.
-        assert len(logread) > 200 or int(snap.get("snlog_wc_int") or 0) > 1000, (
-            f"{case['id']}: DUT logs too small for large-file extract smoke"
-        )
-    write_logs_evidence(
-        case["id"],
-        {
-            "dut_extract_ok": True,
-            "logread_chars": len(logread),
-            "snlog_wc": snap.get("snlog_wc_int"),
-            "session_lines": len(session.splitlines()),
-            "nms_pending": True,
-            "note": NMS_PENDING_NOTE,
-            "proofs": [
-                "V&V method: DUT SSH extract of logread / snlog_json / session_logs",
-                f"logread={len(logread)} chars, snlog={snap.get('snlog_wc_int')} bytes, "
-                f"session_lines={len(session.splitlines())}",
-                f"NMS pending: {NMS_PENDING_NOTE}",
-            ],
-            "logread_tail": logread[-500:],
-            "session_tail": session[-300:],
-        },
-    )
-    print(f"[logs] {cid}: DUT extract OK — {NMS_PENDING_NOTE}")
-
-
-def _mode_nms_server_set_dut(case: dict[str, Any], profile_active: dict[str, Any]) -> None:
-    prepare_mgmt(profile_active)
-    key = "tftp.provision.nmsserverip"
-    baseline = uci_get(profile_active, key) or "192.168.1.100"
-    target = "192.168.1.200" if baseline != "192.168.1.200" else "192.168.1.201"
-
-    def _apply() -> dict[str, Any]:
-        out = ucidyn_set(profile_active, key, target)
-        got = _assert_uci(profile_active, key, target)
-        # restore
-        ucidyn_set(profile_active, key, baseline)
-        return {"key": key, "set": target, "got": got, "restored": baseline, "out": out[-120:], "nms_pending": True}
-
-    _apply_and_prove_logs(case, profile_active, apply_fn=_apply, grep=r"nms|tftp|provision|uci")
-    print(f"[logs] {case['id']}: DUT NMS server set OK — {NMS_PENDING_NOTE}")
 
 
 def _mode_remote_syslog_set(case: dict[str, Any], profile_active: dict[str, Any]) -> None:
@@ -987,8 +927,6 @@ def _mode_storage_limit_fill(case: dict[str, Any], profile_active: dict[str, Any
 
 
 _MODE_HANDLERS: dict[str, Callable[[dict[str, Any], dict[str, Any]], None]] = {
-    "dut_log_extract": _mode_dut_log_extract,
-    "nms_server_set_dut": _mode_nms_server_set_dut,
     "remote_syslog_set": _mode_remote_syslog_set,
     "temp_log_toggle": _mode_temp_log_toggle,
     "timezone_set_log": _mode_timezone_set_log,
@@ -1018,6 +956,10 @@ _MODE_HANDLERS: dict[str, Callable[[dict[str, Any], dict[str, Any]], None]] = {
 def execute_logs_case(case_id: str, profile_active: dict[str, Any]) -> None:
     case = case_by_id(case_id)
     status = case.get("status")
+    if status == "not_available":
+        import pytest
+
+        pytest.skip(case.get("note") or f"{case_id} not available")
     if status == "pending":
         import pytest
 

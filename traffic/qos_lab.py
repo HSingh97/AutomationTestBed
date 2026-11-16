@@ -457,6 +457,8 @@ def stop_trex(
 
 def _resolve_qos_qinq() -> tuple[int | None, int | None]:
     """QinQ tags for QoS TRex streams (env override, else profile testbed.qinq)."""
+    if os.environ.get("QOS_NO_QINQ", "").strip().lower() in {"1", "true", "yes"}:
+        return None, None
     env_s = os.environ.get("QOS_SVLAN")
     env_c = os.environ.get("QOS_CVLAN")
     if env_s and env_c:

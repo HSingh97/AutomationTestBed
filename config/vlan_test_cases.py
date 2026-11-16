@@ -6,9 +6,11 @@ Regenerate: ``PYTHONPATH=. python3 scripts/sync_vlan_catalog.py``
   - implemented — TRex / ping automation (QinQ, transparent, trunk-related data path)
   - manual — needs switch, GUI, or physical link ops
   - not_applicable — N/A for A60/A61 alpha (mgmt/access VLAN modes outside scope)
+  - not_available — needs an NMS server, which this bench does not have
   - pending — not classified yet
 
 Alpha scope: QinQ + transparent + trunk data path only; mgmt/MVLAN config cases marked N/A.
+NMS traffic and NMS tagging cases are ``not_available``.
 """
 
 from __future__ import annotations
@@ -36,9 +38,9 @@ VLAN_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS",
         "type": "Functional",
         "plan_result": "Pass",
-        "status": "not_applicable",
+        "status": "not_available",
         "mode": None,
-        "note": "Not applicable for A60/A61 alpha \u2014 outside QinQ/transparent/trunk VLAN scope."
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "VLAN_03",
@@ -60,9 +62,9 @@ VLAN_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS & CPE",
         "type": "Negative",
         "plan_result": "Pass",
-        "status": "not_applicable",
+        "status": "not_available",
         "mode": None,
-        "note": "Not applicable for A60/A61 alpha \u2014 outside QinQ/transparent/trunk VLAN scope."
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "VLAN_05",
@@ -84,9 +86,9 @@ VLAN_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS & CPE",
         "type": "Functional",
         "plan_result": "Pass",
-        "status": "not_applicable",
+        "status": "not_available",
         "mode": None,
-        "note": "Not applicable for A60/A61 alpha \u2014 outside QinQ/transparent/trunk VLAN scope."
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "VLAN_07",
@@ -96,9 +98,9 @@ VLAN_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS & CPE",
         "type": "Functional",
         "plan_result": "Not Available",
-        "status": "not_applicable",
+        "status": "not_available",
         "mode": None,
-        "note": "Not applicable for A60/A61 alpha \u2014 outside QinQ/transparent/trunk VLAN scope."
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "VLAN_08",
@@ -108,9 +110,9 @@ VLAN_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS & CPE",
         "type": "Functional",
         "plan_result": "Not Available",
-        "status": "implemented",
-        "mode": "qinq_data_tag_verify",
-        "note": "Data-path only (NMS skipped): QinQ UCI svlan/cvlan + TRex double-tag throughput."
+        "status": "not_available",
+        "mode": None,
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "VLAN_09",
@@ -120,9 +122,9 @@ VLAN_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS & CPE",
         "type": "Functional",
         "plan_result": "Not Available",
-        "status": "implemented",
-        "mode": "qinq_data_tag_verify",
-        "note": "Data-path only (NMS skipped): QinQ UCI svlan/cvlan + TRex double-tag throughput."
+        "status": "not_available",
+        "mode": None,
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "VLAN_10",
@@ -144,9 +146,9 @@ VLAN_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS & CPE",
         "type": "Functional",
         "plan_result": "Not Available",
-        "status": "not_applicable",
+        "status": "not_available",
         "mode": None,
-        "note": "Not applicable for A60/A61 alpha \u2014 outside QinQ/transparent/trunk VLAN scope."
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "VLAN_12",

@@ -22,13 +22,12 @@ def classify(tid: str, title: str, steps: str) -> tuple[str, str | None, str]:
     blob = f"{title} {steps}".lower()
     is_system = "system logs" in title.lower()
 
-    # --- NMS extract (DUT-only; NMS pending) ---
+    # --- NMS extract: no NMS server on this bench ---
     if tid in {"LOGS_01", "LOGS_02", "LOGS_03", "LOGS_04", "LOGS_05", "LOGS_07", "LOGS_09"}:
         return (
-            "implemented",
-            "dut_log_extract",
-            "DUT: collect logread/snlog/session logs via SSH. "
-            "(NMS side implementation and validation pending)",
+            "not_available",
+            None,
+            "Not available: NMS is not available.",
         )
     if tid == "LOGS_06":
         return (
@@ -97,10 +96,9 @@ def classify(tid: str, title: str, steps: str) -> tuple[str, str | None, str]:
     # --- NMS server / remote syslog / temp toggle / TZ / NTP / location ---
     if tid in {"LOGS_40", "LOGS_83"} or ("nms server" in blob and "set" in blob):
         return (
-            "implemented",
-            "nms_server_set_dut",
-            "DUT: set NMS server UCI via ucidyn. "
-            "(NMS side implementation and validation pending)",
+            "not_available",
+            None,
+            "Not available: NMS is not available.",
         )
     if "server ip to save system logs" in blob or (
         "logging" in title.lower() and "server ip" in blob
@@ -169,7 +167,9 @@ def classify(tid: str, title: str, steps: str) -> tuple[str, str | None, str]:
             f"DUT: apply safe radio UCI change; assert {'system' if is_system else 'config'} log evidence.",
         )
 
-    return ("implemented", "dut_log_extract", f"DUT log collect fallback for {tid}.")
+    if "nms" in blob:
+        return ("not_available", None, "Not available: NMS is not available.")
+    return ("pending", None, f"Not classified yet: {tid}.")
 
 
 def load_rows() -> list[dict]:
@@ -215,13 +215,13 @@ def render(cases: list[dict]) -> str:
 Regenerate: ``PYTHONPATH=. python3 scripts/sync_logs_catalog.py``
 
 ``status``:
-  - implemented — DUT-side automation (NMS client validation may still be pending)
+  - implemented — DUT-side automation
+  - not_available — needs an NMS server, which this bench does not have
   - pending — deferred
   - manual — needs external gear
 
 Destructive modes require ``--allow-logs-destructive``.
-NMS-related extract/set cases validate DUT only;
-NMS side implementation and validation are pending.
+NMS extract and NMS-server cases are ``not_available``.
 """
 
 from __future__ import annotations

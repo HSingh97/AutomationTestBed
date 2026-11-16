@@ -28,7 +28,6 @@ _TREX_DEPENDENT_MODES = frozenset(
     {
         "qinq_throughput",
         "qinq_negative_outer_only",
-        "qinq_data_tag_verify",
         "tagged_data_pass_fail",
         "transparent_throughput",
         "qinq_hybrid_throughput",
@@ -165,27 +164,6 @@ def _mode_qinq_negative_outer_only(case: dict[str, Any], profile_active: dict[st
         f"(cap {NEGATIVE_MAX_MBPS})"
     )
     emit_vlan_result(case["id"], result)
-
-
-def _mode_qinq_data_tag_verify(case: dict[str, Any], profile_active: dict[str, Any]) -> None:
-    """VLAN_08/09 — data double-tag verify (NMS capture skipped)."""
-    svlan, cvlan = _qinq_tags(profile_active)
-    _throughput_case(
-        case,
-        profile_active,
-        bts_vlan_mode="qinq",
-        qinq_enabled=True,
-        expected_min_mbps=DEFAULT_MIN_MBPS,
-    )
-    uci_ok, uci_detail = _verify_bts_qinq_uci(profile_active)
-    assert uci_ok, (
-        f"{case['id']} QinQ UCI not double-tagged as expected "
-        f"(want svlan={svlan} cvlan={cvlan}): {uci_detail}"
-    )
-    write_vlan_case_evidence(
-        case["id"],
-        payload={"nms_skipped": True, "data_double_tag_uci": uci_detail},
-    )
 
 
 def _mode_vlan_id_range_check(case: dict[str, Any], profile_active: dict[str, Any]) -> None:
@@ -483,7 +461,6 @@ def _mode_cpe_vlan_mode_cycle(case: dict[str, Any], profile_active: dict[str, An
 _MODE_HANDLERS: dict[str, Callable[[dict[str, Any], dict[str, Any]], None]] = {
     "qinq_throughput": _mode_qinq_throughput,
     "qinq_negative_outer_only": _mode_qinq_negative_outer_only,
-    "qinq_data_tag_verify": _mode_qinq_data_tag_verify,
     "vlan_id_range_check": _mode_vlan_id_range_check,
     "tagged_data_pass_fail": _mode_tagged_data_pass_fail,
     "transparent_throughput": _mode_transparent_throughput,
@@ -502,6 +479,10 @@ def execute_vlan_case(case_id: str, profile_active: dict[str, Any]) -> None:
     case = case_by_id(case_id)
     status = case.get("status")
 
+    if status == "not_available":
+        import pytest
+
+        pytest.skip(case.get("note") or f"{case_id} not available")
     if status == "not_applicable":
         import pytest
 

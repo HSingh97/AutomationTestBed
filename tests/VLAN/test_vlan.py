@@ -22,7 +22,7 @@ def _require_vlan_lab(request):
     if case_id is not None and "case_id" in case_id.params:
         cid = case_id.params["case_id"]
         case = case_by_id(cid)
-        if case.get("status") in ("not_applicable", "manual", "pending"):
+        if case.get("status") in ("not_applicable", "manual", "pending", "not_available"):
             return
         mode = case.get("mode") or ""
         if mode.startswith("destructive"):
@@ -43,6 +43,8 @@ def _run(case_id: str, profile_bundle) -> None:
     status = case.get("status")
     note = case.get("note") or case.get("title", "")[:80]
 
+    if status == "not_available":
+        pytest.skip(note if "not available" in note.lower() else f"Not available: {note}")
     if status == "not_applicable":
         pytest.skip(f"Not implemented: {note}")
     if status == "manual":

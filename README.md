@@ -216,13 +216,13 @@ venv/bin/playwright install chromium
 
 Source: `Senao UBR P2MP Test Plan_Aug26_Alpha_UBR655.xlsx` Summary sheet — **41 test sheets, 1,725 cases**.
 
-**27.3% of plan cases are automated** (471 / 1,725). **17 of 41 sheets** have a pytest suite. The TRex throughput matrix exercises the Throughput sheet but is not 192 separate cases, so those 192 are not included in the 471.
+**26.7% of plan cases are automated** (460 / 1,725). **17 of 41 sheets** have a pytest suite. The TRex throughput matrix exercises the Throughput sheet but is not 192 separate cases, so those 192 are not included in the 460.
 
 | Sheet | On sheet | Automated | Not in pytest |
 |-------|----------|-----------|----------------|
 | GUI | 139 | 73 | 66 |
 | Jumbo Frames | 10 | 10 | 0 |
-| VLAN | 59 | 46 | 13 (12 N/A, 1 manual) |
+| VLAN | 59 | 44 | 15 (7 N/A, 7 not available — NMS, 1 manual) |
 | QoS | 40 | 36 | 4 manual (`QoS_28`, `31`, `33`, `35`) |
 | Arp & Bridge Table | 11 | 10 | 1 |
 | IPv4 & IPv6 | 49 | 34 | 15 (`IP_10`, `IP_29` manual; `IP_37`–`IP_60` not collected) |
@@ -230,15 +230,17 @@ Source: `Senao UBR P2MP Test Plan_Aug26_Alpha_UBR655.xlsx` Summary sheet — **4
 | Wireless Security | 14 | 8 | 6 |
 | 2.4 GHz Radio | 40 | 19 | 21 |
 | Process Monitoring | 19 | 19 | 0 |
-| Logs | 97 | 97 | 0 |
+| Logs | 97 | 88 | 9 not available — NMS (`LOGS_01`–`05`, `07`, `09`, `40`, `83`) |
 | API | 27 | 18 | 9 |
 | Firewall | 6 | 6 | 0 (`FIREWALL_06` runs only when OpenVAS is installed) |
-| DFS | 28 | 24 | 4 N/A (`TC_DFS_009`, `024`, `025`, `027`) |
+| DFS | 28 | 24 | 4 (`TC_DFS_009`, `027` N/A; `TC_DFS_024`, `025` not available — NMS) |
 | Security | 16 | 13 | 3 manual (`SEC-01`, `SEC-02`, `SEC-16`) |
 | Asymmetric CBW | 12 | 8 | 4 N/A (`ACB_08`–`ACB_11`) |
 | Throughput per MCS | 192 | matrix only | 192 discrete rows are not individual tests |
 
 **Sheets with no suite yet (24):** RFC Results, Sanity, Tx Power Measurement, ATPC, Functional, Link Test Tool, Ethernet Test, Cable Length, DCS, DDRS, OFDMA, MU-MIMO, Spectrum Analyser & Site Survey, DHCPv4 & DHCPv6, SECURE-DUAL-BOOT, Device Management, CPE-Power-On-PoE-Mechanism, CPE and IDU DHCP Authentication, PPPoE, GPS, NMS-Client Communication, Cascaded BTS Deployment, Device_NMS_Interoperability, Co-Channel.
+
+NMS-Client Communication and Device_NMS_Interoperability stay out of pytest because this bench has no NMS. Cases inside Logs, VLAN, and DFS that need an NMS server are kept in the catalog with status `not_available` and skip as `Not available: NMS is not available.` DUT checks that only mention TR-069 as the management model (`SEC-07`, `SEC-08`, `SEC-14`) still run on the radio.
 
 ### GUI (`tests/GUI/`) — 73 tests
 
@@ -706,6 +708,10 @@ Catalog in [docs/lab-instruments.html](docs/lab-instruments.html) (built by `scr
 | WirelessSecurity | 8 |
 | ArpBridgeTable | 10 |
 | Throughput unit tests | ~73 |
+| Logs not available (NMS) | 9 |
+| VLAN automated | 44 |
+| VLAN not available (NMS) | 7 |
+| DFS automated | 24 |
 
 **Regenerate coverage after adding tests:** `python3 scripts/generate_automation_coverage.py`
 

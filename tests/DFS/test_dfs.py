@@ -23,6 +23,11 @@ pytestmark = [pytest.mark.DFS]
 
 @pytest.fixture(autouse=True)
 def _require_dfs_lab(request):
+    spec = getattr(request.node, "callspec", None)
+    if spec is not None and "case_id" in getattr(spec, "params", {}):
+        case = case_by_id(spec.params["case_id"])
+        if case.get("status") in ("na", "not_available"):
+            return
     if not request.config.getoption("--allow-dfs-lab"):
         pytest.skip("DFS lab cases require --allow-dfs-lab (live channel/radar on BTS)")
     set_long_flag(bool(request.config.getoption("--allow-dfs-long")))
@@ -32,8 +37,8 @@ def _run(case_id: str, profile_bundle) -> None:
     case = case_by_id(case_id)
     status = case.get("status")
     note = case.get("note") or case.get("title", "")[:80]
-    if status == "na":
-        pytest.skip(note or "Not available")
+    if status in ("na", "not_available"):
+        pytest.skip(note if "not available" in note.lower() else f"Not available: {note}")
     if status != "implemented":
         pytest.skip(f"Not implemented: {note}")
     execute_dfs_case(case_id, profile_bundle.active)

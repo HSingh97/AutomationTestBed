@@ -971,8 +971,6 @@ def build_logs_verification_lines(case_id: str, evidence: dict[str, Any]) -> tup
 
     if mode == "user_login_log":
         summary.append("V&V method: Playwright GUI login + DUT session/snlog proof")
-    elif mode == "dut_log_extract":
-        summary.append("V&V method: DUT SSH extract of logread / snlog_json / session_logs")
     elif mode:
         summary.append(f"V&V method: DUT SSH ({mode})")
     else:
@@ -1024,8 +1022,6 @@ def build_logs_verification_lines(case_id: str, evidence: dict[str, Any]) -> tup
             f"snlog={evidence.get('snlog_wc')} bytes, "
             f"session_lines={evidence.get('session_lines')}"
         )
-        if evidence.get("nms_pending"):
-            summary.append(f"NMS pending: {note or 'NMS side validation not automated yet'}")
 
     if "post_logger_ok" in evidence:
         summary.append(
@@ -1097,7 +1093,7 @@ def build_logs_verification_lines(case_id: str, evidence: dict[str, Any]) -> tup
         details.append(f"{label}:")
         details.extend(f"  {_logs_clip(ln, 220)}" for ln in val.splitlines()[-6:] if ln.strip())
 
-    if note and "NMS pending" not in " ".join(summary):
+    if note:
         summary.append(f"Plan note: {note}")
 
     if not summary:

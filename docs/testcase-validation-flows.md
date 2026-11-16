@@ -2,6 +2,8 @@
 
 The flowcharts below describe how each automated testcase is validated in the framework.
 
+Cases that need an NMS server are not flowcharted and are not run. They stay in the catalog as `not_available` with the skip reason `Not available: NMS is not available.` That covers Logs extract and NMS-server set (`LOGS_01`–`05`, `07`, `09`, `40`, `83`), VLAN NMS traffic and NMS tagging (`VLAN_02`, `04`, `06`, `07`, `08`, `09`, `11`), and DFS NMS traps (`TC_DFS_024`, `025`).
+
 ## Summary Flowcharts
 
 <details>

@@ -8,8 +8,6 @@ from typing import Any
 
 from traffic.vlan_lab import _ssh_cmd, ensure_lab_mgmt_access, lab_hosts
 
-NMS_PENDING_NOTE = "NMS side implementation and validation pending"
-
 
 def dut_ssh_host(profile_active: dict[str, Any]) -> tuple[str, str, str]:
     hosts = lab_hosts(profile_active)

@@ -81,16 +81,16 @@ testbed:
     internet_ssh: ""
   secondary_pc:
     enabled: true
-    # Mgmt NIC on CPE-side PC (eno1). 192.168.2.215 is datapath-only and may be unreachable
-    # from the automation host when that L2 segment is down.
+    # SSH stays on eno1 (10.0.150.187). VLAN datapath is enp2s0
+    # (192.168.1.215 / 192.168.2.215 / 10.0.0.215). Do not retag eno1.
     ssh: "root@10.0.150.187"
     password: "senao1234#"
-    mgmt_interface: eno1
+    mgmt_interface: enp2s0
     datapath_ipv4: "192.168.2.215"
     fallback_ipv4: "10.0.0.215"
     fallback_prefix_len: 8
-    # Live CPE LAN on CPE-side PC (not factory 10.0.0.1 — that may be another unit).
-    cpe_factory_ipv4: "10.0.0.121"
+    # CPE br-lan on this bench. 10.0.0.121 does not answer; both radios also have 10.0.0.1.
+    cpe_factory_ipv4: "192.168.1.231"
   cpe_discovery:
     radio_idx: 2
     lease_commands:

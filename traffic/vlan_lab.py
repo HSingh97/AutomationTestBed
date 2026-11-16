@@ -242,6 +242,7 @@ def env_overrides() -> dict[str, str]:
         "dut_password": "VLAN_DUT_PASSWORD",
         "trex_ports": "VLAN_TREX_PORTS",
         "cpe_pc_host": "VLAN_CPE_PC_HOST",
+        "cpe_lan_host": "VLAN_CPE_HOST",
     }
     return {k: os.environ[v] for k, v in keys.items() if os.environ.get(v)}
 
@@ -279,6 +280,8 @@ def lab_hosts(profile_active: dict[str, Any] | None = None) -> dict[str, str]:
         or DEFAULT_DUT_HOST
     ).split("/")[0]
     bts_host = env.get("dut_host")
+    if bts_host and ":" not in bts_host:
+        bts_v4 = bts_host.split("/")[0]
     if not bts_host and strict_v6 and bts_v6:
         bts_host = bts_v6
     if not bts_host:
@@ -291,7 +294,8 @@ def lab_hosts(profile_active: dict[str, Any] | None = None) -> dict[str, str]:
         or ""
     )
     cpe_lan = (
-        str(sec.get("cpe_factory_ipv4") or "")
+        env.get("cpe_lan_host")
+        or str(sec.get("cpe_factory_ipv4") or "")
         or str(dut.get("cpe_fallback_ip") or "")
         or "10.0.0.121"
     )
@@ -890,11 +894,15 @@ def ensure_lab_mgmt_access(profile_active: dict[str, Any]) -> dict[str, Any]:
     vlan_if = f"{parent}.{vid}" if vid else parent
     print(f"[vlan] Mgmt access: {vlan_if} -> {cidr} ({'ok' if ok else 'FAILED'})")
 
-    # One carrier flap on the *backend* PC restores IPv6 reachability after
-    # tag/untag changes. Do NOT flap the remote CPE-side PC — its SSH control
-    # path is the same NIC (eno1 @ 10.0.150.187); a flap can strand it.
-    flap_ok = _run_coro(lambda: flap_lab_pc_ethernet(pc, password, vlan_id=vid, settle_s=2.0))
-    print(f"[vlan] Mgmt eth flap on {parent}: {'ok' if flap_ok else 'FAILED'}")
+    # Flap only after a real tag change. Staying untagged must not bounce the
+    # parent: on this bench that NIC also carries 192.168.1.12, and a down/up
+    # makes 192.168.1.230 return "No route to host".
+    if need_tag:
+        flap_ok = _run_coro(lambda: flap_lab_pc_ethernet(pc, password, vlan_id=vid, settle_s=2.0))
+        print(f"[vlan] Mgmt eth flap on {parent}: {'ok' if flap_ok else 'FAILED'}")
+    else:
+        flap_ok = True
+        print(f"[vlan] Mgmt eth flap skipped on {parent} (untagged)")
 
     # CPE-side (remote) lab PC — same mgmtvlan decision as BTS/primary (no flap).
     sec_result: dict[str, Any] = {"skipped": True}

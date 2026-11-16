@@ -54,6 +54,8 @@ After **factory reset on both BTS and CPE**:
 
 1. **`enp3s0` untagged + `10.0.0.xx`** — reach BTS fallback **`10.0.0.1`** (no QinQ yet)
 2. **Basic BTS config** on fallback (installer GUI / UCI): IPv6, mgmt VLAN, NMS, AIRTEL SSID
+
+NMS fields written here are device configuration only. This bench has no NMS server, so Logs, VLAN, and DFS cases that require one are `not_available` (`Not available: NMS is not available.`).
 3. **`enp3s0.200.201` QinQ + mgmt IPv6** — parent `enp3s0` **keeps** `10.0.0.xx` for recovery
 
 Profile `factory_provision` uses VLAN **200/201** (not 100/101):

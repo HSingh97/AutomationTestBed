@@ -22,7 +22,7 @@ def _require_logs_lab(request):
     if case_id is not None and "case_id" in case_id.params:
         cid = case_id.params["case_id"]
         case = case_by_id(cid)
-        if case.get("status") in ("pending", "manual"):
+        if case.get("status") in ("pending", "manual", "not_available"):
             return
         mode = str(case.get("mode") or "")
         if mode in DESTRUCTIVE_MODES:
@@ -44,6 +44,8 @@ def _run(case_id: str, profile_bundle) -> None:
     case = case_by_id(case_id)
     status = case.get("status")
     note = case.get("note") or case.get("title", "")[:80]
+    if status == "not_available":
+        pytest.skip(note if "not available" in note.lower() else f"Not available: {note}")
     if status in ("pending", "manual"):
         pytest.skip(f"Not implemented: {note}")
     if status != "implemented":

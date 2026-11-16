@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A60/A61 Logs suite — DUT-side (NMS client validation pending).
+# A60/A61 Logs suite. NMS extract and NMS-server cases skip as not available.
 #
 # Examples:
 #   ./scripts/run_a60_logs.sh --allow-logs-lab

@@ -3,13 +3,13 @@
 Regenerate: ``PYTHONPATH=. python3 scripts/sync_logs_catalog.py``
 
 ``status``:
-  - implemented — DUT-side automation (NMS client validation may still be pending)
+  - implemented — DUT-side automation
+  - not_available — needs an NMS server, which this bench does not have
   - pending — deferred
   - manual — needs external gear
 
 Destructive modes require ``--allow-logs-destructive``.
-NMS-related extract/set cases validate DUT only;
-NMS side implementation and validation are pending.
+NMS extract and NMS-server cases are ``not_available``.
 """
 
 from __future__ import annotations
@@ -25,9 +25,9 @@ LOGS_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS & CPE",
         "type": "Validation",
         "plan_result": "Pass",
-        "status": "implemented",
-        "mode": "dut_log_extract",
-        "note": "DUT: collect logread/snlog/session logs via SSH. (NMS side implementation and validation pending)"
+        "status": "not_available",
+        "mode": None,
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "LOGS_02",
@@ -37,9 +37,9 @@ LOGS_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS & CPE",
         "type": "Negative",
         "plan_result": "Pass",
-        "status": "implemented",
-        "mode": "dut_log_extract",
-        "note": "DUT: collect logread/snlog/session logs via SSH. (NMS side implementation and validation pending)"
+        "status": "not_available",
+        "mode": None,
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "LOGS_03",
@@ -49,9 +49,9 @@ LOGS_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS & CPE",
         "type": "Negative",
         "plan_result": "Pass",
-        "status": "implemented",
-        "mode": "dut_log_extract",
-        "note": "DUT: collect logread/snlog/session logs via SSH. (NMS side implementation and validation pending)"
+        "status": "not_available",
+        "mode": None,
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "LOGS_04",
@@ -61,9 +61,9 @@ LOGS_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS",
         "type": "Validation",
         "plan_result": "Pass",
-        "status": "implemented",
-        "mode": "dut_log_extract",
-        "note": "DUT: collect logread/snlog/session logs via SSH. (NMS side implementation and validation pending)"
+        "status": "not_available",
+        "mode": None,
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "LOGS_05",
@@ -73,9 +73,9 @@ LOGS_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS & CPE",
         "type": "Validation",
         "plan_result": "Not Available",
-        "status": "implemented",
-        "mode": "dut_log_extract",
-        "note": "DUT: collect logread/snlog/session logs via SSH. (NMS side implementation and validation pending)"
+        "status": "not_available",
+        "mode": None,
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "LOGS_06",
@@ -97,9 +97,9 @@ LOGS_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS & CPE",
         "type": "Validation",
         "plan_result": "Pass",
-        "status": "implemented",
-        "mode": "dut_log_extract",
-        "note": "DUT: collect logread/snlog/session logs via SSH. (NMS side implementation and validation pending)"
+        "status": "not_available",
+        "mode": None,
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "LOGS_08",
@@ -121,9 +121,9 @@ LOGS_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS & CPE",
         "type": "Validation",
         "plan_result": "Pass",
-        "status": "implemented",
-        "mode": "dut_log_extract",
-        "note": "DUT: collect logread/snlog/session logs via SSH. (NMS side implementation and validation pending)"
+        "status": "not_available",
+        "mode": None,
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "LOGS_10",
@@ -493,9 +493,9 @@ LOGS_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS & CPE",
         "type": "Validation",
         "plan_result": "Pass",
-        "status": "implemented",
-        "mode": "nms_server_set_dut",
-        "note": "DUT: set NMS server UCI via ucidyn. (NMS side implementation and validation pending)"
+        "status": "not_available",
+        "mode": None,
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "LOGS_41",
@@ -1009,9 +1009,9 @@ LOGS_TEST_CASES: list[dict[str, Any]] = [
         "dut": "BTS & CPE",
         "type": "Validation",
         "plan_result": "Pass",
-        "status": "implemented",
-        "mode": "nms_server_set_dut",
-        "note": "DUT: set NMS server UCI via ucidyn. (NMS side implementation and validation pending)"
+        "status": "not_available",
+        "mode": None,
+        "note": "Not available: NMS is not available."
     },
     {
         "id": "LOGS_84",
