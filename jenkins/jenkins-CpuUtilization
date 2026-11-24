@@ -65,7 +65,7 @@ pipeline {
     parameters {
         choice(
             name: 'TARGET_STAND',
-            choices: ['test-qa-lab-01', 'test-qa-lab-02', 'test-harman2', 'test-puneet'],
+            choices: ['test-qa-lab-01', 'test-qa-lab-02', 'test-harman2', 'test-puneet', 'test-jayanth'],
             description: 'Jenkins agent / lab stand'
         )
         string(
