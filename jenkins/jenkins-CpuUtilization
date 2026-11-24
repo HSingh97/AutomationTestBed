@@ -38,12 +38,19 @@ def selectedCases(boolean failIfEmpty = true) {
     return selected.join(',')
 }
 
-def positiveInt(String raw, String label) {
-    def text = (raw ?: '').trim()
-    if (!text.isInteger() || text.toInteger() < 1) {
-        error("${label} must be a positive whole number")
+def positiveInt(raw, String label, int fallback) {
+    def text = raw == null ? '' : raw.toString().trim()
+    if (!text) {
+        return fallback
     }
-    return text.toInteger()
+    if (!(text ==~ /[0-9]+/)) {
+        error("${label} must be a positive whole number, got '${text}'")
+    }
+    def value = text as int
+    if (value < 1) {
+        error("${label} must be a positive whole number, got '${text}'")
+    }
+    return value
 }
 
 pipeline {
@@ -91,9 +98,9 @@ pipeline {
         stage('Prepare Testbed') {
             steps {
                 script {
-                    def minutes = positiveInt(params.Duration, 'Duration')
-                    def settle = positiveInt(params.Settle, 'Settle')
-                    def poll = positiveInt(params.Poll, 'Poll')
+                    def minutes = positiveInt(params.Duration, 'Duration', 10)
+                    def settle = positiveInt(params.Settle, 'Settle', 30)
+                    def poll = positiveInt(params.Poll, 'Poll', 5)
                     if ((minutes * 60) < poll) {
                         error('Duration must cover at least one poll interval')
                     }
@@ -129,9 +136,9 @@ pipeline {
         stage('Run CPU Utilization') {
             steps {
                 script {
-                    def minutes = positiveInt(params.Duration, 'Duration')
-                    def settle = positiveInt(params.Settle, 'Settle')
-                    def poll = positiveInt(params.Poll, 'Poll')
+                    def minutes = positiveInt(params.Duration, 'Duration', 10)
+                    def settle = positiveInt(params.Settle, 'Settle', 30)
+                    def poll = positiveInt(params.Poll, 'Poll', 5)
                     def btsIp = (params['BTS IP'] ?: '').trim()
                     def cpeIp = (params['CPE IP'] ?: '').trim()
                     def cases = selectedCases().split(',')
