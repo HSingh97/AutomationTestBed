@@ -12,6 +12,18 @@ from utils.net_utils import normalize_ip
 from utils.regression_flows import _navigate_to_flashops
 
 _SESSION_BACKUPS: dict[str, Path] = {}
+# Only these archives are used for device recovery and backup/restore.
+_GOLDEN_BACKUP = {
+    "BTS": "config/backup-UBR650-bts.tar.gz",
+    "CPE": "config/backup-UBR650-cpe.tar.gz",
+}
+
+
+def golden_backup_path(role: str = "BTS", repo_root: Path | None = None) -> Path:
+    """UBR650 BTS or CPE archive. Recovery and restore use nothing else."""
+    root = repo_root or Path(__file__).resolve().parent.parent
+    role_u = "CPE" if str(role).strip().lower() == "cpe" else "BTS"
+    return (root / _GOLDEN_BACKUP[role_u]).resolve()
 
 
 def _cache_key(role: str, host: str = "") -> str:
@@ -51,37 +63,8 @@ def resolve_restore_archive_path(
     cfg: dict[str, Any] | None = None,
     repo_root: Path | None = None,
 ) -> Path | None:
-    """
-    Prefer session fresh backup over repo archives (config/BTS.tar.gz).
-    Returns None when stale archives are disallowed and no fresh backup exists.
-    """
-    cfg = cfg or profile.get("ip_tests", {}) or {}
-    cached = get_session_backup_path(role)
-    if cached is not None:
-        return cached
-
-    require_fresh = bool(cfg.get("ip15_require_fresh_backup", True))
-    allow_stale = bool(cfg.get("allow_stale_backup_archive", False))
-    if require_fresh and not allow_stale:
-        return None
-
-    explicit = str(cfg.get("backup_archive_path", "")).strip()
-    if explicit:
-        path = Path(explicit).expanduser()
-        if not path.is_absolute() and repo_root:
-            path = repo_root / path
-        return path if path.is_file() else None
-
-    recovery = profile.get("recovery", {}) or {}
-    link_rec = profile.get("testbed", {}).get("link_recovery", {}) or {}
-    role_l = str(role).lower()
-    if role_l == "cpe":
-        rel = recovery.get("cpe_restore_archive") or link_rec.get("cpe_archive")
-    else:
-        rel = recovery.get("bts_restore_archive") or link_rec.get("bts_archive")
-    if not rel or not repo_root:
-        return None
-    path = repo_root / str(rel)
+    """Return the UBR650 archive for this role. Other backup files are ignored."""
+    path = golden_backup_path(role, repo_root)
     return path if path.is_file() else None
 
 
@@ -239,8 +222,8 @@ async def take_gui_device_backup(
     force: bool = False,
 ) -> Path:
     """
-    Management → Upgrade/Reset → Backup → download archive to temp dir.
-    Cached per session so restore reuses the same file (not config/BTS.tar.gz).
+    Download a LuCI backup into a temp file.
+    Device recovery does not call this; it uses the UBR650 archives.
     """
     target = normalize_ip(str(gui_ip).split("/")[0])
     if gui_page is not None:
@@ -318,82 +301,18 @@ async def take_device_backup(
     force: bool = False,
 ) -> Path:
     """
-    Take a fresh backup before factory reset / restore cycle.
-    Prefers GUI download to temp; falls back to SSH sysupgrade -b.
-    Never uses pre-baked config/BTS.tar.gz unless allow_stale_backup_archive is true.
+    Backup/restore uses only the UBR650 archive for this role.
+    A live GUI or sysupgrade download is not used.
     """
-    cfg = cfg or {}
-    min_bytes = int(cfg.get("backup_min_bytes", 1024))
-    prefer_gui = bool(cfg.get("backup_via_gui", True))
-    require_fresh = bool(cfg.get("ip15_require_fresh_backup", True))
-    allow_stale = bool(cfg.get("allow_stale_backup_archive", False))
-    target = normalize_ip(str(gui_ip or getattr(ssh, "host", "")).split("/")[0])
-
-    if not force:
-        cached = get_session_backup_path(role, target)
-        if cached is not None and cached.stat().st_size >= min_bytes:
-            if notes is not None:
-                notes.append(f"backup: session temp {cached.name}")
-            return cached
-
-    if allow_stale and not require_fresh:
-        stale = resolve_restore_archive_path(
-            cfg.get("_profile") or {},
-            role=role,
-            cfg=cfg,
-            repo_root=Path(__file__).resolve().parent.parent,
-        )
-        if stale is not None and stale.is_file():
-            if notes is not None:
-                notes.append(f"backup: using stale archive {stale.name}")
-            return stale
-
-    last_err = ""
-    gui_target = gui_host_from_page(gui_page, target) if gui_page is not None else target
-    if prefer_gui and gui_page is not None and device_creds and gui_target:
-        try:
-            path = await take_gui_device_backup(
-                gui_page,
-                device_creds=device_creds,
-                gui_ip=gui_target,
-                role=role,
-                min_bytes=min_bytes,
-                notes=notes,
-                force=True,
-            )
-            if live_uci:
-                from utils.ip_test_flows import _assert_backup_matches_live_uci
-
-                _assert_backup_matches_live_uci(path, live_uci, notes=notes)
-            return path
-        except Exception as exc:
-            last_err = str(exc)
-            if notes is not None:
-                notes.append(f"backup: GUI failed ({exc}); trying SSH sysupgrade -b")
-
-    if ssh is None:
-        raise RuntimeError(last_err or "backup: no GUI page and no SSH session")
-
-    remote = str(cfg.get("backup_remote_path", "/tmp/ip_test_backup.tar.gz")).strip()
-    local = temp_backup_path(role, prefix="ubr_ssh")
-    host = target or normalize_ip(str(getattr(ssh, "host", "")))
-    await _ssh_sysupgrade_backup(
-        ssh,
-        password=password,
-        host=host,
-        remote_path=remote,
-        local_path=local,
-    )
-    if local.stat().st_size < min_bytes:
-        raise RuntimeError(f"SSH backup too small ({local.stat().st_size} bytes)")
-    if live_uci:
-        from utils.ip_test_flows import _assert_backup_matches_live_uci
-
-        _assert_backup_matches_live_uci(local, live_uci, notes=notes)
-    register_session_backup(role, host, local)
+    del gui_page, ssh, device_creds, password, cfg, live_uci, force
+    path = golden_backup_path(role)
+    if not path.is_file():
+        raise RuntimeError(f"UBR650 backup missing: {path}")
+    host = normalize_ip(str(gui_ip).split("/")[0]) if gui_ip else ""
+    register_session_backup(role, host, path)
     if notes is not None:
-        notes.append(f"backup: SSH sysupgrade -b → temp {local} ({local.stat().st_size} bytes)")
-    return local
+        notes.append(f"backup: UBR650 archive {path.name} ({path.stat().st_size} bytes)")
+    return path
 
 
 async def ensure_session_device_backup(
@@ -405,29 +324,20 @@ async def ensure_session_device_backup(
     ssh=None,
     password: str = "",
 ) -> Path | None:
-    """
-    Session hook: capture GUI backup once at login when ip_tests.take_session_backup is true.
-    """
-    ip_cfg = profile.get("ip_tests", {}) or {}
-    if not ip_cfg.get("take_session_backup", False):
-        return get_session_backup_path("BTS", gui_ip)
-    if get_session_backup_path("BTS", gui_ip):
-        return get_session_backup_path("BTS", gui_ip)
+    """Register the UBR650 BTS archive as the session backup. No live download."""
+    del gui_page, ssh, password
     notes: list[str] = []
     try:
         path = await take_device_backup(
-            gui_page=gui_page,
-            ssh=ssh,
             device_creds=device_creds,
             gui_ip=gui_ip,
-            password=password,
             role="BTS",
-            cfg={**ip_cfg, "_profile": profile},
+            cfg=profile.get("ip_tests", {}) or {},
             notes=notes,
         )
         for line in notes:
             print(f"[backup] {line}")
         return path
     except Exception as exc:
-        print(f"[backup] session backup skipped: {exc}")
+        print(f"[backup] UBR650 archive unavailable: {exc}")
         return None

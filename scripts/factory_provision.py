@@ -37,7 +37,9 @@ async def _main(args: argparse.Namespace) -> int:
     fallback = args.fallback_ip or "10.0.0.1"
 
     from playwright.async_api import async_playwright
+    from utils.playwright_env import ensure_playwright_chromium
 
+    ensure_playwright_chromium()
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=not args.headed)
         context = await browser.new_context(ignore_https_errors=True)

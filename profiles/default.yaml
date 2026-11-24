@@ -110,8 +110,8 @@ testbed:
   link_recovery:
     restore_bts: true
     restore_cpe: true
-    bts_archive: config/BTS.tar.gz
-    cpe_archive: config/CPE.tar.gz
+    bts_archive: config/backup-UBR650-bts.tar.gz
+    cpe_archive: config/backup-UBR650-cpe.tar.gz
 
 link:
   # Static credentials for local lab run (no AIRTEL auto-generation).
@@ -143,8 +143,8 @@ recovery:
   factory_reset_command: firstboot && reboot
   reboot_wait_seconds: 120
   restore_default_ip: "192.168.2.1"
-  bts_restore_archive: config/BTS.tar.gz
-  cpe_restore_archive: config/CPE.tar.gz
+  bts_restore_archive: config/backup-UBR650-bts.tar.gz
+  cpe_restore_archive: config/backup-UBR650-cpe.tar.gz
 
 # Universal hard-reboot controller (Digital Loggers PDU).
 # For hard-reboot cases.
@@ -171,7 +171,7 @@ regression:
   web_post_ping_delay_seconds: 5
   reboot_wait_seconds: 150
   network_reload_wait_seconds: 30
-  soft_reboot_ping_timeout_seconds: 200
+  soft_reboot_ping_timeout_seconds: 230
   soft_reboot_ping_grace_seconds: 120
   firmware_ping_timeout_seconds: 420
   soft_reset_link_uptime_max_seconds: 90

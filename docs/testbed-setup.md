@@ -162,8 +162,8 @@ Triggered when:
 Actions (in order):
 
 1. SSH BTS on **recovery IPv4** (`10.0.0.1`) — optional VLAN fix if mgmt was down due to wrong tagging
-2. **GUI restore** `config/BTS.tar.gz` (requires `--with-gui`)
-3. **GUI restore** `config/CPE.tar.gz` on factory IP `192.168.2.1` (or manual via CPE PC)
+2. **GUI restore** `config/backup-UBR650-bts.tar.gz` (requires `--with-gui`)
+3. **GUI restore** `config/backup-UBR650-cpe.tar.gz` on factory IP `192.168.2.1` (or manual via CPE PC)
 4. Reboot wait → retry **mgmt IPv6** from phase 2
 
 State: `logs/testbed_state.json`
@@ -207,8 +207,8 @@ testbed:
     fallback_prefix_len: 8
     cpe_factory_ipv4: "10.0.0.1"
   link_recovery:
-    bts_archive: config/BTS.tar.gz
-    cpe_archive: config/CPE.tar.gz
+    bts_archive: config/backup-UBR650-bts.tar.gz
+    cpe_archive: config/backup-UBR650-cpe.tar.gz
 
 link:
   auto_credentials: true
@@ -271,7 +271,7 @@ PYTHONPATH=. pytest tests/GUI/ -v --skip-testbed-bootstrap
 
 1. Confirm lab PC VLANs: mgmt IPv6 only on `enp3s0.100.101` (BTS PC — not on bare `enp3s0`), and on `enp3s0` (CPE PC)
 2. Run `scripts/bootstrap_testbed.py --with-gui` to restore BTS/CPE archives
-3. On CPE PC (`10.0.150.187`), load `config/CPE.tar.gz` manually if GUI restore from automation host fails
+3. On CPE PC (`10.0.150.187`), load `config/backup-UBR650-cpe.tar.gz` manually if GUI restore from automation host fails
 4. Verify live link: `wlanconfig ath1 list` on BTS (expect CPE MAC, RSSI > -80)
 
-Place archives under `config/BTS.tar.gz` and `config/CPE.tar.gz`.
+Place archives under `config/backup-UBR650-bts.tar.gz` and `config/backup-UBR650-cpe.tar.gz`.

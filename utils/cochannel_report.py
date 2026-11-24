@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import html
 import json
 import re
 from dataclasses import asdict
@@ -14,12 +15,14 @@ from utils.senao_branding import senao_logo_src
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-LEVEL_ORDER = ("low", "mid", "high")
+LEVEL_ORDER = ("none", "low", "mid", "high")
 LEVEL_LABEL = {
+    "none": "No Interference",
     "low": "Low Interference",
     "mid": "Mid Interference",
     "high": "High Interference",
 }
+COMPARE_LEVELS = ("low", "mid", "high")
 
 CSV_FIELDS = [
     "interference",
@@ -56,6 +59,11 @@ CSV_FIELDS = [
     "free_samples_json",
     "traffic_series_json",
     "notes",
+    "bidi_tx_mbps",
+    "bidi_rx_mbps",
+    "bidi_drop_pct",
+    "bidi_latency_ms",
+    "bidi_jitter_ms",
 ]
 
 
@@ -285,6 +293,175 @@ def write_cochannel_csv(rows: list[Any], path: Path) -> Path:
     return path
 
 
+def _level_rssi_at_primary(rows: list[Any], level: str) -> Any:
+    """Same ``list ap`` RSSI the level badge uses, after that level's TX is set."""
+    level_rows = [
+        r for r in rows
+        if str(_g(r, "interference") or "").lower() == level
+    ]
+    baselines = [r for r in level_rows if str(_g(r, "phase") or "") == "baseline"]
+    traffic = [r for r in level_rows if str(_g(r, "phase") or "") != "baseline"]
+    for r in baselines + traffic:
+        rssi = _g(r, "rssi_before_dbm")
+        if rssi is None:
+            rssi = _g(r, "rssi_dbm")
+        if rssi is not None:
+            return rssi
+    return None
+
+
+def _bidi_totals(row: Any) -> dict[str, float | None]:
+    """Combined both-direction totals from the downlink and uplink columns."""
+
+    def num(key: str) -> float | None:
+        try:
+            value = _g(row, key)
+            if value is None or value == "":
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    explicit_tx = num("bidi_tx_mbps")
+    if explicit_tx is not None:
+        return {
+            "tx": explicit_tx,
+            "rx": num("bidi_rx_mbps"),
+            "drop": num("bidi_drop_pct"),
+            "lat": num("bidi_latency_ms"),
+            "jit": num("bidi_jitter_ms"),
+        }
+
+    dl_tx, ul_tx = num("dl_tx_mbps"), num("ul_tx_mbps")
+    dl_rx, ul_rx = num("dl_rx_mbps"), num("ul_rx_mbps")
+    dl_loss, ul_loss = num("dl_packet_drop_pct"), num("ul_packet_drop_pct")
+    dl_lat, ul_lat = num("dl_latency_ms"), num("ul_latency_ms")
+    dl_jit, ul_jit = num("dl_jitter_ms"), num("ul_jitter_ms")
+
+    def add(a: float | None, b: float | None) -> float | None:
+        if a is None or b is None:
+            return None
+        return a + b
+
+    def avg(a: float | None, b: float | None) -> float | None:
+        if a is None or b is None:
+            return None
+        return (a + b) / 2.0
+
+    drop: float | None = None
+    if dl_loss is not None and ul_loss is not None:
+        weight = (dl_tx or 0.0) + (ul_tx or 0.0)
+        if weight > 0 and dl_tx is not None and ul_tx is not None:
+            drop = (dl_loss * dl_tx + ul_loss * ul_tx) / weight
+        else:
+            drop = (dl_loss + ul_loss) / 2.0
+    return {
+        "tx": add(dl_tx, ul_tx),
+        "rx": add(dl_rx, ul_rx),
+        "drop": drop,
+        "lat": avg(dl_lat, ul_lat),
+        "jit": avg(dl_jit, ul_jit),
+    }
+
+
+def _heard_rssi_html(link: dict[str, Any], rows: list[Any]) -> str:
+    """RSSI the primary receives from the secondary BTS (``wlanconfig list ap``).
+
+    Use the value measured during each level. The pre-test snapshot is taken
+    before secondary TX changes, so it does not match the level tables.
+    """
+    if str(link.get("role") or "") != "Secondary":
+        return ""
+    channel = str(link.get("heard_channel") or "")
+    freq = str(link.get("heard_frequency_mhz") or "")
+    bw = str(link.get("heard_bandwidth") or "")
+    detail = "wlanconfig ath1 list ap, same value as each level below"
+    extra = []
+    if channel:
+        extra.append(f"channel {channel}")
+    if freq:
+        extra.append(f"{freq} MHz")
+    if bw:
+        extra.append(f"BW {bw}")
+    if extra:
+        detail = f"{detail} · {', '.join(extra)}"
+    parts = []
+    for level in LEVEL_ORDER:
+        rssi = _level_rssi_at_primary(rows, level)
+        if rssi is None:
+            continue
+        parts.append(f"{LEVEL_LABEL[level]} {rssi} dBm")
+    if not parts:
+        heard = link.get("heard_rssi_dbm")
+        parts.append(f"{heard} dBm" if heard is not None else "—")
+    return (
+        "<p class='heard'><span>RSSI at primary</span>"
+        f"<strong>{html.escape(' · '.join(parts))}</strong>"
+        f"<em>{html.escape(detail)}</em></p>"
+    )
+
+
+def _links_html(meta: dict[str, Any], rows: list[Any]) -> str:
+    cards = []
+    for link in meta.get("links") or []:
+        if not isinstance(link, dict):
+            continue
+        snr = link.get("snr_db")
+        rssi = link.get("rssi_dbm")
+        noise = link.get("noise_dbm")
+        freq = str(link.get("frequency_ghz") or "")
+        channel = str(link.get("channel") or "—")
+        channel_txt = f"{channel} · {freq} GHz" if freq else channel
+        cards.append(
+            "<article class='link-card'>"
+            f"<h3>{html.escape(str(link.get('role') or 'Link'))}</h3>"
+            f"<p class='peers'>{html.escape(str(link.get('bts') or ''))} / "
+            f"{html.escape(str(link.get('cpe') or ''))}</p>"
+            "<div class='link-grid'>"
+            f"<div><span>Channel</span><strong>{html.escape(channel_txt)}</strong></div>"
+            f"<div><span>Bandwidth</span><strong>{html.escape(str(link.get('bandwidth') or '—'))}</strong></div>"
+            f"<div><span>SNR</span><strong>{html.escape(f'{snr} dB' if snr is not None else '—')}</strong></div>"
+            "</div>"
+            "<p class='peers'>"
+            f"CPE RSSI {rssi if rssi is not None else '—'} dBm · "
+            f"noise {noise if noise is not None else '—'} dBm · "
+            f"{html.escape(str(link.get('ssid') or ''))}"
+            "</p>"
+            f"{_heard_rssi_html(link, rows)}"
+            "</article>"
+        )
+    if not cards:
+        return ""
+    return f"<div class='links'>{''.join(cards)}</div>"
+
+
+def _identical_levels_note(rows: list[Any]) -> str:
+    """Say so when low, mid, and high did not change the primary."""
+    traffic = [
+        r for r in rows
+        if str(_g(r, "phase") or "") == "traffic"
+    ]
+    by_level = {}
+    for row in traffic:
+        by_level.setdefault(str(_g(row, "interference") or "").lower(), row)
+    if not all(level in by_level for level in COMPARE_LEVELS):
+        return ""
+    obss = [_g(by_level[level], "obss_pct") for level in COMPARE_LEVELS]
+    dl = []
+    for level in COMPARE_LEVELS:
+        try:
+            dl.append(float(_g(by_level[level], "dl_rx_mbps")))
+        except (TypeError, ValueError):
+            return ""
+    if len(set(obss)) == 1 and max(dl) - min(dl) < 1.0:
+        return (
+            "<p class='same-note'>Low, mid, and high produced the same primary result. "
+            "The secondary load did not show up as extra OBSS or as a throughput drop, "
+            "so these three blocks are not separate interference levels.</p>"
+        )
+    return ""
+
+
 def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | None = None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     meta = meta or {}
@@ -342,7 +519,7 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
                     rssi = _g(r, "rssi_dbm")
                 if rssi is not None:
                     break
-        return f"RSSI {rssi} dBm" if rssi is not None else "RSSI —"
+        return f"RSSI at primary {rssi} dBm" if rssi is not None else "RSSI at primary —"
 
     def _section(level: str) -> str:
         level_rows = by_level.get(level) or []
@@ -363,13 +540,14 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
                 free_b = _g(b, "free_pct")
             before_body = (
                 "<tr>"
+                f"<td class='rf'>{_fmt(_g(b, 'secondary_iperf_mbps'), 0)}</td>"
                 f"<td class='rf'>{_fmt(obss_b, 0)}</td>"
                 f"<td class='rf'>{_fmt(util_b, 0)}</td>"
                 f"<td class='rf'>{_fmt(free_b, 0)}</td>"
                 "</tr>"
             )
         else:
-            before_body = '<tr><td colspan="3" class="empty">No data</td></tr>'
+            before_body = '<tr><td colspan="4" class="empty">No data</td></tr>'
 
         before_table = f"""
           <h3 class="tbl-title">Without primary throughput</h3>
@@ -377,6 +555,7 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
             <table class="tbl-before">
               <thead>
                 <tr>
+                  <th class="rf">Secondary Mbps</th>
                   <th class="rf">OBSS (%)</th>
                   <th class="rf">Channel util (%)</th>
                   <th class="rf">Channel free (%)</th>
@@ -390,7 +569,7 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
         interval_s = float(meta.get("rf_sample_interval_s") or 5.0)
         graph_rows_html = ""
         if not traffic:
-            tput_body = '<tr><td colspan="14" class="empty">No throughput data</td></tr>'
+            tput_body = '<tr><td colspan="20" class="empty">No throughput data</td></tr>'
         else:
             tput_body = ""
             for r in traffic:
@@ -422,9 +601,11 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
             </div>
           </details>
                     """
+                bidi = _bidi_totals(r)
                 tput_body += (
                     "<tr>"
                     f"<td class='su'>{su}</td>"
+                    f"<td class='rf'>{_fmt(_g(r,'secondary_iperf_mbps'), 0)}</td>"
                     f"<td class='rf'>{_fmt(_g(r,'obss_after_pct') if _g(r,'obss_after_pct') is not None else _g(r,'obss_pct'), 1)}</td>"
                     f"<td class='rf'>{_fmt(_g(r,'util_after_pct') if _g(r,'util_after_pct') is not None else _g(r,'util_pct'), 1)}</td>"
                     f"<td class='rf'>{_fmt(_g(r,'free_after_pct') if _g(r,'free_after_pct') is not None else _g(r,'free_pct'), 1)}</td>"
@@ -438,6 +619,11 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
                     f"<td class='{_drop_class(ul)}'>{_fmt(ul)}</td>"
                     f"<td>{_fmt(_g(r,'ul_latency_ms'))}</td>"
                     f"<td>{_fmt(_g(r,'ul_jitter_ms'))}</td>"
+                    f"<td class='tput'>{_fmt(bidi['tx'])}</td>"
+                    f"<td class='tput'>{_fmt(bidi['rx'])}</td>"
+                    f"<td class='{_drop_class(bidi['drop'])}'>{_fmt(bidi['drop'])}</td>"
+                    f"<td>{_fmt(bidi['lat'])}</td>"
+                    f"<td>{_fmt(bidi['jit'])}</td>"
                     "</tr>"
                 )
 
@@ -457,11 +643,13 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
               <thead>
                 <tr>
                   <th class="su" rowspan="2">SU</th>
-                  <th class="rf" colspan="3">RF avg during test</th>
+                  <th class="rf" colspan="4">RF avg during test</th>
                   <th class="dl" colspan="5">Downlink</th>
                   <th class="ul" colspan="5">Uplink</th>
+                  <th class="bidi" colspan="5">Bidirectional</th>
                 </tr>
                 <tr>
+                  <th class="rf">Secondary Mbps</th>
                   <th class="rf">OBSS %</th>
                   <th class="rf">Util %</th>
                   <th class="rf">Free %</th>
@@ -475,6 +663,11 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
                   <th class="ul">Drop %</th>
                   <th class="ul">Lat ms</th>
                   <th class="ul">Jitter ms</th>
+                  <th class="bidi">TX Mbps</th>
+                  <th class="bidi">RX Mbps</th>
+                  <th class="bidi">Drop %</th>
+                  <th class="bidi">Lat ms</th>
+                  <th class="bidi">Jitter ms</th>
                 </tr>
               </thead>
               <tbody>{tput_body}</tbody>
@@ -495,6 +688,8 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
         """
 
     sections_html = "".join(_section(lv) for lv in LEVEL_ORDER)
+    links_html = _links_html(meta, rows)
+    same_note = _identical_levels_note(rows)
     charts_json = json.dumps(chart_series_json)
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -535,7 +730,37 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
     }}
     .summary {{
       display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px;
-      margin-bottom: 18px;
+      margin-bottom: 12px;
+    }}
+    .links {{
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;
+    }}
+    .link-card {{
+      background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 14px 16px; box-shadow: 0 2px 8px rgba(15,23,42,0.04);
+    }}
+    .link-card h3 {{ margin: 0; font-size: 15px; color: var(--navy); }}
+    .link-card .peers {{ margin: 4px 0 10px; color: var(--muted); font-size: 12px; }}
+    .link-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; }}
+    .link-grid div {{ background: #f8fafc; border-radius: 8px; padding: 8px 10px; }}
+    .link-grid span {{
+      display: block; font-size: 10px; text-transform: uppercase;
+      letter-spacing: 0.04em; color: var(--muted); font-weight: 700;
+    }}
+    .link-grid strong {{ font-size: 15px; color: var(--title); }}
+    .heard {{
+      margin: 10px 0 0; padding: 8px 10px; background: #eef2ff; border-radius: 8px;
+      display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline;
+    }}
+    .heard span {{
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+      color: var(--muted); font-weight: 700;
+    }}
+    .heard strong {{ font-size: 16px; color: var(--navy); }}
+    .heard em {{ flex-basis: 100%; font-style: normal; font-size: 11px; color: var(--muted); }}
+    .same-note {{
+      background: #fff7ed; border: 1px solid #fdba74; color: #9a3412;
+      border-radius: 12px; padding: 12px 14px; margin: 0 0 16px; font-size: 13px;
     }}
     .stat {{
       background: var(--card); border: 1px solid var(--border); border-radius: 12px;
@@ -568,6 +793,7 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
       border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 600;
       border: 1px solid transparent;
     }}
+    .badge-none {{ background: #f1f5f9; color: #334155; border-color: #cbd5e1; }}
     .badge-low {{ background: #ecfdf5; color: #047857; border-color: #a7f3d0; }}
     .badge-mid {{ background: #fff7ed; color: #9a3412; border-color: #fdba74; }}
     .badge-high {{ background: #fef2f2; color: #991b1b; border-color: #fca5a5; }}
@@ -581,7 +807,7 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
     }}
     table {{ width: 100%; border-collapse: collapse; }}
     .tbl-before {{ min-width: 480px; }}
-    .tbl-tput {{ min-width: 860px; }}
+    .tbl-tput {{ min-width: 1180px; }}
     .graph-section {{
       margin-top: 16px; padding-top: 8px;
       border-top: 1px dashed var(--border);
@@ -627,6 +853,7 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
     th.su {{ background: #dcfce7; }}
     th.dl {{ background: #fef3c7; }}
     th.ul {{ background: #fce7f3; }}
+    th.bidi {{ background: #dbeafe; }}
     th.rf {{ background: #e0e7ff; }}
     th.tput {{ background: #ccfbf1; }}
     td.su {{ font-weight: 700; color: var(--navy); background: #f8fafc; }}
@@ -642,7 +869,7 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
       .chart-wrap {{ height: 220px; }}
     }}
     @media (max-width: 800px) {{
-      .summary {{ grid-template-columns: repeat(2, minmax(0,1fr)); }}
+      .summary, .links, .link-grid {{ grid-template-columns: 1fr 1fr; }}
       .hero {{ flex-direction: column; align-items: flex-start; }}
     }}
   </style>
@@ -662,10 +889,12 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
     <div class="summary">
       <div class="stat"><h3>{n_traffic}</h3><p>Traffic Cells</p></div>
       <div class="stat ok"><h3>{n_ok}</h3><p>With Throughput</p></div>
-      <div class="stat"><h3>3</h3><p>Interference Levels</p></div>
+      <div class="stat"><h3>{len(LEVEL_ORDER)}</h3><p>Interference Levels</p></div>
       <div class="stat"><h3>{cpe_stat}</h3><p>CPE Counts</p></div>
     </div>
 
+    {links_html}
+    {same_note}
     {sections_html}
 
     <footer>Senao AutomationTestBed · CoChannel</footer>
@@ -749,7 +978,7 @@ def write_cochannel_html(rows: list[Any], path: Path, *, meta: dict[str, Any] | 
     document.querySelectorAll("details.graph-drop").forEach(function (det) {{
       det.addEventListener("toggle", function () {{
         if (!det.open) return;
-        const m = det.id.match(/^graph-(low|mid|high)-(\\d+)$/);
+        const m = det.id.match(/^graph-(none|low|mid|high)-(\\d+)$/);
         if (m) renderRowCharts(m[1], m[2]);
       }});
     }});

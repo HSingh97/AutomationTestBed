@@ -70,6 +70,11 @@ cochannel:
   cpe_iface: "enx8cae4cdd4da8"
   dl_mbps_per_su: 40.0
   ul_mbps_per_su: 10.0
+  # Primary offer. One direction is 800 Mbps. Both together stay at 800 (400+400).
+  downlink_mbps: 800
+  uplink_mbps: 800
+  bidi_downlink_mbps: 400
+  bidi_uplink_mbps: 400
   # Primary throughput duration — 3 minutes
   duration_s: 180
   buffer_s: 3
@@ -83,7 +88,7 @@ cochannel:
   secondary_throughput_max_mbps: 400
   secondary_throughput_step_mbps: 2
   trex:
-    host: "192.168.1.1"
+    host: "192.168.1.2"
     user: root
     password: ubuntu
     directory: /opt/v3.06
@@ -93,6 +98,13 @@ cochannel:
     duration_s: 7200
     su: 1
   interference:
+    none:
+      # No other BSS on the primary channel. Secondary stays off that channel.
+      secondary_tx_power_dbm: 10
+      obss_min: 0
+      obss_max: 20
+      secondary_iperf_mbps: 0
+      tune_obss: false
     low:
       # Location: weak TX; light OBSS (link only — low band is soft)
       secondary_tx_power_dbm: 1
@@ -101,19 +113,21 @@ cochannel:
       secondary_iperf_mbps: 0
       tune_obss: false
     mid:
-      # Location: mid TX; ramp secondary load until OBSS ~25%
+      # Below high. ~90 Mbps saturates OBSS near 40% for both mid and high.
       secondary_tx_power_dbm: 15
-      obss_min: 22
+      obss_min: 15
       obss_max: 28
-      secondary_iperf_mbps: 3
-      tune_obss: true
+      secondary_iperf_mbps: 25
+      secondary_mbps_max: 30
+      tune_obss: false
     high:
-      # Location: high TX; ramp secondary load until OBSS ~32%
+      # Higher secondary load than mid, so OBSS steps up.
       secondary_tx_power_dbm: 26
       obss_min: 30
-      obss_max: 35
-      secondary_iperf_mbps: 5
-      tune_obss: true
+      obss_max: 45
+      secondary_iperf_mbps: 80
+      secondary_mbps_max: 100
+      tune_obss: false
   secondary_tx_power_min_dbm: 1
   secondary_tx_power_max_dbm: 26
   iperf_port: 5201

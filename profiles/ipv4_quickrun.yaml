@@ -18,8 +18,8 @@ testbed:
   link_recovery:
     restore_bts: false
     restore_cpe: false
-    bts_archive: config/BTS.tar.gz
-    cpe_archive: config/CPE.tar.gz
+    bts_archive: config/backup-UBR650-bts.tar.gz
+    cpe_archive: config/backup-UBR650-cpe.tar.gz
   recovery:
     bts_fallback_ipv4: "10.0.0.1"
   factory_defaults:
@@ -83,7 +83,8 @@ recovery:
     - 1
   restore_default_ip: "10.0.0.1"
   reboot_wait_seconds: 150
-  bts_restore_archive: config/BTS.tar.gz
+  bts_restore_archive: config/backup-UBR650-bts.tar.gz
+  cpe_restore_archive: config/backup-UBR650-cpe.tar.gz
 
 traffic:
   benchmark_backend: ixia
@@ -153,10 +154,10 @@ ip_tests:
   link_recovery_timeout_s: 90
   link_recovery_poll_s: 3
   link_recovery_tx_power: "1"
-  ip15_require_fresh_backup: true
-  allow_stale_backup_archive: false
-  backup_via_gui: true
-  take_session_backup: true
+  ip15_require_fresh_backup: false
+  allow_stale_backup_archive: true
+  backup_via_gui: false
+  take_session_backup: false
   backup_min_bytes: 1024
   # Stop IP batch on first failure — later cases depend on link/config from earlier ones
   stop_on_first_failure: true

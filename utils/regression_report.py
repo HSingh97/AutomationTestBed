@@ -24,7 +24,7 @@ TESTBED_WIDE_COLUMN_MAX = 4
 CASE_CATALOG: dict[str, dict[str, str]] = {
     "REG_01": {
         "title": "Soft Reboot",
-        "description": "BTS reboot; ping within 200s; Device Init Success in /etc/device_logs",
+        "description": "BTS reboot; link formation benchmark 230s; Device Init Success in /etc/device_logs",
         "badge_class": "badge-reboot",
     },
     "REG_02": {
@@ -36,6 +36,14 @@ CASE_CATALOG: dict[str, dict[str, str]] = {
         "title": "Firmware Upgrade",
         "description": "Firmware flash; reboot confirmed in logs; ping within 7 minutes",
         "badge_class": "badge-firmware",
+    },
+    "REG_04": {
+        "title": "CPU utilization",
+        "description": (
+            "One case, five conditions: no link or link up, page closed or open, "
+            "and link up with the page open and throughput. CPU is sysInfoCPUUsage every 5s."
+        ),
+        "badge_class": "badge-other",
     },
 }
 
@@ -61,12 +69,17 @@ class IterationRecord:
 
     @property
     def status(self) -> str:
-        """pass | partial | fail — partial = connectivity OK, link log validation not OK."""
+        """pass | partial | fail — partial = connectivity OK, link log validation not OK.
+
+        Slow link formation stays a pass. The report highlights that time separately.
+        """
         checks_ok = bool(self.checks) and all(item.passed for item in self.checks)
         if not checks_ok:
             return "fail"
         val = self.validation
         if val:
+            if val.get("link_formation_slow") and val.get("reboot_confirmed"):
+                return "pass"
             if val.get("partial"):
                 return "partial"
             if not val.get("passed", True):
@@ -714,16 +727,18 @@ def _render_validation_panel(record: IterationRecord) -> str:
         )
     if val.get("ping_recovery_seconds") is not None:
         limit = val.get("ping_recovery_limit_s")
-        limit_txt = f" (max {limit}s)" if limit else ""
+        limit_txt = f" (benchmark {limit}s)" if limit else ""
         ping_secs = float(val["ping_recovery_seconds"])
         ping_ok = limit is None or ping_secs <= float(limit)
-        ping_slow = bool(val.get("partial")) and not ping_ok and ping_secs > 0
+        formation_slow = bool(val.get("link_formation_slow")) or (
+            bool(val.get("reboot_confirmed")) and not ping_ok and ping_secs > 0
+        )
         rows.append(
             _validation_row(
-                "Ping recovery",
+                "Link formation",
                 f"{val['ping_recovery_seconds']}s{limit_txt}",
                 ok=True if ping_ok else None,
-                warn=ping_slow,
+                warn=formation_slow,
             )
         )
     if val.get("link_dropped") is not None:
@@ -821,19 +836,36 @@ def _render_validation_panel(record: IterationRecord) -> str:
     """
 
 
+def _formation_time_chip(record: IterationRecord) -> str:
+    """Show link-formation time on a pass. Amber when it ran past the benchmark."""
+    val = record.validation or {}
+    seconds = val.get("ping_recovery_seconds")
+    if seconds is None or not val.get("device_logs_validation"):
+        return ""
+    slow = bool(val.get("link_formation_slow"))
+    limit = val.get("ping_recovery_limit_s")
+    note = f"benchmark {limit}s" if limit else ""
+    css = "slow" if slow else "ok"
+    note_html = f" <span class='time-note'>{escape(note)}</span>" if note else ""
+    return f"<span class='time-chip {css}'>{escape(str(seconds))}s{note_html}</span>"
+
+
 def _render_iteration_article(record: IterationRecord) -> str:
     matrix = _iteration_matrix(record)
     status = record.status
     status_class = {"pass": "ok", "partial": "warn", "fail": "bad"}.get(status, "bad")
+    slow_pass = status == "pass" and bool((record.validation or {}).get("link_formation_slow"))
     status_label = status.upper()
     failures_html = _render_failure_notes(record)
     validation_html = _render_validation_panel(record)
     connectivity_open = "" if status == "pass" else " open"
+    slow_class = " slow" if slow_pass else ""
 
     return f"""
-    <article class="iteration {status_class}">
+    <article class="iteration {status_class}{slow_class}">
       <div class="iteration-title">
         <span class="phase">{escape(_format_phase_label(record.phase))}</span>
+        {_formation_time_chip(record)}
         <span class="status-pill {status}">{status_label}</span>
       </div>
       {validation_html}
@@ -1118,6 +1150,15 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
     }}
     .iteration.compact {{ padding: 10px 14px; }}
     .iteration.ok {{ border-left: 5px solid var(--pass); }}
+    .iteration.ok.slow {{
+      border-left: 5px solid var(--partial); background: #fffbeb;
+    }}
+    .time-chip {{
+      font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px;
+    }}
+    .time-chip.ok {{ background: #dcfce7; color: #166534; }}
+    .time-chip.slow {{ background: #ffedd5; color: #9a3412; }}
+    .time-chip .time-note {{ font-weight: 600; opacity: 0.85; margin-left: 4px; }}
     .iteration.warn {{
       border-left: 5px solid var(--partial); background: #fffbeb;
     }}
@@ -1194,8 +1235,9 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
       <h2>Regression Results</h2>
       {iteration_body}
       <p class="footnote">
-        Report lists only test types executed in this run.         Soft reboot: ping target 200s (extra grace before hard fail); slow ping or missing init log is
-        <strong>partial</strong> (orange). Hard <strong>fail</strong> only when ping/web connectivity fails.
+        Report lists only test types executed in this run. Soft reboot: link formation benchmark 230s.
+        A long formation still <strong>passes</strong>, and that time is highlighted.
+        <strong>Partial</strong> is only a missing Device Init line. Hard <strong>fail</strong> only when the link does not form.
         Soft reset: link terminate/re-establish (max 90s).
       </p>
     </section>

@@ -217,6 +217,9 @@ async def open_cpe_gui_page(
         nonlocal page, isolated
         from playwright.async_api import async_playwright
 
+        from utils.playwright_env import ensure_playwright_chromium
+
+        ensure_playwright_chromium()
         pw = await async_playwright().start()
         browser = await pw.chromium.launch(headless=True)
         isolated_ctx = await browser.new_context(ignore_https_errors=True)

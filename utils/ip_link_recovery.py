@@ -24,29 +24,14 @@ from utils.link_ssid import ensure_bts_link_ssid_ssh
 
 
 def _archive_path(profile: dict[str, Any], *, role: str = "bts") -> Path | None:
-    from utils.device_backup import get_session_backup_path, resolve_restore_archive_path
+    from utils.device_backup import golden_backup_path, resolve_restore_archive_path
 
-    cached = get_session_backup_path(role)
-    if cached is not None:
-        return cached
     repo = Path(__file__).resolve().parent.parent
     ip_cfg = profile.get("ip_tests", {}) or {}
     resolved = resolve_restore_archive_path(profile, role=role, cfg=ip_cfg, repo_root=repo)
     if resolved is not None:
         return resolved
-    recovery = profile.get("recovery", {}) or {}
-    tb = profile.get("testbed", {}) or {}
-    link_rec = tb.get("link_recovery", {}) or {}
-    if role == "cpe":
-        rel = link_rec.get("cpe_archive") or recovery.get("cpe_restore_archive", "")
-    else:
-        rel = link_rec.get("bts_archive") or recovery.get("bts_restore_archive", "")
-    if not rel:
-        return None
-    path = Path(str(rel))
-    if not path.is_absolute():
-        path = Path.cwd() / path
-    return path if path.is_file() else None
+    return golden_backup_path(role, repo)
 
 
 def inspect_backup_for_link_issues(
@@ -57,7 +42,7 @@ def inspect_backup_for_link_issues(
 ) -> list[str]:
     """
     Scan sysupgrade backup for settings that break RF link on this bench
-    (e.g. LAN 192.168.2.1 + tx power 26 from stale BTS.tar.gz).
+    (LAN 192.168.2.1 or tx power 26). The UBR650 archives are still the restore source.
     """
     issues: list[str] = []
     if not archive.is_file():

@@ -99,8 +99,8 @@ testbed:
   link_recovery:
     restore_bts: true
     restore_cpe: true
-    bts_archive: config/BTS.tar.gz
-    cpe_archive: config/CPE.tar.gz
+    bts_archive: config/backup-UBR650-bts.tar.gz
+    cpe_archive: config/backup-UBR650-cpe.tar.gz
 
 link:
   auto_credentials: true
@@ -126,8 +126,8 @@ recovery:
   factory_reset_command: firstboot && reboot
   reboot_wait_seconds: 150
   restore_default_ip: "10.0.0.120"
-  bts_restore_archive: config/BTS.tar.gz
-  cpe_restore_archive: config/CPE.tar.gz
+  bts_restore_archive: config/backup-UBR650-bts.tar.gz
+  cpe_restore_archive: config/backup-UBR650-cpe.tar.gz
 
 regression:
   iterations: 1

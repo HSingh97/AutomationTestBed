@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import csv
 import datetime as dt
 import json
@@ -20,6 +21,31 @@ from utils.lab_nic_guard import assert_no_lab_nic_down
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ARTIFACTS = REPO_ROOT / "reports" / "artifacts"
+
+
+def _env_float(name: str, fallback: Any) -> float:
+    """Env wins, including 0 (the traffic script treats 0 Mbps as max rate)."""
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return float(fallback)
+    return float(raw)
+
+
+def _trex_from_profile(cc: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    trex = dict(cc.get("trex") or profile.get("traffic", {}).get("trex") or {})
+    host = os.environ.get("COCHANNEL_TREX_HOST", "").strip()
+    if host:
+        trex["host"] = host
+    return trex
+
+_DIR_LINE_RE = re.compile(
+    r"(?P<label>BTS → CPE|CPE → BTS)\s+"
+    r"[\d,]+\s+[\d,]+\s+[\d,]+\s+"
+    r"(?P<loss>[\d.]+)%\s+"
+    r"(?P<tx_mbps>[\d.]+)\s+(?P<rx_mbps>[\d.]+)\s+"
+    r"(?P<avg>[\d.]+)\s+[\d.]+\s+[\d.]+\s+"
+    r"(?P<jitter>[\d.]+)"
+)
 
 FINAL_SUMMARY_RE = re.compile(
     r"BTS → CPE\s+"
@@ -41,7 +67,8 @@ FINAL_SUMMARY_RE = re.compile(
 RSSI_ROW_RE = re.compile(
     r"(?P<ssid>.{1,36}?)\s+"
     r"(?P<bssid>(?:[0-9a-f]{2}:){5}[0-9a-f]{2})\s+"
-    r"(?P<chan>\d+)\s+(?P<freq>\d+)\s+(?P<rssi>-?\d+)",
+    r"(?P<chan>\d+)\s+(?P<freq>\d+)\s+(?P<rssi>-?\d+)"
+    r"(?:\s+\d+\s+(?P<bw>\d+))?",
     re.I,
 )
 
@@ -66,6 +93,11 @@ class CoChannelConfig:
     cpe_iface: str = "enx8cae4cdd4da8"
     dl_mbps_per_su: float = 40.0
     ul_mbps_per_su: float = 10.0
+    # One direction can be offered at 800. Both directions together stay at 800.
+    downlink_mbps: float = 800.0
+    uplink_mbps: float = 800.0
+    bidi_downlink_mbps: float = 400.0
+    bidi_uplink_mbps: float = 400.0
     duration_s: float = 180.0
     buffer_s: float = 3.0
     su_counts: list[int] = field(default_factory=list)
@@ -97,21 +129,61 @@ class CoChannelConfig:
             or cc.get("duration_s")
             or 180
         )
+        primary_bts = os.environ.get("COCHANNEL_PRIMARY_BTS") or cc.get("primary_bts") or cls.primary_bts
+        primary_cpes_env = os.environ.get("COCHANNEL_PRIMARY_CPES", "").strip()
+        if primary_cpes_env:
+            primary_cpes = [x.strip() for x in primary_cpes_env.split(",") if x.strip()]
+        else:
+            primary_cpes = [str(x) for x in (cc.get("primary_cpes") or cls().primary_cpes)]
+        secondary_bts = (
+            os.environ.get("COCHANNEL_SECONDARY_BTS") or cc.get("secondary_bts") or cls.secondary_bts
+        )
+        secondary_cpe = (
+            os.environ.get("COCHANNEL_SECONDARY_CPE") or cc.get("secondary_cpe") or cls.secondary_cpe
+        )
+        cpe_iface = (
+            os.environ.get("COCHANNEL_CPE_IFACE") or cc.get("cpe_iface") or "enx8cae4cdd4da8"
+        )
+        backend = (
+            os.environ.get("COCHANNEL_SECONDARY_BACKEND")
+            or cc.get("secondary_traffic_backend")
+            or "auto"
+        )
         return cls(
             lab_pc_ssh=str(cc.get("lab_pc_ssh") or cls.lab_pc_ssh),
             lab_pc_password=str(cc.get("lab_pc_password") or cls.lab_pc_password),
             device_password=str(cc.get("device_password") or cls.device_password),
-            primary_bts=str(cc.get("primary_bts") or cls.primary_bts),
-            primary_cpes=[str(x) for x in (cc.get("primary_cpes") or cls().primary_cpes)],
-            secondary_bts=str(cc.get("secondary_bts") or cls.secondary_bts),
-            secondary_cpe=str(cc.get("secondary_cpe") or cls.secondary_cpe),
+            primary_bts=str(primary_bts),
+            primary_cpes=primary_cpes,
+            secondary_bts=str(secondary_bts),
+            secondary_cpe=str(secondary_cpe),
             wifi_iface=str(cc.get("wifi_iface") or "wifi1"),
             wlan_iface=str(cc.get("wlan_iface") or "ath1"),
             mac_vlan_script=str(cc.get("mac_vlan_script") or cls.mac_vlan_script),
-            bts_iface=str(cc.get("bts_iface") or "enp4s0"),
-            cpe_iface=str(cc.get("cpe_iface") or "enx8cae4cdd4da8"),
-            dl_mbps_per_su=float(cc.get("dl_mbps_per_su") or 40.0),
-            ul_mbps_per_su=float(cc.get("ul_mbps_per_su") or 10.0),
+            bts_iface=str(
+                os.environ.get("COCHANNEL_BTS_IFACE")
+                or cc.get("bts_iface")
+                or "enp4s0"
+            ),
+            cpe_iface=str(cpe_iface),
+            dl_mbps_per_su=_env_float("COCHANNEL_DL_MBPS", cc.get("dl_mbps_per_su") if cc.get("dl_mbps_per_su") is not None else 40.0),
+            ul_mbps_per_su=_env_float("COCHANNEL_UL_MBPS", cc.get("ul_mbps_per_su") if cc.get("ul_mbps_per_su") is not None else 10.0),
+            downlink_mbps=_env_float(
+                "COCHANNEL_DOWNLINK_MBPS",
+                cc.get("downlink_mbps") if cc.get("downlink_mbps") is not None else 800.0,
+            ),
+            uplink_mbps=_env_float(
+                "COCHANNEL_UPLINK_MBPS",
+                cc.get("uplink_mbps") if cc.get("uplink_mbps") is not None else 800.0,
+            ),
+            bidi_downlink_mbps=_env_float(
+                "COCHANNEL_BIDI_DL_MBPS",
+                cc.get("bidi_downlink_mbps") if cc.get("bidi_downlink_mbps") is not None else 400.0,
+            ),
+            bidi_uplink_mbps=_env_float(
+                "COCHANNEL_BIDI_UL_MBPS",
+                cc.get("bidi_uplink_mbps") if cc.get("bidi_uplink_mbps") is not None else 400.0,
+            ),
             duration_s=duration,
             buffer_s=float(cc.get("buffer_s") or 3.0),
             su_step=int(cc.get("su_step") or 2),
@@ -121,10 +193,10 @@ class CoChannelConfig:
             interference=dict(cc.get("interference") or {}),
             interference_mode=str(cc.get("interference_mode") or "obss").lower(),
             secondary_tx_fixed_dbm=int(cc.get("secondary_tx_fixed_dbm") or 1),
-            secondary_traffic_backend=str(cc.get("secondary_traffic_backend") or "auto").lower(),
+            secondary_traffic_backend=str(backend).lower(),
             secondary_throughput_max_mbps=float(cc.get("secondary_throughput_max_mbps") or 400.0),
             secondary_throughput_step_mbps=float(cc.get("secondary_throughput_step_mbps") or 25.0),
-            trex=dict(cc.get("trex") or profile.get("traffic", {}).get("trex") or {}),
+            trex=_trex_from_profile(cc, profile),
             iperf_port=int(cc.get("iperf_port") or 5201),
             iperf_port_ul=int(cc.get("iperf_port_ul") or 5202),
             rssi_settle_s=float(cc.get("rssi_settle_s") or 12.0),
@@ -309,6 +381,12 @@ class MatrixRow:
     free_samples_json: str = ""
     traffic_series_json: str = ""
     notes: str = ""
+    # Bidirectional pass is its own offer (400+400), not the sum of the 800 tests.
+    bidi_tx_mbps: float | None = None
+    bidi_rx_mbps: float | None = None
+    bidi_drop_pct: float | None = None
+    bidi_latency_ms: float | None = None
+    bidi_jitter_ms: float | None = None
 
 
 def _free_channel_pct(util_pct: int | None) -> int | None:
@@ -403,64 +481,67 @@ def _parse_pct(raw: str, field: str) -> int | None:
     return None
 
 
-def _parse_max_rssi_ap(raw: str) -> tuple[int | None, str, str, str]:
-    """Return (rssi, ssid, bssid, channel) for strongest (least-negative) AP row."""
-    best: tuple[int, str, str, str] | None = None
+def _control_channel(iwconfig_text: str) -> str:
+    match = re.search(r"Frequency[:=]\s*([0-9.]+)\s*GHz", iwconfig_text or "", re.I)
+    if not match:
+        return ""
+    mhz = int(round(float(match.group(1)) * 1000))
+    if mhz < 3000:
+        return ""
+    return str((mhz - 5000) // 5)
+
+
+def _parse_max_rssi_ap(
+    raw: str, *, home_channel: str = ""
+) -> tuple[int | None, str, str, str]:
+    """Strongest AP on the primary's own channel. Other channels are ignored."""
+    rows: list[tuple[int, str, str, str]] = []
     for line in str(raw or "").splitlines():
         if "SSID" in line.upper() and "BSSID" in line.upper():
             continue
-        m = RSSI_ROW_RE.search(line)
-        if not m:
+        match = RSSI_ROW_RE.search(line)
+        if not match:
             continue
         try:
-            rssi = int(m.group("rssi"))
+            rssi = int(match.group("rssi"))
         except ValueError:
             continue
         if rssi >= 0:
             continue
-        if best is None or rssi > best[0]:
-            best = (
-                rssi,
-                m.group("ssid").strip(),
-                m.group("bssid").strip(),
-                m.group("chan").strip(),
-            )
-    if best is None:
+        channel = match.group("chan").strip()
+        if home_channel and channel != home_channel:
+            continue
+        rows.append((rssi, match.group("ssid").strip(), match.group("bssid").strip(), channel))
+    if not rows:
         return None, "", "", ""
-    return best[0], best[1], best[2], best[3]
+    best = max(rows, key=lambda row: row[0])
+    return best
+
+
+def _read_ap_table(cfg: CoChannelConfig) -> tuple[str, str]:
+    """Same-channel neighbors only. A scan replaces this table with off-channel APs."""
+    raw = _ssh_device(
+        cfg,
+        cfg.primary_bts,
+        f"wlanconfig {cfg.wlan_iface} list ap 2>/dev/null; echo ---FREQ---; "
+        f"iwconfig {cfg.wlan_iface} | sed -n '2p'",
+        timeout_s=30,
+    )
+    ap_raw, _, freq = str(raw or "").partition("---FREQ---")
+    return ap_raw, _control_channel(freq)
 
 
 def read_rf_snap(cfg: CoChannelConfig) -> RfSnap:
     """Read co-channel RSSI + OBSS + channel util from primary BTS."""
-    ap_raw = ""
-    util_raw = ""
-    for attempt in range(3):
-        ap_raw = _ssh_device(
-            cfg,
-            cfg.primary_bts,
-            f"wlanconfig {cfg.wlan_iface} list ap 2>/dev/null",
-            timeout_s=60,
-        )
-        rssi, ssid, bssid, chan = _parse_max_rssi_ap(ap_raw)
-        util_raw = _ssh_device(
-            cfg,
-            cfg.primary_bts,
-            f"cfg80211tool {cfg.wifi_iface} g_ch_util_obss; "
-            f"cfg80211tool {cfg.wifi_iface} g_chanutil",
-            timeout_s=45,
-        )
-        if str(ap_raw or "").strip() or rssi is not None:
-            return RfSnap(
-                rssi_dbm=rssi,
-                ssid=ssid,
-                bssid=bssid,
-                channel=chan,
-                obss_pct=_parse_pct(util_raw, "g_ch_util_obss"),
-                util_pct=_parse_pct(util_raw, "g_chanutil"),
-                raw_ap=ap_raw,
-            )
-        time.sleep(8)
-    rssi, ssid, bssid, chan = _parse_max_rssi_ap(ap_raw)
+    ap_raw, home_channel = _read_ap_table(cfg)
+    rssi, ssid, bssid, chan = _parse_max_rssi_ap(ap_raw, home_channel=home_channel)
+    util_raw = _ssh_device(
+        cfg,
+        cfg.primary_bts,
+        f"cfg80211tool {cfg.wifi_iface} g_ch_util_obss; "
+        f"cfg80211tool {cfg.wifi_iface} g_chanutil",
+        timeout_s=45,
+    )
     return RfSnap(
         rssi_dbm=rssi,
         ssid=ssid,
@@ -472,8 +553,133 @@ def read_rf_snap(cfg: CoChannelConfig) -> RfSnap:
     )
 
 
+def _bandwidth_label(htmode: str, sta_line: str) -> str:
+    mode = re.search(r"(?:HE|HT|VHT|EHT)(\d+)", sta_line or "", re.I)
+    if mode:
+        prefix = re.search(r"(HE|HT|VHT|EHT)\d+", sta_line, re.I)
+        return prefix.group(0).upper() if prefix else htmode
+    text = (htmode or "").strip().upper()
+    return text or "—"
+
+
+def read_link_endpoint(cfg: CoChannelConfig, host: str, role: str, peer: str) -> dict[str, Any]:
+    """Channel, bandwidth, and SNR for one link, as seen by its BTS."""
+    raw = _ssh_device(
+        cfg,
+        host,
+        f"iwconfig {cfg.wlan_iface}; echo ---STA---; "
+        f"wlanconfig {cfg.wlan_iface} list sta 2>/dev/null | sed -n '2p'; echo ---HT---; "
+        f"uci get wireless.{cfg.wifi_iface}.htmode 2>/dev/null",
+        timeout_s=30,
+    )
+    text = str(raw or "")
+    body, _, rest = text.partition("---STA---")
+    sta, _, ht_raw = rest.partition("---HT---")
+    sta_line = sta.strip().splitlines()[0].strip() if sta.strip() else ""
+    essid = re.search(r'ESSID:"([^"]*)"', body)
+    bssid = re.search(r"Access Point:\s*([0-9A-Fa-f:]{17})", body)
+    freq = re.search(r"Frequency[:=]\s*([0-9.]+)\s*GHz", body, re.I)
+    noise = re.search(r"Noise level[=:](-?\d+)", body, re.I)
+    tx_power = re.search(r"Tx-Power[=:](\d+)", body, re.I)
+    bit_rate = re.search(r"Bit Rate[=:]([0-9.]+)\s*([MG])b/s", body, re.I)
+    parts = sta_line.split()
+    rssi = None
+    channel = _control_channel(body)
+    phy_rate = ""
+    if len(parts) >= 6:
+        channel = parts[2] or channel
+        phy_rate = parts[3]
+        try:
+            rssi = int(parts[5])
+        except ValueError:
+            rssi = None
+    noise_dbm = int(noise.group(1)) if noise else None
+    snr = (rssi - noise_dbm) if rssi is not None and noise_dbm is not None else None
+    if bit_rate and not phy_rate:
+        phy_rate = f"{bit_rate.group(1)} {bit_rate.group(2)}b/s"
+    return {
+        "role": role,
+        "bts": host,
+        "cpe": peer,
+        "ssid": essid.group(1) if essid else "",
+        "bssid": bssid.group(1).lower() if bssid else "",
+        "channel": channel,
+        "frequency_ghz": freq.group(1) if freq else "",
+        "bandwidth": _bandwidth_label(ht_raw.strip(), sta_line),
+        "rssi_dbm": rssi,
+        "noise_dbm": noise_dbm,
+        "snr_db": snr,
+        "tx_power_dbm": int(tx_power.group(1)) if tx_power else None,
+        "phy_rate": phy_rate,
+    }
+
+
+def _match_heard_ap(ap_text: str, *, ssid: str, bssid: str) -> dict[str, Any] | None:
+    """Row in ``wlanconfig list ap`` for the secondary BTS."""
+    want_bssid = (bssid or "").lower()
+    want_ssid = (ssid or "").strip().lower()
+    ssid_hit: dict[str, Any] | None = None
+    for line in str(ap_text or "").splitlines():
+        match = RSSI_ROW_RE.search(line)
+        if not match:
+            continue
+        row = {
+            "ssid": match.group("ssid").strip(),
+            "bssid": match.group("bssid").lower(),
+            "channel": match.group("chan").strip(),
+            "frequency_mhz": match.group("freq").strip(),
+            "bandwidth": match.group("bw") or "",
+            "rssi_dbm": int(match.group("rssi")),
+        }
+        if want_bssid and row["bssid"] == want_bssid:
+            return row
+        if want_ssid and row["ssid"].lower() == want_ssid:
+            ssid_hit = row
+    return ssid_hit
+
+
+def read_secondary_rssi_at_primary(
+    cfg: CoChannelConfig, *, ssid: str, bssid: str
+) -> dict[str, Any]:
+    """RSSI the primary BTS receives from the secondary BTS.
+
+    ``wlanconfig list ap`` already lists only BSSs on the primary's own channel.
+    Do not scan first: a scan replaces that table with off-channel APs.
+    """
+    raw = _ssh_device(
+        cfg,
+        cfg.primary_bts,
+        f"wlanconfig {cfg.wlan_iface} list ap 2>/dev/null",
+        timeout_s=30,
+    )
+    return _match_heard_ap(raw, ssid=ssid, bssid=bssid) or {}
+
+
+def read_link_pair(cfg: CoChannelConfig) -> list[dict[str, Any]]:
+    primary_cpe = cfg.primary_cpes[0] if cfg.primary_cpes else ""
+    links = [
+        read_link_endpoint(cfg, cfg.primary_bts, "Primary", primary_cpe),
+        read_link_endpoint(cfg, cfg.secondary_bts, "Secondary", cfg.secondary_cpe),
+    ]
+    secondary = links[1]
+    heard = read_secondary_rssi_at_primary(
+        cfg, ssid=str(secondary.get("ssid") or ""), bssid=str(secondary.get("bssid") or "")
+    )
+    secondary["heard_rssi_dbm"] = heard.get("rssi_dbm")
+    secondary["heard_channel"] = heard.get("channel") or ""
+    secondary["heard_frequency_mhz"] = heard.get("frequency_mhz") or ""
+    secondary["heard_bandwidth"] = heard.get("bandwidth") or ""
+    secondary["heard_bssid"] = heard.get("bssid") or secondary.get("bssid") or ""
+    return links
+
+
 # Active secondary load (Mbps) after interference tuning — used in matrix notes.
 _active_secondary_mbps: float = 0.0
+# COCH_02 runs one level per test. Hold those rows and write one report at the end.
+_deferred_rows: list[MatrixRow] = []
+_deferred_cfg: CoChannelConfig | None = None
+_deferred_cpes: int = 0
+_deferred_links: list[dict[str, Any]] = []
 
 
 def stop_secondary_iperf(cfg: CoChannelConfig) -> None:
@@ -505,7 +711,7 @@ def _resolve_secondary_backend(cfg: CoChannelConfig) -> str:
     backend = str(cfg.secondary_traffic_backend or "auto").lower()
     if backend != "auto":
         return backend
-    trex_host = str((cfg.trex or {}).get("host") or "192.168.1.1")
+    trex_host = str((cfg.trex or {}).get("host") or "192.168.1.2")
     # Reachability from lab PC (automation host may not route 192.168.1.x)
     try:
         out = _ssh_lab(
@@ -523,7 +729,7 @@ def _resolve_secondary_backend(cfg: CoChannelConfig) -> str:
 def _trex_cfg(cfg: CoChannelConfig) -> dict[str, Any]:
     t = dict(cfg.trex or {})
     return {
-        "host": str(t.get("host") or "192.168.1.1"),
+        "host": str(t.get("host") or "192.168.1.2"),
         "user": str(t.get("user") or "root"),
         "password": str(t.get("password") or "ubuntu"),
         "pythonpath": str(
@@ -533,6 +739,7 @@ def _trex_cfg(cfg: CoChannelConfig) -> dict[str, Any]:
         "client_script": str(
             t.get("client_script") or "/root/master_script_extended_16SU.py"
         ),
+        "directory": str(t.get("directory") or "/opt/v3.06"),
         "su": int(t.get("su") or 1),
         "duration_s": int(t.get("duration_s") or 7200),
     }
@@ -553,8 +760,29 @@ def _ssh_trex(cfg: CoChannelConfig, remote_cmd: str, *, timeout_s: int = 60) -> 
 
 def _stop_secondary_trex(cfg: CoChannelConfig) -> None:
     t = _trex_cfg(cfg)
-    # pkill may return non-zero when nothing matches — always exit 0 for nested SSH.
-    remote = "pkill -9 -f master_script_extended_16SU.py 2>/dev/null; exit 0"
+    # Killing the client leaves the last stream running on t-rex-64.
+    # Reset the ports so OBSS actually falls when the load is supposed to be off.
+    reset = "\n".join(
+        [
+            "from trex.stl.api import STLClient",
+            f"c = STLClient(server={t['host']!r})",
+            "c.connect()",
+            "ports = c.get_all_ports()",
+            "c.acquire(ports=ports, force=True)",
+            "c.stop(ports=ports)",
+            "c.reset(ports=ports)",
+            "c.disconnect()",
+            "print('TREX_STOPPED', ports)",
+        ]
+    )
+    payload = base64.b64encode(reset.encode()).decode()
+    # Brackets keep pkill from matching this ssh command line and killing the session.
+    remote = (
+        "pkill -9 -f '[m]aster_script_extended_16SU.py' 2>/dev/null || true; "
+        f"export PYTHONPATH={shlex.quote(t['pythonpath'])}; "
+        f"echo {payload} | base64 -d | python3 || true; "
+        "exit 0"
+    )
     inner = (
         f"sshpass -p {shlex.quote(t['password'])} ssh "
         f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
@@ -563,13 +791,103 @@ def _stop_secondary_trex(cfg: CoChannelConfig) -> None:
         f"{shlex.quote(remote)}"
     )
     try:
-        _ssh_lab(cfg, inner, timeout_s=25)
+        out = _ssh_lab(cfg, inner, timeout_s=40)
+        if out.strip():
+            print(f"[cochannel] secondary TRex stop: {out.strip()[-180:]}", flush=True)
     except Exception as exc:
         print(f"[cochannel] WARN stop secondary TRex: {exc}", flush=True)
 
 
+def _ensure_trex_daemon(cfg: CoChannelConfig) -> None:
+    """Start ``t-rex-64 -i`` on the secondary TRex host when port 4501 is down.
+
+    Same launch as ``traffic.qos_lab.start_trex_server`` and
+    ``scripts/run_qa_lab_trex.sh``: hugepages, then
+    ``./t-rex-64 -i --no-scapy-server -c 1 --no-ofed-check``, then wait for RPC.
+    The script is sent base64-encoded so ``pkill -f t-rex-64`` cannot match this
+    SSH command line and kill the session.
+    """
+    t = _trex_cfg(cfg)
+    probe = _ssh_trex(
+        cfg,
+        "ss -lnt 2>/dev/null | grep -q ':4501' && echo TREX_READY || "
+        "(netstat -lnt 2>/dev/null | grep -q ':4501' && echo TREX_READY || echo TREX_DOWN)",
+        timeout_s=20,
+    )
+    if "TREX_READY" in probe:
+        print(f"[cochannel] TRex server already listening on {t['host']}:4501", flush=True)
+        return
+
+    print(
+        f"[cochannel] starting TRex server on {t['host']} ({t['directory']})",
+        flush=True,
+    )
+    script = "\n".join(
+        [
+            "set -e",
+            "echo 1024 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages",
+            "HP=$(cat /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages 2>/dev/null || echo 0)",
+            'echo "HUGEPAGES=$HP"',
+            'if [ "$HP" -lt 64 ]; then',
+            '  echo TREX_FAIL',
+            '  echo "Hugepages not allocated (nr_hugepages=$HP)"',
+            "  exit 1",
+            "fi",
+            "pkill -f '[t]-rex-64' 2>/dev/null || true",
+            "sleep 2",
+            f"cd {shlex.quote(t['directory'])}",
+            "nohup ./t-rex-64 -i --no-scapy-server -c 1 --no-ofed-check "
+            ">/tmp/trex_server.log 2>&1 &",
+            "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do",
+            "  sleep 3",
+            "  if ss -lnt 2>/dev/null | grep -q ':4501'; then echo TREX_READY; exit 0; fi",
+            "  if netstat -lnt 2>/dev/null | grep -q ':4501'; then echo TREX_READY; exit 0; fi",
+            "done",
+            "echo TREX_FAIL",
+            "tail -40 /tmp/trex_server.log || true",
+            "exit 1",
+        ]
+    )
+    payload = base64.b64encode(script.encode()).decode()
+    out = _ssh_trex(cfg, f"echo {payload} | base64 -d | bash", timeout_s=90)
+    print(f"[cochannel] TRex server: {out.strip()[-500:]}", flush=True)
+    if "TREX_READY" not in out:
+        raise RuntimeError(
+            f"TRex server did not listen on {t['host']}:4501\n{out[-800:]}"
+        )
+
+
+def _secondary_trex_log_ok(cfg: CoChannelConfig, *, wait_s: int = 25) -> str:
+    """Wait until the client log shows a connection, or raise on RPC failure."""
+    deadline = time.time() + wait_s
+    last = ""
+    while time.time() < deadline:
+        last = _ssh_trex(
+            cfg,
+            "tail -40 /tmp/cochannel_secondary_trex.log 2>/dev/null || true",
+            timeout_s=20,
+        )
+        if any(
+            token in last
+            for token in (
+                "TRexError",
+                "Failed to get server response",
+                "An error occurred",
+            )
+        ):
+            raise RuntimeError(
+                "secondary TRex client did not connect:\n" + last[-800:]
+            )
+        if "Connecting to BSU server" in last:
+            return last
+        time.sleep(3)
+    raise RuntimeError(
+        "secondary TRex client produced no connection log:\n" + last[-800:]
+    )
+
+
 def _start_secondary_trex(cfg: CoChannelConfig, mbps: float, *, tx_dbm: int | None = None) -> None:
-    """Start long-duration bi-dir TRex load on secondary (master_script @ 192.168.1.1)."""
+    """Start long-duration bi-dir TRex load on secondary (master_script on the TRex host)."""
     global _active_secondary_mbps
     t = _trex_cfg(cfg)
     bw = f"{int(round(mbps))}M"
@@ -579,27 +897,31 @@ def _start_secondary_trex(cfg: CoChannelConfig, mbps: float, *, tx_dbm: int | No
         f"(@{t['host']}, su={t['su']}){tx_note}",
         flush=True,
     )
+    _ensure_trex_daemon(cfg)
     _stop_secondary_trex(cfg)
     time.sleep(1)
     # Long duration so load stays up while OBSS is polled / primary traffic runs.
     # --server-bsu must be the TRex box itself (same as manual).
     remote = (
         f"export PYTHONPATH={shlex.quote(t['pythonpath'])}; "
+        f"export PYTHONUNBUFFERED=1; "
         f"cd /root; "
-        f"nohup stdbuf -oL -eL python3 {shlex.quote(t['client_script'])} "
+        f"nohup python3 -u {shlex.quote(t['client_script'])} "
         f"--server-bsu {shlex.quote(t['host'])} "
         f"--su {int(t['su'])} --bw {shlex.quote(bw)} --size 1500 "
         f"--duration {int(t['duration_s'])} --debug "
         f"</dev/null >/tmp/cochannel_secondary_trex.log 2>&1 & echo STARTED"
     )
-    try:
-        out = _ssh_trex(cfg, remote, timeout_s=30)
-        print(f"[cochannel] secondary TRex start: {out.strip()[:80]}", flush=True)
-    except Exception as exc:
-        print(f"[cochannel] WARN secondary TRex start: {exc}", flush=True)
+    out = _ssh_trex(cfg, remote, timeout_s=30)
+    print(f"[cochannel] secondary TRex client launched: {out.strip()[:80]}", flush=True)
+    log = _secondary_trex_log_ok(cfg, wait_s=45)
+    connected = next(
+        (line for line in log.splitlines() if "Connecting to BSU" in line),
+        "",
+    )
+    print(f"[cochannel] secondary TRex connected: {connected.strip()}", flush=True)
     _active_secondary_mbps = mbps
-    # Give streams a few seconds before first OBSS read
-    time.sleep(8)
+    time.sleep(3)
 
 
 def start_secondary_throughput(cfg: CoChannelConfig, mbps: float, *, tx_dbm: int | None = None) -> None:
@@ -833,6 +1155,8 @@ def _set_interference_level_obss(
     step = float(cfg.secondary_throughput_step_mbps)
     obss_lo = int(band.get("obss_min", 0))
     obss_hi = int(band.get("obss_max", 100))
+    level_max = float(band.get("secondary_mbps_max") or cfg.secondary_throughput_max_mbps)
+    level_max = min(level_max, float(cfg.secondary_throughput_max_mbps))
 
     print(
         f"[cochannel] Setting interference={level} "
@@ -844,7 +1168,8 @@ def _set_interference_level_obss(
     set_secondary_tx_power(cfg, tx)
     time.sleep(cfg.rssi_settle_s)
 
-    if need_load and mbps > 0:
+    # A fixed secondary_iperf_mbps must be sent even when OBSS tuning is off.
+    if mbps > 0:
         start_secondary_throughput(cfg, mbps, tx_dbm=tx)
         time.sleep(cfg.rssi_settle_s)
     elif need_load:
@@ -868,9 +1193,17 @@ def _set_interference_level_obss(
             if snap.obss_pct is None:
                 break
             if snap.obss_pct < obss_lo:
-                mbps = min(cfg.secondary_throughput_max_mbps, mbps + step)
+                if mbps >= level_max:
+                    print(
+                        f"[cochannel] secondary load already at {level_max:g} Mbps",
+                        flush=True,
+                    )
+                    break
+                # Step up inside this level's cap. A +100 jump put mid and high
+                # on the same ~90 Mbps load, so both OBSS readings sat near 40%.
+                mbps = min(level_max, max(mbps + 10, mbps * 1.5))
             elif snap.obss_pct > obss_hi:
-                mbps = max(0.0, mbps - step)
+                mbps = max(0.0, mbps * 0.6)
             else:
                 break
             print(
@@ -971,34 +1304,50 @@ def parse_traffic_live_series(
 
 def parse_traffic_summary(output: str) -> TrafficSnap:
     text = output or ""
-    # Prefer the FINAL SUMMARY block — LIVE STATS earlier in the log can
-    # show transient TX/RX skew that recovers by end-of-test.
+    # Prefer the FINAL SUMMARY block. A downlink-only or uplink-only run has one row.
     anchor = text.rfind("FINAL SUMMARY")
     region = text[anchor:] if anchor >= 0 else text
-    matches = list(FINAL_SUMMARY_RE.finditer(region))
-    if not matches and anchor >= 0:
-        matches = list(FINAL_SUMMARY_RE.finditer(text))
-    if not matches:
+    found: dict[str, re.Match[str]] = {}
+    for match in _DIR_LINE_RE.finditer(region):
+        found[match.group("label")] = match
+    if not found and anchor >= 0:
+        for match in _DIR_LINE_RE.finditer(text):
+            found[match.group("label")] = match
+    if not found:
         return TrafficSnap(raw_tail=text[-4000:])
-    m = matches[-1]
-    g = m.groupdict()
+    snap = TrafficSnap(raw_tail=region[-2000:])
 
-    def f(name: str) -> float:
-        return float(g[name])
+    def _fill(match: re.Match[str], prefix: str) -> None:
+        setattr(snap, f"{prefix}_loss_pct", float(match.group("loss")))
+        setattr(snap, f"{prefix}_latency_ms", float(match.group("avg")))
+        setattr(snap, f"{prefix}_jitter_ms", float(match.group("jitter")))
+        setattr(snap, f"{prefix}_tx_mbps", float(match.group("tx_mbps")))
+        setattr(snap, f"{prefix}_rx_mbps", float(match.group("rx_mbps")))
 
-    return TrafficSnap(
-        dl_loss_pct=f("dl_loss"),
-        dl_latency_ms=f("dl_avg"),
-        dl_jitter_ms=f("dl_jitter"),
-        ul_loss_pct=f("ul_loss"),
-        ul_latency_ms=f("ul_avg"),
-        ul_jitter_ms=f("ul_jitter"),
-        dl_tx_mbps=f("dl_tx_mbps"),
-        dl_rx_mbps=f("dl_rx_mbps"),
-        ul_tx_mbps=f("ul_tx_mbps"),
-        ul_rx_mbps=f("ul_rx_mbps"),
-        raw_tail=m.group(0),
-    )
+    if "BTS → CPE" in found:
+        _fill(found["BTS → CPE"], "dl")
+    if "CPE → BTS" in found:
+        _fill(found["CPE → BTS"], "ul")
+    return snap
+
+
+def _bidi_metrics(traffic: TrafficSnap) -> dict[str, float | None]:
+    """400+400 pass: total offer and receive, weighted drop, average latency."""
+    dl_tx, ul_tx = traffic.dl_tx_mbps, traffic.ul_tx_mbps
+    dl_rx, ul_rx = traffic.dl_rx_mbps, traffic.ul_rx_mbps
+    dl_loss, ul_loss = traffic.dl_loss_pct, traffic.ul_loss_pct
+    tx = rx = drop = lat = jit = None
+    if dl_tx is not None and ul_tx is not None:
+        tx = dl_tx + ul_tx
+    if dl_rx is not None and ul_rx is not None:
+        rx = dl_rx + ul_rx
+    if dl_loss is not None and ul_loss is not None and tx:
+        drop = (dl_loss * (dl_tx or 0.0) + ul_loss * (ul_tx or 0.0)) / tx
+    if traffic.dl_latency_ms is not None and traffic.ul_latency_ms is not None:
+        lat = (traffic.dl_latency_ms + traffic.ul_latency_ms) / 2.0
+    if traffic.dl_jitter_ms is not None and traffic.ul_jitter_ms is not None:
+        jit = (traffic.dl_jitter_ms + traffic.ul_jitter_ms) / 2.0
+    return {"tx": tx, "rx": rx, "drop": drop, "lat": lat, "jit": jit}
 
 
 def _sample_obss_util_during(
@@ -1079,12 +1428,22 @@ def _pick_traffic_output(stdout: str, log_text: str) -> tuple[str, str]:
 
 
 def run_primary_throughput(
-    cfg: CoChannelConfig, su_count: int, *, level: str = "run"
+    cfg: CoChannelConfig,
+    su_count: int,
+    *,
+    level: str = "run",
+    mode: str = "bidir",
+    dl_mbps: float | None = None,
+    ul_mbps: float | None = None,
 ) -> ThroughputResult:
     """
     Run mac_vlan traffic on lab PC; sample OBSS/util/free every 5s for full duration.
+
+    ``mode`` is downlink (800), uplink (800), or bidir (400+400). A rate of 0 is
+    not used: the script treats 0 as line rate.
     """
     level = str(level or "run").lower()
+    mode = str(mode or "bidir").lower()
     su_count = int(su_count)
     max_su = max(cfg.su_counts) if cfg.su_counts else count_bts_connected_stations(cfg)
     max_su = max(max_su, su_count)
@@ -1092,15 +1451,32 @@ def run_primary_throughput(
         raise ValueError(f"su_count must be ≥1, got {su_count}")
     if su_count > max_su:
         raise ValueError(f"su_count {su_count} exceeds available CPEs ({max_su})")
+    if mode not in {"downlink", "uplink", "bidir"}:
+        raise ValueError(f"unknown traffic mode {mode}")
 
-    dl = cfg.dl_mbps_per_su * su_count
-    ul = cfg.ul_mbps_per_su * su_count
+    if dl_mbps is None:
+        dl_mbps = cfg.downlink_mbps if mode == "downlink" else cfg.bidi_downlink_mbps
+    if ul_mbps is None:
+        ul_mbps = cfg.uplink_mbps if mode == "uplink" else cfg.bidi_uplink_mbps
+    dl_mbps = float(dl_mbps)
+    ul_mbps = float(ul_mbps)
+    offer = {
+        "downlink": f"DL {dl_mbps:g}",
+        "uplink": f"UL {ul_mbps:g}",
+        "bidir": f"DL {dl_mbps:g} + UL {ul_mbps:g}",
+    }[mode]
     duration = float(cfg.duration_s)
     interval = float(cfg.rf_sample_interval_s or 5.0)
     stats_iv = max(1, int(round(interval)))
     script = cfg.mac_vlan_script
-    log_path = f"/tmp/cochannel_{level}_su{su_count}_out.log"
-    wrap = f"/tmp/cochannel_{level}_run_su{su_count}.py"
+    log_path = f"/tmp/cochannel_{level}_{mode}_su{su_count}_out.log"
+    wrap = f"/tmp/cochannel_{level}_{mode}_run_su{su_count}.py"
+    rate_args = []
+    if mode in {"downlink", "bidir"}:
+        rate_args.extend(["--bts-rate-mbps", f"{dl_mbps:g}"])
+    if mode in {"uplink", "bidir"}:
+        rate_args.extend(["--cpe-rate-mbps", f"{ul_mbps:g}"])
+    rate_literal = ", ".join(repr(part) for part in rate_args)
 
     wrap_script = f"""import runpy
 import sys
@@ -1111,10 +1487,10 @@ sys.argv = [
     SCRIPT,
     "--bts", {cfg.bts_iface!r},
     "--cpe", {cfg.cpe_iface!r},
+    "--mode", {mode!r},
     "--duration", "{duration:g}",
     "--buffer", "{cfg.buffer_s:g}",
-    "--bts-rate-mbps", "{dl:g}",
-    "--cpe-rate-mbps", "{ul:g}",
+    {rate_literal},
     "--stats-interval", "{stats_iv}",
 ]
 ns = runpy.run_path(SCRIPT, run_name="mac_vlan_coch")
@@ -1125,7 +1501,7 @@ patched = bts + cpe
 main_fn = ns["main"]
 main_fn.__globals__["MAC_VLAN_TABLE"] = patched
 ns["MAC_VLAN_TABLE"] = patched
-print(f"[cochannel] Running {{SU}} SU  DL={{'{dl:g}'}} UL={{'{ul:g}'}} Mbps  "
+print(f"[cochannel] Running {{SU}} SU  mode={mode}  {offer}  "
       f"duration={{'{duration:g}'}}s  flows={{len(patched)}}")
 main_fn()
 """
@@ -1142,8 +1518,8 @@ test -f "$WRAP"
 sudo sh -c "python3 '$WRAP' 2>&1 | tee '$LOG'"
 """
     print(
-        f"[cochannel] Primary traffic: {su_count} SU, "
-        f"{dl:g}/{ul:g} Mbps, {duration:g}s "
+        f"[cochannel] Primary traffic: {su_count} SU, {mode} {offer}, {duration:g}s "
+        f"bts={cfg.bts_iface} cpe={cfg.cpe_iface} "
         f"(RF every {interval:g}s for full run) …",
         flush=True,
     )
@@ -1338,11 +1714,73 @@ def verify_backend_only(cfg: CoChannelConfig) -> RfSnap:
     return snap
 
 
+def publish_cochannel_report(
+    cfg: CoChannelConfig,
+    rows: list[MatrixRow],
+    *,
+    connected_cpes: int,
+    links: list[dict[str, Any]] | None = None,
+) -> None:
+    """Write one CSV and one HTML for the rows collected so far."""
+    if not rows:
+        return
+    ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = REPO_ROOT / cfg.results_dir
+    csv_path = out_dir / f"cochannel_matrix_{ts}.csv"
+    write_matrix_csv(rows, csv_path)
+    print(f"[cochannel] CSV → {csv_path}", flush=True)
+    try:
+        from utils.cochannel_report import write_cochannel_reports
+
+        write_cochannel_reports(
+            rows,
+            out_dir=out_dir,
+            stem=f"cochannel_report_{ts}",
+            meta={
+                "duration_s": cfg.duration_s,
+                "rf_samples": max(
+                    1, int(round(cfg.duration_s / max(1.0, cfg.rf_sample_interval_s)))
+                ),
+                "rf_sample_interval_s": cfg.rf_sample_interval_s,
+                "pytest_log": "/tmp/cochannel_full_matrix_final.log",
+                "su_counts": cfg.su_counts,
+                "connected_cpes": connected_cpes,
+                "links": list(links or []),
+                "generated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "method": (
+                    "TX power sets RSSI location; OBSS via secondary load; "
+                    "baseline RF without primary traffic; during primary traffic "
+                    "sample OBSS/util/free every 5s and report average"
+                ),
+            },
+        )
+    except Exception as exc:
+        print(f"[cochannel] WARN report generation failed: {exc}", flush=True)
+
+
+def flush_deferred_cochannel_report() -> None:
+    """Write the single report for levels that were run one test at a time."""
+    global _deferred_rows, _deferred_cfg, _deferred_cpes, _deferred_links
+    rows, cfg, cpes, links = (
+        _deferred_rows,
+        _deferred_cfg,
+        _deferred_cpes,
+        _deferred_links,
+    )
+    _deferred_rows = []
+    _deferred_cfg = None
+    _deferred_cpes = 0
+    _deferred_links = []
+    if rows and cfg is not None:
+        publish_cochannel_report(cfg, rows, connected_cpes=cpes, links=links)
+
+
 def run_cochannel_matrix(
     cfg: CoChannelConfig,
     *,
     levels: list[str] | None = None,
     su_counts: list[int] | None = None,
+    publish: bool = True,
 ) -> list[MatrixRow]:
     levels = [x.lower() for x in (levels or ["low", "mid", "high"])]
     if su_counts is None:
@@ -1352,6 +1790,25 @@ def run_cochannel_matrix(
     cfg.su_counts = su_counts
     connected_cpes = count_bts_connected_stations(cfg)
     rows: list[MatrixRow] = []
+    global _deferred_links
+    if not _deferred_links:
+        try:
+            _deferred_links = read_link_pair(cfg)
+            for link in _deferred_links:
+                print(
+                    f"[cochannel] {link['role']} {link['bts']}/{link['cpe']} "
+                    f"ch {link['channel']} {link['frequency_ghz']} GHz "
+                    f"{link['bandwidth']} SNR {link['snr_db']} dB "
+                    f"CPE RSSI {link['rssi_dbm']} dBm"
+                    + (
+                        f" heard-at-primary {link['heard_rssi_dbm']} dBm"
+                        if "heard_rssi_dbm" in link
+                        else ""
+                    ),
+                    flush=True,
+                )
+        except Exception as exc:
+            print(f"[cochannel] WARN link details: {exc}", flush=True)
 
     try:
         for level in levels:
@@ -1412,14 +1869,31 @@ def run_cochannel_matrix(
                     f"FREE={pre_free} ===",
                     flush=True,
                 )
-                result = run_primary_throughput(cfg, n, level=level)
-                traffic = result.traffic
+                runs: dict[str, ThroughputResult] = {}
+                for mode, dl_offer, ul_offer in (
+                    ("downlink", cfg.downlink_mbps, 0.0),
+                    ("uplink", 0.0, cfg.uplink_mbps),
+                    ("bidir", cfg.bidi_downlink_mbps, cfg.bidi_uplink_mbps),
+                ):
+                    runs[mode] = run_primary_throughput(
+                        cfg,
+                        n,
+                        level=level,
+                        mode=mode,
+                        dl_mbps=dl_offer,
+                        ul_mbps=ul_offer,
+                    )
+                dl_traffic = runs["downlink"].traffic
+                ul_traffic = runs["uplink"].traffic
+                bidi = runs["bidir"]
+                bidi_traffic = bidi.traffic
+                bidi_m = _bidi_metrics(bidi_traffic)
                 post = read_rf_snap(cfg)
-                obss = result.obss_avg if result.obss_avg is not None else post.obss_pct
-                util = result.util_avg if result.util_avg is not None else post.util_pct
+                obss = bidi.obss_avg if bidi.obss_avg is not None else post.obss_pct
+                util = bidi.util_avg if bidi.util_avg is not None else post.util_pct
                 free = (
-                    result.free_avg
-                    if result.free_avg is not None
+                    bidi.free_avg
+                    if bidi.free_avg is not None
                     else _free_channel_pct(
                         int(round(util)) if util is not None else post.util_pct
                     )
@@ -1429,9 +1903,11 @@ def run_cochannel_matrix(
                 free_i = int(round(free)) if free is not None else None
                 print(
                     f"[cochannel] AFTER {level.upper()}/{n}SU: "
-                    f"DL={traffic.dl_rx_mbps} Mbps UL={traffic.ul_rx_mbps} Mbps "
+                    f"DL {dl_traffic.dl_rx_mbps}/{cfg.downlink_mbps:g} Mbps  "
+                    f"UL {ul_traffic.ul_rx_mbps}/{cfg.uplink_mbps:g} Mbps  "
+                    f"BIDI {bidi_m['rx']}/{bidi_m['tx']} Mbps  "
                     f"AVG OBSS={obss_i}% UTIL={util_i}% FREE={free_i}% "
-                    f"(n={len(result.obss_samples)}) RSSI={post.rssi_dbm}",
+                    f"(n={len(bidi.obss_samples)}) RSSI={post.rssi_dbm}",
                     flush=True,
                 )
                 row = MatrixRow(
@@ -1442,18 +1918,23 @@ def run_cochannel_matrix(
                     util_pct=util_i,
                     free_pct=free_i,
                     secondary_tx_dbm=tx,
-                    dl_packet_drop_pct=traffic.dl_loss_pct,
-                    dl_latency_ms=traffic.dl_latency_ms,
-                    dl_jitter_ms=traffic.dl_jitter_ms,
-                    ul_packet_drop_pct=traffic.ul_loss_pct,
-                    ul_latency_ms=traffic.ul_latency_ms,
-                    ul_jitter_ms=traffic.ul_jitter_ms,
+                    dl_packet_drop_pct=dl_traffic.dl_loss_pct,
+                    dl_latency_ms=dl_traffic.dl_latency_ms,
+                    dl_jitter_ms=dl_traffic.dl_jitter_ms,
+                    ul_packet_drop_pct=ul_traffic.ul_loss_pct,
+                    ul_latency_ms=ul_traffic.ul_latency_ms,
+                    ul_jitter_ms=ul_traffic.ul_jitter_ms,
                     secondary_iperf_mbps=iperf_mbps,
                     phase="traffic",
-                    dl_tx_mbps=traffic.dl_tx_mbps,
-                    dl_rx_mbps=traffic.dl_rx_mbps,
-                    ul_tx_mbps=traffic.ul_tx_mbps,
-                    ul_rx_mbps=traffic.ul_rx_mbps,
+                    dl_tx_mbps=dl_traffic.dl_tx_mbps,
+                    dl_rx_mbps=dl_traffic.dl_rx_mbps,
+                    ul_tx_mbps=ul_traffic.ul_tx_mbps,
+                    ul_rx_mbps=ul_traffic.ul_rx_mbps,
+                    bidi_tx_mbps=bidi_m["tx"],
+                    bidi_rx_mbps=bidi_m["rx"],
+                    bidi_drop_pct=bidi_m["drop"],
+                    bidi_latency_ms=bidi_m["lat"],
+                    bidi_jitter_ms=bidi_m["jit"],
                     rssi_before_dbm=pre.rssi_dbm,
                     obss_before_pct=pre.obss_pct,
                     util_before_pct=pre.util_pct,
@@ -1462,29 +1943,40 @@ def run_cochannel_matrix(
                     obss_after_pct=obss_i,
                     util_after_pct=util_i,
                     free_after_pct=free_i,
-                    obss_sample_count=len(result.obss_samples),
-                    util_sample_count=len(result.util_samples),
-                    obss_samples_json=json.dumps(result.obss_samples),
-                    util_samples_json=json.dumps(result.util_samples),
-                    free_samples_json=json.dumps(result.free_samples),
+                    obss_sample_count=len(bidi.obss_samples),
+                    util_sample_count=len(bidi.util_samples),
+                    obss_samples_json=json.dumps(bidi.obss_samples),
+                    util_samples_json=json.dumps(bidi.util_samples),
+                    free_samples_json=json.dumps(bidi.free_samples),
                     traffic_series_json=(
-                        json.dumps(result.traffic_series)
-                        if result.traffic_series
+                        json.dumps(bidi.traffic_series)
+                        if bidi.traffic_series
                         else ""
                     ),
                     notes=(
                         f"AFTER primary throughput;"
+                        f"dl={cfg.downlink_mbps:g};ul={cfg.uplink_mbps:g};"
+                        f"bidi={cfg.bidi_downlink_mbps:g}+{cfg.bidi_uplink_mbps:g};"
                         f"tx={tx};sec_load={iperf_mbps};"
-                        f"dl_rx={traffic.dl_rx_mbps};ul_rx={traffic.ul_rx_mbps};"
+                        f"dl_rx={dl_traffic.dl_rx_mbps};ul_rx={ul_traffic.ul_rx_mbps};"
+                        f"bidi_rx={bidi_m['rx']};"
                         f"avg_obss={obss_i};avg_util={util_i};avg_free={free_i};"
-                        f"rf_samples={len(result.obss_samples)};"
+                        f"rf_samples={len(bidi.obss_samples)};"
                         f"interval={cfg.rf_sample_interval_s}s"
                     ),
                 )
                 rows.append(row)
                 check.is_not_none(
-                    traffic.dl_loss_pct,
-                    f"{level}/{n}SU: traffic summary parse failed",
+                    dl_traffic.dl_loss_pct,
+                    f"{level}/{n}SU: downlink summary parse failed",
+                )
+                check.is_not_none(
+                    ul_traffic.ul_loss_pct,
+                    f"{level}/{n}SU: uplink summary parse failed",
+                )
+                check.is_not_none(
+                    bidi_traffic.dl_loss_pct,
+                    f"{level}/{n}SU: bidi summary parse failed",
                 )
     finally:
         stop_secondary_iperf(cfg)
@@ -1493,38 +1985,20 @@ def run_cochannel_matrix(
         except Exception as exc:
             print(f"[cochannel] WARN restore TX failed: {exc}", flush=True)
 
-    ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = REPO_ROOT / cfg.results_dir
-    csv_path = out_dir / f"cochannel_matrix_{ts}.csv"
-    write_matrix_csv(rows, csv_path)
     print_matrix_table(rows)
-    print(f"[cochannel] CSV → {csv_path}", flush=True)
-
-    try:
-        from utils.cochannel_report import write_cochannel_reports
-
-        write_cochannel_reports(
-            rows,
-            out_dir=out_dir,
-            stem=f"cochannel_report_{ts}",
-            meta={
-                "duration_s": cfg.duration_s,
-                "rf_samples": max(
-                    1, int(round(cfg.duration_s / max(1.0, cfg.rf_sample_interval_s)))
-                ),
-                "rf_sample_interval_s": cfg.rf_sample_interval_s,
-                "pytest_log": "/tmp/cochannel_full_matrix_final.log",
-                "su_counts": cfg.su_counts,
-                "connected_cpes": connected_cpes,
-                "generated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "method": (
-                    "TX power sets RSSI location; OBSS via secondary load; "
-                    "baseline RF without primary traffic; during primary traffic "
-                    "sample OBSS/util/free every 5s and report average"
-                ),
-            },
+    if publish:
+        publish_cochannel_report(
+            cfg, rows, connected_cpes=connected_cpes, links=_deferred_links
         )
-    except Exception as exc:
-        print(f"[cochannel] WARN report generation failed: {exc}", flush=True)
+    else:
+        global _deferred_rows, _deferred_cfg, _deferred_cpes
+        _deferred_rows.extend(rows)
+        _deferred_cfg = cfg
+        _deferred_cpes = connected_cpes
+        print(
+            f"[cochannel] holding {len(rows)} rows "
+            f"({len(_deferred_rows)} total) for one report",
+            flush=True,
+        )
 
     return rows

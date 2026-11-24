@@ -175,6 +175,9 @@ async def root_ssh(request, bsu_ip, device_creds, sanity_bts_bind, profile_bundl
 
 @pytest.fixture(scope="session")
 async def gui_browser():
+    from utils.playwright_env import ensure_playwright_chromium
+
+    ensure_playwright_chromium()
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         yield browser

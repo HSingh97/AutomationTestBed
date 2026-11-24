@@ -1839,8 +1839,9 @@ def _apply_cpe_bandwidth(
         # so ucidyn apply drops SSH and a foreground apply is killed by SIGHUP
         # before the new htmode is stored.
         chain = (
-            f"ucidyn set advwireless.ath{radio_idx}.htmode {htmode}"
-            " && { nohup ucidyn apply >/tmp/ucidyn-apply.log 2>&1 </dev/null & }"
+            f"ucidyn set wireless.wifi{radio_idx}.htmode {htmode}"
+            f" && ucidyn set advwireless.ath{radio_idx}.htmode {htmode}"
+            " && (trap '' HUP; ucidyn apply >/tmp/ucidyn-apply.log 2>&1 </dev/null &)"
             " && echo CPE_APPLY_STARTED"
         )
         print(f"[CPE] Bandwidth apply chain on {host}: {chain}")

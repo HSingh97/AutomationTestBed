@@ -1171,6 +1171,9 @@ def pytest_sessionfinish(session, exitstatus):
 @pytest.fixture(scope="session")
 async def gui_browser():
     """Spins up a headless Chromium browser for GUI testing."""
+    from utils.playwright_env import ensure_playwright_chromium
+
+    ensure_playwright_chromium()
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         yield browser
@@ -1320,6 +1323,15 @@ _quiet_ssh_library_logs()
 def pytest_collection_finish(session):
     count = len(session.items)
     print(f"\n[pytest] Collected {count} test(s). Starting session setup (not stuck)...\n")
+    needs_browser = any(
+        "gui_page" in getattr(item, "fixturenames", ())
+        or "gui_browser" in getattr(item, "fixturenames", ())
+        for item in session.items
+    )
+    if needs_browser:
+        from utils.playwright_env import ensure_playwright_chromium
+
+        ensure_playwright_chromium()
     if session.items:
         from utils.ip_suite_progress import IpSuiteProgress
 

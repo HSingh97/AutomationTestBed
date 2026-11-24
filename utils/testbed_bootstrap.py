@@ -417,7 +417,7 @@ async def _restore_link_via_archives(
 
     sec = _tb(profile_bundle.active).get("secondary_pc", {}) or {}
     cpe_fallback = str(sec.get("cpe_factory_ipv4", "192.168.2.1"))
-    cpe_archive = link_rec.get("cpe_archive") or recovery.get("cpe_restore_archive", "config/CPE.tar.gz")
+    cpe_archive = link_rec.get("cpe_archive") or recovery.get("cpe_restore_archive", "config/backup-UBR650-cpe.tar.gz")
     recovery = dict(recovery)
     recovery["cpe_restore_archive"] = cpe_archive
     profile_bundle.active["recovery"] = recovery

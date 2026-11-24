@@ -97,6 +97,9 @@ async def _open_remote_radio_target(host: str, device_creds: dict[str, str]):
         remote_browser = None
         remote_context = None
         try:
+            from utils.playwright_env import ensure_playwright_chromium
+
+            ensure_playwright_chromium()
             remote_playwright = await async_playwright().start()
             remote_browser = await remote_playwright.chromium.launch(headless=True)
             remote_context = await remote_browser.new_context(ignore_https_errors=True)

@@ -132,6 +132,58 @@ def apply_commands(radio_idx: int, bandwidth: str | None, channel: int) -> str:
     return " && ".join(commands)
 
 
+def _firmware(args: argparse.Namespace, ip: str) -> str:
+    try:
+        raw = run_ssh_command(ip, args.user, args.password, "cat /etc/version", timeout_s=20)
+    except RuntimeError:
+        return "—"
+    lines = [line.strip() for line in raw.splitlines() if line.strip() and not line.strip().startswith("cat ")]
+    return lines[-1] if lines else "—"
+
+
+def _last_event_line(args: argparse.Namespace) -> str:
+    try:
+        text = run_ssh_command(
+            args.bts_ip,
+            args.user,
+            args.password,
+            "tail -n 1 /tmp/kwn-wifi1-events.log 2>/dev/null",
+            timeout_s=20,
+        )
+    except RuntimeError:
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+def _link_since(args: argparse.Namespace, marker: str, *, width_change: bool) -> tuple[str, str, str]:
+    """Return link_drop, note, and dfs flag from the wifi event log after marker."""
+    try:
+        text = run_ssh_command(
+            args.bts_ip,
+            args.user,
+            args.password,
+            "tail -n 40 /tmp/kwn-wifi1-events.log 2>/dev/null",
+            timeout_s=20,
+        )
+    except RuntimeError:
+        return "unknown", "", "no"
+    if marker and marker in text:
+        text = text.split(marker, 1)[-1]
+    dfs = "yes" if "DFS CAC started" in text else "no"
+    if dfs == "yes":
+        return "expected", "DFS CAC", dfs
+    if "terminated link" in text:
+        if width_change:
+            return "expected", "width change", dfs
+        reason = ""
+        for line in text.splitlines():
+            if "terminated link" in line and "Reason:" in line:
+                reason = line.rsplit("Reason:", 1)[-1].strip()
+        return "dropped", reason or "link terminated", dfs
+    return "seamless", "", dfs
+
+
 def _ping_once(host: str, *, count: int, wait_s: int) -> tuple[bool, str]:
     command = ["ping", "-c", str(count), "-W", str(wait_s), host]
     try:
@@ -306,6 +358,9 @@ def run_sweep(args: argparse.Namespace) -> int:
         "ping_ok",
         "ping_detail",
         "config_ok",
+        "link_drop",
+        "link_note",
+        "dfs",
         "note",
     ]
     rows: list[dict[str, str]] = []
@@ -335,6 +390,7 @@ def run_sweep(args: argparse.Namespace) -> int:
             for index, channel in enumerate(channels):
                 set_bandwidth = bandwidth if index == 0 else None
                 command = apply_commands(args.radio_index, set_bandwidth, channel)
+                link_marker = _last_event_line(args)
                 note = ""
                 try:
                     run_ssh_command(
@@ -352,6 +408,9 @@ def run_sweep(args: argparse.Namespace) -> int:
                     bandwidth=bandwidth,
                     channel=channel,
                 )
+                link_drop, link_note, dfs = _link_since(
+                    args, link_marker, width_change=set_bandwidth is not None
+                )
                 passed = config_ok and ping_ok
                 row = {
                     "bandwidth": bandwidth,
@@ -363,6 +422,9 @@ def run_sweep(args: argparse.Namespace) -> int:
                     "ping_ok": "yes" if ping_ok else "no",
                     "ping_detail": ping_detail,
                     "config_ok": "yes" if config_ok else "no",
+                    "link_drop": link_drop,
+                    "link_note": link_note,
+                    "dfs": dfs,
                     "note": note,
                 }
                 writer.writerow(row)
@@ -397,6 +459,8 @@ def run_sweep(args: argparse.Namespace) -> int:
         channels_by_bw=channels_by_bw,
         executed_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         report_id=stamp,
+        bts_fw=_firmware(args, args.bts_ip),
+        cpe_fw=_firmware(args, args.cpe_ip),
     )
     print(
         f"\nDone {len(passed_rows)}/{len(rows)} passed  CSV {csv_path}\n"

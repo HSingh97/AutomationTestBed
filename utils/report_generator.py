@@ -128,6 +128,14 @@ def _humanize_module_name(nodeid: str, test_id: str) -> str:
         raw = re.sub(r"_ipv4$", "", raw, flags=re.I)
         return raw.replace("_", " ").strip().title()
 
+    if re.match(r"SPECT_ANALYZER_\d+", test_id, re.I):
+        raw = re.sub(r"^spect_analyzer_\d+_?", "", raw, flags=re.I)
+        return raw.replace("_", " ").strip().title()
+
+    if re.match(r"LINK_TEST_\d+", test_id, re.I):
+        raw = re.sub(r"^link_test_\d+_?", "", raw, flags=re.I)
+        return raw.replace("_", " ").strip().title()
+
     return raw.replace("_", " ").strip().title()
 
 
@@ -263,6 +271,10 @@ def get_group_marker(keywords):
             return "API"
         if re.match(r"ARPBRIDGE_\d+", str(kw), re.I) or low in ("arpbridgetable", "arp_bridge_table"):
             return "ArpBridgeTable"
+        if re.match(r"SPECT_ANALYZER_\d+", str(kw), re.I) or low in ("spectrumsitesurvey", "spectrum"):
+            return "SpectrumSiteSurvey"
+        if re.match(r"LINK_TEST_\d+", str(kw), re.I) or low in ("linktest", "link_test"):
+            return "LinkTest"
 
     for kw in kw_list:
         if kw in ignore_list or str(kw).startswith('GUI_') or str(kw).startswith('test_') or '.py' in str(kw):
@@ -318,6 +330,31 @@ def _customer_error_message(raw: str) -> str:
         err = cleaned.strip()
     err = re.sub(r"\s*\([^)]{8,}\)\s*$", "", err).strip()
     return err or "Unknown error"
+
+
+_BOX_DRAWING_LINE = re.compile(r"^[\s╔╗╚╝═║┌┐└┘─│╭╮╯╰+\-_=|]*$")
+
+
+def _meaningful_error_line(text: str) -> str:
+    """Pick the exception text, not a Playwright box border or blank rule."""
+    lines = [ln.strip() for ln in str(text or "").splitlines() if ln.strip()]
+    cleaned: list[str] = []
+    for ln in lines:
+        body = ln[2:].strip() if ln.startswith("E ") else ln
+        if _BOX_DRAWING_LINE.match(body):
+            continue
+        if body.startswith("<3 ") or body.lower().startswith("looks like playwright"):
+            continue
+        cleaned.append(body)
+    for body in cleaned:
+        if "Executable doesn't exist" in body or body.startswith("playwright."):
+            return _customer_error_message(body)
+    for body in reversed(cleaned):
+        if any(token in body for token in ("Error:", "Error", "Exception", "AssertionError", "RuntimeError")):
+            return _customer_error_message(body)
+    if cleaned:
+        return _customer_error_message(cleaned[-1])
+    return "Unknown error"
 
 
 def _functional_case_number(test_id: str) -> int | None:
@@ -1599,18 +1636,51 @@ def generate():
                                                     )
                                                     test_name = _humanize_module_name(nodeid, test_id)
                                                 else:
-                                                    match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
-                                                    if match:
-                                                        test_id = match.group(1).upper()
-                                                        raw_name = match.group(2)
-                                                        parts = raw_name.split('_')
-                                                        if len(parts) >= 2 and parts[0] == 'summary':
-                                                            test_name = '-'.join(p.capitalize() for p in parts[::-1])
-                                                        else:
-                                                            test_name = '-'.join(p.capitalize() for p in parts)
+                                                    spect_kw = next(
+                                                        (
+                                                            str(k).upper()
+                                                            for k in test.get("keywords", [])
+                                                            if re.match(r"SPECT_ANALYZER_\d+", str(k), re.I)
+                                                        ),
+                                                        None,
+                                                    )
+                                                    spect_fn = re.search(r"test_spect_analyzer_(\d+)_", nodeid, re.I)
+                                                    link_kw = next(
+                                                        (
+                                                            str(k).upper()
+                                                            for k in test.get("keywords", [])
+                                                            if re.match(r"LINK_TEST_\d+", str(k), re.I)
+                                                        ),
+                                                        None,
+                                                    )
+                                                    link_fn = re.search(r"test_link_test_(\d+)_", nodeid, re.I)
+                                                    if spect_kw or spect_fn:
+                                                        test_id = (
+                                                            spect_kw
+                                                            if spect_kw
+                                                            else f"SPECT_ANALYZER_{int(spect_fn.group(1)):02d}"
+                                                        )
+                                                        test_name = _humanize_module_name(nodeid, test_id)
+                                                    elif link_kw or link_fn:
+                                                        test_id = (
+                                                            link_kw
+                                                            if link_kw
+                                                            else f"LINK_TEST_{int(link_fn.group(1)):02d}"
+                                                        )
+                                                        test_name = _humanize_module_name(nodeid, test_id)
                                                     else:
-                                                        test_id = "N/A"
-                                                        test_name = nodeid.split('::')[-1]
+                                                        match = re.search(r'test_(gui_\d+)_(.*)', nodeid.lower())
+                                                        if match:
+                                                            test_id = match.group(1).upper()
+                                                            raw_name = match.group(2)
+                                                            parts = raw_name.split('_')
+                                                            if len(parts) >= 2 and parts[0] == 'summary':
+                                                                test_name = '-'.join(p.capitalize() for p in parts[::-1])
+                                                            else:
+                                                                test_name = '-'.join(p.capitalize() for p in parts)
+                                                        else:
+                                                            test_id = "N/A"
+                                                            test_name = nodeid.split('::')[-1]
 
         group_name = get_group_marker(test.get('keywords', []))
         outcome = _effective_outcome_for_report(test).upper()
@@ -1775,15 +1845,7 @@ def generate():
                 stats['failed'] += 1
                 status = "FAILED"
                 lines = [ln.strip() for ln in longrepr.strip().split("\n") if ln.strip()]
-                err = lines[-1] if lines else "Unknown Exception"
-                # Prefer the human XFailed / AssertionError message when present.
-                for ln in reversed(lines):
-                    if ln.startswith("E ") or "XFailed:" in ln or "AssertionError:" in ln:
-                        err = ln[2:].strip() if ln.startswith("E ") else ln
-                        break
-                err = re.sub(r"^_pytest\.outcomes\.XFailed:\s*", "", err)
-                err = re.sub(r"^XFailed:\s*", "", err, flags=re.I)
-                err = _customer_error_message(err)
+                err = _meaningful_error_line(longrepr) if lines else "Unknown Exception"
                 title = "Known product defect:" if is_xfail else "Critical Execution Error:"
                 if (is_um_case or is_qos_case) and validated_params:
                     pills = "".join([f"<span class='param-pill'>{p}</span>" for p in validated_params])
@@ -1834,8 +1896,7 @@ def generate():
             status = "FAILED"
             teardown = test.get("teardown", {})
             err = str(teardown.get("longrepr") or test.get("setup", {}).get("longrepr") or "Unknown error")
-            lines = err.strip().split("\n")
-            err_line = lines[-1] if lines else "Unknown error"
+            err_line = _meaningful_error_line(err)
             reason_html = (
                 f"<div class='reason-title' style='color:#991b1b;'>Critical Execution Error:</div>"
                 f"<div class='failure-list'><div class='failure-item'>{err_line}</div></div>"
@@ -1937,6 +1998,10 @@ def generate():
             groups[group_name] = _sort_functional_records(records)
         elif group_name == "ArpBridgeTable":
             groups[group_name] = _sort_arpbridge_records(records)
+        elif group_name == "SpectrumSiteSurvey":
+            groups[group_name] = _sort_numbered_suite_records(records, "SPECT_ANALYZER")
+        elif group_name == "LinkTest":
+            groups[group_name] = _sort_numbered_suite_records(records, "LINK_TEST")
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     html_filename = ARTIFACTS_DIR / f"{output_prefix}_{build_no}_Report_{date_str}.html"

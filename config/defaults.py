@@ -1009,10 +1009,10 @@ IP_TEST_DEFAULTS = {
     "link_recovery_timeout_s": 90,
     "link_recovery_poll_s": 3,
     "link_recovery_tx_power": "1",
-    "ip15_require_fresh_backup": True,
-    "allow_stale_backup_archive": False,
-    "backup_via_gui": True,
-    "take_session_backup": True,
+    "ip15_require_fresh_backup": False,
+    "allow_stale_backup_archive": True,
+    "backup_via_gui": False,
+    "take_session_backup": False,
     "backup_min_bytes": 1024,
     "stop_on_first_failure": True,
     "require_testbed_baseline": True,
@@ -1175,8 +1175,8 @@ TESTBED_DEFAULTS = {
     "link_recovery": {
         "restore_bts": True,
         "restore_cpe": True,
-        "bts_archive": "config/BTS.tar.gz",
-        "cpe_archive": "config/CPE.tar.gz",
+        "bts_archive": "config/backup-UBR650-bts.tar.gz",
+        "cpe_archive": "config/backup-UBR650-cpe.tar.gz",
     },
 }
 

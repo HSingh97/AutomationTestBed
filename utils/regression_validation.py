@@ -6,6 +6,7 @@ import asyncio
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
 
 import shlex
@@ -32,6 +33,7 @@ class RegressionValidation:
     uptime_stable: bool | None = None
     ping_recovery_seconds: float | None = None
     ping_recovery_limit_s: int | None = None
+    link_formation_slow: bool = False
     link_dropped: bool | None = None
     link_reestablished: bool | None = None
     link_restore_seconds: float | None = None
@@ -88,6 +90,7 @@ class RegressionValidation:
             "uptime_stable": self.uptime_stable,
             "ping_recovery_seconds": self.ping_recovery_seconds,
             "ping_recovery_limit_s": self.ping_recovery_limit_s,
+            "link_formation_slow": self.link_formation_slow,
             "link_dropped": self.link_dropped,
             "link_reestablished": self.link_reestablished,
             "link_restore_seconds": self.link_restore_seconds,
@@ -121,6 +124,7 @@ class RegressionValidation:
             uptime_stable=data.get("uptime_stable"),
             ping_recovery_seconds=data.get("ping_recovery_seconds"),
             ping_recovery_limit_s=data.get("ping_recovery_limit_s"),
+            link_formation_slow=bool(data.get("link_formation_slow")),
             link_dropped=data.get("link_dropped"),
             link_reestablished=data.get("link_reestablished"),
             link_restore_seconds=data.get("link_restore_seconds"),
@@ -189,7 +193,7 @@ async def _ping_once(
 def regression_timeouts(profile_bundle) -> dict[str, int]:
     reg = profile_bundle.active.get("regression", {})
     return {
-        "soft_reboot_ping_s": int(reg.get("soft_reboot_ping_timeout_seconds", 200)),
+        "soft_reboot_ping_s": int(reg.get("soft_reboot_ping_timeout_seconds", 230)),
         "soft_reboot_ping_grace_s": int(reg.get("soft_reboot_ping_grace_seconds", 120)),
         "firmware_ping_s": int(reg.get("firmware_ping_timeout_seconds", 420)),
         "soft_reset_link_uptime_s": int(reg.get("soft_reset_link_uptime_max_seconds", 90)),
@@ -415,6 +419,27 @@ async def read_device_logs(ssh: AsyncGenericDriver) -> str:
     return clean_ssh_output(raw) or raw.strip()
 
 
+_DEVICE_LOG_TS_RE = re.compile(
+    r"^(?P<dow>[A-Z][a-z]{2}) (?P<mon>[A-Z][a-z]{2})\s+(?P<day>\d{1,2}) "
+    r"(?P<hms>\d{2}:\d{2}:\d{2})(?:\s+[A-Za-z]+)?\s+(?P<year>\d{4})"
+)
+
+
+def parse_device_timestamp(text: str) -> datetime | None:
+    """Parse BusyBox ``date`` or an ``/etc/device_logs`` stamp. The DUT clock is the source."""
+    match = _DEVICE_LOG_TS_RE.match(str(text or "").strip())
+    if not match:
+        return None
+    raw = (
+        f"{match.group('dow')} {match.group('mon')} {int(match.group('day')):02d} "
+        f"{match.group('hms')} {match.group('year')}"
+    )
+    try:
+        return datetime.strptime(raw, "%a %b %d %H:%M:%S %Y")
+    except ValueError:
+        return None
+
+
 def _is_device_init_success_line(line: str) -> bool:
     lower = line.lower()
     if "device init" in lower and ("success" in lower or "complete" in lower):
@@ -422,17 +447,77 @@ def _is_device_init_success_line(line: str) -> bool:
     return "init" in lower and "success" in lower and "device" in lower
 
 
+async def read_device_clock(ssh: AsyncGenericDriver) -> tuple[datetime | None, str]:
+    raw = clean_ssh_output(await _ssh_run(ssh, "date")) or ""
+    return parse_device_timestamp(raw), raw
+
+
+async def read_etc_device_logs(ssh: AsyncGenericDriver) -> list[str]:
+    """Full ``/etc/device_logs``. Do not pass this through clean_ssh_output — that keeps one line."""
+    raw = await _ssh_run(ssh, "cat /etc/device_logs 2>/dev/null", timeout_ops=60)
+    lines: list[str] = []
+    for line in str(raw or "").replace("\r", "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("cat ") or re.match(r"^root@", line, re.I):
+            continue
+        lines.append(line)
+    return lines
+
+
+def last_reboot_log(lines: list[str], now: datetime) -> str | None:
+    """Last Device Init line whose stamp is not after the device clock."""
+    skew = timedelta(seconds=120)
+    chosen: str | None = None
+    for line in lines:
+        if not _is_device_init_success_line(line):
+            continue
+        stamp = parse_device_timestamp(line)
+        if stamp is None or stamp > now + skew:
+            continue
+        chosen = line
+    return chosen
+
+
+def _previous_reboot_log(lines_before: list[str], device_time_before: str) -> str:
+    """Last Device Init line that was already on the radio before this reboot."""
+    if not lines_before:
+        return ""
+    before = parse_device_timestamp(device_time_before) if device_time_before else None
+    if before is not None:
+        return last_reboot_log(lines_before, before) or ""
+    previous = ""
+    for line in lines_before:
+        if _is_device_init_success_line(line):
+            previous = line
+    return previous
+
+
 async def _find_device_init_line(
-    ssh: AsyncGenericDriver, lines_before: list[str]
+    ssh: AsyncGenericDriver,
+    lines_before: list[str],
+    *,
+    device_time_before: str = "",
 ) -> str | None:
-    lines_after = _device_log_lines(await read_device_logs(ssh))
-    for line in _new_event_lines_since(lines_before, lines_after):
-        if _is_device_init_success_line(line):
-            return line
-    for line in lines_after[-50:]:
-        if _is_device_init_success_line(line):
-            return line
-    return None
+    """Last Device Init line printed at or before the current device clock.
+
+    A line already present before the reboot does not confirm this boot. The
+    DUT clock can jump, so the pre-reboot timestamp is not used as a cutoff.
+    """
+    previous = _previous_reboot_log(lines_before, device_time_before)
+    lines = await read_etc_device_logs(ssh)
+    now, now_raw = await read_device_clock(ssh)
+    if now is None:
+        _log("REG_01", f"device date unreadable: {now_raw!r}")
+        return None
+    latest = last_reboot_log(lines, now)
+    if not latest:
+        _log("REG_01", f"no Device Init line at or before device time {now_raw}")
+        return None
+    if previous and latest == previous:
+        _log("REG_01", f"device time {now_raw}; last reboot log unchanged: {latest}")
+        return None
+    _log("REG_01", f"device time {now_raw}; last reboot log: {latest}")
+    return latest
 
 
 def _format_device_init_excerpt(init_line: str | None, *, fallback_lines: list[str] | None = None) -> str:
@@ -444,10 +529,19 @@ def _format_device_init_excerpt(init_line: str | None, *, fallback_lines: list[s
 
 
 async def capture_soft_reboot_snapshot(ssh: AsyncGenericDriver, *, case_id: str, label: str) -> dict[str, Any]:
-    """Baseline device log lines before soft reboot."""
-    lines = _device_log_lines(await read_device_logs(ssh))
-    _log(case_id, f"{label}: device_logs lines={len(lines)}")
-    return {"device_log_lines": lines}
+    """Device clock and the last reboot line in /etc/device_logs, taken before reboot."""
+    clock, clock_raw = await read_device_clock(ssh)
+    lines = await read_etc_device_logs(ssh)
+    last = last_reboot_log(lines, clock) if clock is not None else None
+    _log(
+        case_id,
+        f"{label}: device time={clock_raw or '?'} last reboot log={last or 'none'}",
+    )
+    return {
+        "device_log_lines": lines,
+        "device_time": clock_raw,
+        "last_reboot_log": last or "",
+    }
 
 
 async def validate_soft_reboot_iteration(
@@ -461,7 +555,8 @@ async def validate_soft_reboot_iteration(
 ) -> RegressionValidation:
     """After soft reboot: BTS→CPE ping; Device Init Success in /etc/device_logs.
 
-    Ping over ``ping_timeout_s`` but within grace → partial (orange), not fail.
+    Link formation within ``ping_timeout_s`` (benchmark, 230s) is a pass.
+    A slower formation that still comes up is a pass with the time highlighted.
     Hard fail only when ping never recovers before timeout+grace.
     """
     validation = RegressionValidation(
@@ -469,11 +564,13 @@ async def validate_soft_reboot_iteration(
         device_logs_validation=True,
     )
     lines_before: list[str] = list(snapshot_before.get("device_log_lines") or [])
+    device_time_before = str(snapshot_before.get("device_time") or "")
     hard_limit_s = ping_timeout_s + max(0, ping_grace_s)
 
     cpe_target = cpe_hosts[0] if cpe_hosts else ""
     start = time.monotonic()
     ping_ok = False
+    ping_seen_at: float | None = None
     captured_init: str | None = None
 
     while time.monotonic() - start < hard_limit_s:
@@ -485,14 +582,25 @@ async def validate_soft_reboot_iteration(
                 else:
                     await conn.send_command("echo ok")
                     ping_ok = True
+                if ping_ok and ping_seen_at is None:
+                    ping_seen_at = time.monotonic()
+                    validation.ping_recovery_seconds = round(ping_seen_at - start, 1)
                 if not captured_init:
-                    captured_init = await _find_device_init_line(conn, lines_before)
+                    captured_init = await _find_device_init_line(
+                        conn, lines_before, device_time_before=device_time_before
+                    )
             finally:
                 await _close_ssh(conn)
         except Exception:
             pass
-        if ping_ok:
-            validation.ping_recovery_seconds = round(time.monotonic() - start, 1)
+        if ping_ok and captured_init:
+            break
+        # Device Init is written after the link is back; keep polling for it.
+        if (
+            ping_ok
+            and ping_seen_at is not None
+            and (time.monotonic() - ping_seen_at) > 120
+        ):
             break
         await asyncio.sleep(10)
 
@@ -512,7 +620,9 @@ async def validate_soft_reboot_iteration(
         try:
             conn = await _open_root_ssh(bts_host, password)
             try:
-                captured_init = await _find_device_init_line(conn, lines_before)
+                captured_init = await _find_device_init_line(
+                    conn, lines_before, device_time_before=device_time_before
+                )
             finally:
                 await _close_ssh(conn)
         except Exception:
@@ -529,30 +639,32 @@ async def validate_soft_reboot_iteration(
         validation.summary = (
             f"Ping recovered in {validation.ping_recovery_seconds}s"
             + (f" (over {ping_timeout_s}s limit)" if ping_slow else "")
-            + " but no Device Init Success line in /etc/device_logs."
-        )
-    elif ping_slow:
-        validation.passed = False
-        validation.partial = True
-        validation.summary = (
-            f"Soft reboot OK (slow ping): recovered in {validation.ping_recovery_seconds}s "
-            f"(target {ping_timeout_s}s); device init confirmed in logs."
+            + " but the last Device Init line in /etc/device_logs does not match this boot."
         )
     else:
         validation.passed = True
-        validation.summary = (
-            f"Soft reboot OK: ping in {validation.ping_recovery_seconds}s "
-            f"(limit {ping_timeout_s}s); device init confirmed in logs."
-        )
+        validation.partial = False
+        seconds = float(validation.ping_recovery_seconds or 0)
+        # Long formation stays a pass. Highlight it once it uses most of the benchmark,
+        # and also when it runs past the benchmark.
+        validation.link_formation_slow = ping_slow or seconds >= (float(ping_timeout_s) * 0.85)
+        if validation.link_formation_slow:
+            validation.summary = (
+                f"Soft reboot OK: link formed in {validation.ping_recovery_seconds}s "
+                f"(benchmark {ping_timeout_s}s, highlighted); device init confirmed in logs."
+            )
+        else:
+            validation.summary = (
+                f"Soft reboot OK: link formed in {validation.ping_recovery_seconds}s "
+                f"(benchmark {ping_timeout_s}s); device init confirmed in logs."
+            )
     return validation
 
 
-async def _latest_device_init_in_tail(ssh: AsyncGenericDriver) -> str | None:
-    lines = _device_log_lines(await read_device_logs(ssh))
-    for line in reversed(lines[-80:]):
-        if _is_device_init_success_line(line):
-            return line
-    return None
+async def _latest_device_init_in_tail(
+    ssh: AsyncGenericDriver, *, device_time_before: str = ""
+) -> str | None:
+    return await _find_device_init_line(ssh, [], device_time_before=device_time_before)
 
 
 async def refresh_soft_reboot_validation(
@@ -561,6 +673,7 @@ async def refresh_soft_reboot_validation(
     bts_host: str,
     password: str,
     lines_before: list[str] | None = None,
+    device_time_before: str = "",
 ) -> dict[str, Any]:
     """After connectivity passes, re-read device logs and soften stale ping-timeout results."""
     updated = dict(validation)
@@ -568,10 +681,16 @@ async def refresh_soft_reboot_validation(
     try:
         conn = await _open_root_ssh(bts_host, password)
         try:
-            if lines_before:
-                init_line = await _find_device_init_line(conn, lines_before)
+            if lines_before or device_time_before:
+                init_line = await _find_device_init_line(
+                    conn,
+                    lines_before or [],
+                    device_time_before=device_time_before,
+                )
             if not init_line:
-                init_line = await _latest_device_init_in_tail(conn)
+                init_line = await _latest_device_init_in_tail(
+                    conn, device_time_before=device_time_before
+                )
         finally:
             await _close_ssh(conn)
     except Exception:

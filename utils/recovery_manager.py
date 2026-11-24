@@ -39,11 +39,8 @@ class RecoveryManager:
     ) -> Path:
         if bundle_path is not None and bundle_path.is_file():
             return bundle_path.resolve()
-        from utils.device_backup import get_session_backup_path, resolve_restore_archive_path
+        from utils.device_backup import golden_backup_path, resolve_restore_archive_path
 
-        cached = get_session_backup_path(role)
-        if cached is not None:
-            return cached
         profile = self.profile_bundle.active
         ip_cfg = profile.get("ip_tests", {}) or {}
         resolved = resolve_restore_archive_path(
@@ -54,13 +51,7 @@ class RecoveryManager:
         )
         if resolved is not None:
             return resolved.resolve()
-        recovery = profile.get("recovery", {})
-        role_upper = str(role).upper()
-        if role_upper == "CPE":
-            rel = recovery.get("cpe_restore_archive", "config/CPE.tar.gz")
-        else:
-            rel = recovery.get("bts_restore_archive", "config/BTS.tar.gz")
-        return self._repo_root() / str(rel)
+        return golden_backup_path(role, self._repo_root())
 
     async def is_gui_reachable(self, local_ip: str | None = None, timeout_s: int = 6) -> bool:
         dut = self.profile_bundle.active["dut"]
@@ -192,7 +183,7 @@ class RecoveryManager:
         """
         Restore saved profile via GUI:
         factory/default IP -> Management -> Upgrade/Reset -> Restore.
-        Uses session temp backup when available (not stale config/BTS.tar.gz).
+        Uses the UBR650 BTS or CPE archive only.
         """
         recovery = self.profile_bundle.active.get("recovery", {})
         restore_ip = str(

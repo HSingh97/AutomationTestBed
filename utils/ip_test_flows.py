@@ -1271,29 +1271,15 @@ def _repo_root() -> Path:
 
 
 def _resolve_backup_archive(cfg: dict[str, Any], device_target: str) -> Path | None:
-    from utils.device_backup import get_session_backup_path
+    from utils.device_backup import resolve_restore_archive_path
 
     role = "CPE" if device_target == "cpe" else "BTS"
-    cached = get_session_backup_path(role)
-    if cached is not None:
-        return cached
-    explicit = str(cfg.get("backup_archive_path", "")).strip()
-    if explicit:
-        path = Path(explicit).expanduser()
-        if not path.is_absolute():
-            path = _repo_root() / path
-        return path if path.is_file() else None
-    profile = cfg.get("_profile") or {}
-    recovery = profile.get("recovery", {}) or {}
-    link = profile.get("link_recovery", {}) or {}
-    if device_target == "cpe":
-        rel = recovery.get("cpe_restore_archive") or link.get("cpe_archive")
-    else:
-        rel = recovery.get("bts_restore_archive") or link.get("bts_archive")
-    if not rel:
-        return None
-    path = _repo_root() / str(rel)
-    return path if path.is_file() else None
+    return resolve_restore_archive_path(
+        cfg.get("_profile") or {},
+        role=role,
+        cfg=cfg,
+        repo_root=_repo_root(),
+    )
 
 
 def _parse_uci_network_lan(content: str) -> dict[str, str]:
@@ -2042,20 +2028,10 @@ async def _create_device_backup_archive(
     device_target: str,
     live_uci: dict[str, str] | None = None,
 ) -> Path:
-    """
-    Fresh backup before IP_15/IP_35 reset: GUI download to temp (preferred),
-    SSH sysupgrade -b fallback. Pre-baked config/BTS.tar.gz is never used unless
-    ip_tests.allow_stale_backup_archive is true.
-    """
+    """IP_15/IP_35 restore uses the UBR650 BTS or CPE archive only."""
     from utils.device_backup import take_device_backup
 
     notes = cfg.get("_notes")
-    stale = _resolve_backup_archive(cfg, device_target)
-    require_fresh = bool(cfg.get("ip15_require_fresh_backup", True))
-    if stale is not None and require_fresh and isinstance(notes, list):
-        notes.append(
-            f"IP_15 ignoring pre-baked archive {stale.name}; taking fresh GUI/SSH backup"
-        )
 
     password = str(cfg.get("_password", ""))
     host = normalize_ip(str(cfg.get("_last_effective_host", "")).strip())

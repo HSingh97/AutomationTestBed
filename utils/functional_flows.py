@@ -5359,8 +5359,11 @@ async def _ft27_open_gui_target(
     from playwright.async_api import async_playwright
     from pages.radio_properties_page import RadioPropertiesPage
     from utils.gui_login import login_if_needed
+    from utils.playwright_env import ensure_playwright_chromium
 
     host = normalize_ip(host)
+    if browser_name != "firefox":
+        ensure_playwright_chromium()
     pw = await async_playwright().start()
     if browser_name == "firefox":
         browser = await pw.firefox.launch(headless=True)

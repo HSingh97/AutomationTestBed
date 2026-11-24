@@ -84,6 +84,8 @@ python3.10 -m venv venv
 venv/bin/pip install --upgrade pip
 venv/bin/pip install -r requirements.txt
 venv/bin/playwright install chromium
+# Pytest also installs Chromium into ~/.cache/ms-playwright when a GUI test is collected,
+# including when PLAYWRIGHT_BROWSERS_PATH points at an empty cache.
 # System (Linux): sshpass, snmp / net-snmp — see setup_env.sh
 ```
 
@@ -127,7 +129,7 @@ venv/bin/playwright install chromium
 
 1. **Profiles (`profiles/*.yaml`)** — Single source of truth for BTS/CPE IPs, credentials, VLAN/QinQ, TRex servers, `su_count`, MCS wait times, and feature flags. Jenkins resolves profile from `TARGET_STAND` via `config/benches.yaml`.
 
-2. **Session bootstrap (`scripts/bootstrap_testbed.py`, `conftest.py:testbed_ready`)** — Applies mgmt VLAN, QinQ, discovers CPEs from BTS, optional archive restore (`config/BTS.tar.gz`, `config/CPE.tar.gz`). Skip with `--skip-testbed-bootstrap`.
+2. **Session bootstrap (`scripts/bootstrap_testbed.py`, `conftest.py:testbed_ready`)** — Applies mgmt VLAN, QinQ, discovers CPEs from BTS, optional archive restore (`config/backup-UBR650-bts.tar.gz`, `config/backup-UBR650-cpe.tar.gz`). Skip with `--skip-testbed-bootstrap`.
 
 3. **GUI tests** — Playwright drives LuCI; parallel **SSH** reads UCI/`cfg80211tool` to verify backend state matches GUI. Locators in `pages/locators.py`; commands in `pages/commands.py`.
 
@@ -580,6 +582,8 @@ Sample: `docs/samples/Senao_Performance_84_Grafana_Report.html`
 | AutomationFramework | `Senao_UBR_<build>_Report_<date>.html` |
 | Throughput | `Senao_Performance_<build>_Report_<date>.html` (Grafana-style by default) |
 | Regression | `Senao_Regression_<build>_Report_<date>.html` |
+| Channel Connectivity | `Senao_Channel_Connectivity_<build>_Report_<date>.html` |
+| CPU Utilization | `Senao_CPU_Utilization_<build>_Report_<date>.html` |
 
 ---
 
@@ -589,6 +593,8 @@ Sample: `docs/samples/Senao_Performance_84_Grafana_Report.html`
 |---------------|-------------|---------|
 | `jenkins/jenkins-AutomationFramework` | Automation Framework / Automation Test Cases | Unified GUI, IP, Regression, Jumbo, ProcessMonitor |
 | `jenkins/jenkins-Throughput` | Automation Framework / Throughput Test - Trex | Performance matrix or VLAN debug campaign |
+| `jenkins/jenkins-ChannelConnectivity` | Automation Framework / Channel Connectivity | Bandwidth and channel sweep with SU ping |
+| `jenkins/jenkins-CpuUtilization` | Automation Framework / CPU Utilization | REG_04 CPU from sysInfoCPUUsage |
 | `jenkins/jenkins-Regression` | Standalone regression | REG_01–03 checkboxes |
 | `jenkins/jenkins-VlanLinkDebug` | VLAN Link Debug Campaign | QinQ vs transparent recovery |
 | `jenkins/jenkins-common.groovy` | Shared | Email, `publishHTML`, report copy |
@@ -599,6 +605,8 @@ Sample: `docs/samples/Senao_Performance_84_Grafana_Report.html`
 |--------|-----|
 | `jenkins/trigger-build.sh` | Automation Test Cases (`TEST_MARKERS`, `TEST_FILTER`) |
 | `jenkins/trigger-throughput.sh` | Throughput Test - Trex |
+| `jenkins/trigger-channel-connectivity.sh` | Channel Connectivity |
+| `jenkins/trigger-cpu-utilization.sh` | CPU Utilization |
 | `jenkins/trigger-vlan-debug-campaign.sh` | VLAN Link Debug Campaign |
 | `jenkins/run-local.sh` | Local mirror of AutomationFramework pipeline |
 

@@ -430,15 +430,11 @@ def _mode_user_login_log(case: dict[str, Any], profile_active: dict[str, Any]) -
     host = str(hosts.get("dut_ipv4") or hosts.get("dut_host") or "")
 
     async def _do_login() -> dict[str, Any]:
-        import os
-        from pathlib import Path
-
         from playwright.async_api import async_playwright
 
-        # Prefer system Chrome / user cache — Cursor sandbox PW path may be empty.
-        cache = Path.home() / ".cache" / "ms-playwright"
-        if cache.is_dir():
-            os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(cache))
+        from utils.playwright_env import ensure_playwright_chromium
+
+        ensure_playwright_chromium()
 
         async with async_playwright() as p:
             browser = None

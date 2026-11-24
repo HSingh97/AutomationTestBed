@@ -1,0 +1,241 @@
+// REG_04 CPU utilization — runs on TARGET_STAND.
+// CPU values are sysInfoCPUUsage (the radio's /tmp/cpu_usage).
+// Report: Senao_CPU_Utilization_<build>_Report_<date>.html
+
+def archiveBuildArtifacts(pattern, allowEmpty = false) {
+    step([
+        $class: 'ArtifactArchiver',
+        artifacts: pattern,
+        fingerprint: true,
+        onlyIfSuccessful: false,
+        allowEmptyArchive: allowEmpty,
+    ])
+}
+
+def selectedCases(boolean failIfEmpty = true) {
+    def selected = []
+    if (params.NO_LINK_CLOSED) {
+        selected << '1'
+    }
+    if (params.LINK_CLOSED) {
+        selected << '2'
+    }
+    if (params.NO_LINK_OPEN) {
+        selected << '3'
+    }
+    if (params.LINK_OPEN) {
+        selected << '4'
+    }
+    if (params.THROUGHPUT) {
+        selected << '5'
+    }
+    if (!selected) {
+        if (failIfEmpty) {
+            error('Select at least one CPU case')
+        }
+        return '(none)'
+    }
+    return selected.join(',')
+}
+
+def positiveInt(String raw, String label) {
+    def text = (raw ?: '').trim()
+    if (!text.isInteger() || text.toInteger() < 1) {
+        error("${label} must be a positive whole number")
+    }
+    return text.toInteger()
+}
+
+pipeline {
+    agent { node { label "${TARGET_STAND}" } }
+
+    parameters {
+        choice(
+            name: 'TARGET_STAND',
+            choices: ['test-qa-lab-01', 'test-qa-lab-02', 'test-harman2', 'test-puneet'],
+            description: 'Jenkins agent / lab stand'
+        )
+        string(
+            name: 'BTS IP',
+            defaultValue: '192.168.3.20',
+            description: 'BTS management IP'
+        )
+        string(
+            name: 'CPE IP',
+            defaultValue: '192.168.3.21',
+            description: 'CPE / SU management IP'
+        )
+        string(
+            name: 'Duration',
+            defaultValue: '10',
+            description: 'Minutes to record each selected case, after the settle'
+        )
+        string(
+            name: 'Settle',
+            defaultValue: '30',
+            description: 'Seconds to wait after the link change before the first sample'
+        )
+        string(
+            name: 'Poll',
+            defaultValue: '5',
+            description: 'Seconds between sysInfoCPUUsage samples'
+        )
+        booleanParam(name: 'NO_LINK_CLOSED', defaultValue: true, description: '1 — No link, webpage closed')
+        booleanParam(name: 'LINK_CLOSED', defaultValue: true, description: '2 — Link up, webpage closed')
+        booleanParam(name: 'NO_LINK_OPEN', defaultValue: true, description: '3 — No link, webpage open')
+        booleanParam(name: 'LINK_OPEN', defaultValue: true, description: '4 — Link up, webpage open')
+        booleanParam(name: 'THROUGHPUT', defaultValue: false, description: '5 — Link up, webpage open, throughput')
+    }
+
+    stages {
+        stage('Prepare Testbed') {
+            steps {
+                script {
+                    def minutes = positiveInt(params.Duration, 'Duration')
+                    def settle = positiveInt(params.Settle, 'Settle')
+                    def poll = positiveInt(params.Poll, 'Poll')
+                    if ((minutes * 60) < poll) {
+                        error('Duration must cover at least one poll interval')
+                    }
+                    echo '------------------------------------------'
+                    echo 'UBR CPU Utilization'
+                    echo "--- TARGET STAND: ${TARGET_STAND}"
+                    echo "BTS IP:     ${params['BTS IP']}"
+                    echo "CPE IP:     ${params['CPE IP']}"
+                    echo "Cases:      ${selectedCases()}"
+                    echo "Duration:   ${minutes} min"
+                    echo "Settle:     ${settle}s"
+                    echo "Poll:       ${poll}s"
+                    echo '------------------------------------------'
+                }
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh '''
+                    bash jenkins/ensure-system-deps.sh
+
+                    python3 -m venv venv
+                    venv/bin/pip install --upgrade pip
+                    venv/bin/pip install -r requirements.txt
+                    if [ "$NO_LINK_OPEN" = "true" ] || [ "$LINK_OPEN" = "true" ] || [ "$THROUGHPUT" = "true" ]; then
+                      venv/bin/playwright install chromium
+                    fi
+                '''
+            }
+        }
+
+        stage('Run CPU Utilization') {
+            steps {
+                script {
+                    def minutes = positiveInt(params.Duration, 'Duration')
+                    def settle = positiveInt(params.Settle, 'Settle')
+                    def poll = positiveInt(params.Poll, 'Poll')
+                    def btsIp = (params['BTS IP'] ?: '').trim()
+                    def cpeIp = (params['CPE IP'] ?: '').trim()
+                    def cases = selectedCases().split(',')
+
+                    sh 'rm -rf reports/artifacts/CPU_Report_* Senao_CPU_Utilization_*.html Senao_CPU_Utilization_*.csv || true'
+
+                    def cmd = new StringBuilder('PYTHONPATH=. venv/bin/python scripts/regression_cpu_monitor.py')
+                    cmd.append(" --duration ${minutes * 60}")
+                    cmd.append(" --settle ${settle}")
+                    cmd.append(" --poll ${poll}")
+                    if (btsIp) {
+                        cmd.append(" --bts '${btsIp}'")
+                    }
+                    if (cpeIp) {
+                        cmd.append(" --cpe '${cpeIp}'")
+                    }
+                    cases.each { item ->
+                        cmd.append(" --case ${item}")
+                    }
+
+                    def exitCode = sh(script: cmd.toString(), returnStatus: true)
+                    env.CPU_EXIT = "${exitCode}"
+
+                    def reportPath = sh(
+                        script: '''
+                            set -e
+                            latest=$(ls -t reports/artifacts/CPU_Report_*_Grafana.html 2>/dev/null | head -1 || true)
+                            echo "$latest"
+                        ''',
+                        returnStdout: true
+                    ).trim()
+                    if (!reportPath) {
+                        error('CPU utilization finished but no Grafana HTML report was found')
+                    }
+                    env.CPU_REPORT_RAW = reportPath
+                    echo "HTML report (raw): ${reportPath}"
+                    if (exitCode != 0) {
+                        unstable("CPU utilization completed with failures (exit ${exitCode})")
+                    }
+                }
+            }
+        }
+
+        stage('Finalize Report') {
+            steps {
+                script {
+                    def senao = load 'jenkins/jenkins-common.groovy'
+                    def destFile = "${senao.standardReportBasename('Senao_CPU_Utilization')}.html"
+                    senao.copyLatestCpuReport(destFile)
+                    env.CPU_REPORT = destFile
+                    echo "Standard report: ${destFile}"
+                }
+            }
+        }
+
+        stage('Archive Report') {
+            steps {
+                script {
+                    archiveBuildArtifacts('Senao_CPU_Utilization_*.html')
+                    archiveBuildArtifacts('Senao_CPU_Utilization_*.csv', true)
+                    archiveBuildArtifacts('reports/artifacts/CPU_Report_*_Grafana.html', true)
+                    archiveBuildArtifacts('reports/artifacts/CPU_Report_*.csv', true)
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                def senao = load 'jenkins/jenkins-common.groovy'
+                def reportFile = env.CPU_REPORT ?: "${senao.standardReportBasename('Senao_CPU_Utilization')}.html"
+                def hasReport = fileExists(reportFile)
+
+                if (hasReport) {
+                    senao.publishSenaoHtmlReport(reportFile, "Senao CPU Utilization Report - Build ${env.BUILD_NUMBER}")
+                }
+
+                def detailsHtml = """\
+                    <p><strong>Stand:</strong> ${params.TARGET_STAND}</p>
+                    <p><strong>BTS IP:</strong> ${params['BTS IP']}</p>
+                    <p><strong>CPE IP:</strong> ${params['CPE IP']}</p>
+                    <p><strong>Cases:</strong> ${selectedCases(false)}</p>
+                    <p><strong>Duration:</strong> ${params.Duration} min</p>
+                    <p><strong>Settle:</strong> ${params.Settle}s</p>
+                    <p><strong>Poll:</strong> ${params.Poll}s</p>
+                """
+
+                try {
+                    senao.sendSenaoPipelineEmail([
+                        subjectPrefix: 'UBR CPU Utilization',
+                        reportTitle: 'UBR CPU Utilization Report',
+                        footerNote: 'REG_04 CPU from sysInfoCPUUsage, with memory and station count',
+                        reportFile: hasReport ? reportFile : '',
+                        detailsHtml: detailsHtml
+                    ])
+                } catch (Exception exc) {
+                    echo "Email notification failed: ${exc.message}"
+                }
+                echo '-----------------------------------------'
+                echo 'CPU utilization pipeline complete.'
+                echo "Report: ${hasReport ? reportFile : 'not generated'}"
+                echo '-----------------------------------------'
+            }
+        }
+    }
+}

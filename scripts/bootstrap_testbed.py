@@ -41,6 +41,9 @@ async def _main(args: argparse.Namespace) -> int:
         from playwright.async_api import async_playwright
         from utils.gui_login import login_if_needed
         from utils.net_utils import format_http_host
+        from utils.playwright_env import ensure_playwright_chromium
+
+        ensure_playwright_chromium()
 
         dut = bundle.active["dut"]
         host_primary = dut.get("local_ipv6") or dut.get("local_ip")

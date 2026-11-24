@@ -58,6 +58,9 @@ _MODE_VERIFIED_PARAMS: dict[str, list[str]] = {
 @asynccontextmanager
 async def open_um_page():
     """Launch Chromium on the current asyncio loop (not session gui_browser)."""
+    from utils.playwright_env import ensure_playwright_chromium
+
+    ensure_playwright_chromium()
     pw = await async_playwright().start()
     browser = await pw.chromium.launch(headless=True)
     context = await browser.new_context(ignore_https_errors=True)
@@ -234,6 +237,9 @@ def ensure_admin_password_sync(host: str, new_password: str = "admin1234") -> No
     """Sync helper for session setup (avoids pytest-asyncio loop conflicts)."""
     from playwright.sync_api import sync_playwright
 
+    from utils.playwright_env import ensure_playwright_chromium
+
+    ensure_playwright_chromium()
     url = f"https://{format_http_host(host)}/cgi-bin/luci/"
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)

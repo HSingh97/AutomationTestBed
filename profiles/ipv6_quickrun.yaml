@@ -25,8 +25,8 @@ testbed:
   link_recovery:
     restore_bts: false
     restore_cpe: false
-    bts_archive: config/BTS.tar.gz
-    cpe_archive: config/CPE.tar.gz
+    bts_archive: config/backup-UBR650-bts.tar.gz
+    cpe_archive: config/backup-UBR650-cpe.tar.gz
   recovery:
     bts_fallback_ipv4: "10.0.0.1"
   factory_defaults:
@@ -80,7 +80,8 @@ recovery:
     - 1
   restore_default_ip: "10.0.0.1"
   reboot_wait_seconds: 150
-  bts_restore_archive: config/BTS.tar.gz
+  bts_restore_archive: config/backup-UBR650-bts.tar.gz
+  cpe_restore_archive: config/backup-UBR650-cpe.tar.gz
 
 traffic:
   benchmark_backend: ixia

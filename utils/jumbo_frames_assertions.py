@@ -785,7 +785,7 @@ async def assert_jmb_10_factory_reset_default(root_ssh, gui_page, bsu_ip, device
     finally:
         await temp_ssh.close()
 
-    _log_case("JMB_10", "Restoring baseline profile bundle (BTS.tar.gz).")
+    _log_case("JMB_10", "Restoring baseline profile bundle (backup-UBR650-bts.tar.gz).")
     manager = get_active_recovery_manager()
     assert manager is not None, "Recovery manager is not initialized."
     restored = await manager.run_profile_restore(

@@ -102,7 +102,7 @@ ddrs:
   secondary_tx_power_max_dbm: 26
   rssi_settle_s: 10
   trex:
-    host: "192.168.1.1"
+    host: "192.168.1.2"
     user: root
     password: ubuntu
     directory: /opt/v3.06

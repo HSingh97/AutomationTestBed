@@ -14,6 +14,7 @@ import pytest
 from utils.cochannel_flows import (
     CoChannelConfig,
     _obss_in_band,
+    flush_deferred_cochannel_report,
     interference_level_ok,
     run_cochannel_matrix,
     set_interference_level,
@@ -27,6 +28,13 @@ pytestmark = [pytest.mark.Lab, pytest.mark.CoChannel]
 
 def _cfg(profile_bundle) -> CoChannelConfig:
     return CoChannelConfig.from_profile(profile_bundle.active)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _one_cochannel_report():
+    """Low, mid, and high are separate tests. Publish them as one HTML."""
+    yield
+    flush_deferred_cochannel_report()
 
 
 @pytest.mark.COCH_00
@@ -77,7 +85,7 @@ def test_cochannel_matrix_level(profile_bundle, level):
     Primary duration from profile (default 180s / 3 min). Override: COCHANNEL_DURATION_S.
     """
     cfg = _cfg(profile_bundle)
-    rows = run_cochannel_matrix(cfg, levels=[level])
+    rows = run_cochannel_matrix(cfg, levels=[level], publish=False)
     baseline = [r for r in rows if r.phase == "baseline"]
     traffic = [r for r in rows if r.phase == "traffic"]
     assert len(baseline) == 1

@@ -64,6 +64,24 @@ def copyLatestPerformanceReport(String destFile) {
     """
 }
 
+def copyLatestCpuReport(String destFile) {
+    sh """
+        set -e
+        latest=\$(ls -t reports/artifacts/CPU_Report_*_Grafana.html 2>/dev/null | head -1 || true)
+        if [ -z "\$latest" ]; then
+          echo "No reports/artifacts/CPU_Report_*_Grafana.html found"
+          exit 1
+        fi
+        cp "\$latest" "${destFile}"
+        csv="\${latest%_Grafana.html}.csv"
+        if [ -f "\$csv" ]; then
+          cp "\$csv" "${destFile.replace('.html', '.csv')}"
+          echo "Copied \$csv -> ${destFile.replace('.html', '.csv')}"
+        fi
+        echo "Copied \$latest -> ${destFile}"
+    """
+}
+
 def copyLatestChannelConnectivityReport(String destFile) {
     sh """
         set -e

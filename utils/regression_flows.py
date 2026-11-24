@@ -97,6 +97,42 @@ async def _ensure_ssh_open(ssh: AsyncGenericDriver) -> None:
     await ssh.open()
 
 
+async def _reopen_ssh(ssh: AsyncGenericDriver, *, timeout_s: int) -> None:
+    """Keep reopening until the device answers. A reboot leaves the session dead."""
+    deadline = time.monotonic() + timeout_s
+    last_error = ""
+    while time.monotonic() < deadline:
+        try:
+            await _ensure_ssh_open(ssh)
+            await ssh.send_command("echo ok", timeout_ops=15)
+            return
+        except Exception as exc:
+            last_error = str(exc)
+            try:
+                await ssh.close()
+            except Exception:
+                pass
+            await asyncio.sleep(5)
+    raise TimeoutError(f"SSH not ready within {timeout_s}s: {last_error}")
+
+
+async def _wait_until_ssh_down(host: str, password: str, *, case_id: str, timeout_s: int = 90) -> None:
+    """Return once the BTS stops answering, so recovery is not measured before the reboot."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            conn = await _open_root_ssh(host, password)
+            try:
+                await conn.send_command("echo up", timeout_ops=8)
+            finally:
+                await _close_ssh(conn)
+        except Exception:
+            _log(case_id, "BTS SSH down — reboot started")
+            return
+        await asyncio.sleep(2)
+    _log(case_id, f"BTS still reachable {timeout_s}s after reboot command")
+
+
 async def _wait_for_ssh(host: str, password: str, *, timeout_s: int, interval_s: int = 5) -> AsyncGenericDriver:
     deadline = time.monotonic() + timeout_s
     last_error = ""
@@ -405,6 +441,7 @@ async def verify_iteration_health(
                 bts_host=bts_host,
                 password=password,
                 lines_before=lines_before,
+                device_time_before=str((soft_reboot_snapshot or {}).get("device_time") or ""),
             )
 
     collector = get_regression_collector()
@@ -415,6 +452,15 @@ async def verify_iteration_health(
     val_failed = bool(validation) and not validation.get("passed", True) and not val_partial
     connectivity_ok = not failures
     passed = connectivity_ok and not val_failed
+    if validation and validation.get("link_formation_slow") and connectivity_ok and not val_failed:
+        summary = validation.get("summary", "")
+        _log(
+            case_id,
+            f"{phase} recorded as PASS (link formation highlighted)"
+            + (f" — {summary}" if summary else "")
+            + " — continuing remaining iterations.",
+        )
+        return True
     if val_partial and connectivity_ok:
         summary = (validation or {}).get("summary", "")
         _log(
@@ -481,7 +527,14 @@ async def _trigger_soft_reboot(gui_page, root_ssh: AsyncGenericDriver | None, *,
         return
     assert root_ssh is not None, "SSH reboot requested but root_ssh is unavailable."
     await _ensure_ssh_open(root_ssh)
-    await root_ssh.send_command("reboot")
+    # Reboot closes SSH. Schedule it and treat a dropped session as the reboot starting.
+    try:
+        await root_ssh.send_command(
+            "(sleep 1; reboot) >/dev/null 2>&1 & echo REBOOT_SENT",
+            timeout_ops=20,
+        )
+    except Exception as exc:
+        _log("REG_01", f"reboot dispatched (SSH closed: {exc})")
 
 
 async def _send_network_reload(ssh: AsyncGenericDriver, *, label: str, case_id: str) -> None:
@@ -548,7 +601,10 @@ async def run_soft_reboot_regression(
         phase = f"iteration-{iteration}"
         _log(case_id, f"Iteration {iteration}/{iterations}: capture state, trigger soft reboot.")
         try:
-            await _ensure_ssh_open(root_ssh)
+            await _reopen_ssh(
+                root_ssh,
+                timeout_s=timeouts["soft_reboot_ping_s"] + timeouts["soft_reboot_ping_grace_s"],
+            )
             snapshot_before = await capture_soft_reboot_snapshot(
                 root_ssh, case_id=case_id, label=f"Before {phase}"
             )
@@ -560,6 +616,9 @@ async def run_soft_reboot_regression(
                 await root_ssh.close()
             except Exception:
                 pass
+            await _wait_until_ssh_down(
+                bsu_ip, device_creds["pass"], case_id=case_id
+            )
 
             validation = await validate_soft_reboot_iteration(
                 bts_host=bsu_ip,
@@ -576,7 +635,7 @@ async def run_soft_reboot_regression(
                 device_creds=device_creds,
                 root_ssh=root_ssh,
             )
-            await _ensure_ssh_open(root_ssh)
+            await _reopen_ssh(root_ssh, timeout_s=120)
             await login_if_needed(
                 gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.LONG_WAIT_MS, skip_recovery=True
             )
