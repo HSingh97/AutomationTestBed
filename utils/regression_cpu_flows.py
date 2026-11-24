@@ -45,6 +45,7 @@ class CpuMonitorConfig:
     gui_user: str = "root"
     bts_ip: str = "192.168.3.20"
     cpe_ip: str = "192.168.3.21"
+    manage_link: bool = True
     snmp_community: str = "ubr@rw123"
     duration_s: int = 60
     poll_s: int = 5
@@ -581,10 +582,13 @@ def run_cpu_case(cfg: CpuMonitorConfig, case: CpuCase) -> CpuCaseResult:
     samples: list[CpuSample] = []
     note = ""
     try:
-        if case.link_up:
-            ensure_link(cfg)
+        if cfg.manage_link:
+            if case.link_up:
+                ensure_link(cfg)
+            else:
+                drop_link(cfg)
         else:
-            drop_link(cfg)
+            print("[cpu] CPE IP is empty — leaving the SSID unchanged", flush=True)
         if case.webpage_open:
             web = WebPage(cfg)
             web.open()
@@ -592,7 +596,8 @@ def run_cpu_case(cfg: CpuMonitorConfig, case: CpuCase) -> CpuCaseResult:
             traffic = True
             start_throughput(cfg)
         samples = poll_cpu_mem(cfg, web if case.webpage_open else None)
-        _check_link_state(case, samples)
+        if cfg.manage_link:
+            _check_link_state(case, samples)
         if traffic:
             note = iperf_summary(cfg)
             if "Mbits" not in note and "Gbits" not in note:
@@ -616,10 +621,11 @@ def run_cpu_case(cfg: CpuMonitorConfig, case: CpuCase) -> CpuCaseResult:
                 print(f"[cpu] stop throughput: {exc}", flush=True)
         if web is not None:
             web.close()
-        try:
-            ensure_link(cfg)
-        except Exception as exc:
-            print(f"[cpu] restore link failed: {exc}", flush=True)
+        if cfg.manage_link:
+            try:
+                ensure_link(cfg)
+            except Exception as exc:
+                print(f"[cpu] restore link failed: {exc}", flush=True)
 
 
 def _avg(values: list[float], ndigits: int = 1) -> float:

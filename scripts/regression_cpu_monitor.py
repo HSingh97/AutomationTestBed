@@ -71,19 +71,32 @@ def main() -> int:
     if args.duration < args.poll:
         raise SystemExit("--duration must be at least one poll interval")
 
+    cpe_ip = args.cpe.strip()
+    cases = _select(args.case)
+    if not cpe_ip:
+        skipped = [case for case in cases if case.link_up]
+        cases = [case for case in cases if not case.link_up]
+        if skipped:
+            names = ", ".join(f"{case.scenario} {case.title}" for case in skipped)
+            print(f"[cpu] CPE IP is empty — skipping link-up cases: {names}", flush=True)
+        if not cases:
+            raise SystemExit("CPE IP is empty, so only the no-link cases can run")
+        print("[cpu] CPE IP is empty — no-link cases will not change or restore the SSID", flush=True)
+
     cfg = CpuMonitorConfig(
         lab_ssh=args.lab,
         lab_password=args.lab_password,
         device_password=args.device_password,
         gui_user=args.gui_user,
         bts_ip=args.bts,
-        cpe_ip=args.cpe,
+        cpe_ip=cpe_ip,
+        manage_link=bool(cpe_ip),
         snmp_community=args.snmp_community,
         duration_s=args.duration,
         poll_s=args.poll,
         settle_s=args.settle,
     )
-    results = [run_cpu_case(cfg, case) for case in _select(args.case)]
+    results = [run_cpu_case(cfg, case) for case in cases]
     report = write_cpu_report(cfg, results)
     print(f"[cpu] report {report}")
     failed = [result.case.case_id for result in results if not result.ok]
