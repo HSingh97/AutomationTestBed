@@ -119,7 +119,16 @@ pipeline {
                     echo "Duration:   ${minutes} min"
                     echo "Settle:     ${settle}s"
                     echo "Poll:       ${poll}s"
+                    echo "Node:       ${env.NODE_NAME}"
                     echo '------------------------------------------'
+                    def btsIp = (params['BTS IP'] ?: '').trim()
+                    if (!btsIp) {
+                        error('BTS IP is required')
+                    }
+                    def reachable = sh(script: "ping -c 2 -W 2 '${btsIp}'", returnStatus: true)
+                    if (reachable != 0) {
+                        error("BTS ${btsIp} is not reachable from ${env.NODE_NAME}. The CPU test runs on this node only.")
+                    }
                 }
             }
         }
@@ -128,6 +137,10 @@ pipeline {
             steps {
                 sh '''
                     bash jenkins/ensure-system-deps.sh
+                    if ! command -v snmpget >/dev/null 2>&1; then
+                      sudo apt-get update -qq
+                      sudo DEBIAN_FRONTEND=noninteractive apt-get install -y snmp
+                    fi
 
                     python3 -m venv venv
                     venv/bin/pip install --upgrade pip

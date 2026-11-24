@@ -21,7 +21,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from utils.regression_cpu_flows import CASES, CpuMonitorConfig, run_cpu_case, write_cpu_report
+from utils.regression_cpu_flows import (
+    CASES,
+    CpuMonitorConfig,
+    require_bts_reachable,
+    run_cpu_case,
+    write_cpu_report,
+)
 
 
 def _select(names: list[str]) -> list:
@@ -96,6 +102,10 @@ def main() -> int:
         poll_s=args.poll,
         settle_s=args.settle,
     )
+    try:
+        require_bts_reachable(cfg)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
     results = [run_cpu_case(cfg, case) for case in cases]
     report = write_cpu_report(cfg, results)
     print(f"[cpu] report {report}")

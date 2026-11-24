@@ -3,7 +3,8 @@
 Five cases, polled every 5 seconds for a configurable duration.
 CPU is the radio's sysInfoCPUUsage (the same value as /tmp/cpu_usage).
 Memory is UCD-SNMP real RAM. Station count still uses wlanconfig; this
-agent's SNMP tree has no SU table.
+agent's SNMP tree has no SU table. SNMP, SSH, and the LuCI tunnel run on
+this host. The BTS must be reachable here; there is no jump through another PC.
 
 1. No station, web page closed
 2. Station associated, web page closed
@@ -19,7 +20,7 @@ from __future__ import annotations
 
 import csv
 import re
-import shlex
+import shutil
 import socket
 import subprocess
 import time
@@ -100,23 +101,8 @@ class CpuCaseResult:
         return not self.error and bool(self.samples)
 
 
-def ssh_lab(cfg: CpuMonitorConfig, remote_cmd: str, *, timeout_s: int = 60) -> str:
-    cmd = [
-        "sshpass",
-        "-p",
-        cfg.lab_password,
-        "ssh",
-        "-o",
-        "StrictHostKeyChecking=no",
-        "-o",
-        "UserKnownHostsFile=/dev/null",
-        "-o",
-        "LogLevel=ERROR",
-        "-o",
-        "ConnectTimeout=12",
-        cfg.lab_ssh,
-        remote_cmd,
-    ]
+def run_local(cmd: list[str], *, timeout_s: int = 60) -> str:
+    """Run a command on this host. Jenkins uses the TARGET_STAND node."""
     proc = subprocess.run(
         cmd,
         capture_output=True,
@@ -127,8 +113,28 @@ def ssh_lab(cfg: CpuMonitorConfig, remote_cmd: str, *, timeout_s: int = 60) -> s
     out = proc.stdout or ""
     if proc.returncode != 0 and not out.strip():
         err = (proc.stderr or "").strip()
-        raise RuntimeError(f"lab SSH failed (rc={proc.returncode}): {err[:240]}")
+        raise RuntimeError(f"command failed (rc={proc.returncode}): {err[:240]}")
     return out
+
+
+def require_bts_reachable(cfg: CpuMonitorConfig) -> None:
+    """Fail when this machine cannot reach the BTS. There is no lab-PC hop."""
+    host = socket.gethostname()
+    if shutil.which("snmpget") is None:
+        raise RuntimeError(f"snmpget is not installed on {host}")
+    proc = subprocess.run(
+        ["ping", "-c", "2", "-W", "2", cfg.bts_ip],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"BTS {cfg.bts_ip} is not reachable from {host}. "
+            "CPU sampling runs on this node only."
+        )
+    print(f"[cpu] BTS {cfg.bts_ip} is reachable from {host}", flush=True)
 
 
 def ssh_device(
@@ -138,13 +144,23 @@ def ssh_device(
     *,
     timeout_s: int = 45,
 ) -> str:
-    inner = (
-        f"sshpass -p {shlex.quote(cfg.device_password)} ssh "
-        f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-        f"-o LogLevel=ERROR -o ConnectTimeout=10 "
-        f"root@{shlex.quote(device_ip)} {shlex.quote(device_cmd)}"
-    )
-    return ssh_lab(cfg, inner, timeout_s=timeout_s)
+    cmd = [
+        "sshpass",
+        "-p",
+        cfg.device_password,
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "LogLevel=ERROR",
+        "-o",
+        "ConnectTimeout=10",
+        f"root@{device_ip}",
+        device_cmd,
+    ]
+    return run_local(cmd, timeout_s=timeout_s)
 
 
 # sysInfoCPUUsage. The agent returns the first field of /tmp/cpu_usage.
@@ -181,13 +197,21 @@ def mem_used_from_kb(total_kb: int, avail_kb: int) -> tuple[float, float, float]
 
 
 def snmp_get(cfg: CpuMonitorConfig, oids: list[str]) -> list[str]:
-    """One snmpget from the lab PC. Values only, in request order."""
-    oid_text = " ".join(shlex.quote(oid) for oid in oids)
-    command = (
-        f"snmpget -v2c -c {shlex.quote(cfg.snmp_community)} -Ovq -t 2 -r 1 "
-        f"{shlex.quote(cfg.bts_ip)} {oid_text}"
-    )
-    raw = ssh_lab(cfg, command, timeout_s=20)
+    """One snmpget from this host. Values only, in request order."""
+    cmd = [
+        "snmpget",
+        "-v2c",
+        "-c",
+        cfg.snmp_community,
+        "-Ovq",
+        "-t",
+        "2",
+        "-r",
+        "1",
+        cfg.bts_ip,
+        *oids,
+    ]
+    raw = run_local(cmd, timeout_s=20)
     lines = [line.strip() for line in raw.splitlines() if line.strip()]
     if len(lines) != len(oids) or any("No Such" in line or line.startswith("Timeout") for line in lines):
         raise RuntimeError(f"SNMP sample failed: {raw.strip()[:240]}")
@@ -464,7 +488,7 @@ class WebPage:
         cmd = [
             "sshpass",
             "-p",
-            self.cfg.lab_password,
+            self.cfg.device_password,
             "ssh",
             "-N",
             "-o",
@@ -476,8 +500,8 @@ class WebPage:
             "-o",
             "ConnectTimeout=12",
             "-L",
-            f"127.0.0.1:{self.local_port}:{self.cfg.bts_ip}:443",
-            self.cfg.lab_ssh,
+            f"127.0.0.1:{self.local_port}:127.0.0.1:443",
+            f"root@{self.cfg.bts_ip}",
         ]
         self._tunnel = subprocess.Popen(
             cmd,
@@ -681,7 +705,7 @@ def _read_cpe_fw_link_local(cfg: CpuMonitorConfig) -> str:
     """CPE /etc/version when its management IPv4 does not answer.
 
     The station can stay associated while br-lan is on another address.
-    The lab still has the CPE ethernet as an IPv6 link-local neighbor.
+    This host may still have the CPE ethernet as an IPv6 link-local neighbor.
     Only a neighbor that shares the associated station's MAC prefix is used,
     so another radio on the same switch is not reported as this CPE.
     """
@@ -689,7 +713,7 @@ def _read_cpe_fw_link_local(cfg: CpuMonitorConfig) -> str:
     if not prefixes:
         return ""
     try:
-        v6 = ssh_lab(cfg, "ip -6 neigh show", timeout_s=15)
+        v6 = run_local(["ip", "-6", "neigh", "show"], timeout_s=15)
     except (RuntimeError, subprocess.TimeoutExpired):
         return ""
     for line in v6.splitlines():
@@ -701,14 +725,8 @@ def _read_cpe_fw_link_local(cfg: CpuMonitorConfig) -> str:
             continue
         dev = parts[parts.index("dev") + 1]
         target = f"{parts[0].split('%', 1)[0]}%{dev}"
-        inner = (
-            f"sshpass -p {shlex.quote(cfg.device_password)} ssh "
-            f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-            f"-o LogLevel=ERROR -o ConnectTimeout=8 "
-            f"root@{shlex.quote(target)} 'cat /etc/version 2>/dev/null'"
-        )
         try:
-            raw = ssh_lab(cfg, inner, timeout_s=20)
+            raw = ssh_device(cfg, target, "cat /etc/version 2>/dev/null", timeout_s=20)
         except (RuntimeError, subprocess.TimeoutExpired):
             continue
         found = _version_text(raw)
