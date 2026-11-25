@@ -98,15 +98,6 @@ class CpuCaseResult:
     error: str = ""
     stations: int | None = None
 
-
-@dataclass
-class CpuCaseResult:
-    case: CpuCase
-    samples: list[CpuSample]
-    started_at: str
-    iperf_note: str = ""
-    error: str = ""
-
     @property
     def ok(self) -> bool:
         return not self.error and bool(self.samples)
