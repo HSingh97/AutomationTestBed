@@ -285,7 +285,6 @@ def read_station_count(cfg: CpuMonitorConfig) -> int:
 
 def poll_cpu_mem(
     cfg: CpuMonitorConfig,
-    web: "WebPage | None" = None,
     *,
     settle_s: int | None = None,
 ) -> list[CpuSample]:
@@ -295,20 +294,12 @@ def poll_cpu_mem(
     settle = max(0, int(cfg.settle_s if settle_s is None else settle_s))
     if settle:
         print(f"  settle {settle}s before capture", flush=True)
-        waited = 0
-        while waited < settle:
-            step = min(poll, settle - waited)
-            time.sleep(step)
-            waited += step
-            if web is not None:
-                web.ensure_logged_in()
+        time.sleep(settle)
     points = max(1, duration // poll)
     samples: list[CpuSample] = []
     t0 = time.monotonic()
     for index in range(points):
         elapsed = time.monotonic() - t0
-        if web is not None:
-            web.ensure_logged_in()
         cpu, mem_pct, mem_mb, mem_total = read_cpu_mem(cfg)
         stations = read_station_count(cfg)
         samples.append(
@@ -489,6 +480,7 @@ class WebPage:
         self.local_port = 18443
 
     def open(self) -> None:
+        self._extend_session()
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             self.local_port = int(sock.getsockname()[1])
@@ -501,47 +493,18 @@ class WebPage:
         self._page = self._context.new_page()
         self._submit_login()
 
-    def ensure_logged_in(self) -> None:
-        """Sign in again when LuCI has returned to the login form."""
-        if self._page is None or not self._session_expired():
-            return
-        print("[cpu] LuCI session ended — signing in again", flush=True)
-        self._submit_login()
-
-    def _session_expired(self) -> bool:
-        page = self._page
-        if page is None:
-            return False
-        if self._login_form_visible():
-            return True
-        try:
-            probe = page.evaluate(
-                """async () => {
-                    const res = await fetch(window.location.href, {
-                        credentials: 'same-origin',
-                        cache: 'no-store',
-                    });
-                    const text = await res.text();
-                    const login = text.includes('name="luci_username"')
-                        || text.includes("name='luci_username'");
-                    return { status: res.status, login: login };
-                }"""
-            )
-        except Exception:
-            return True
-        if not isinstance(probe, dict):
-            return True
-        return bool(probe.get("login")) or int(probe.get("status") or 0) in {401, 403}
-
-    def _login_form_visible(self) -> bool:
-        page = self._page
-        if page is None:
-            return False
-        try:
-            user = page.locator("input[name='luci_username']")
-            return user.count() > 0 and user.first.is_visible()
-        except Exception:
-            return False
+    def _extend_session(self) -> None:
+        """One login has to cover the webpage case. Do not sign in again later."""
+        seconds = 1800
+        cmd = (
+            "uci -q get luci.sauth >/dev/null || uci set luci.sauth=internal; "
+            f"uci set luci.sauth.sessiontime={seconds}; "
+            "uci commit luci; "
+            "uci get luci.sauth.sessiontime"
+        )
+        raw = ssh_device(self.cfg, self.cfg.bts_ip, cmd, timeout_s=30)
+        shown = raw.strip().splitlines()[-1] if raw.strip() else str(seconds)
+        print(f"[cpu] LuCI session time set to {shown}s", flush=True)
 
     def _submit_login(self) -> None:
         page = self._page
@@ -730,11 +693,7 @@ def run_cpu_case(
         settle_s = cfg.settle_s if changed or not cfg.manage_link else 0
         if cfg.manage_link and not changed:
             print("[cpu] SSID unchanged, capture starts without another wait", flush=True)
-        samples = poll_cpu_mem(
-            cfg,
-            web if case.webpage_open else None,
-            settle_s=settle_s,
-        )
+        samples = poll_cpu_mem(cfg, settle_s=settle_s)
         if cfg.manage_link:
             _check_link_state(case, samples)
         if traffic:
