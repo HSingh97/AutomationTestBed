@@ -13,7 +13,8 @@ this host. The BTS must be reachable here; there is no jump through another PC.
 5. Station associated, web page open, throughput running
 
 The link is dropped by moving the BTS SSID off the CPE's SSID and restored
-afterwards. The radio is not taken down with ``wifi down``.
+afterwards. The radio is not taken down with ``wifi down``. No-link cases
+run first, then link cases, so the SSID changes only between those groups.
 """
 
 from __future__ import annotations
@@ -247,11 +248,16 @@ def read_station_count(cfg: CpuMonitorConfig) -> int:
     return int(numbers[-1])
 
 
-def poll_cpu_mem(cfg: CpuMonitorConfig, web: "WebPage | None" = None) -> list[CpuSample]:
+def poll_cpu_mem(
+    cfg: CpuMonitorConfig,
+    web: "WebPage | None" = None,
+    *,
+    settle_s: int | None = None,
+) -> list[CpuSample]:
     """One SNMP sample every poll_s across duration_s, after settle_s is left unrecorded."""
     poll = max(1, int(cfg.poll_s))
     duration = max(poll, int(cfg.duration_s))
-    settle = max(0, int(cfg.settle_s))
+    settle = max(0, int(cfg.settle_s if settle_s is None else settle_s))
     if settle:
         print(f"  settle {settle}s before capture", flush=True)
         waited = 0
@@ -338,23 +344,35 @@ def _wait_link(cfg: CpuMonitorConfig, *, essid: str, up: bool, timeout_s: int) -
     raise RuntimeError(f"link did not become {state} on {essid!r} within {timeout_s}s ({last})")
 
 
-def drop_link(cfg: CpuMonitorConfig) -> None:
-    """Move the BTS SSID so the CPE cannot associate. ath1 stays up."""
+def drop_link(cfg: CpuMonitorConfig) -> bool:
+    """Move the BTS SSID so the CPE cannot associate. ath1 stays up.
+
+    Returns True when the SSID was changed. A later no-link case leaves it.
+    """
     current = _essid(cfg)
     if not current:
         raise RuntimeError(f"{cfg.wlan_iface} has no ESSID")
     if current != NOLINK_SSID:
         cfg.restore_ssid = current
         cfg.ssid_key = _ssid_key_for(cfg, current)
+    elif cfg.ssid_key:
+        stations = read_station_count(cfg)
+        if stations == 0:
+            print("[cpu] link already down, leaving the SSID unchanged", flush=True)
+            return False
     if not cfg.ssid_key:
         raise RuntimeError("SSID UCI key is unknown")
     print(f"[cpu] dropping link: {cfg.restore_ssid or current} -> {NOLINK_SSID}", flush=True)
     _apply_ssid(cfg, cfg.ssid_key, NOLINK_SSID)
     _wait_link(cfg, essid=NOLINK_SSID, up=False, timeout_s=120)
+    return True
 
 
-def ensure_link(cfg: CpuMonitorConfig) -> None:
-    """Put the saved SSID back and wait for the CPE station."""
+def ensure_link(cfg: CpuMonitorConfig) -> bool:
+    """Put the saved SSID back and wait for the CPE station.
+
+    Returns True when the SSID was changed.
+    """
     target = cfg.restore_ssid
     if not target:
         current = _essid(cfg)
@@ -374,12 +392,14 @@ def ensure_link(cfg: CpuMonitorConfig) -> None:
     except (RuntimeError, subprocess.TimeoutExpired):
         snap_sta = None
     if current == target and snap_sta is not None and snap_sta >= 1:
-        return
+        print(f"[cpu] link already up on {target}, leaving the SSID unchanged", flush=True)
+        return False
     if not cfg.ssid_key:
         cfg.ssid_key = _ssid_key_for(cfg, current or target)
     print(f"[cpu] restoring link SSID {target}", flush=True)
     _apply_ssid(cfg, cfg.ssid_key, target)
     _wait_link(cfg, essid=target, up=True, timeout_s=150)
+    return True
 
 
 class WebPage:
@@ -595,7 +615,17 @@ def _check_link_state(case: CpuCase, samples: list[CpuSample]) -> None:
             )
 
 
-def run_cpu_case(cfg: CpuMonitorConfig, case: CpuCase) -> CpuCaseResult:
+def order_cases(cases: list[CpuCase]) -> list[CpuCase]:
+    """No-link cases first, then link cases. Order inside each group is kept."""
+    return [case for case in cases if not case.link_up] + [case for case in cases if case.link_up]
+
+
+def run_cpu_case(
+    cfg: CpuMonitorConfig,
+    case: CpuCase,
+    *,
+    restore_after: bool = True,
+) -> CpuCaseResult:
     print(
         f"[cpu] {case.case_id} scenario {case.scenario} {case.title} "
         f"for {cfg.duration_s}s every {cfg.poll_s}s",
@@ -607,11 +637,12 @@ def run_cpu_case(cfg: CpuMonitorConfig, case: CpuCase) -> CpuCaseResult:
     samples: list[CpuSample] = []
     note = ""
     try:
+        changed = False
         if cfg.manage_link:
             if case.link_up:
-                ensure_link(cfg)
+                changed = ensure_link(cfg)
             else:
-                drop_link(cfg)
+                changed = drop_link(cfg)
         else:
             print("[cpu] CPE IP is empty — leaving the SSID unchanged", flush=True)
         if case.webpage_open:
@@ -620,7 +651,16 @@ def run_cpu_case(cfg: CpuMonitorConfig, case: CpuCase) -> CpuCaseResult:
         if case.throughput:
             traffic = True
             start_throughput(cfg)
-        samples = poll_cpu_mem(cfg, web if case.webpage_open else None)
+        # The long wait follows an SSID change. The next case in the same
+        # group keeps that SSID and starts recording.
+        settle_s = cfg.settle_s if changed or not cfg.manage_link else 0
+        if cfg.manage_link and not changed:
+            print("[cpu] SSID unchanged, capture starts without another wait", flush=True)
+        samples = poll_cpu_mem(
+            cfg,
+            web if case.webpage_open else None,
+            settle_s=settle_s,
+        )
         if cfg.manage_link:
             _check_link_state(case, samples)
         if traffic:
@@ -646,7 +686,7 @@ def run_cpu_case(cfg: CpuMonitorConfig, case: CpuCase) -> CpuCaseResult:
                 print(f"[cpu] stop throughput: {exc}", flush=True)
         if web is not None:
             web.close()
-        if cfg.manage_link:
+        if restore_after and cfg.manage_link:
             try:
                 ensure_link(cfg)
             except Exception as exc:

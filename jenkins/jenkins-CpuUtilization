@@ -17,11 +17,11 @@ def selectedCases(boolean failIfEmpty = true) {
     if (params.NO_LINK_CLOSED) {
         selected << '1'
     }
-    if (params.LINK_CLOSED) {
-        selected << '2'
-    }
     if (params.NO_LINK_OPEN) {
         selected << '3'
+    }
+    if (params.LINK_CLOSED) {
+        selected << '2'
     }
     if (params.LINK_OPEN) {
         selected << '4'

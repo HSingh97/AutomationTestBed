@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Poll BTS CPU and memory over SNMP every 5 seconds for REG_04.
 
-REG_04 is one case with five conditions:
+REG_04 runs every no-link case before any link case:
   1  no link, webpage closed
-  2  link up, webpage closed
   3  no link, webpage open
+  2  link up, webpage closed
   4  link up, webpage open
   5  link up, webpage open, throughput passing
 
@@ -16,6 +16,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import signal
 import sys
 from pathlib import Path
 
@@ -24,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from utils.regression_cpu_flows import (
     CASES,
     CpuMonitorConfig,
+    ensure_link,
+    order_cases,
     require_bts_reachable,
     run_cpu_case,
     write_cpu_report,
@@ -106,7 +109,34 @@ def main() -> int:
         require_bts_reachable(cfg)
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
-    results = [run_cpu_case(cfg, case) for case in cases]
+    cases = order_cases(cases)
+    print(
+        "[cpu] order: "
+        + ", ".join(f"{case.scenario} {case.title}" for case in cases),
+        flush=True,
+    )
+
+    def _restore_on_signal(signum, _frame):
+        print("[cpu] interrupted, restoring the link", flush=True)
+        if cfg.manage_link:
+            try:
+                ensure_link(cfg)
+            except Exception as exc:
+                print(f"[cpu] restore link failed: {exc}", flush=True)
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _restore_on_signal)
+    results = []
+    try:
+        for index, case in enumerate(cases):
+            last = index == len(cases) - 1
+            results.append(run_cpu_case(cfg, case, restore_after=last))
+    finally:
+        if cfg.manage_link:
+            try:
+                ensure_link(cfg)
+            except Exception as exc:
+                print(f"[cpu] restore link failed: {exc}", flush=True)
     report = write_cpu_report(cfg, results)
     print(f"[cpu] report {report}")
     failed = [result.case.case_id for result in results if not result.ok]
