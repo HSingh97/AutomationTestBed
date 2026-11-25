@@ -87,7 +87,16 @@ class CpuSample:
     mem_used_pct: float
     mem_used_mb: float
     mem_total_mb: float
-    stations: int
+
+
+@dataclass
+class CpuCaseResult:
+    case: CpuCase
+    samples: list[CpuSample]
+    started_at: str
+    iperf_note: str = ""
+    error: str = ""
+    stations: int | None = None
 
 
 @dataclass
@@ -301,7 +310,6 @@ def poll_cpu_mem(
     for index in range(points):
         elapsed = time.monotonic() - t0
         cpu, mem_pct, mem_mb, mem_total = read_cpu_mem(cfg)
-        stations = read_station_count(cfg)
         samples.append(
             CpuSample(
                 t_s=max(0, int(round(elapsed))),
@@ -309,12 +317,11 @@ def poll_cpu_mem(
                 mem_used_pct=mem_pct,
                 mem_used_mb=mem_mb,
                 mem_total_mb=mem_total,
-                stations=stations,
             )
         )
         print(
             f"  t={samples[-1].t_s}s cpu={samples[-1].cpu_pct}% "
-            f"mem={samples[-1].mem_used_pct}% sta={samples[-1].stations}",
+            f"mem={samples[-1].mem_used_pct}%",
             flush=True,
         )
         if index + 1 < points:
@@ -637,19 +644,15 @@ def iperf_summary(cfg: CpuMonitorConfig) -> str:
     return raw.strip().splitlines()[-1] if raw.strip() else ""
 
 
-def _check_link_state(case: CpuCase, samples: list[CpuSample]) -> None:
-    if case.link_up:
-        bad = [row for row in samples if row.stations < 1]
-        if bad:
-            raise RuntimeError(
-                f"{case.case_id} scenario {case.scenario}: link dropped during sampling ({len(bad)} polls)"
-            )
-    else:
-        bad = [row for row in samples if row.stations != 0]
-        if bad:
-            raise RuntimeError(
-                f"{case.case_id} scenario {case.scenario}: a station was associated during the no-link poll"
-            )
+def _check_link_state(case: CpuCase, stations: int) -> None:
+    if case.link_up and stations < 1:
+        raise RuntimeError(
+            f"{case.case_id} scenario {case.scenario}: no station was associated (sta={stations})"
+        )
+    if not case.link_up and stations != 0:
+        raise RuntimeError(
+            f"{case.case_id} scenario {case.scenario}: a station was associated (sta={stations})"
+        )
 
 
 def order_cases(cases: list[CpuCase]) -> list[CpuCase]:
@@ -673,6 +676,7 @@ def run_cpu_case(
     traffic = False
     samples: list[CpuSample] = []
     note = ""
+    stations: int | None = None
     try:
         changed = False
         if cfg.manage_link:
@@ -694,15 +698,23 @@ def run_cpu_case(
         if cfg.manage_link and not changed:
             print("[cpu] SSID unchanged, capture starts without another wait", flush=True)
         samples = poll_cpu_mem(cfg, settle_s=settle_s)
+        stations = read_station_count(cfg)
+        print(f"[cpu] stations {stations}", flush=True)
         if cfg.manage_link:
-            _check_link_state(case, samples)
+            _check_link_state(case, stations)
         if traffic:
             note = iperf_summary(cfg)
             if "Mbits" not in note and "Gbits" not in note:
                 raise RuntimeError(
                     f"{case.case_id} scenario {case.scenario}: throughput log has no bitrate"
                 )
-        return CpuCaseResult(case=case, samples=samples, started_at=started, iperf_note=note)
+        return CpuCaseResult(
+            case=case,
+            samples=samples,
+            started_at=started,
+            iperf_note=note,
+            stations=stations,
+        )
     except Exception as exc:
         return CpuCaseResult(
             case=case,
@@ -710,6 +722,7 @@ def run_cpu_case(
             started_at=started,
             iperf_note=note,
             error=str(exc),
+            stations=stations,
         )
     finally:
         if traffic:
@@ -1051,6 +1064,7 @@ def write_cpu_report(cfg: CpuMonitorConfig, results: list[CpuCaseResult]) -> Pat
         link = "Up" if result.case.link_up else "Down"
         page = "Open" if result.case.webpage_open else "Closed"
         traffic = "Yes" if result.case.throughput else "No"
+        sta_txt = "—" if result.stations is None else str(result.stations)
         summary_rows.append(
             f"<tr class='{row_cls} scenario-jump' data-scenario='{escape(result.case.scenario)}'>"
             f"<td class='mono'>{escape(result.case.scenario)}</td>"
@@ -1058,6 +1072,7 @@ def write_cpu_report(cfg: CpuMonitorConfig, results: list[CpuCaseResult]) -> Pat
             f"<td>{link}</td><td>{page}</td><td>{traffic}</td>"
             f"<td class='mono'>{cpu_txt}</td>"
             f"<td class='mono'>{mem_txt}</td>"
+            f"<td class='mono'>{sta_txt}</td>"
             f"<td>{_status_pill(status)}</td>"
             "</tr>"
         )
@@ -1073,14 +1088,13 @@ def write_cpu_report(cfg: CpuMonitorConfig, results: list[CpuCaseResult]) -> Pat
                 row.mem_used_pct,
                 row.mem_used_mb,
                 row.mem_total_mb,
-                row.stations,
+                "" if result.stations is None else result.stations,
             ])
             mem_cell = f"<td class='mono'>{row.mem_used_mb}</td>" if show_mem_mb else ""
             sample_rows.append(
                 "<tr>"
                 f"<td class='mono'>{row.t_s}</td><td class='mono'>{row.cpu_pct}</td>"
                 f"<td class='mono'>{row.mem_used_pct}</td>{mem_cell}"
-                f"<td class='mono'>{row.stations}</td>"
                 "</tr>"
             )
         color = _CASE_COLORS[index % len(_CASE_COLORS)]
@@ -1098,12 +1112,12 @@ def write_cpu_report(cfg: CpuMonitorConfig, results: list[CpuCaseResult]) -> Pat
             f"<span class='scenario-title'><span class='swatch' style='background:{color}'></span>"
             f"Scenario {escape(result.case.scenario)} — {escape(result.case.title)}</span>"
             f"<span class='scenario-meta'>CPU {escape(cpu_txt)}% · mem {escape(mem_txt)}% "
-            f"{_status_pill(status)}</span>"
+            f"· sta {escape(sta_txt)} {_status_pill(status)}</span>"
             f"</summary>"
             f"<div class='scenario-body'>{note}{err}{chart}"
             f"<details class='samples'><summary>Samples ({len(result.samples)})</summary>"
             f"<div class='table-scroll'><table class='data-table'>"
-            f"<thead><tr><th>t (s)</th><th>CPU %</th><th>Mem %</th>{mem_head}<th>Stations</th></tr></thead>"
+            f"<thead><tr><th>t (s)</th><th>CPU %</th><th>Mem %</th>{mem_head}</tr></thead>"
             f"<tbody>{''.join(sample_rows)}</tbody></table></div></details></div></details>"
         )
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
@@ -1237,7 +1251,7 @@ def write_cpu_report(cfg: CpuMonitorConfig, results: list[CpuCaseResult]) -> Pat
           <thead>
             <tr>
               <th>#</th><th>Condition</th><th>Link</th><th>Page</th><th>Throughput</th>
-              <th>CPU min / avg / max %</th><th>Mem avg %</th><th>Result</th>
+              <th>CPU min / avg / max %</th><th>Mem avg %</th><th>Stations</th><th>Result</th>
             </tr>
           </thead>
           <tbody>
