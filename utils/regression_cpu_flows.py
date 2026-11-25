@@ -165,6 +165,41 @@ def ssh_device(
     return run_local(cmd, timeout_s=timeout_s)
 
 
+def ssh_device_result(
+    cfg: CpuMonitorConfig,
+    device_ip: str,
+    device_cmd: str,
+    *,
+    timeout_s: int = 45,
+) -> tuple[int, str]:
+    """Run one remote command and return its exit code. A dropped session is not hidden."""
+    cmd = [
+        "sshpass",
+        "-p",
+        cfg.device_password,
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "LogLevel=ERROR",
+        "-o",
+        "ConnectTimeout=10",
+        f"root@{device_ip}",
+        device_cmd,
+    ]
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout_s,
+        check=False,
+    )
+    out = "\n".join(part.strip() for part in (proc.stdout, proc.stderr) if part and part.strip())
+    return proc.returncode, out
+
+
 # sysInfoCPUUsage. The agent returns the first field of /tmp/cpu_usage.
 OID_CPU_USAGE = "1.3.6.1.4.1.14125.123.1.2.2.13.0"
 # UCD-SNMP-MIB. Memory is real RAM, kB.
@@ -312,19 +347,53 @@ def _ssid_key_for(cfg: CpuMonitorConfig, essid: str) -> str:
             key = match.group(1) + ".ssid"
             if _UCI_KEY_RE.match(key):
                 return key
+    index = re.search(r"(\d+)$", cfg.wlan_iface)
+    device = f"wifi{index.group(1)}" if index else ""
+    if device:
+        for line in raw.splitlines():
+            match = re.match(rf"^(wireless\..+)\.device='{re.escape(device)}'$", line.strip())
+            if match:
+                key = match.group(1) + ".ssid"
+                if _UCI_KEY_RE.match(key):
+                    return key
     raise RuntimeError(f"UCI SSID key for {essid!r} was not found")
+
+
+def _ssid_change_pending(cfg: CpuMonitorConfig) -> bool:
+    try:
+        raw = ssh_device(cfg, cfg.bts_ip, "uci changes", timeout_s=20)
+    except (RuntimeError, subprocess.TimeoutExpired):
+        return True
+    return ".ssid=" in raw
 
 
 def _apply_ssid(cfg: CpuMonitorConfig, uci_key: str, ssid: str) -> None:
     if not _UCI_KEY_RE.match(uci_key):
         raise RuntimeError(f"refusing UCI key {uci_key!r}")
-    # wifi reload does not move the live ESSID on this image. ucidyn apply does,
-    # and it can drop the SSH session while the radio restarts.
-    cmd = f"ucidyn set {uci_key} {shlex.quote(ssid)}; ucidyn apply; echo APPLY_DONE"
-    try:
-        ssh_device(cfg, cfg.bts_ip, cmd, timeout_s=90)
-    except (RuntimeError, subprocess.TimeoutExpired) as exc:
-        print(f"[cpu] ssid apply connection closed ({exc})", flush=True)
+    # ucidyn set only stages the value. apply commits it and reloads the radio,
+    # which can drop SSH. One shell command hid a failed apply behind echo.
+    rc, out = ssh_device_result(
+        cfg,
+        cfg.bts_ip,
+        f"ucidyn set {uci_key} {shlex.quote(ssid)}",
+        timeout_s=40,
+    )
+    if rc != 0:
+        raise RuntimeError(f"ucidyn set {ssid!r} failed (rc={rc}): {out[:240]}")
+    last = ""
+    for _attempt in (1, 2):
+        try:
+            rc, out = ssh_device_result(cfg, cfg.bts_ip, "ucidyn apply", timeout_s=120)
+            last = f"rc={rc} {out[:180]}".strip()
+            if rc != 0:
+                print(f"[cpu] ucidyn apply connection closed ({last})", flush=True)
+        except (RuntimeError, subprocess.TimeoutExpired) as exc:
+            last = str(exc)[:180]
+            print(f"[cpu] ucidyn apply connection closed ({last})", flush=True)
+        if not _ssid_change_pending(cfg):
+            return
+        print("[cpu] SSID change is still pending, applying again", flush=True)
+    raise RuntimeError(f"ucidyn apply left the SSID uncommitted ({last})")
 
 
 def _wait_link(cfg: CpuMonitorConfig, *, essid: str, up: bool, timeout_s: int) -> None:
@@ -364,7 +433,7 @@ def drop_link(cfg: CpuMonitorConfig) -> bool:
         raise RuntimeError("SSID UCI key is unknown")
     print(f"[cpu] dropping link: {cfg.restore_ssid or current} -> {NOLINK_SSID}", flush=True)
     _apply_ssid(cfg, cfg.ssid_key, NOLINK_SSID)
-    _wait_link(cfg, essid=NOLINK_SSID, up=False, timeout_s=120)
+    _wait_link(cfg, essid=NOLINK_SSID, up=False, timeout_s=180)
     return True
 
 
@@ -391,7 +460,12 @@ def ensure_link(cfg: CpuMonitorConfig) -> bool:
         snap_sta = read_station_count(cfg)
     except (RuntimeError, subprocess.TimeoutExpired):
         snap_sta = None
-    if current == target and snap_sta is not None and snap_sta >= 1:
+    if (
+        current == target
+        and snap_sta is not None
+        and snap_sta >= 1
+        and not _ssid_change_pending(cfg)
+    ):
         print(f"[cpu] link already up on {target}, leaving the SSID unchanged", flush=True)
         return False
     if not cfg.ssid_key:
