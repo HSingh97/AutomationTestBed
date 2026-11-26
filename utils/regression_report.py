@@ -727,16 +727,24 @@ def _render_validation_panel(record: IterationRecord) -> str:
         )
     if val.get("ping_recovery_seconds") is not None:
         limit = val.get("ping_recovery_limit_s")
-        limit_txt = f" (benchmark {limit}s)" if limit else ""
+        local_only = bool(val.get("local_reachability"))
+        limit_txt = "" if local_only or not limit else f" (benchmark {limit}s)"
         ping_secs = float(val["ping_recovery_seconds"])
-        ping_ok = limit is None or ping_secs <= float(limit)
-        formation_slow = bool(val.get("link_formation_slow")) or (
-            bool(val.get("reboot_confirmed")) and not ping_ok and ping_secs > 0
+        ping_ok = limit is None or local_only or ping_secs <= float(limit)
+        formation_slow = (not local_only) and (
+            bool(val.get("link_formation_slow"))
+            or (bool(val.get("reboot_confirmed")) and not ping_ok and ping_secs > 0)
+        )
+        label = "BTS reachability" if local_only else "Link formation"
+        shown = (
+            f"BTS answered local ping in {val['ping_recovery_seconds']}s"
+            if local_only
+            else f"Link formed in {val['ping_recovery_seconds']}s{limit_txt}"
         )
         rows.append(
             _validation_row(
-                "Link formation",
-                f"{val['ping_recovery_seconds']}s{limit_txt}",
+                label,
+                shown,
                 ok=True if ping_ok else None,
                 warn=formation_slow,
             )
@@ -837,17 +845,21 @@ def _render_validation_panel(record: IterationRecord) -> str:
 
 
 def _formation_time_chip(record: IterationRecord) -> str:
-    """Show link-formation time on a pass. Amber when it ran past the benchmark."""
+    """Show how long the BTS took to answer, or how long the link took to form."""
     val = record.validation or {}
     seconds = val.get("ping_recovery_seconds")
-    if seconds is None or not val.get("device_logs_validation"):
+    if seconds is None:
         return ""
+    if val.get("local_reachability"):
+        return f"<span class='time-chip ok'>BTS up in {escape(str(seconds))}s</span>"
     slow = bool(val.get("link_formation_slow"))
     limit = val.get("ping_recovery_limit_s")
     note = f"benchmark {limit}s" if limit else ""
     css = "slow" if slow else "ok"
     note_html = f" <span class='time-note'>{escape(note)}</span>" if note else ""
-    return f"<span class='time-chip {css}'>{escape(str(seconds))}s{note_html}</span>"
+    return (
+        f"<span class='time-chip {css}'>Link formed in {escape(str(seconds))}s{note_html}</span>"
+    )
 
 
 def _render_iteration_article(record: IterationRecord) -> str:
@@ -956,7 +968,9 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
         iterations_target = escape(str(meta.get("iterations", "—")))
     bts_host = escape(str(meta.get("bts_host", "—")))
     cpe_hosts = meta.get("cpe_hosts") or []
-    cpe_label = escape(", ".join(str(h) for h in cpe_hosts) if cpe_hosts else "—")
+    cpe_label = escape(
+        ", ".join(str(h) for h in cpe_hosts) if cpe_hosts else "not set — local BTS ping only"
+    )
     testbed_summary = meta.get("testbed_summary", {})
     testbed_table = _render_testbed_summary_table(testbed_summary)
 
@@ -1235,10 +1249,10 @@ def _build_html(collector: RegressionReportCollector, *, pytest_stats: dict[str,
       <h2>Regression Results</h2>
       {iteration_body}
       <p class="footnote">
-        Report lists only test types executed in this run. Soft reboot: link formation benchmark 230s.
-        A long formation still <strong>passes</strong>, and that time is highlighted.
-        <strong>Partial</strong> is only a missing Device Init line. Hard <strong>fail</strong> only when the link does not form.
-        Soft reset: link terminate/re-establish (max 90s).
+        Report lists only test types executed in this run. With a CPE address, each iteration waits for the link
+        and shows how long it took to form. Without a CPE address, the check is a local ping of the BTS.
+        Soft reboot link benchmark is 230s. A long formation still <strong>passes</strong>, and that time is highlighted.
+        <strong>Partial</strong> is only a missing Device Init line. Hard <strong>fail</strong> is when the BTS or the link does not come back.
       </p>
     </section>
   </div>

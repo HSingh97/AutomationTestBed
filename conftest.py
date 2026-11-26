@@ -220,6 +220,18 @@ def pytest_addoption(parser):
         help="Single HTML report path for all regression iterations/runs (append when state file exists).",
     )
     group.addoption(
+        "--regression-bts-ip",
+        action="store",
+        default="",
+        help="BTS address for a GUI-only regression run. Required by the Regression job.",
+    )
+    group.addoption(
+        "--regression-cpe-ip",
+        action="store",
+        default="",
+        help="CPE address. Empty means check only that the BTS answers a local ping.",
+    )
+    group.addoption(
         "--regression-fresh",
         action="store_true",
         default=False,
@@ -691,6 +703,10 @@ async def testbed_ready(request, profile_bundle, device_creds):
     Configure lab for mgmt VLAN-only access:
     BTS QinQ, CPE transparent, mgmt addresses, CPE IP from BTS DHCP (SSH only).
     """
+    if (request.config.getoption("--regression-bts-ip") or "").strip():
+        print("[testbed] Regression BTS IP set — GUI only, lab bootstrap skipped.")
+        return profile_bundle
+
     # Always refresh live mgmt IPv6 from fallback (or CLI) before bootstrap/skip path.
     await _refresh_operating_ips_from_fallback(request, profile_bundle, device_creds)
 
@@ -845,6 +861,9 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(scope="session")
 def bsu_ip(request, testbed_ready):
+    explicit = (request.config.getoption("--regression-bts-ip") or "").strip()
+    if explicit:
+        return normalize_ip(explicit)
     dut = testbed_ready.active["dut"]
     if dut.get("ip_mode") == "ipv6" or dut.get("strict_ipv6"):
         cli_local_v6 = request.config.getoption("--local-ipv6")
@@ -857,6 +876,9 @@ def bsu_ip(request, testbed_ready):
 
 @pytest.fixture(scope="session")
 def cpe_ips(request, testbed_ready):
+    if (request.config.getoption("--regression-bts-ip") or "").strip():
+        raw = (request.config.getoption("--regression-cpe-ip") or "").strip()
+        return [normalize_ip(ip.strip()) for ip in raw.split(",") if ip.strip()]
     dut = testbed_ready.active["dut"]
     if dut.get("ip_mode") == "ipv6" or dut.get("strict_ipv6"):
         cli_remote_v6 = request.config.getoption("--remote-ipv6")
@@ -907,6 +929,9 @@ def recovery_manager(profile_bundle):
 # =====================================================================
 def _session_bts_ssh_hosts(request, profile: dict, bsu_ip: str) -> list[str]:
     """BTS SSH chain: factory IPv4 first, then mgmt IPv6 (matches IP preflight step 1)."""
+    explicit = (request.config.getoption("--regression-bts-ip") or "").strip()
+    if explicit:
+        return [normalize_ip(explicit)]
     from utils.ip_test_flows import _factory_first_ssh_hosts, _ordered_unique_hosts
 
     dut = profile.get("dut", {}) or {}
@@ -948,7 +973,10 @@ async def root_ssh(request, bsu_ip, device_creds, recovery_manager):
     )
     if effective != normalize_ip(bsu_ip):
         print(f"[ssh] root_ssh session on {effective} (profile primary {bsu_ip})")
-    await recovery_manager.ensure_link_or_recover(bsu_ip=bsu_ip, device_creds=device_creds, root_ssh=conn)
+    if (request.config.getoption("--regression-bts-ip") or "").strip():
+        print(f"[ssh] Regression BTS {bsu_ip} — no lab link recovery.")
+    else:
+        await recovery_manager.ensure_link_or_recover(bsu_ip=bsu_ip, device_creds=device_creds, root_ssh=conn)
     if getattr(request.config.option, "skip_testbed_bootstrap", False):
         print("[link] SSID left as-is (skip-testbed-bootstrap).")
     else:
@@ -1222,6 +1250,11 @@ async def gui_page(request, gui_browser, bsu_ip, device_creds, recovery_manager,
                 gui_errors.append(f"{gui_host}: {exc}")
         if logged_in:
             break
+    if not logged_in and (request.config.getoption("--regression-bts-ip") or "").strip():
+        raise RuntimeError(
+            f"BTS GUI login failed for {bsu_ip}. "
+            f"This regression run does not recover the lab. {'; '.join(gui_errors)}"
+        )
     if not logged_in:
         await recovery_manager.ensure_link_or_recover(
             gui_page=page,

@@ -1,5 +1,5 @@
-// UBR stability regression. Runs only on qa-lab-01.
-// Tick the tests, set the cycle counts, then Build. Addresses come from the bench profile.
+// UBR stability regression. GUI only, so it can run off the automation testbed.
+// Pick the stand, enter the BTS IP, and enter a CPE IP only when the link should be timed.
 
 def archiveBuildArtifacts(pattern, allowEmpty = false) {
     step([
@@ -26,9 +26,46 @@ def cycleCount(String name) {
     return text
 }
 
+def addressOf(String name, boolean required) {
+    def text = (params[name] ?: '').toString().trim()
+    if (!text) {
+        if (required) {
+            error('BTS IP is required. The test does not start without it.')
+        }
+        return ''
+    }
+    def ipv4 = text ==~ /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/
+    def ipv6 = text.contains(':') && (text ==~ /[0-9A-Fa-f:]+/)
+    if (!ipv4 && !ipv6) {
+        error("${name} must be an IPv4 or IPv6 address, got: ${text}")
+    }
+    if (ipv4 && text.split('\\.').any { (it as int) > 255 }) {
+        error("${name} is not a valid IPv4 address: ${text}")
+    }
+    return text
+}
+
 properties([
     disableConcurrentBuilds(),
     parameters([
+        [
+            $class: 'ChoiceParameterDefinition',
+            name: 'Target stand',
+            choices: "test-qa-lab-01\ntest-qa-lab-02\ntest-harman2\ntest-a60-lab",
+            description: ''
+        ],
+        [
+            $class: 'StringParameterDefinition',
+            name: 'BTS IP',
+            defaultValue: '',
+            description: ''
+        ],
+        [
+            $class: 'StringParameterDefinition',
+            name: 'CPE IP',
+            defaultValue: '',
+            description: ''
+        ],
         [
             $class: 'ChoiceParameter',
             choiceType: 'PT_CHECKBOX',
@@ -183,14 +220,14 @@ properties([
 ])
 
 pipeline {
-    agent { label 'test-qa-lab-01' }
+    agent { label "${params['Target stand'] ?: 'test-qa-lab-01'}" }
 
     options {
         disableConcurrentBuilds()
     }
 
     environment {
-        TARGET_STAND = 'test-qa-lab-01'
+        TARGET_STAND = "${params['Target stand'] ?: 'test-qa-lab-01'}"
     }
 
     stages {
@@ -205,12 +242,15 @@ pipeline {
                     }
                     def selected = order.findAll { picked.contains(it) }
                     if (selected.isEmpty()) {
-                        error('Tick at least one test. Addresses are taken from the qa-lab-01 bench profile.')
+                        error('Tick at least one test.')
                     }
+                    def btsIp = addressOf('BTS IP', true)
+                    def cpeIp = addressOf('CPE IP', false)
                     if (selected.contains('REG_03') && !(params['Firmware image'] ?: '').toString().trim()) {
                         error('Choose a firmware image when Firmware upgrade is ticked.')
                     }
 
+                    def stand = (params['Target stand'] ?: 'test-qa-lab-01').toString().trim()
                     def bench = readFile('config/benches.yaml')
                     def profile = ''
                     def recovery = ''
@@ -218,7 +258,7 @@ pipeline {
                     for (line in bench.readLines()) {
                         def trimmed = line.trim()
                         if (line.startsWith('  ') && !line.startsWith('    ') && trimmed.endsWith(':')) {
-                            inStand = trimmed == 'test-qa-lab-01:'
+                            inStand = trimmed == "${stand}:"
                             continue
                         }
                         if (!inStand) {
@@ -232,7 +272,7 @@ pipeline {
                         }
                     }
                     if (!profile || !recovery) {
-                        error('config/benches.yaml has no profile for test-qa-lab-01')
+                        error("config/benches.yaml has no profile for ${stand}")
                     }
 
                     def summary = []
@@ -267,10 +307,15 @@ pipeline {
                     env.REGRESSION_ITER_ARGS = iterArgs.join(' ')
                     env.PROFILE_NAME = profile
                     env.RECOVERY_PROFILE_NAME = recovery
+                    env.REGRESSION_BTS_IP = btsIp
+                    env.REGRESSION_CPE_IP = cpeIp
+                    env.REGRESSION_CPE_ARG = cpeIp ? "--regression-cpe-ip '${cpeIp}'" : ''
 
                     echo '----------------------------------------'
                     echo 'UBR Stability Regression'
-                    echo 'Agent:          test-qa-lab-01'
+                    echo "Agent:          ${stand}"
+                    echo "BTS IP:         ${btsIp}"
+                    echo "CPE IP:         ${cpeIp ?: '(not set — local BTS ping only)'}"
                     echo "Tests:          ${env.REGRESSION_SELECTED_SUMMARY}"
                     echo "Profile:        ${env.PROFILE_NAME}"
                     echo "Recovery:       ${env.RECOVERY_PROFILE_NAME}"
@@ -314,6 +359,9 @@ pipeline {
                             --regression-fresh \
                             --profile "${env.PROFILE_NAME}" \
                             --recovery-profile "${env.RECOVERY_PROFILE_NAME}" \
+                            --skip-testbed-bootstrap \
+                            --regression-bts-ip "${env.REGRESSION_BTS_IP}" \
+                            ${env.REGRESSION_CPE_ARG} \
                             ${env.REGRESSION_ITER_ARGS} \
                             ${env.FIRMWARE_IMAGE_ARG}
                         """
@@ -361,7 +409,9 @@ pipeline {
 
                 def detailsHtml = """\
                     <p><strong>Tests run:</strong> ${env.REGRESSION_SELECTED_SUMMARY ?: '—'}</p>
-                    <p><strong>Bench:</strong> qa-lab-01</p>
+                    <p><strong>Stand:</strong> ${env.TARGET_STAND ?: '—'}</p>
+                    <p><strong>BTS IP:</strong> ${env.REGRESSION_BTS_IP ?: '—'}</p>
+                    <p><strong>CPE IP:</strong> ${env.REGRESSION_CPE_IP ?: 'not set — local BTS ping only'}</p>
                     <p><strong>Firmware:</strong> ${env.FIRMWARE_IMAGE_ARG ? 'uploaded in build' : '(not used)'}</p>
                     <p><strong>Report:</strong> one merged HTML (per test: Total Executed / Passed / Failed)</p>
                 """

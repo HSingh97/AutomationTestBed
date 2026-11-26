@@ -33,6 +33,7 @@ class RegressionValidation:
     uptime_stable: bool | None = None
     ping_recovery_seconds: float | None = None
     ping_recovery_limit_s: int | None = None
+    local_reachability: bool = False
     link_formation_slow: bool = False
     link_dropped: bool | None = None
     link_reestablished: bool | None = None
@@ -90,6 +91,7 @@ class RegressionValidation:
             "uptime_stable": self.uptime_stable,
             "ping_recovery_seconds": self.ping_recovery_seconds,
             "ping_recovery_limit_s": self.ping_recovery_limit_s,
+            "local_reachability": self.local_reachability,
             "link_formation_slow": self.link_formation_slow,
             "link_dropped": self.link_dropped,
             "link_reestablished": self.link_reestablished,
@@ -124,6 +126,7 @@ class RegressionValidation:
             uptime_stable=data.get("uptime_stable"),
             ping_recovery_seconds=data.get("ping_recovery_seconds"),
             ping_recovery_limit_s=data.get("ping_recovery_limit_s"),
+            local_reachability=bool(data.get("local_reachability")),
             link_formation_slow=bool(data.get("link_formation_slow")),
             link_dropped=data.get("link_dropped"),
             link_reestablished=data.get("link_reestablished"),
@@ -168,6 +171,67 @@ async def _close_ssh(conn: AsyncGenericDriver | None) -> None:
         await conn.close()
     except Exception:
         pass
+
+
+async def ping_from_runner(host: str, *, count: int = 2) -> tuple[bool, str]:
+    """Ping a host from the machine running the test."""
+    target = str(host or "").strip()
+    if not target:
+        return False, "no host"
+    flag = "-6" if ":" in target else "-4"
+    proc = await asyncio.create_subprocess_exec(
+        "ping",
+        flag,
+        "-c",
+        str(count),
+        "-W",
+        "2",
+        target,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        output, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return False, "local ping timed out"
+    text = (output or b"").decode("utf-8", "replace").strip()
+    ok = proc.returncode == 0 and "100% packet loss" not in text.lower()
+    return ok, "replies received" if ok else (text[-180:] or "no reply")
+
+
+async def wait_runner_ping(host: str, *, timeout_s: int, started_at: float) -> tuple[bool, float]:
+    """Wait until this machine can ping ``host``. Returns success and elapsed seconds."""
+    while time.monotonic() - started_at < timeout_s:
+        ok, _detail = await ping_from_runner(host)
+        if ok:
+            return True, round(time.monotonic() - started_at, 1)
+        await asyncio.sleep(5)
+    return False, round(time.monotonic() - started_at, 1)
+
+
+async def wait_link_ping(
+    bts_host: str,
+    cpe_host: str,
+    password: str,
+    *,
+    timeout_s: int,
+    started_at: float,
+) -> tuple[bool, float]:
+    """Wait until the BTS can ping the CPE. Returns success and elapsed seconds."""
+    while time.monotonic() - started_at < timeout_s:
+        try:
+            conn = await _open_root_ssh(bts_host, password)
+            try:
+                ok, _detail = await _ping_once(conn, cpe_host, count=2)
+            finally:
+                await _close_ssh(conn)
+        except Exception:
+            ok = False
+        if ok:
+            return True, round(time.monotonic() - started_at, 1)
+        await asyncio.sleep(10)
+    return False, round(time.monotonic() - started_at, 1)
 
 
 async def _ping_once(
@@ -568,20 +632,23 @@ async def validate_soft_reboot_iteration(
     hard_limit_s = ping_timeout_s + max(0, ping_grace_s)
 
     cpe_target = cpe_hosts[0] if cpe_hosts else ""
+    validation.local_reachability = not bool(cpe_target)
     start = time.monotonic()
     ping_ok = False
     ping_seen_at: float | None = None
     captured_init: str | None = None
 
     while time.monotonic() - start < hard_limit_s:
+        if not cpe_target:
+            ping_ok, _detail = await ping_from_runner(bts_host)
+            if ping_ok and ping_seen_at is None:
+                ping_seen_at = time.monotonic()
+                validation.ping_recovery_seconds = round(ping_seen_at - start, 1)
         try:
             conn = await _open_root_ssh(bts_host, password)
             try:
                 if cpe_target:
                     ping_ok, _detail = await _ping_once(conn, cpe_target, count=2)
-                else:
-                    await conn.send_command("echo ok")
-                    ping_ok = True
                 if ping_ok and ping_seen_at is None:
                     ping_seen_at = time.monotonic()
                     validation.ping_recovery_seconds = round(ping_seen_at - start, 1)
@@ -608,10 +675,16 @@ async def validate_soft_reboot_iteration(
         validation.passed = False
         validation.ping_recovery_seconds = round(time.monotonic() - start, 1)
         validation.reboot_confirmed = False
-        validation.summary = (
-            f"Ping did not recover within {hard_limit_s}s "
-            f"(waited {validation.ping_recovery_seconds}s)."
-        )
+        if validation.local_reachability:
+            validation.summary = (
+                f"BTS did not answer a local ping within {hard_limit_s}s "
+                f"(waited {validation.ping_recovery_seconds}s)."
+            )
+        else:
+            validation.summary = (
+                f"Link did not form within {hard_limit_s}s "
+                f"(waited {validation.ping_recovery_seconds}s for BTS to ping CPE)."
+            )
         return validation
 
     ping_slow = float(validation.ping_recovery_seconds or 0) > float(ping_timeout_s)
@@ -636,28 +709,41 @@ async def validate_soft_reboot_iteration(
     if not init_ok:
         validation.passed = False
         validation.partial = True
+        what = (
+            "BTS answered a local ping"
+            if validation.local_reachability
+            else "link formed"
+        )
         validation.summary = (
             f"Ping recovered in {validation.ping_recovery_seconds}s"
             + (f" (over {ping_timeout_s}s limit)" if ping_slow else "")
+            + f" ({what})"
             + " but the last Device Init line in /etc/device_logs does not match this boot."
         )
     else:
         validation.passed = True
         validation.partial = False
         seconds = float(validation.ping_recovery_seconds or 0)
-        # Long formation stays a pass. Highlight it once it uses most of the benchmark,
-        # and also when it runs past the benchmark.
-        validation.link_formation_slow = ping_slow or seconds >= (float(ping_timeout_s) * 0.85)
-        if validation.link_formation_slow:
+        if validation.local_reachability:
+            validation.link_formation_slow = False
             validation.summary = (
-                f"Soft reboot OK: link formed in {validation.ping_recovery_seconds}s "
-                f"(benchmark {ping_timeout_s}s, highlighted); device init confirmed in logs."
+                f"Soft reboot OK: BTS answered a local ping in {validation.ping_recovery_seconds}s; "
+                "device init confirmed in logs."
             )
         else:
-            validation.summary = (
-                f"Soft reboot OK: link formed in {validation.ping_recovery_seconds}s "
-                f"(benchmark {ping_timeout_s}s); device init confirmed in logs."
-            )
+            # Long formation stays a pass. Highlight it once it uses most of the benchmark,
+            # and also when it runs past the benchmark.
+            validation.link_formation_slow = ping_slow or seconds >= (float(ping_timeout_s) * 0.85)
+            if validation.link_formation_slow:
+                validation.summary = (
+                    f"Soft reboot OK: link formed in {validation.ping_recovery_seconds}s "
+                    f"(benchmark {ping_timeout_s}s, highlighted); device init confirmed in logs."
+                )
+            else:
+                validation.summary = (
+                    f"Soft reboot OK: link formed in {validation.ping_recovery_seconds}s "
+                    f"(benchmark {ping_timeout_s}s); device init confirmed in logs."
+                )
     return validation
 
 
@@ -739,40 +825,49 @@ async def validate_reboot_iteration(
     validation.links_before = str(snapshot_before.get("links") or "")
 
     cpe_target = cpe_hosts[0] if cpe_hosts else ""
+    validation.local_reachability = not bool(cpe_target)
     start = time.monotonic()
     ping_ok = False
-    validation.add_event("Ping recovery", f"Waiting up to {ping_timeout_s}s for BTS→CPE ping")
+    wait_label = "local BTS ping" if validation.local_reachability else "BTS→CPE ping"
+    validation.add_event("Ping recovery", f"Waiting up to {ping_timeout_s}s for {wait_label}")
 
     while time.monotonic() - start < ping_timeout_s:
         elapsed = int(time.monotonic() - start)
         try:
-            conn = await _open_root_ssh(bts_host, password)
-            try:
-                if cpe_target:
+            if cpe_target:
+                conn = await _open_root_ssh(bts_host, password)
+                try:
                     ping_ok, _detail = await _ping_once(conn, cpe_target, count=2)
-                else:
-                    await conn.send_command("echo ok")
-                    ping_ok = True
-            finally:
-                await _close_ssh(conn)
+                finally:
+                    await _close_ssh(conn)
+            else:
+                ping_ok, _detail = await ping_from_runner(bts_host)
         except Exception as exc:
             validation.add_event("Ping attempt", f"{elapsed}s: {exc}")
         if ping_ok:
             validation.ping_recovery_seconds = round(time.monotonic() - start, 1)
-            validation.add_event(
-                "Ping recovery",
-                f"BTS→CPE reachable in {validation.ping_recovery_seconds}s",
+            formed = (
+                f"BTS answered local ping in {validation.ping_recovery_seconds}s"
+                if validation.local_reachability
+                else f"Link formed in {validation.ping_recovery_seconds}s"
             )
+            validation.add_event("Ping recovery", formed)
             break
         await asyncio.sleep(10)
 
     if not ping_ok:
         validation.passed = False
         validation.ping_recovery_seconds = round(time.monotonic() - start, 1)
-        validation.summary = (
-            f"Ping did not recover within {ping_timeout_s}s "
-            f"(waited {validation.ping_recovery_seconds}s)."
-        )
+        if validation.local_reachability:
+            validation.summary = (
+                f"BTS did not answer a local ping within {ping_timeout_s}s "
+                f"(waited {validation.ping_recovery_seconds}s)."
+            )
+        else:
+            validation.summary = (
+                f"Link did not form within {ping_timeout_s}s "
+                f"(waited {validation.ping_recovery_seconds}s for BTS to ping CPE)."
+            )
         validation.add_event("Ping recovery", validation.summary)
         return validation
 
@@ -824,10 +919,19 @@ async def validate_reboot_iteration(
             "Uptime reset but no reboot evidence in device or system logs."
         )
     else:
-        validation.summary = (
-            f"Reboot confirmed (uptime {uptime_before}s→{uptime_after}s, logs OK); "
-            f"ping in {validation.ping_recovery_seconds}s (limit {ping_timeout_s}s)."
-        )
+        if validation.local_reachability:
+            validation.summary = (
+                f"Reboot confirmed (uptime {uptime_before}s→{uptime_after}s, logs OK); "
+                f"BTS answered a local ping in {validation.ping_recovery_seconds}s."
+            )
+        else:
+            validation.link_formation_slow = float(validation.ping_recovery_seconds or 0) > (
+                float(ping_timeout_s) * 0.85
+            )
+            validation.summary = (
+                f"Reboot confirmed (uptime {uptime_before}s→{uptime_after}s, logs OK); "
+                f"link formed in {validation.ping_recovery_seconds}s (limit {ping_timeout_s}s)."
+            )
     return validation
 
 
@@ -839,6 +943,9 @@ async def validate_soft_reset_iteration(
     snapshot_before: dict[str, Any],
     reload_started_at: float,
     max_link_restore_s: int,
+    bts_host: str = "",
+    cpe_hosts: list[str] | None = None,
+    password: str = "",
 ) -> RegressionValidation:
     """Verify link terminated then re-established using /tmp/kwn-wifiN-events.log."""
     log_path = wifi_events_log_path(radio_idx)
@@ -847,6 +954,22 @@ async def validate_soft_reset_iteration(
         wifi_events_log_path=log_path,
     )
     validation.device_time_before = str(snapshot_before.get("device_time") or "")
+
+    if cpe_hosts is not None and not cpe_hosts:
+        validation.local_reachability = True
+        timeout_s = max_link_restore_s + 20
+        ok, seconds = await wait_runner_ping(
+            bts_host, timeout_s=timeout_s, started_at=reload_started_at
+        )
+        validation.ping_recovery_seconds = seconds
+        validation.passed = ok
+        if ok:
+            validation.summary = f"Network reset OK: BTS answered a local ping in {seconds}s."
+        else:
+            validation.summary = (
+                f"BTS did not answer a local ping within {timeout_s}s (waited {seconds}s)."
+            )
+        return validation
 
     lines_before = _wifi_event_lines(await read_wifi_events_log(ssh, radio_idx))
 
@@ -908,10 +1031,28 @@ async def validate_soft_reset_iteration(
             f"link restore took {validation.link_restore_seconds}s (limit {max_link_restore_s}s)"
         )
 
+    if cpe_hosts:
+        ok, seconds = await wait_link_ping(
+            bts_host,
+            cpe_hosts[0],
+            password,
+            timeout_s=max_link_restore_s + 20,
+            started_at=reload_started_at,
+        )
+        validation.ping_recovery_seconds = seconds
+        if not ok:
+            failures.append(
+                f"link did not form within {max_link_restore_s + 20}s (BTS could not ping CPE)"
+            )
+
     if failures:
         validation.passed = False
         validation.partial = True
         validation.summary = "; ".join(failures).capitalize() + "."
+    elif cpe_hosts:
+        seconds = float(validation.ping_recovery_seconds or 0)
+        validation.link_formation_slow = seconds > float(max_link_restore_s) * 0.85
+        validation.summary = f"Soft reset OK: link formed in {validation.ping_recovery_seconds}s."
     else:
         validation.summary = (
             f"Soft reset OK: link terminated and re-established in "

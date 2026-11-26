@@ -39,6 +39,11 @@ def _iterations(request, profile_bundle):
     return int(reg.get("iterations", 3))
 
 
+def _recover_link(request) -> bool:
+    """An explicit BTS IP is a GUI-only run. Do not factory-reset that radio."""
+    return not (request.config.getoption("--regression-bts-ip") or "").strip()
+
+
 def _case_id(request) -> str:
     for marker in ("REG_01", "REG_02", "REG_03"):
         if request.node.get_closest_marker(marker):
@@ -87,6 +92,7 @@ async def test_reg_01_soft_reboot_cycles(
         profile_bundle=profile_bundle,
         recovery_manager=recovery_manager,
         iterations=_iterations(request, profile_bundle),
+        recover_link=_recover_link(request),
     )
 
 
@@ -116,6 +122,7 @@ async def test_reg_02_network_soft_reset_cycles(
         profile_bundle=profile_bundle,
         recovery_manager=recovery_manager,
         iterations=_iterations(request, profile_bundle),
+        recover_link=_recover_link(request),
     )
 
 
@@ -151,4 +158,5 @@ async def test_reg_03_firmware_upgrade_cycles(
         recovery_manager=recovery_manager,
         iterations=_iterations(request, profile_bundle),
         firmware_image=str(firmware_image).strip(),
+        recover_link=_recover_link(request),
     )

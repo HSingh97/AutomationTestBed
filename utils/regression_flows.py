@@ -22,6 +22,7 @@ from utils.regression_validation import (
     capture_device_snapshot,
     regression_timeouts,
     capture_soft_reboot_snapshot,
+    ping_from_runner,
     validate_reboot_iteration,
     refresh_soft_reboot_validation,
     validate_soft_reboot_iteration,
@@ -357,9 +358,40 @@ async def verify_iteration_health(
     Records results always; returns False on failure unless stop_on_fail triggers pytest.fail.
     """
     if not cpe_hosts:
-        if stop_on_fail:
-            pytest.fail(f"{case_id}: no CPE targets configured for health validation.")
-        return False
+        local_ok, local_detail = await ping_from_runner(bts_host)
+        checks = [
+            HealthCheckResult(
+                check_id="BTS_LOCAL_PING",
+                device_role="BTS (Local)",
+                device_host=bts_host,
+                check_type="Ping",
+                passed=local_ok,
+                detail=local_detail,
+            )
+        ]
+        web_cfg = _web_check_settings(profile_bundle)
+        checks.append(
+            await _verify_web_login(
+                gui_browser,
+                bts_host,
+                device_creds,
+                check_id="BTS_GUI_LOGIN",
+                device_role="BTS (Local)",
+                timeout_s=web_cfg["timeout_s"],
+                retry_count=web_cfg["retry_count"],
+                retry_interval_s=web_cfg["retry_interval_s"],
+            )
+        )
+        get_regression_collector().record_iteration(case_id, phase, checks, validation=validation)
+        val_partial = bool(validation) and validation.get("partial")
+        val_failed = bool(validation) and not validation.get("passed", True) and not val_partial
+        passed = all(check.passed for check in checks) and not val_failed
+        if not passed:
+            _log(case_id, f"{phase} recorded as FAIL — local BTS reachability")
+            print(_format_failure_summary(case_id, phase, checks))
+            if stop_on_fail:
+                pytest.fail(_format_failure_summary(case_id, phase, checks))
+        return passed
 
     count = _ping_count(profile_bundle)
     web_cfg = _web_check_settings(profile_bundle)
@@ -578,6 +610,7 @@ async def run_soft_reboot_regression(
     recovery_manager: RecoveryManager,
     iterations: int,
     case_id: str = "REG_01",
+    recover_link: bool = True,
 ) -> None:
     _log(case_id, f"Starting {iterations} soft reboot iteration(s).")
     reg = _regression_cfg(profile_bundle)
@@ -629,12 +662,13 @@ async def run_soft_reboot_regression(
                 snapshot_before=snapshot_before,
             )
 
-            await recovery_manager.ensure_link_or_recover(
-                gui_page=gui_page,
-                bsu_ip=bsu_ip,
-                device_creds=device_creds,
-                root_ssh=root_ssh,
-            )
+            if recover_link:
+                await recovery_manager.ensure_link_or_recover(
+                    gui_page=gui_page,
+                    bsu_ip=bsu_ip,
+                    device_creds=device_creds,
+                    root_ssh=root_ssh,
+                )
             await _reopen_ssh(root_ssh, timeout_s=120)
             await login_if_needed(
                 gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.LONG_WAIT_MS, skip_recovery=True
@@ -681,6 +715,7 @@ async def run_soft_reset_regression(
     recovery_manager: RecoveryManager,
     iterations: int,
     case_id: str = "REG_02",
+    recover_link: bool = True,
 ) -> None:
     """N-cycle network interface soft reset (BTS + CPE) via /etc/init.d/network reload."""
     _log(case_id, f"Starting {iterations} network soft-reset iteration(s) ({NETWORK_RELOAD_CMD}).")
@@ -741,14 +776,18 @@ async def run_soft_reset_regression(
                 snapshot_before=snapshot_before,
                 reload_started_at=reload_started,
                 max_link_restore_s=timeouts["soft_reset_link_uptime_s"],
+                bts_host=bsu_ip,
+                cpe_hosts=cpe_ips,
+                password=device_creds["pass"],
             )
 
-            await recovery_manager.ensure_link_or_recover(
-                gui_page=gui_page,
-                bsu_ip=bsu_ip,
-                device_creds=device_creds,
-                root_ssh=root_ssh,
-            )
+            if recover_link:
+                await recovery_manager.ensure_link_or_recover(
+                    gui_page=gui_page,
+                    bsu_ip=bsu_ip,
+                    device_creds=device_creds,
+                    root_ssh=root_ssh,
+                )
             await _ensure_ssh_open(root_ssh)
             await login_if_needed(
                 gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.LONG_WAIT_MS, skip_recovery=True
@@ -795,6 +834,7 @@ async def run_firmware_upgrade_regression(
     iterations: int,
     firmware_image: str,
     case_id: str = "REG_03",
+    recover_link: bool = True,
 ) -> None:
     image_path = Path(firmware_image).expanduser().resolve()
     if not image_path.is_file():
@@ -869,12 +909,13 @@ async def run_firmware_upgrade_regression(
                     "No explicit upgrade keyword in device/system logs (uptime + reboot markers still checked)",
                 )
 
-            await recovery_manager.ensure_link_or_recover(
-                gui_page=gui_page,
-                bsu_ip=bsu_ip,
-                device_creds=device_creds,
-                root_ssh=root_ssh,
-            )
+            if recover_link:
+                await recovery_manager.ensure_link_or_recover(
+                    gui_page=gui_page,
+                    bsu_ip=bsu_ip,
+                    device_creds=device_creds,
+                    root_ssh=root_ssh,
+                )
             await login_if_needed(
                 gui_page, bsu_ip, device_creds, wait_ms=UITimeouts.LONG_WAIT_MS, skip_recovery=True
             )
