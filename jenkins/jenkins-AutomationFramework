@@ -42,7 +42,7 @@ properties([
                 script: [
                     $class: 'SecureGroovyScript',
                     sandbox: true,
-                    script: 'return ["GUI","IP","JUMBO","QOS","USERMGMT","VLAN","LOGS","FIREWALL","DFS","SECURITY","ACB","WIRELESS","ARP","API","RADIO24","SANITY","DDRS","DHCP","FUNCTIONAL","LINKTEST","SPECTRUM"]'
+                    script: 'return ["GUI":"GUI ( 73 ) ( ~2h 30m )","IP":"IP ( 35 ) ( ~1h 15m )","JUMBO":"JUMBO ( 10 ) ( ~25m )","QOS":"QOS ( 32 ) ( ~1h )","USERMGMT":"USERMGMT ( 50 ) ( ~2h )","VLAN":"VLAN ( 44 ) ( ~1h 20m )","LOGS":"LOGS ( 72 ) ( ~1h 10m )","FIREWALL":"FIREWALL ( 6 ) ( ~15m )","DFS":"DFS ( 21 ) ( ~45m )","SECURITY":"SECURITY ( 13 ) ( ~30m )","ACB":"ACB ( 8 ) ( ~25m )","WIRELESS":"WIRELESS ( 8 ) ( ~40m )","ARP":"ARP ( 11 ) ( ~20m )","API":"API ( 18 ) ( ~35m )","RADIO24":"RADIO24 ( 19 ) ( ~45m )","SANITY":"SANITY ( 47 ) ( ~1h 40m )","DDRS":"DDRS ( 49 ) ( ~2h )","DHCP":"DHCP ( 42 ) ( ~1h 30m )","FUNCTIONAL":"FUNCTIONAL ( 25 ) ( ~1h )","LINKTEST":"LINKTEST ( 14 ) ( ~30m )","SPECTRUM":"SPECTRUM ( 22 ) ( ~40m )"]'
                 ]
             ]
         ],
@@ -79,7 +79,7 @@ properties([
 }
 #ecp_suites-checkbox > div, #ecp_suites-checkbox > table {
   display: grid !important;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
   column-gap: 28px;
   row-gap: 6px;
   width: 100% !important;
