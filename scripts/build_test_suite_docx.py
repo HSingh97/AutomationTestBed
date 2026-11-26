@@ -680,9 +680,8 @@ def build_radio24_doc() -> Path:
         doc,
         ["Category", "Command hint"],
         [
-            ["Hidden SSID (01–04, 08)", '-m "RADIO_24_01 or RADIO_24_02 or …"'],
-            ["DHCP (17–20)", "./scripts/run_dhcp_cases_until_pass.sh"],
-            ["Boot (21–22)", '-m "RADIO_24_21 or RADIO_24_22"'],
+            ["DHCP (07–10)", "./scripts/run_dhcp_cases_until_pass.sh"],
+            ["Boot (11–12)", '-m "RADIO_24_11 or RADIO_24_12"'],
             ["API (41–50)", "Add --local-ipv6; PC on CPE mgmt Wi‑Fi"],
             ["Wait for link first", "python3 scripts/wait_link_run_radio24.py"],
         ],
@@ -696,130 +695,74 @@ def build_radio24_doc() -> Path:
         "the management interface (it should be).",
     )
 
-    _h2(doc, "5.1 Hidden SSID and connect (01–08)")
-    cases_scan = [
-        (
-            "2_4G_RADIO_01",
-            "SSID hidden in scan",
-            "Passive Wi‑Fi scan must not list the management SSID.",
-            ["SSH to scan PC.", "Run iwlist scan.", "Confirm KWDEJPOQ not visible."],
-            ["Target SSID absent from scan results"],
-            "Hidden SSID not broadcast in scan list.",
-            "test_radio_24_01_hidden_ssid_not_visible",
-            "assert_radio_24_01_hidden_ssid_not_visible",
-        ),
-        (
-            "2_4G_RADIO_02",
-            "Connect hidden SSID",
-            "Client can still join if SSID and password are known.",
-            ["nmcli connect hidden SSID.", "Ping 169.254.254.1.", "Confirm no internet via Wi‑Fi."],
-            ["Connected", "Mgmt ping OK", "No route to 8.8.8.8 on Wi‑Fi"],
-            "Management link works; no internet leak.",
-            "test_radio_24_02_connect_hidden_ssid",
-            "assert_radio_24_02_connect_hidden_ssid",
-        ),
-        (
-            "2_4G_RADIO_03",
-            "Wrong password",
-            "Bad password must not connect.",
-            ["Attempt join with wrong password."],
-            ["Connection fails", "No mgmt IP"],
-            "Join rejected.",
-            "test_radio_24_03_connect_hidden_ssid_wrong_password",
-            "assert_radio_24_03_connect_hidden_ssid_wrong_password",
-        ),
-        (
-            "2_4G_RADIO_04",
-            "Hidden after reboot",
-            "After CPE reboot and link restore, SSID still hidden.",
-            ["Reboot CPE.", "Wait BTS↔CPE link.", "Passive scan again."],
-            ["SSID still not in scan"],
-            "Hidden behavior persists across reboot.",
-            "test_radio_24_04_reboot_cpe_scan_hidden_ssid",
-            "assert_radio_24_04_reboot_cpe_scan_hidden_ssid",
-        ),
-        (
-            "2_4G_RADIO_08",
-            "Hidden after FW upgrade",
-            "Firmware upgrade (keep config) must not expose SSID.",
-            ["Join mgmt Wi‑Fi.", "upload-sw + upgrade-sw.", "Wait link.", "Scan again."],
-            ["Upgrade OK", "Link stable", "SSID still hidden"],
-            "Upgrade preserves hidden SSID.",
-            "test_radio_24_08_fw_upgrade_scan_hidden_ssid",
-            "assert_radio_24_08_fw_upgrade_scan_hidden_ssid",
-        ),
-    ]
-    for c in cases_scan:
-        _case_block(doc, *c)
-
-    _h2(doc, "5.2 DHCP (17–20)")
+    _h2(doc, "5.1 DHCP (07–10)")
     cases_dhcp = [
         (
-            "2_4G_RADIO_17",
+            "2_4G_RADIO_07",
             "DHCP disabled",
             "With CPE DHCP off, client must not get mgmt IP.",
             ["Disable dhcp.lan24 on CPE.", "Scan PC tries to join.", "Restore DHCP after test."],
             ["No 169.254.x IP", "Cannot ping CPE mgmt"],
             "No connection without DHCP.",
-            "test_radio_24_17_dhcp_server_down_no_ip",
-            "assert_radio_24_17_dhcp_server_down_no_ip",
+            "test_radio_24_07_dhcp_server_down_no_ip",
+            "assert_radio_24_07_dhcp_server_down_no_ip",
         ),
         (
-            "2_4G_RADIO_18",
+            "2_4G_RADIO_08",
             "DHCP after reboot",
             "After reboot with DHCP on, client gets expected lease.",
             ["Enable DHCP.", "Reboot CPE.", "Connect hidden SSID."],
             ["Client IP = 169.254.254.100 (or pool match)"],
             "DHCP works after reboot.",
-            "test_radio_24_18_dhcp_recovery_after_reboot",
-            "assert_radio_24_18_dhcp_recovery_after_reboot",
+            "test_radio_24_08_dhcp_recovery_after_reboot",
+            "assert_radio_24_08_dhcp_recovery_after_reboot",
         ),
         (
-            "2_4G_RADIO_19",
+            "2_4G_RADIO_09",
             "Wi‑Fi toggle stress",
             "Toggling Wi‑Fi 25× must not break Ethernet; Wi‑Fi auto-reconnects.",
             ["Toggle scan PC Wi‑Fi radio.", "Check WAN port stays up.", "Verify DHCP reconnect."],
             ["LAN up throughout", "Wi‑Fi reconnects with DHCP IP"],
             "Resilient under radio toggling.",
-            "test_radio_24_19_dhcp_stress_connect_disconnect",
-            "assert_radio_24_19_dhcp_stress_connect_disconnect",
+            "test_radio_24_09_dhcp_stress_connect_disconnect",
+            "assert_radio_24_09_dhcp_stress_connect_disconnect",
         ),
         (
-            "2_4G_RADIO_20",
+            "2_4G_RADIO_10",
             "Lease in CPE logs",
             "CPE DHCP lease must match scan PC MAC, IP, and hostname.",
             ["Connect scan PC.", "Read MAC and hostname.", "Compare to CPE dhcp.leases."],
             ["MAC, IP, hostname all match lease file"],
             "Lease correctly recorded on CPE.",
-            "test_radio_24_20_dhcp_logs_lease_assignment",
-            "assert_radio_24_20_dhcp_logs_lease_assignment",
+            "test_radio_24_10_dhcp_logs_lease_assignment",
+            "assert_radio_24_10_dhcp_logs_lease_assignment",
         ),
     ]
     for c in cases_dhcp:
         _case_block(doc, *c)
 
-    _h2(doc, "5.3 Boot behavior (21–22)")
+    _h2(doc, "5.2 Boot behavior (11–12)")
     _case_block(
         doc,
-        "2_4G_RADIO_21",
+        "2_4G_RADIO_11",
         "No connect during boot",
         "While CPE is booting, hidden connect attempts must fail.",
         ["Reboot CPE.", "Repeatedly try to connect during ~90 s boot window."],
         ["Connect blocked during boot"],
         "SSID not available until boot completes.",
-        "test_radio_24_21_no_ssid_during_boot",
-        "assert_radio_24_21_no_ssid_during_boot",
+        "test_radio_24_11_no_ssid_during_boot",
+        "assert_radio_24_11_no_ssid_during_boot",
     )
     _case_block(
         doc,
-        "2_4G_RADIO_22",
+        "2_4G_RADIO_12",
         "Connect after boot",
         "Once CPE is up, hidden connect must succeed.",
         ["Reboot CPE.", "Wait until ready.", "Connect and ping mgmt IP."],
         ["Connect succeeds", "Ping 169.254.254.1 OK"],
         "Management Wi‑Fi available after boot.",
-        "test_radio_24_22_ssid_appears_after_boot",
-        "assert_radio_24_22_ssid_appears_after_boot",
+        "test_radio_24_12_ssid_appears_after_boot",
+        "assert_radio_24_12_ssid_appears_after_boot",
     )
 
     _h2(doc, "5.4 Management API (41–50)")

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Run RADIO_24_17–20 until all pass (or max attempts).
+# Run RADIO_24_07–10 until all pass (or max attempts).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 LOG="radio24_dhcp_run.log"
-MARKER="RADIO_24_17 or RADIO_24_18 or RADIO_24_19 or RADIO_24_20"
+MARKER="RADIO_24_07 or RADIO_24_08 or RADIO_24_09 or RADIO_24_10"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-5}"
 
 for attempt in $(seq 1 "$MAX_ATTEMPTS"); do

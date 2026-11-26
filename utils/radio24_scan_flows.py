@@ -35,7 +35,7 @@ def _log(message: str) -> None:
 def _resolve_scan_pc_config(
     profile_bundle,
     *,
-    case_id: str = "2_4G_RADIO_01",
+    case_id: str = "2_4G_RADIO",
 ) -> tuple[str, str, str, str, int, int]:
     defaults = RADIO_24_SCAN_DEFAULTS
     dut = (profile_bundle.active.get("dut") or {}) if profile_bundle else {}
@@ -64,7 +64,7 @@ async def _ssh_run(
 async def _detect_wifi_interface(
     conn: asyncssh.SSHClientConnection,
     *,
-    case_id: str = "2_4G_RADIO_01",
+    case_id: str = "2_4G_RADIO",
 ) -> str:
     code, out = await _ssh_run(
         conn,
@@ -90,7 +90,7 @@ async def _detect_wifi_interface(
 async def _detect_scan_pc_wan_interface(
     conn: asyncssh.SSHClientConnection,
     *,
-    case_id: str = "2_4G_RADIO_19",
+    case_id: str = "2_4G_RADIO_09",
     preferred: str | None = None,
 ) -> str:
     """Ethernet (WAN) NIC on the lab scan PC — prefer the link that is actually connected."""
@@ -1829,372 +1829,6 @@ async def _passive_iwlist_scan(
     return iwlist_ssids
 
 
-async def assert_radio_24_01_hidden_ssid_not_visible(
-    profile_bundle=None,
-):
-    """
-    2.4G_RADIO_01: Scan for SSIDs near CPE from the lab PC Wi‑Fi NIC.
-
-    Expected: CPE 2.4 GHz mgmt SSID is not visible in a passive scan (iwlist).
-    """
-    case_id = "2_4G_RADIO_01"
-    defaults = RADIO_24_SCAN_DEFAULTS
-    scan_ip, scan_password, target_ssid, _, settle_s, timeout_s = _resolve_scan_pc_config(
-        profile_bundle, case_id=case_id
-    )
-    max_toggle = int(defaults.get("HIDDEN_TOGGLE_ATTEMPTS", 10))
-    radio_idx = int(defaults.get("CPE_RADIO_24_IDX", 0))
-    toggle_settle_s = int(defaults.get("RADIO_TOGGLE_SETTLE_S", 3))
-    lab_flush_attempts = int(defaults.get("LAB_PC_FLUSH_ATTEMPTS", 3))
-    cpe_reload_wait_s = int(defaults.get("CPE_WIFI_RELOAD_WAIT_S", 8))
-
-    print_section(
-        f"{case_id}: Scan near CPE from lab PC {scan_ip} — "
-        f"hidden mgmt SSID {target_ssid!r} must not appear in scan"
-    )
-
-    async with asyncssh.connect(
-        scan_ip,
-        username="root",
-        password=scan_password,
-        known_hosts=None,
-        connect_timeout=15.0,
-    ) as conn:
-        iface = await _clear_lab_pc_wifi(conn, case_id=case_id)
-
-        iwlist_ssids = await _passive_iwlist_scan(
-            conn,
-            iface,
-            settle_s=settle_s,
-            timeout_s=timeout_s,
-        )
-        toggle_count = 0
-        cpe_iface_idx: int | None = None
-
-        if target_ssid in _visible_ssids_from_iwlist(iwlist_ssids):
-            iwlist_ssids = await _try_lab_pc_flush_until_hidden(
-                conn,
-                iface,
-                target_ssid,
-                iwlist_ssids,
-                settle_s=settle_s,
-                timeout_s=timeout_s,
-                max_attempts=lab_flush_attempts,
-            )
-
-        if target_ssid in _visible_ssids_from_iwlist(iwlist_ssids):
-            cpe_ip, cpe_user, cpe_password = _resolve_cpe_ssh_target(profile_bundle)
-            check.is_true(
-                cpe_ip and cpe_password and profile_bundle,
-                f"{case_id}: CPE SSH required when {target_ssid!r} is visible in scan",
-            )
-            try:
-                async with asyncssh.connect(
-                    cpe_ip,
-                    username=cpe_user,
-                    password=cpe_password,
-                    known_hosts=None,
-                    connect_timeout=15.0,
-                ) as cpe_conn:
-                    cpe_iface_idx = await _resolve_cpe_wifi_iface_idx_for_ssid(
-                        cpe_conn,
-                        target_ssid,
-                        fallback_idx=radio_idx,
-                    )
-                    while (
-                        target_ssid in _visible_ssids_from_iwlist(iwlist_ssids)
-                        and toggle_count < max_toggle
-                    ):
-                        await _toggle_cpe_mgmt_ap_off_on(
-                            cpe_conn,
-                            cpe_iface_idx,
-                            settle_s=toggle_settle_s,
-                            reload_wait_s=cpe_reload_wait_s,
-                        )
-                        await _flush_lab_pc_wifi_radio(conn, iface, settle_s=2)
-                        toggle_count += 1
-                        iwlist_ssids = await _passive_iwlist_scan(
-                            conn,
-                            iface,
-                            settle_s=settle_s,
-                            timeout_s=timeout_s,
-                        )
-            except (OSError, asyncssh.Error) as exc:
-                check.is_false(
-                    target_ssid in _visible_ssids_from_iwlist(iwlist_ssids),
-                    f"{case_id}: {target_ssid!r} visible and CPE SSH failed ({exc})",
-                )
-
-        iwlist_visible = target_ssid in _visible_ssids_from_iwlist(iwlist_ssids)
-
-        _print_scan_ssid_list(iwlist_ssids, target_ssid)
-
-        check.is_false(
-            iwlist_visible,
-            f"{case_id}: {target_ssid!r} still visible after {toggle_count} "
-            f"radio off/on toggle(s) (max {max_toggle})",
-        )
-
-
-async def assert_radio_24_02_connect_hidden_ssid(
-    profile_bundle=None,
-):
-    """
-    2.4G_RADIO_02: Connect to hidden CPE 2.4 GHz mgmt SSID via SSH (nmcli on lab PC).
-
-    Hidden visibility is covered by case 01. Here: connect, ping CPE mgmt IP, no internet.
-    """
-    case_id = "2_4G_RADIO_02"
-    defaults = RADIO_24_SCAN_DEFAULTS
-    scan_ip, scan_password, target_ssid, target_password, _, _ = _resolve_scan_pc_config(
-        profile_bundle, case_id=case_id
-    )
-    connect_settle_s = int(defaults.get("CONNECT_SETTLE_S", 10))
-    cpe_mgmt_ip = str(defaults.get("CPE_MGMT_IP", "169.254.254.1")).strip()
-    internet_host = str(defaults.get("INTERNET_PROBE_HOST", "8.8.8.8"))
-    connect_retries = int(defaults.get("CONNECT_RETRY_ATTEMPTS", 3))
-
-    mgmt_bssid = await _fetch_cpe_24g_ap_bssid(profile_bundle)
-
-    print_section(
-        f"{case_id}: SSH nmcli connect hidden SSID {target_ssid!r} on lab PC {scan_ip}"
-    )
-    await _prep_cpe_mgmt_dhcp_for_connect(profile_bundle, target_ssid=target_ssid)
-    mgmt_bssid = await _fetch_cpe_24g_ap_bssid(profile_bundle) or mgmt_bssid
-    if mgmt_bssid:
-        print(f"  CPE 2.4 GHz AP BSSID: {mgmt_bssid} (WPA&WPA2 Personal hidden join)")
-    print(f"  Wi‑Fi join target: scan PC {scan_ip} (not the pytest runner desktop)")
-
-    async with asyncssh.connect(
-        scan_ip,
-        username="root",
-        password=scan_password,
-        known_hosts=None,
-        connect_timeout=15.0,
-    ) as conn:
-        iface = await _detect_wifi_interface(conn, case_id=case_id)
-
-        connect_code, connect_out = await _connect_hidden_wifi_with_retries(
-            conn,
-            iface,
-            ssid=target_ssid,
-            password=target_password,
-            settle_s=connect_settle_s,
-            max_attempts=connect_retries,
-            bssid=mgmt_bssid,
-            profile_bundle=profile_bundle,
-            scan_ip=scan_ip,
-            scan_password=scan_password,
-        )
-
-        linked, active_ssid, wifi_state, iface_ip, cpe_ping_ok = await _verify_cpe_mgmt_wifi_link(
-            conn,
-            iface,
-            cpe_mgmt_ip,
-            expected_ssid=target_ssid,
-            timeout_s=max(connect_settle_s + 20, 35),
-        )
-        connected = linked
-        no_internet = await _internet_unreachable(
-            conn,
-            internet_host,
-            src_ip=iface_ip,
-        )
-
-        print_comparison_table(
-            [
-                ("Wi‑Fi device state", "connected", wifi_state or "disconnected", "PASS" if connected else "FAIL"),
-                ("Hidden SSID", target_ssid, active_ssid or "(not connected)", "PASS" if active_ssid == target_ssid else "FAIL"),
-                (
-                    f"{iface} IPv4",
-                    "169.254.x",
-                    iface_ip or "(none)",
-                    "PASS" if iface_ip else "FAIL",
-                ),
-                ("nmcli connect (SSH)", "profile add + up", "ok" if connect_code == 0 else f"exit {connect_code}", "PASS" if connect_code == 0 else "FAIL"),
-                (
-                    f"Ping CPE mgmt via {iface}",
-                    cpe_mgmt_ip,
-                    "reachable" if cpe_ping_ok else "no reply",
-                    "PASS" if cpe_ping_ok else "FAIL",
-                ),
-                (
-                    f"Internet via {iface}",
-                    f"no reply to {internet_host}",
-                    "no internet" if no_internet else "reachable",
-                    "PASS" if no_internet else "FAIL",
-                ),
-            ]
-        )
-
-        check.equal(connect_code, 0, f"{case_id}: nmcli connect failed: {connect_out[-400:]}")
-        check.is_true(
-            connected,
-            f"{case_id}: Wi‑Fi must have 169.254.x on {iface}, route via {iface}, and ping {cpe_mgmt_ip} "
-            f"(state={wifi_state!r}, ssid={active_ssid!r}, ip={iface_ip!r})",
-        )
-        check.is_true(
-            cpe_ping_ok,
-            f"{case_id}: ping to CPE mgmt {cpe_mgmt_ip} via {iface} should succeed",
-        )
-        check.is_true(
-            no_internet,
-            f"{case_id}: internet via {iface} ({internet_host}) should not be reachable on mgmt Wi‑Fi",
-        )
-
-
-async def assert_radio_24_03_connect_hidden_ssid_wrong_password(
-    profile_bundle=None,
-):
-    """
-    2.4G_RADIO_03: Hidden SSID must not appear in scan; wrong password must not connect.
-
-    Disconnect all saved Wi‑Fi, confirm SSID hidden, attempt join with bad credentials.
-    """
-    case_id = "2_4G_RADIO_03"
-    defaults = RADIO_24_SCAN_DEFAULTS
-    scan_ip, scan_password, target_ssid, _, settle_s, timeout_s = _resolve_scan_pc_config(
-        profile_bundle, case_id=case_id
-    )
-    wrong_password = str(defaults.get("CPE_MGMT_WRONG_PASSWORD", "WrongAutoTestKey!99"))
-    connect_settle_s = int(defaults.get("CONNECT_SETTLE_S", 10))
-    cpe_mgmt_ip = str(defaults.get("CPE_MGMT_IP", "169.254.254.1")).strip()
-    lab_flush_attempts = int(defaults.get("LAB_PC_FLUSH_ATTEMPTS", 3))
-
-    print_section(
-        f"{case_id}: Disconnect all Wi‑Fi — hidden SSID {target_ssid!r} must not appear; "
-        f"wrong password must not connect"
-    )
-    mgmt_bssid = await _fetch_cpe_24g_ap_bssid(profile_bundle)
-
-    async with asyncssh.connect(
-        scan_ip,
-        username="root",
-        password=scan_password,
-        known_hosts=None,
-        connect_timeout=15.0,
-    ) as conn:
-        iface = await _clear_lab_pc_wifi(conn, case_id=case_id)
-
-        iwlist_ssids = await _passive_iwlist_scan(
-            conn,
-            iface,
-            settle_s=settle_s,
-            timeout_s=timeout_s,
-        )
-        if target_ssid in _visible_ssids_from_iwlist(iwlist_ssids):
-            iwlist_ssids = await _try_lab_pc_flush_until_hidden(
-                conn,
-                iface,
-                target_ssid,
-                iwlist_ssids,
-                settle_s=settle_s,
-                timeout_s=timeout_s,
-                max_attempts=lab_flush_attempts,
-            )
-        if target_ssid in _visible_ssids_from_iwlist(iwlist_ssids):
-            await _toggle_cpe_mgmt_ap_off_on_bundle(
-                profile_bundle,
-                mgmt_ssid=target_ssid,
-            )
-            await asyncio.sleep(int(defaults.get("CPE_WIFI_RELOAD_WAIT_S", 8)))
-            iwlist_ssids = await _passive_iwlist_scan(
-                conn,
-                iface,
-                settle_s=settle_s,
-                timeout_s=timeout_s,
-            )
-            if target_ssid in _visible_ssids_from_iwlist(iwlist_ssids):
-                iwlist_ssids = await _try_lab_pc_flush_until_hidden(
-                    conn,
-                    iface,
-                    target_ssid,
-                    iwlist_ssids,
-                    settle_s=settle_s,
-                    timeout_s=timeout_s,
-                    max_attempts=lab_flush_attempts,
-                )
-        ssid_visible = target_ssid in _visible_ssids_from_iwlist(iwlist_ssids)
-        _print_scan_ssid_list(iwlist_ssids, target_ssid)
-
-        check.is_false(
-            ssid_visible,
-            f"{case_id}: {target_ssid!r} must be hidden (not in scan) before wrong-password attempt",
-        )
-
-        connect_code, connect_out = await _connect_hidden_wifi(
-            conn,
-            iface,
-            ssid=target_ssid,
-            password=wrong_password,
-            settle_s=connect_settle_s,
-            bssid=mgmt_bssid,
-        )
-
-        not_connected, active_ssid, wifi_state = await _wait_for_wifi_not_connected(
-            conn,
-            iface,
-            target_ssid,
-            timeout_s=max(connect_settle_s + 15, 25),
-        )
-        disconnected = not_connected and active_ssid != target_ssid
-        cpe_ping_ok = await _ping_reachable(conn, cpe_mgmt_ip, iface=iface)
-
-        print_comparison_table(
-            [
-                (
-                    "Hidden SSID in scan",
-                    "not visible",
-                    "visible" if ssid_visible else "not in scan",
-                    "PASS" if not ssid_visible else "FAIL",
-                ),
-                (
-                    "Wi‑Fi device state",
-                    "not connected",
-                    wifi_state or "disconnected",
-                    "PASS" if disconnected else "FAIL",
-                ),
-                (
-                    "Hidden SSID",
-                    f"not {target_ssid!r}",
-                    active_ssid or "(not connected)",
-                    "PASS" if active_ssid != target_ssid else "FAIL",
-                ),
-                (
-                    "nmcli connect (wrong password)",
-                    "activation fails",
-                    "failed" if connect_code != 0 else "exit 0",
-                    "PASS" if connect_code != 0 else "FAIL",
-                ),
-                (
-                    f"Ping CPE mgmt via {iface}",
-                    "no reply",
-                    "reachable" if cpe_ping_ok else "no reply",
-                    "PASS" if not cpe_ping_ok else "FAIL",
-                ),
-            ]
-        )
-
-        await _ssh_run(conn, f"nmcli device disconnect {iface}", timeout_s=30)
-        await _delete_nmcli_connection(conn, target_ssid)
-        await _delete_legacy_hidden_profiles(conn)
-
-        check.not_equal(
-            connect_code,
-            0,
-            f"{case_id}: nmcli should reject wrong password (got exit 0): {connect_out[-400:]}",
-        )
-        check.is_true(
-            disconnected,
-            f"{case_id}: must not connect to {target_ssid!r} with wrong password "
-            f"(state={wifi_state!r}, ssid={active_ssid!r})",
-        )
-        check.is_false(
-            cpe_ping_ok,
-            f"{case_id}: ping to CPE mgmt {cpe_mgmt_ip} via {iface} should fail when not connected",
-        )
-
-
 def _resolve_reboot_wait_s(profile_bundle, defaults: dict) -> int:
     if profile_bundle:
         recovery = profile_bundle.active.get("recovery") or {}
@@ -2251,99 +1885,6 @@ async def _reboot_cpe_and_wait_link(
         # Mgmt AP also needs to finish come-up after reboot.
         await _wait_for_cpe_24g_ap_bssid_stable(profile_bundle, timeout_s=90)
     return reboot_sent, bts_ok, cpe_ok, stable
-
-
-async def assert_radio_24_04_reboot_cpe_scan_hidden_ssid(
-    profile_bundle=None,
-):
-    """
-    2.4G_RADIO_04: Reboot CPE, wait for link, scan — hidden mgmt SSID must stay hidden.
-    """
-    case_id = "2_4G_RADIO_04"
-    defaults = RADIO_24_SCAN_DEFAULTS
-    scan_ip, scan_password, target_ssid, _, settle_s, timeout_s = _resolve_scan_pc_config(
-        profile_bundle, case_id=case_id
-    )
-    lab_flush_attempts = int(defaults.get("LAB_PC_FLUSH_ATTEMPTS", 3))
-    reboot_wait_s = _resolve_reboot_wait_s(profile_bundle, defaults)
-    reboot_boot_s = _resolve_reboot_boot_s(profile_bundle, defaults)
-
-    print_section(f"{case_id}: Reboot CPE — wait for BTS/CPE link — scan; {target_ssid!r} must stay hidden")
-
-    reboot_sent, bts_ok, cpe_ping_ok, link_stable = await _reboot_cpe_and_wait_link(
-        profile_bundle,
-        case_id=case_id,
-        timeout_s=reboot_wait_s,
-        boot_s=reboot_boot_s,
-        mgmt_ssid=target_ssid,
-    )
-    print_comparison_table(
-        [
-            (
-                "CPE reboot",
-                "command sent",
-                "sent" if reboot_sent else "failed",
-                "PASS" if reboot_sent else "FAIL",
-            ),
-            (
-                "BTS SSH",
-                "reachable",
-                "ok" if bts_ok else "down",
-                "PASS" if bts_ok else "FAIL",
-            ),
-            (
-                "BTS ping CPE IPv6",
-                "reachable",
-                "ok" if cpe_ping_ok else "no reply",
-                "PASS" if cpe_ping_ok else "FAIL",
-            ),
-            (
-                "Link stable",
-                "BTS + CPE ping",
-                "stable" if link_stable else "not ready",
-                "PASS" if link_stable else "FAIL",
-            ),
-        ]
-    )
-    check.is_true(reboot_sent, f"{case_id}: CPE reboot must be sent (direct SSH or BTS remote_exec)")
-    check.is_true(
-        link_stable,
-        f"{case_id}: BTS↔CPE link must be stable (BTS SSH + ping CPE) within {reboot_wait_s}s after reboot",
-    )
-
-    async with asyncssh.connect(
-        scan_ip,
-        username="root",
-        password=scan_password,
-        known_hosts=None,
-        connect_timeout=15.0,
-    ) as conn:
-        iface = await _clear_lab_pc_wifi(conn, case_id=case_id)
-
-        iwlist_ssids = await _passive_iwlist_scan(
-            conn,
-            iface,
-            settle_s=settle_s,
-            timeout_s=timeout_s,
-        )
-        if target_ssid in _visible_ssids_from_iwlist(iwlist_ssids):
-            iwlist_ssids = await _try_lab_pc_flush_until_hidden(
-                conn,
-                iface,
-                target_ssid,
-                iwlist_ssids,
-                settle_s=settle_s,
-                timeout_s=timeout_s,
-                max_attempts=lab_flush_attempts,
-            )
-
-        iwlist_visible = target_ssid in _visible_ssids_from_iwlist(iwlist_ssids)
-        _print_scan_ssid_list(iwlist_ssids, target_ssid)
-
-        check.is_false(
-            iwlist_visible,
-            f"{case_id}: {target_ssid!r} must remain hidden in scan after CPE reboot",
-        )
 
 
 def _curl_http_status(raw: str) -> int:
@@ -2493,194 +2034,6 @@ async def _silent_cpe_api_upload_and_upgrade(
         upgrade_ok = "UPGRADE_STARTED" in upper or '"status":"UPGRADE_STARTED"' in upper
 
     return upload_ok, upgrade_ok, status_body[:200], upgrade_body[:200]
-
-
-async def assert_radio_24_08_fw_upgrade_scan_hidden_ssid(
-    profile_bundle=None,
-):
-    """
-    2.4G_RADIO_08: Upgrade CPE firmware (preserve config) via mgmt API, wait for link, scan.
-
-    Uses API upload-sw + upgrade-sw (preserveConfig) from the scan PC on CPE mgmt Wi‑Fi.
-    Firmware image: latest Senao-<CPE-model>-*.tgz under /tftpboot on the scan PC
-    (or FW_FILE override when that exact file exists).
-    """
-    case_id = "2_4G_RADIO_08"
-    defaults = RADIO_24_SCAN_DEFAULTS
-    scan_ip, scan_password, target_ssid, target_password, settle_s, timeout_s = _resolve_scan_pc_config(
-        profile_bundle, case_id=case_id
-    )
-    fw_file = str(defaults.get("FW_FILE", "AUTO")).strip() or "AUTO"
-    fw_dir = str(defaults.get("FW_DIR", "/tftpboot")).strip()
-    upload_timeout_s = int(defaults.get("FW_UPLOAD_TIMEOUT_S", 900))
-    fw_upgrade_wait_s = int(defaults.get("FW_UPGRADE_WAIT_S", 1200))
-    reboot_boot_s = _resolve_reboot_boot_s(profile_bundle, defaults)
-    lab_flush_attempts = int(defaults.get("LAB_PC_FLUSH_ATTEMPTS", 3))
-    connect_settle_s = int(defaults.get("CONNECT_SETTLE_S", 10))
-    connect_retries = int(defaults.get("CONNECT_RETRY_ATTEMPTS", 3))
-    radio_idx = int(defaults.get("CPE_RADIO_24_IDX", 0))
-    mgmt_ready_wait_s = int(defaults.get("MGMT_AP_READY_WAIT_S", 12))
-    cpe_reload_wait_s = int(defaults.get("CPE_WIFI_RELOAD_WAIT_S", 8))
-    cpe_mgmt_api = f"http://{defaults.get('CPE_MGMT_IP', '169.254.254.1')}"
-
-    cpe_model = await _detect_cpe_model_label(profile_bundle)
-    print_section(
-        f"{case_id}: FW upgrade latest {cpe_model} image from {fw_dir} "
-        f"(preserve config) — link up — scan; {target_ssid!r} must stay hidden"
-    )
-
-    mgmt_ready = await _ensure_cpe_mgmt_ap_ready(
-        profile_bundle,
-        radio_idx=radio_idx,
-        reload_wait_s=max(mgmt_ready_wait_s, cpe_reload_wait_s),
-        mgmt_ssid=target_ssid,
-    )
-    mgmt_bssid = await _wait_for_cpe_24g_ap_bssid_stable(profile_bundle, timeout_s=90)
-
-    upload_ok = False
-    upgrade_ok = False
-    link_stable = False
-    ssid_visible = True
-    upload_status = ""
-    upgrade_status = ""
-    fw_path = None
-    fw_name = ""
-
-    async with asyncssh.connect(
-        scan_ip,
-        username="root",
-        password=scan_password,
-        known_hosts=None,
-        connect_timeout=15.0,
-    ) as conn:
-        iface = await _detect_wifi_interface(conn, case_id=case_id)
-        fw_path = await _resolve_latest_cpe_fw_on_scan_pc(
-            conn,
-            fw_dir=fw_dir,
-            cpe_model=cpe_model,
-            preferred_file="" if fw_file.upper() in ("AUTO", "LATEST", "*") else fw_file,
-        )
-        fw_name = fw_path.rsplit("/", 1)[-1] if fw_path else ""
-        _log(f"{case_id}: CPE model={cpe_model}, firmware={fw_name or '(missing)'}")
-        check.is_true(
-            fw_path,
-            f"{case_id}: no Senao-{cpe_model}-*.tgz under {fw_dir} on scan PC {scan_ip}",
-        )
-
-        connect_code, _ = await _connect_hidden_wifi_with_retries(
-            conn,
-            iface,
-            ssid=target_ssid,
-            password=target_password,
-            settle_s=connect_settle_s,
-            max_attempts=connect_retries,
-            bssid=mgmt_bssid,
-            profile_bundle=profile_bundle,
-            refresh_bssid=True,
-            scan_ip=scan_ip,
-            scan_password=scan_password,
-        )
-        check.equal(
-            connect_code,
-            0,
-            f"{case_id}: scan PC must join CPE mgmt Wi‑Fi before firmware API calls",
-        )
-
-        upload_ok, upgrade_ok, upload_status, upgrade_status = await _silent_cpe_api_upload_and_upgrade(
-            conn,
-            fw_path or "",
-            api_base=cpe_mgmt_api,
-            upload_timeout_s=upload_timeout_s,
-        )
-
-        await _ssh_run(conn, f"nmcli device disconnect {iface}", timeout_s=30)
-
-    if upgrade_ok:
-        await asyncio.sleep(max(reboot_boot_s, 60))
-        _, _, link_stable = await _wait_for_bts_cpe_link_stable(
-            profile_bundle,
-            timeout_s=fw_upgrade_wait_s,
-        )
-
-    async with asyncssh.connect(
-        scan_ip,
-        username="root",
-        password=scan_password,
-        known_hosts=None,
-        connect_timeout=15.0,
-    ) as conn:
-        iface = await _clear_lab_pc_wifi(conn, case_id=case_id)
-        iwlist_ssids = await _passive_iwlist_scan(
-            conn,
-            iface,
-            settle_s=settle_s,
-            timeout_s=timeout_s,
-        )
-        if target_ssid in _visible_ssids_from_iwlist(iwlist_ssids):
-            iwlist_ssids = await _try_lab_pc_flush_until_hidden(
-                conn,
-                iface,
-                target_ssid,
-                iwlist_ssids,
-                settle_s=settle_s,
-                timeout_s=timeout_s,
-                max_attempts=lab_flush_attempts,
-            )
-        ssid_visible = target_ssid in _visible_ssids_from_iwlist(iwlist_ssids)
-        _print_scan_ssid_list(iwlist_ssids, target_ssid)
-
-    print_comparison_table(
-        [
-            (
-                "CPE mgmt AP ready",
-                "enabled",
-                "ready" if mgmt_ready else "not confirmed",
-                "PASS" if mgmt_ready else "FAIL",
-            ),
-            (
-                "FW image",
-                f"latest {cpe_model}",
-                fw_name or "missing",
-                "PASS" if fw_path else "FAIL",
-            ),
-            (
-                "FW upload (API)",
-                "upload-sw success",
-                "ok" if upload_ok else "failed",
-                "PASS" if upload_ok else "FAIL",
-            ),
-            (
-                "FW upgrade preserveConfig",
-                "UPGRADE_STARTED",
-                "started" if upgrade_ok else "failed",
-                "PASS" if upgrade_ok else "FAIL",
-            ),
-            (
-                "BTS link after upgrade",
-                "stable",
-                "stable" if link_stable else "not ready",
-                "PASS" if link_stable else "FAIL",
-            ),
-            (
-                "Hidden SSID in scan",
-                "not visible",
-                "visible" if ssid_visible else "not in scan",
-                "PASS" if not ssid_visible else "FAIL",
-            ),
-        ]
-    )
-
-    check.is_true(mgmt_ready, f"{case_id}: CPE 2.4 GHz mgmt AP must be ready before upgrade")
-    check.is_true(upload_ok, f"{case_id}: upload-sw must succeed ({upload_status!r})")
-    check.is_true(upgrade_ok, f"{case_id}: upgrade-sw preserveConfig must start ({upgrade_status!r})")
-    check.is_true(
-        link_stable,
-        f"{case_id}: BTS↔CPE link must be stable within {fw_upgrade_wait_s}s after upgrade",
-    )
-    check.is_false(
-        ssid_visible,
-        f"{case_id}: {target_ssid!r} must remain hidden in scan after firmware upgrade",
-    )
 
 
 async def _run_cpe_command(
@@ -3021,7 +2374,7 @@ def _cpe_lease_matches_client(
 async def _ensure_scan_pc_lan_ports_up(
     conn: asyncssh.SSHClientConnection,
     *,
-    case_id: str = "2_4G_RADIO_19",
+    case_id: str = "2_4G_RADIO_09",
 ) -> list[str]:
     """Bring all scan PC ethernet (LAN) ports up; do not disable them during Wi‑Fi tests."""
     _, out = await _ssh_run(
@@ -3257,11 +2610,11 @@ async def _prep_cpe_mgmt_dhcp_for_connect(
     return mgmt_ready and dhcp_on
 
 
-async def assert_radio_24_17_dhcp_server_down_no_ip(
+async def assert_radio_24_07_dhcp_server_down_no_ip(
     profile_bundle=None,
 ):
-    """2.4G_RADIO_17 — disable CPE 2.4 GHz DHCP server; scan PC must not get mgmt link."""
-    case_id = "2_4G_RADIO_17"
+    """2.4G_RADIO_7 — disable CPE 2.4 GHz DHCP server; scan PC must not get mgmt link."""
+    case_id = "2_4G_RADIO_07"
     defaults = RADIO_24_SCAN_DEFAULTS
     scan_ip, scan_password, target_ssid, target_password, _, _ = _resolve_scan_pc_config(
         profile_bundle, case_id=case_id
@@ -3373,11 +2726,11 @@ async def assert_radio_24_17_dhcp_server_down_no_ip(
         check.is_true(restored, f"{case_id}: must restore CPE lan24 DHCP after test")
 
 
-async def assert_radio_24_18_dhcp_recovery_after_reboot(
+async def assert_radio_24_08_dhcp_recovery_after_reboot(
     profile_bundle=None,
 ):
-    """2.4G_RADIO_18 — reboot CPE with DHCP enabled; after link up get DHCP IP on mgmt Wi‑Fi."""
-    case_id = "2_4G_RADIO_18"
+    """2.4G_RADIO_8 — reboot CPE with DHCP enabled; after link up get DHCP IP on mgmt Wi‑Fi."""
+    case_id = "2_4G_RADIO_08"
     defaults = RADIO_24_SCAN_DEFAULTS
     scan_ip, scan_password, target_ssid, target_password, _, _ = _resolve_scan_pc_config(
         profile_bundle, case_id=case_id
@@ -3471,11 +2824,11 @@ async def assert_radio_24_18_dhcp_recovery_after_reboot(
         )
 
 
-async def assert_radio_24_19_dhcp_stress_connect_disconnect(
+async def assert_radio_24_09_dhcp_stress_connect_disconnect(
     profile_bundle=None,
 ):
-    """2.4G_RADIO_19 — rapid Wi‑Fi radio toggle; LAN ports stay up; auto-reconnect with DHCP IP."""
-    case_id = "2_4G_RADIO_19"
+    """2.4G_RADIO_9 — rapid Wi‑Fi radio toggle; LAN ports stay up; auto-reconnect with DHCP IP."""
+    case_id = "2_4G_RADIO_09"
     defaults = RADIO_24_SCAN_DEFAULTS
     scan_ip, scan_password, target_ssid, target_password, _, _ = _resolve_scan_pc_config(
         profile_bundle, case_id=case_id
@@ -3643,11 +2996,11 @@ async def assert_radio_24_19_dhcp_stress_connect_disconnect(
     check.is_true(cpe_ping_ok, f"{case_id}: CPE must stay up after Wi‑Fi toggle stress")
 
 
-async def assert_radio_24_20_dhcp_logs_lease_assignment(
+async def assert_radio_24_10_dhcp_logs_lease_assignment(
     profile_bundle=None,
 ):
-    """2.4G_RADIO_20 — verify scan PC on CPE 2.4 SSID; CPE lease matches this PC's MAC/IP/hostname."""
-    case_id = "2_4G_RADIO_20"
+    """2.4G_RADIO_10 — verify scan PC on CPE 2.4 SSID; CPE lease matches this PC's MAC/IP/hostname."""
+    case_id = "2_4G_RADIO_10"
     defaults = RADIO_24_SCAN_DEFAULTS
     scan_ip, scan_password, target_ssid, target_password, _, _ = _resolve_scan_pc_config(
         profile_bundle, case_id=case_id
@@ -4196,15 +3549,15 @@ async def _boot_window_connect_blocked(
     return connect_blocked_ok, boot_samples
 
 
-async def assert_radio_24_21_no_ssid_during_boot(
+async def assert_radio_24_11_no_ssid_during_boot(
     profile_bundle=None,
 ):
     """
-    2.4G_RADIO_21 — reboot CPE; while booting hidden SSID connect must fail.
+    2.4G_RADIO_11 — reboot CPE; while booting hidden SSID connect must fail.
 
     Hidden SSID does not appear in scan — verify by connect attempt only.
     """
-    case_id = "2_4G_RADIO_21"
+    case_id = "2_4G_RADIO_11"
     defaults = RADIO_24_SCAN_DEFAULTS
     scan_ip, scan_password, target_ssid, target_password, _, _ = _resolve_scan_pc_config(
         profile_bundle, case_id=case_id
@@ -4285,14 +3638,14 @@ async def assert_radio_24_21_no_ssid_during_boot(
     await _restore_cpe_link_after_reboot(profile_bundle)
 
 
-async def assert_radio_24_22_ssid_appears_after_boot(
+async def assert_radio_24_12_ssid_appears_after_boot(
     profile_bundle=None,
 ):
     """
-    2.4G_RADIO_22 — reboot CPE; when up, hidden SSID must be available in scan
+    2.4G_RADIO_12 — reboot CPE; when up, hidden SSID must be available in scan
     and connect must succeed.
     """
-    case_id = "2_4G_RADIO_22"
+    case_id = "2_4G_RADIO_12"
     defaults = RADIO_24_SCAN_DEFAULTS
     scan_ip, scan_password, target_ssid, target_password, _, _ = _resolve_scan_pc_config(
         profile_bundle, case_id=case_id

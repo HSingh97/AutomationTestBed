@@ -42,7 +42,7 @@ properties([
                 script: [
                     $class: 'SecureGroovyScript',
                     sandbox: true,
-                    script: 'return ["GUI":"GUI ( 73 ) ( ~2h 30m )","IP":"IP ( 35 ) ( ~1h 15m )","JUMBO":"JUMBO ( 10 ) ( ~25m )","QOS":"QOS ( 32 ) ( ~1h )","USERMGMT":"USERMGMT ( 50 ) ( ~2h )","VLAN":"VLAN ( 44 ) ( ~1h 20m )","LOGS":"LOGS ( 72 ) ( ~1h 10m )","FIREWALL":"FIREWALL ( 6 ) ( ~15m )","DFS":"DFS ( 21 ) ( ~45m )","SECURITY":"SECURITY ( 13 ) ( ~30m )","ACB":"ACB ( 8 ) ( ~25m )","WIRELESS":"WIRELESS ( 8 ) ( ~40m )","ARP":"ARP ( 11 ) ( ~20m )","API":"API ( 18 ) ( ~35m )","RADIO24":"RADIO24 ( 19 ) ( ~45m )","SANITY":"SANITY ( 47 ) ( ~1h 40m )","DDRS":"DDRS ( 49 ) ( ~2h )","DHCP":"DHCP ( 42 ) ( ~1h 30m )","FUNCTIONAL":"FUNCTIONAL ( 25 ) ( ~1h )","LINKTEST":"LINKTEST ( 14 ) ( ~30m )","SPECTRUM":"SPECTRUM ( 22 ) ( ~40m )"]'
+                    script: 'return ["GUI":"GUI ( 73 ) ( ~2h 30m )","IP":"IP ( 35 ) ( ~1h 15m )","JUMBO":"JUMBO ( 10 ) ( ~25m )","QOS":"QOS ( 32 ) ( ~1h )","USERMGMT":"USERMGMT ( 50 ) ( ~2h )","VLAN":"VLAN ( 44 ) ( ~1h 20m )","LOGS":"LOGS ( 72 ) ( ~1h 10m )","FIREWALL":"FIREWALL ( 6 ) ( ~15m )","DFS":"DFS ( 21 ) ( ~45m )","SECURITY":"SECURITY ( 13 ) ( ~30m )","ACB":"ACB ( 8 ) ( ~25m )","WIRELESS":"WIRELESS ( 8 ) ( ~40m )","ARP":"ARP ( 11 ) ( ~20m )","API":"API ( 18 ) ( ~35m )","RADIO24":"RADIO24 ( 14 ) ( ~35m )","SANITY":"SANITY ( 47 ) ( ~1h 40m )","DDRS":"DDRS ( 49 ) ( ~2h )","DHCP":"DHCP ( 42 ) ( ~1h 30m )","FUNCTIONAL":"FUNCTIONAL ( 25 ) ( ~1h )","LINKTEST":"LINKTEST ( 14 ) ( ~30m )","SPECTRUM":"SPECTRUM ( 22 ) ( ~40m )"]'
                 ]
             ]
         ],
@@ -64,8 +64,8 @@ properties([
                 script: [
                     $class: 'SecureGroovyScript',
                     sandbox: true,
-                    script: '''def counts = [GUI:73, IP:35, JUMBO:10, QOS:32, USERMGMT:50, VLAN:44, LOGS:72, FIREWALL:6, DFS:21, SECURITY:13, ACB:8, WIRELESS:8, ARP:11, API:18, RADIO24:19, SANITY:47, DDRS:49, DHCP:42, FUNCTIONAL:25, LINKTEST:14, SPECTRUM:22]
-def minutes = [GUI:150, IP:75, JUMBO:25, QOS:60, USERMGMT:120, VLAN:80, LOGS:70, FIREWALL:15, DFS:45, SECURITY:30, ACB:25, WIRELESS:40, ARP:20, API:35, RADIO24:45, SANITY:100, DDRS:120, DHCP:90, FUNCTIONAL:60, LINKTEST:30, SPECTRUM:40]
+                    script: '''def counts = [GUI:73, IP:35, JUMBO:10, QOS:32, USERMGMT:50, VLAN:44, LOGS:72, FIREWALL:6, DFS:21, SECURITY:13, ACB:8, WIRELESS:8, ARP:11, API:18, RADIO24:14, SANITY:47, DDRS:49, DHCP:42, FUNCTIONAL:25, LINKTEST:14, SPECTRUM:22]
+def minutes = [GUI:150, IP:75, JUMBO:25, QOS:60, USERMGMT:120, VLAN:80, LOGS:70, FIREWALL:15, DFS:45, SECURITY:30, ACB:25, WIRELESS:40, ARP:20, API:35, RADIO24:35, SANITY:100, DDRS:120, DHCP:90, FUNCTIONAL:60, LINKTEST:30, SPECTRUM:40]
 def raw = ""
 try { raw = SUITES == null ? "" : SUITES.toString() } catch (Exception e) { raw = "" }
 def names = raw.split(",").collect { it.trim() }.findAll { it && counts.containsKey(it) }

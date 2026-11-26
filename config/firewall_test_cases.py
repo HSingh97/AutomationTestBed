@@ -1,4 +1,4 @@
-"""Firewall catalog synced to ``Senao UBR P2MP Test Plan_Aug26_Alpha_UBR655.xlsx`` sheet ``Firewall``."""
+"""Firewall catalog synced to ``Senao UBR Test Plan.xlsx`` sheet ``Firewall``."""
 
 from __future__ import annotations
 

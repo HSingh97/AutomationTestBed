@@ -1,17 +1,12 @@
 import pytest
 
 from utils.radio24_scan_flows import (
-    assert_radio_24_01_hidden_ssid_not_visible,
-    assert_radio_24_02_connect_hidden_ssid,
-    assert_radio_24_03_connect_hidden_ssid_wrong_password,
-    assert_radio_24_04_reboot_cpe_scan_hidden_ssid,
-    assert_radio_24_08_fw_upgrade_scan_hidden_ssid,
-    assert_radio_24_17_dhcp_server_down_no_ip,
-    assert_radio_24_18_dhcp_recovery_after_reboot,
-    assert_radio_24_19_dhcp_stress_connect_disconnect,
-    assert_radio_24_20_dhcp_logs_lease_assignment,
-    assert_radio_24_21_no_ssid_during_boot,
-    assert_radio_24_22_ssid_appears_after_boot,
+    assert_radio_24_07_dhcp_server_down_no_ip,
+    assert_radio_24_08_dhcp_recovery_after_reboot,
+    assert_radio_24_09_dhcp_stress_connect_disconnect,
+    assert_radio_24_10_dhcp_logs_lease_assignment,
+    assert_radio_24_11_no_ssid_during_boot,
+    assert_radio_24_12_ssid_appears_after_boot,
     assert_radio_24_41_valid_api_call,
     assert_radio_24_42_invalid_api_call,
     assert_radio_24_43_unauthorized_access,
@@ -25,103 +20,58 @@ from utils.radio24_scan_flows import (
 pytestmark = [pytest.mark.sanity, pytest.mark.Radio24Scan]
 
 
-@pytest.mark.order(1)
+@pytest.mark.order(7)
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.RADIO_24_01
+@pytest.mark.RADIO_24_07
 @pytest.mark.Radio24Scan
-async def test_radio_24_01_hidden_ssid_not_visible(profile_bundle):
-    """2.4G_RADIO_01 — scan near CPE; hidden mgmt SSID must not appear in passive scan."""
-    await assert_radio_24_01_hidden_ssid_not_visible(profile_bundle)
-
-
-@pytest.mark.order(2)
-@pytest.mark.asyncio(scope="session")
-@pytest.mark.RADIO_24_02
-@pytest.mark.Radio24Scan
-async def test_radio_24_02_connect_hidden_ssid(profile_bundle):
-    """2.4G_RADIO_02 — connect hidden SSID with correct credentials; link up, no internet."""
-    await assert_radio_24_02_connect_hidden_ssid(profile_bundle)
-
-
-@pytest.mark.order(3)
-@pytest.mark.asyncio(scope="session")
-@pytest.mark.RADIO_24_03
-@pytest.mark.Radio24Scan
-async def test_radio_24_03_connect_hidden_ssid_wrong_password(profile_bundle):
-    """2.4G_RADIO_03 — SSID hidden; wrong password must not connect."""
-    await assert_radio_24_03_connect_hidden_ssid_wrong_password(profile_bundle)
-
-
-@pytest.mark.order(4)
-@pytest.mark.asyncio(scope="session")
-@pytest.mark.RADIO_24_04
-@pytest.mark.Radio24Scan
-async def test_radio_24_04_reboot_cpe_scan_hidden_ssid(profile_bundle):
-    """2.4G_RADIO_04 — reboot CPE; after link up, hidden SSID must not appear in scan."""
-    await assert_radio_24_04_reboot_cpe_scan_hidden_ssid(profile_bundle)
+async def test_radio_24_07_dhcp_server_down_no_ip(profile_bundle):
+    """2.4G_RADIO_7 — disable CPE 2.4 GHz DHCP; scan PC must not connect on mgmt Wi‑Fi."""
+    await assert_radio_24_07_dhcp_server_down_no_ip(profile_bundle)
 
 
 @pytest.mark.order(8)
 @pytest.mark.asyncio(scope="session")
 @pytest.mark.RADIO_24_08
 @pytest.mark.Radio24Scan
-async def test_radio_24_08_fw_upgrade_scan_hidden_ssid(profile_bundle):
-    """2.4G_RADIO_08 — FW upgrade preserve config; after link up, SSID must stay hidden."""
-    await assert_radio_24_08_fw_upgrade_scan_hidden_ssid(profile_bundle)
+async def test_radio_24_08_dhcp_recovery_after_reboot(profile_bundle):
+    """2.4G_RADIO_8 — reboot CPE with DHCP on; after link up get 169.254.254.100."""
+    await assert_radio_24_08_dhcp_recovery_after_reboot(profile_bundle)
 
 
-@pytest.mark.order(17)
+@pytest.mark.order(9)
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.RADIO_24_17
+@pytest.mark.RADIO_24_09
 @pytest.mark.Radio24Scan
-async def test_radio_24_17_dhcp_server_down_no_ip(profile_bundle):
-    """2.4G_RADIO_17 — disable CPE 2.4 GHz DHCP; scan PC must not connect on mgmt Wi‑Fi."""
-    await assert_radio_24_17_dhcp_server_down_no_ip(profile_bundle)
+async def test_radio_24_09_dhcp_stress_connect_disconnect(profile_bundle):
+    """2.4G_RADIO_9 — toggle Wi‑Fi radio; LAN ports stay up; auto-reconnect with DHCP IP."""
+    await assert_radio_24_09_dhcp_stress_connect_disconnect(profile_bundle)
 
 
-@pytest.mark.order(18)
+@pytest.mark.order(10)
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.RADIO_24_18
+@pytest.mark.RADIO_24_10
 @pytest.mark.Radio24Scan
-async def test_radio_24_18_dhcp_recovery_after_reboot(profile_bundle):
-    """2.4G_RADIO_18 — reboot CPE with DHCP on; after link up get 169.254.254.100."""
-    await assert_radio_24_18_dhcp_recovery_after_reboot(profile_bundle)
+async def test_radio_24_10_dhcp_logs_lease_assignment(profile_bundle):
+    """2.4G_RADIO_10 — CPE Leases tab must match this scan PC's MAC, IP, and hostname."""
+    await assert_radio_24_10_dhcp_logs_lease_assignment(profile_bundle)
 
 
-@pytest.mark.order(19)
+@pytest.mark.order(11)
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.RADIO_24_19
+@pytest.mark.RADIO_24_11
 @pytest.mark.Radio24Scan
-async def test_radio_24_19_dhcp_stress_connect_disconnect(profile_bundle):
-    """2.4G_RADIO_19 — toggle Wi‑Fi radio; LAN ports stay up; auto-reconnect with DHCP IP."""
-    await assert_radio_24_19_dhcp_stress_connect_disconnect(profile_bundle)
+async def test_radio_24_11_no_ssid_during_boot(profile_bundle):
+    """2.4G_RADIO_11 — reboot CPE; hidden SSID connect must fail while CPE is booting."""
+    await assert_radio_24_11_no_ssid_during_boot(profile_bundle)
 
 
-@pytest.mark.order(20)
+@pytest.mark.order(12)
 @pytest.mark.asyncio(scope="session")
-@pytest.mark.RADIO_24_20
+@pytest.mark.RADIO_24_12
 @pytest.mark.Radio24Scan
-async def test_radio_24_20_dhcp_logs_lease_assignment(profile_bundle):
-    """2.4G_RADIO_20 — CPE Leases tab must match this scan PC's MAC, IP, and hostname."""
-    await assert_radio_24_20_dhcp_logs_lease_assignment(profile_bundle)
-
-
-@pytest.mark.order(21)
-@pytest.mark.asyncio(scope="session")
-@pytest.mark.RADIO_24_21
-@pytest.mark.Radio24Scan
-async def test_radio_24_21_no_ssid_during_boot(profile_bundle):
-    """2.4G_RADIO_21 — reboot CPE; hidden SSID connect must fail while CPE is booting."""
-    await assert_radio_24_21_no_ssid_during_boot(profile_bundle)
-
-
-@pytest.mark.order(22)
-@pytest.mark.asyncio(scope="session")
-@pytest.mark.RADIO_24_22
-@pytest.mark.Radio24Scan
-async def test_radio_24_22_ssid_appears_after_boot(profile_bundle):
-    """2.4G_RADIO_22 — after reboot when CPE is up, SSID must be available and connect."""
-    await assert_radio_24_22_ssid_appears_after_boot(profile_bundle)
+async def test_radio_24_12_ssid_appears_after_boot(profile_bundle):
+    """2.4G_RADIO_12 — after reboot when CPE is up, SSID must be available and connect."""
+    await assert_radio_24_12_ssid_appears_after_boot(profile_bundle)
 
 
 @pytest.mark.order(41)

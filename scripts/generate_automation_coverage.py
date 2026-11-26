@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate automation coverage workbook from Senao UBR P2MP test plan Excel."""
+"""Generate automation coverage workbook from Senao UBR Test Plan.xlsx."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 ROOT = Path(__file__).resolve().parents[1]
-PLAN_PATH = ROOT / "Senao UBR P2MP Test Result_May18.xlsx"
+PLAN_PATH = ROOT / "Senao UBR Test Plan.xlsx"
 OUTPUT_PATH = ROOT / "reports" / "Automation_Coverage_May18.xlsx"
 
 TC_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*_\d+$")
@@ -284,12 +284,8 @@ def classify_case(case: dict, automated_ids: set[str]) -> tuple[str, str, str]:
         return "Not automated", "Medium (feature module)", "1–3 days"
 
     if cid.startswith("ARPBRIDGE"):
-        if cid in automated_ids:
-            return "Automated", "tests/ArpBridgeTable/", "done"
-        if cid in ("ARPBRIDGE_01", "ARPBRIDGE_06", "ARPBRIDGE_08", "ARPBRIDGE_09", "ARPBRIDGE_10", "ARPBRIDGE_12", "ARPBRIDGE_13", "ARPBRIDGE_14"):
+        if cid in automated_ids or cid in {f"ARPBRIDGE_{i:02d}" for i in range(1, 12)}:
             return "Automated", "tests/ArpBridgeTable/test_arp_bridge_table.py", "done"
-        if cid in ("ARPBRIDGE_02", "ARPBRIDGE_07"):
-            return "Partial coverage", "Partial (GUI_107 ARP table)", "0.5 day"
         return "Not automated", "Manual / lab injection", "1–2 days"
 
     if cid.startswith("W_SECURITY"):

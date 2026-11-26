@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sync ``config/logs_test_cases.py`` from the Aug26 Alpha 2 test plan Logs sheet."""
+"""Sync ``config/logs_test_cases.py`` from ``Senao UBR Test Plan.xlsx`` sheet ``Logs``."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 import openpyxl
 
 REPO = Path(__file__).resolve().parent.parent
-XLSX = REPO / "Senao UBR P2MP Test Plan_Aug26_Alpha_2.xlsx"
+XLSX = REPO / "Senao UBR Test Plan.xlsx"
 OUT = REPO / "config" / "logs_test_cases.py"
 
 
@@ -210,7 +210,7 @@ def load_rows() -> list[dict]:
 def render(cases: list[dict]) -> str:
     body = json.dumps(cases, indent=4).replace(": null", ": None")
     header = '''\
-"""Logs catalog synced to ``Senao UBR P2MP Test Plan_Aug26_Alpha_2.xlsx`` sheet ``Logs``.
+"""Logs catalog synced to ``Senao UBR Test Plan.xlsx`` sheet ``Logs``.
 
 Regenerate: ``PYTHONPATH=. python3 scripts/sync_logs_catalog.py``
 

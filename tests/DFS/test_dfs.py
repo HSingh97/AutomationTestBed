@@ -1,4 +1,4 @@
-"""DFS suite — ``Senao UBR P2MP Test Plan_Aug26_Alpha_UBR655.xlsx`` sheet ``DFS``.
+"""DFS suite — ``Senao UBR Test Plan.xlsx`` sheet ``DFS``.
 
 Radar is injected on the DUT current channel::
 

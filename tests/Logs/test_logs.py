@@ -1,4 +1,4 @@
-"""Logs suite — synced to ``Senao UBR P2MP Test Plan_Aug26_Alpha_2.xlsx`` sheet ``Logs``.
+"""Logs suite — synced to ``Senao UBR Test Plan.xlsx`` sheet ``Logs``.
 
 Gate live DUT runs with::
 

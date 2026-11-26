@@ -1,6 +1,6 @@
 # UBR Automation TestBed
 
-End-to-end automation framework for **Senao UBR** point-to-multipoint (P2MP) and point-to-point (P2P) validation: GUI sanity, IP networking, jumbo frames, VLAN, QoS, logs, user management, firewall, DFS, security, asymmetric channel bandwidth, stability regression, process monitoring, 2.4 GHz CPE API, wireless security, ARP/bridge tables, lab attenuator/SNR sweeps, and **TRex throughput matrix** runs with rich HTML reporting.
+End-to-end automation framework for **Senao UBR** point-to-multipoint (P2MP) and point-to-point (P2P) validation: GUI sanity, IP networking, jumbo frames, VLAN, QoS, logs, user management, firewall, DFS, security, asymmetric channel bandwidth, stability regression, 2.4 GHz CPE API, wireless security, ARP/bridge tables, lab attenuator/SNR sweeps, and **TRex throughput matrix** runs with rich HTML reporting.
 
 Designed for repeatable execution on lab benches, locally via pytest, and in **Jenkins** with per-stand agent labels (`TARGET_STAND`).
 
@@ -33,7 +33,7 @@ Designed for repeatable execution on lab benches, locally via pytest, and in **J
 | **pytest** | 8.1.1 | Test runner, markers, collection hooks |
 | **pytest-asyncio** | 0.23.5 | Async tests (`asyncio_mode = auto` in `pytest.ini`) |
 | **pytest-xdist** | 3.5.0 | Parallel execution |
-| **pytest-order** | 1.2.0 | Ordered suites (API, ProcessMonitor, Radio24, …) |
+| **pytest-order** | 1.2.0 | Ordered suites (API, Radio24, ARP, …) |
 | **pytest-html** | 4.1.1 | HTML test reports |
 | **pytest-json-report** | 1.5.0 | `reports/artifacts/report.json` |
 | **pytest-check** | unpinned | Soft assertions |
@@ -172,9 +172,8 @@ venv/bin/playwright install chromium
 | `tests/IP/` | IPv4/IPv6 networking (`IP_01`–`IP_36` active) |
 | `tests/JumboFrames/` | Jumbo MTU (`JMB_01`–`JMB_10`) |
 | `tests/Regression/` | Stability (`REG_01`–`REG_03`) |
-| `tests/ProcessMonitor/` | Process watchdog tests (`PROCESS_01`–`19`) |
 | `tests/API/` | CPE 2.4 GHz mgmt Wi‑Fi REST API (`API_01`–`API_18`) |
-| `tests/Radio24Scan/` | 2.4 GHz radio scan/config (`RADIO_24_01`–`50` subset) |
+| `tests/Radio24Scan/` | 2.4 GHz radio (`2.4G_RADIO_7`–`12`, plus API `RADIO_24_41`–`50`) |
 | `tests/WirelessSecurity/` | Wireless security cases (`W_SECURITY_*`) |
 | `tests/ArpBridgeTable/` | ARP & bridge table (`ARPBRIDGE_*`) |
 | `tests/Lab/` | Vaunix attenuator + SNR (`--allow-attenuator-lab`) |
@@ -202,11 +201,10 @@ venv/bin/playwright install chromium
 | **IP** | `tests/IP/` | `IP`, `IP_XX`, `IPv4`, `IPv6` | **34 active** / 60 catalog | `--allow-ip-suite` |
 | **Jumbo** | `tests/JumboFrames/` | `JumboFrames` | **10** (`JMB_01`–`JMB_10`) | `JMB_07`/`JMB_10` need `--allow-destructive-jumbo` |
 | **Regression** | `tests/Regression/` | `Regression` | **3** (`REG_01`–`REG_03`) | `--allow-regression` |
-| **ProcessMonitor** | `tests/ProcessMonitor/` | `ProcessMonitor` | **19** (`PROCESS_01`–`19`) | `--allow-process-monitor` |
-| **CPE API 2.4G** | `tests/API/` | `CPE_API_24` | **18** (`API_01`–`API_18`) | CPE mgmt Wi‑Fi setup |
-| **Radio 2.4G scan** | `tests/Radio24Scan/` | `Radio24Scan` | **19** (`RADIO_24_*`) | Shares API conftest |
+| **CPE API 2.4G** | `tests/API/` | `CPE_API_24` | **18** (`API_01`–`API_18`) | Kept; API sheet is not on the current plan |
+| **Radio 2.4G scan** | `tests/Radio24Scan/` | `Radio24Scan` | **14** (plan `2.4G_RADIO_7`–`12`, plus API `RADIO_24_41`–`50`) | Shares API conftest |
 | **Wireless security** | `tests/WirelessSecurity/` | `WirelessSecurity` | **8** (`W_SECURITY_*`) | sanity |
-| **ARP / Bridge** | `tests/ArpBridgeTable/` | `ArpBridgeTable` | **10** (`ARPBRIDGE_*`) | sanity |
+| **ARP / Bridge** | `tests/ArpBridgeTable/` | `ArpBridgeTable` | **11** (`ARPBRIDGE_01`–`11`) | sanity |
 | **Lab attenuator** | `tests/Lab/` | `attenuator` | **1** mock sweep | `--allow-attenuator-lab` |
 | **Throughput unit** | `tests/Throughput/` | *(none)* | **~73** unit tests | No DUT required |
 | **Firewall** | `tests/Firewall/` | `Firewall` | **6** (`FIREWALL_01`–`06`) | `--allow-firewall-lab` |
@@ -214,35 +212,34 @@ venv/bin/playwright install chromium
 | **Security** | `tests/Security/` | `Security` | **13** automated / 16 on sheet | `--allow-security-lab` |
 | **Asymmetric CBW** | `tests/AsymmetricCBW/` | `AsymmetricCBW` | **8** automated / 12 on sheet | `--allow-acb-lab` |
 
-### UBR655 plan coverage
+### Plan coverage
 
-Source: `Senao UBR P2MP Test Plan_Aug26_Alpha_UBR655.xlsx` Summary sheet — **41 test sheets, 1,725 cases**.
+Source: `Senao UBR Test Plan.xlsx` Summary sheet — **32 test sheets, 1,174 cases**. The earlier Aug26 / UBR655 workbooks are retired.
 
-**26.7% of plan cases are automated** (460 / 1,725). **17 of 41 sheets** have a pytest suite. The TRex throughput matrix exercises the Throughput sheet but is not 192 separate cases, so those 192 are not included in the 460.
+The TRex throughput matrix exercises the Throughput sheet but is not 192 separate cases. API (`API_01`–`API_18`) and the 2.4 GHz API tests (`RADIO_24_41`, `42`, `43`, `44`, `45`, `46`, `49`, `50`) stay even though those sheets are not on this plan.
 
 | Sheet | On sheet | Automated | Not in pytest |
 |-------|----------|-----------|----------------|
-| GUI | 139 | 73 | 66 |
-| Jumbo Frames | 10 | 10 | 0 |
+| GUI | 138 | 73 | 65 |
+| Jumbo Frames | 11 | 10 | 1 (`JMB_11` not written) |
 | VLAN | 59 | 44 | 15 (7 N/A, 7 not available — NMS, 1 manual) |
 | QoS | 40 | 36 | 4 manual (`QoS_28`, `31`, `33`, `35`) |
-| Arp & Bridge Table | 11 | 10 | 1 |
+| Arp & Bridge Table | 11 | 11 | 0 |
 | IPv4 & IPv6 | 49 | 34 | 15 (`IP_10`, `IP_29` manual; `IP_37`–`IP_60` not collected) |
 | User Management | 50 | 50 | 0 (7 are destructive and gated) |
 | Wireless Security | 14 | 8 | 6 |
-| 2.4 GHz Radio | 40 | 19 | 21 |
-| Process Monitoring | 19 | 19 | 0 |
+| 2.4 GHz Radio | 19 | 6 (`2.4G_RADIO_7`–`12`) | 13 on the sheet; 8 API tests kept off-sheet |
 | Logs | 97 | 88 | 9 not available — NMS (`LOGS_01`–`05`, `07`, `09`, `40`, `83`) |
-| API | 27 | 18 | 9 |
+| API | not on this plan | 18 | suite kept (`API_01`–`API_18`) |
 | Firewall | 6 | 6 | 0 (`FIREWALL_06` runs only when OpenVAS is installed) |
 | DFS | 28 | 24 | 4 (`TC_DFS_009`, `027` N/A; `TC_DFS_024`, `025` not available — NMS) |
 | Security | 16 | 13 | 3 manual (`SEC-01`, `SEC-02`, `SEC-16`) |
 | Asymmetric CBW | 12 | 8 | 4 N/A (`ACB_08`–`ACB_11`) |
 | Throughput per MCS | 192 | matrix only | 192 discrete rows are not individual tests |
 
-**Sheets with no suite yet (24):** RFC Results, Sanity, Tx Power Measurement, ATPC, Functional, Link Test Tool, Ethernet Test, Cable Length, DCS, DDRS, OFDMA, MU-MIMO, Spectrum Analyser & Site Survey, DHCPv4 & DHCPv6, SECURE-DUAL-BOOT, Device Management, CPE-Power-On-PoE-Mechanism, CPE and IDU DHCP Authentication, PPPoE, GPS, NMS-Client Communication, Cascaded BTS Deployment, Device_NMS_Interoperability, Co-Channel.
+**Dropped from this plan:** ATPC, OFDMA, MU-MIMO, secure dual boot, PoE power-on, CPE/IDU DHCP authentication, Process Monitoring, PPPoE, NMS-Client Communication, Cascaded BTS Deployment, Device–NMS, and the API sheet. Process Monitoring tests are removed. The API suite stays.
 
-NMS-Client Communication and Device_NMS_Interoperability stay out of pytest because this bench has no NMS. Cases inside Logs, VLAN, and DFS that need an NMS server are kept in the catalog with status `not_available` and skip as `Not available: NMS is not available.` DUT checks that only mention TR-069 as the management model (`SEC-07`, `SEC-08`, `SEC-14`) still run on the radio.
+Cases inside Logs, VLAN, and DFS that need an NMS server are kept in the catalog with status `not_available` and skip as `Not available: NMS is not available.` DUT checks that only mention TR-069 as the management model (`SEC-07`, `SEC-08`, `SEC-14`) still run on the radio.
 
 ### GUI (`tests/GUI/`) — 73 tests
 
@@ -283,10 +280,6 @@ ICMP validation across MTU 1500–9000, VLAN, P2MP, boundary values. **`JMB_07`*
 | `REG_02` | N-cycle network soft reset (`/etc/init.d/network reload`) |
 | `REG_03` | N-cycle firmware upgrade (needs `--firmware-image`) |
 
-### ProcessMonitor (`PROCESS_01`–`19`)
-
-Process watchdog, procd, memory/CPU stress. Destructive cases `PROCESS_09`, `PROCESS_15` need `--allow-destructive-process`. Prefers BTS `192.168.2.1`, soft-falls back to `10.0.0.1` if LAN is unreachable.
-
 ### CPE 2.4 GHz API (`API_01`–`API_18`)
 
 REST API against CPE at `169.254.254.1` after PC joins hidden mgmt Wi‑Fi (`utils/cpe_api_24_*`).
@@ -318,7 +311,7 @@ Wireless security policy cases and ARP/bridge learn-table validation (GUI + SSH 
 | `qa_lab_02.yaml` | 6 CPEs, dual TRex servers, `link_stats_source: ssh`, `su_count: 6`, `mcs_kickmac_wait_s: 18` |
 | `ipv4_lab.yaml` | IPv4 GUI/link (`192.168.2.x`) |
 | `ipv6_lab.yaml` | IPv6 monitor/GUI |
-| `ipv4_quickrun.yaml` | Fast IPv4 IP suite (`IP_01`–`IP_17`); Jenkins ProcessMonitor / IPv4 |
+| `ipv4_quickrun.yaml` | Fast IPv4 IP suite (`IP_01`–`IP_17`) |
 | `ipv6_quickrun.yaml` | Fast IPv6 IP suite (`IP_18`–`IP_26`); Jenkins default for `IP` marker |
 | `link_formation.yaml` | Recovery after reset — QinQ, archive restore |
 | `factory_provision.yaml` | Factory reset → installer → AIRTEL SSID path |
@@ -353,7 +346,7 @@ venv/bin/python -m pytest tests/GUI/ -v -k "Summary"
 venv/bin/python -m pytest tests/GUI/test_radio_24.py -v
 ```
 
-### Jumbo, Regression, ProcessMonitor, API, other suites
+### Jumbo, Regression, API, other suites
 
 ```bash
 pytest tests/JumboFrames/ -v
@@ -362,7 +355,6 @@ pytest tests/JumboFrames/ -v --allow-destructive-jumbo -k "JMB_07 or JMB_10"
 pytest tests/Regression/ -v --allow-regression --regression-fresh -k REG_01 \
   --regression-iterations-reg01 2
 
-pytest tests/ProcessMonitor/ -v --allow-process-monitor
 pytest tests/API/ -v
 pytest tests/Radio24Scan/ -v
 pytest tests/WirelessSecurity/ -v
@@ -591,7 +583,7 @@ Sample: `docs/samples/Senao_Performance_84_Grafana_Report.html`
 
 | Pipeline file | Jenkins job | Purpose |
 |---------------|-------------|---------|
-| `jenkins/jenkins-AutomationFramework` | Automation Framework / Automation Test Cases | Unified GUI, IP, Regression, Jumbo, ProcessMonitor |
+| `jenkins/jenkins-AutomationFramework` | Automation Framework / Automation Test Cases | Unified GUI, IP, Regression, Jumbo, API, Radio 2.4 GHz |
 | `jenkins/jenkins-Throughput` | Automation Framework / Throughput Test - Trex | Performance matrix or VLAN debug campaign |
 | `jenkins/jenkins-ChannelConnectivity` | Automation Framework / Channel Connectivity | Bandwidth and channel sweep with SU ping |
 | `jenkins/jenkins-CpuUtilization` | Automation Framework / CPU Utilization | REG_04 CPU from sysInfoCPUUsage |
@@ -618,7 +610,6 @@ Sample: `docs/samples/Senao_Performance_84_Grafana_Report.html`
 | `IP` | `tests/IP/` | `ipv6_quickrun` (or `ipv4_quickrun` for IPv4-only filter) |
 | `Regression` | `tests/Regression/` | `default` |
 | `JumboFrames` | `tests/JumboFrames/` | `default` |
-| `ProcessMonitor` | `tests/ProcessMonitor/` | `ipv4_quickrun` |
 
 **Examples**
 
@@ -710,11 +701,10 @@ Catalog in [docs/lab-instruments.html](docs/lab-instruments.html) (built by `scr
 | IP active cases | 34 |
 | Jumbo | 10 |
 | Regression | 3 |
-| ProcessMonitor | 19 |
 | CPE API 2.4G | 18 |
-| Radio24Scan | 19 |
+| Radio24Scan | 14 |
 | WirelessSecurity | 8 |
-| ArpBridgeTable | 10 |
+| ArpBridgeTable | 11 |
 | Throughput unit tests | ~73 |
 | Logs not available (NMS) | 9 |
 | VLAN automated | 44 |

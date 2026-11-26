@@ -328,7 +328,7 @@ Shared method: Monitor → Tools → Link Test Tool. Run the sheet duration and 
 
 Code: `tests/ArpBridgeTable/test_arp_bridge_table.py` → `utils/arp_bridge_table_flows.py`.
 
-**Last verified:** this bench, 8 Oct 2026, IPv4 only (`.10` / `.11`). ARPBRIDGE_01, ARPBRIDGE_02, and ARPBRIDGE_06 through ARPBRIDGE_14 passed live. There is no ARPBRIDGE_03, ARPBRIDGE_04, or ARPBRIDGE_05 test. Do not move the CPE off static `.11` unless the case says DHCP, and restore it after. SSID stays `UBR655_R1_PS`.
+**Last verified:** this bench, 8 Oct 2026, IPv4 only (`.10` / `.11`), under the previous case numbers. Those runs are now `ARPBRIDGE_01`–`ARPBRIDGE_11` to match `Senao UBR Test Plan.xlsx`. Do not move the CPE off static `.11` unless the case says DHCP, and restore it after. SSID stays `UBR655_R1_PS`.
 
 Shared method: generate the ARP or bridge event from the lab PC or the peer, then read `ip neigh` / `brctl showmacs` and the GUI table.
 
@@ -336,15 +336,15 @@ Shared method: generate the ARP or bridge event from the lab PC or the peer, the
 |----|-------------|-------------|------------|--------|
 | ARPBRIDGE_01 | `test_arpbridge_01_basic_arp_resolution_ipv4` | 1. From the BTS, ping `.11`. 2. Read `ip neigh` for that address and compare the MAC with the RF link MAC. 3. From the CPE, ping `.10` and do the same. | Each side has an IPv4 neighbor for the peer, and that MAC belongs to the peer radio. | PASS 8 Oct 2026 (54s). BTS learned `.11` as `c4:e3:ce:63:e6:2f` (RF `…:e6:31`). CPE learned `.10` as `c4:e3:ce:63:e6:c5` (RF `…:e6:c7`). |
 | ARPBRIDGE_02 | `test_arpbridge_02_duplicate_ip_handling_ipv4` | 1. Ping the peer and record the first MAC. 2. Install a different MAC for that same IPv4. 3. Remove the duplicate and confirm the RF path still has the first MAC. On the CPE the duplicate is applied in the background so the management session can come back. | The duplicate is visible, then the original peer MAC is the one the bridge still uses. | PASS 8 Oct 2026 (73s). BTS first MAC `…:e6:2f`, duplicate `…:e6:84`, RF kept `…:e6:31`. CPE first MAC `…:e6:c5`, duplicate `…:e6:6e`, RF kept `…:e6:c7`. |
-| ARPBRIDGE_06 | `test_arpbridge_06_dynamic_ip_allocation_ipv4` | 1. Leave the BTS static on `.10` with its DHCP server already running. 2. On the CPE, set IPv4 to DHCP and start `udhcpc` on `br-lan`. Do not `ifup lan` — that drops `ath1`. 3. Read the new lease from the BTS and confirm `ip neigh` has the CPE MAC. 4. Put static `.11` back on the live bridge and stop `udhcpc`. A restore session must be the CPE, not the BTS. | The leased address is in the BTS ARP table, then `.11` answers again. | PASS 8 Oct 2026 (198s). CPE lease was `192.168.2.113`, ARP MAC `c4:e3:ce:63:e6:2f`. Static `.11` was restored. BTS stayed `.10`. |
-| ARPBRIDGE_07 | `test_arpbridge_07_gratuitous_arp_handling_ipv4` | 1. Clear the neighbor entry. 2. Send a gratuitous ARP (`arping -U`) from the peer. 3. Read the observer table. | The peer MAC is learned again from the gratuitous ARP or from the bridge table. | PASS 8 Oct 2026 (144s). BTS saw the CPE on the bridge as `c4:e3:ce:63:e6:31`. CPE learned `.10` as `c4:e3:ce:63:e6:c5` (RF `…:e6:c7`). |
-| ARPBRIDGE_08 | `test_arpbridge_08_bridge_interface_ipv4` | Read `br-lan` members on the BTS and the CPE from `brctl` and sysfs. Keep every interface name. A non-tty `ls` prints one name per line. | `eth0` and a radio port are in `br-lan` on both sides. | PASS 8 Oct 2026 (53s). Both bridges have `ath1`, `ath2`, `eth0`, and `eth1`. |
-| ARPBRIDGE_09 | `test_arpbridge_09_bridge_traffic_ipv4` | Ping the peer through `br-lan` and read the bridge ports. | The peer answers. `br-lan` still has ethernet and a radio port. | PASS 8 Oct 2026 (60s). BTS pinged `.11` and the CPE pinged `.10`, both with replies. `ath1` packet counters stayed at 0 (WARN). The neighbor for `.11` is on `ath1`. |
-| ARPBRIDGE_10 | `test_arpbridge_10_mac_learning_ipv4` | 1. Note the peer MAC in the bridge table. 2. Flush it. 3. Ping the peer so it is learned again. The CPE side is read-only after the BTS flush. | The peer MAC comes back on a bridge port with a fresh age. | PASS 8 Oct 2026 (54s). BTS relearned `c4:e3:ce:63:e6:2f` and `…:e6:31` on port 3. CPE still showed the BTS MAC `…:e6:c5` on port 3. |
-| ARPBRIDGE_11 | `test_arpbridge_11_correct_port_forwarding_ipv4` | Ping the peer and read which bridge port holds its MAC. | The MAC is on exactly one port. It is not flooded. | PASS 8 Oct 2026 (70s). Both sides learned the peer on port 3 only. |
-| ARPBRIDGE_12 | `test_arpbridge_12_bridge_table_entry_update_ipv4` | Flush the peer MAC and learn it again. This lab has only the RF path, so the port may stay the same. | The MAC is back on one bridge port. A same-port relearn is recorded, not failed. | PASS 8 Oct 2026 (79s). BTS flushed two entries and relearned `…:e6:31` on port 3 again. CPE still showed `…:e6:c5` on port 3. |
-| ARPBRIDGE_13 | `test_arpbridge_13_refresh_clear_ipv4` | Open the ARP table in the GUI on the BTS, then the CPE. Clear, then refresh. | Clear drops rows. Refresh brings live neighbors back. | PASS 8 Oct 2026 (75s). BTS GUI went from 10 rows to 4 after Clear, then Refresh kept 4. CPE GUI went from 6 rows to 1, then Refresh kept 1. SSID was left as-is. |
-| ARPBRIDGE_14 | `test_arpbridge_14_bridge_table_aging_ipv4` | Shorten `br-lan` ageing to 20 s and watch a remote MAC that is already older than that. Restore 300 s when the check ends. | That idle MAC leaves the bridge table. | PASS 8 Oct 2026 (53s). BTS ageing went 300 s to 20 s and dropped `7c:f1:7e:b2:69:2d` (age 38.92). CPE dropped `c0:a2:c3:a3:fe:e6` (age 46.71). Ageing was put back to 300 s. |
+| ARPBRIDGE_03 | `test_arpbridge_03_dynamic_ip_allocation_ipv4` | 1. Leave the BTS static on `.10` with its DHCP server already running. 2. On the CPE, set IPv4 to DHCP and start `udhcpc` on `br-lan`. Do not `ifup lan` — that drops `ath1`. 3. Read the new lease from the BTS and confirm `ip neigh` has the CPE MAC. 4. Put static `.11` back on the live bridge and stop `udhcpc`. A restore session must be the CPE, not the BTS. | The leased address is in the BTS ARP table, then `.11` answers again. | PASS 8 Oct 2026 (198s). CPE lease was `192.168.2.113`, ARP MAC `c4:e3:ce:63:e6:2f`. Static `.11` was restored. BTS stayed `.10`. |
+| ARPBRIDGE_04 | `test_arpbridge_04_gratuitous_arp_handling_ipv4` | 1. Clear the neighbor entry. 2. Send a gratuitous ARP (`arping -U`) from the peer. 3. Read the observer table. | The peer MAC is learned again from the gratuitous ARP or from the bridge table. | PASS 8 Oct 2026 (144s). BTS saw the CPE on the bridge as `c4:e3:ce:63:e6:31`. CPE learned `.10` as `c4:e3:ce:63:e6:c5` (RF `…:e6:c7`). |
+| ARPBRIDGE_05 | `test_arpbridge_05_bridge_interface_ipv4` | Read `br-lan` members on the BTS and the CPE from `brctl` and sysfs. Keep every interface name. A non-tty `ls` prints one name per line. | `eth0` and a radio port are in `br-lan` on both sides. | PASS 8 Oct 2026 (53s). Both bridges have `ath1`, `ath2`, `eth0`, and `eth1`. |
+| ARPBRIDGE_06 | `test_arpbridge_06_bridge_traffic_ipv4` | Ping the peer through `br-lan` and read the bridge ports. | The peer answers. `br-lan` still has ethernet and a radio port. | PASS 8 Oct 2026 (60s). BTS pinged `.11` and the CPE pinged `.10`, both with replies. `ath1` packet counters stayed at 0 (WARN). The neighbor for `.11` is on `ath1`. |
+| ARPBRIDGE_07 | `test_arpbridge_07_mac_learning_ipv4` | 1. Note the peer MAC in the bridge table. 2. Flush it. 3. Ping the peer so it is learned again. The CPE side is read-only after the BTS flush. | The peer MAC comes back on a bridge port with a fresh age. | PASS 8 Oct 2026 (54s). BTS relearned `c4:e3:ce:63:e6:2f` and `…:e6:31` on port 3. CPE still showed the BTS MAC `…:e6:c5` on port 3. |
+| ARPBRIDGE_08 | `test_arpbridge_08_correct_port_forwarding_ipv4` | Ping the peer and read which bridge port holds its MAC. | The MAC is on exactly one port. It is not flooded. | PASS 8 Oct 2026 (70s). Both sides learned the peer on port 3 only. |
+| ARPBRIDGE_09 | `test_arpbridge_09_bridge_table_entry_update_ipv4` | Flush the peer MAC and learn it again. This lab has only the RF path, so the port may stay the same. | The MAC is back on one bridge port. A same-port relearn is recorded, not failed. | PASS 8 Oct 2026 (79s). BTS flushed two entries and relearned `…:e6:31` on port 3 again. CPE still showed `…:e6:c5` on port 3. |
+| ARPBRIDGE_10 | `test_arpbridge_10_refresh_clear_ipv4` | Open the ARP table in the GUI on the BTS, then the CPE. Clear, then refresh. | Clear drops rows. Refresh brings live neighbors back. | PASS 8 Oct 2026 (75s). BTS GUI went from 10 rows to 4 after Clear, then Refresh kept 4. CPE GUI went from 6 rows to 1, then Refresh kept 1. SSID was left as-is. |
+| ARPBRIDGE_11 | `test_arpbridge_11_bridge_table_aging_ipv4` | Shorten `br-lan` ageing to 20 s and watch a remote MAC that is already older than that. Restore 300 s when the check ends. | That idle MAC leaves the bridge table. | PASS 8 Oct 2026 (53s). BTS ageing went 300 s to 20 s and dropped `7c:f1:7e:b2:69:2d` (age 38.92). CPE dropped `c0:a2:c3:a3:fe:e6` (age 46.71). Ageing was put back to 300 s. |
 
 ---
 
@@ -442,21 +442,16 @@ Code: `tests/Radio24Scan/test_2_4g_radio.py` → `utils/radio24_scan_flows.py`.
 
 **Last verified:** not signed off here. Scan PC is `10.0.150.7`. The hidden SSID is the CPE 2.4 GHz management AP (`ath0`), not the 5 GHz data SSID. Leave the 5 GHz link up.
 
-Shared method: scan from the lab Wi-Fi NIC. Join or refuse the hidden SSID as the row says. DHCP rows use the CPE `lan24` server only.
+Shared method: scan from the lab Wi-Fi NIC. Plan cases are `2.4G_RADIO_7`–`12`. Hidden-SSID cases left the plan and are removed. API rows `RADIO_24_41`–`50` stay. DHCP rows use the CPE `lan24` server only.
 
 | ID | Node suffix | How we test | Pass means | Result |
 |----|-------------|-------------|------------|--------|
-| RADIO_24_01 | `test_radio_24_01_hidden_ssid_not_visible` | Passive scan. | Hidden management SSID is not in the visible list. | |
-| RADIO_24_02 | `test_radio_24_02_connect_hidden_ssid` | Join the hidden SSID with the right key. | NIC associates and gets an address. | |
-| RADIO_24_03 | `test_radio_24_03_connect_hidden_ssid_wrong_password` | Join with a wrong key. | Association fails. | |
-| RADIO_24_04 | `test_radio_24_04_reboot_cpe_scan_hidden_ssid` | Reboot the CPE, then scan and join. | Hidden SSID returns after boot and accepts the key. | |
-| RADIO_24_08 | `test_radio_24_08_fw_upgrade_scan_hidden_ssid` | Upgrade the CPE, then scan the hidden SSID. | SSID returns on the new image. | |
-| RADIO_24_17 | `test_radio_24_17_dhcp_server_down_no_ip` | Stop `lan24` DHCP and join. | Wi-Fi associates and gets no lease. | |
-| RADIO_24_18 | `test_radio_24_18_dhcp_recovery_after_reboot` | Reboot with DHCP enabled. | Client gets a lease after boot. | |
-| RADIO_24_19 | `test_radio_24_19_dhcp_stress_connect_disconnect` | Connect and disconnect the Wi-Fi NIC repeatedly. | Each connect gets a lease. | |
-| RADIO_24_20 | `test_radio_24_20_dhcp_logs_lease_assignment` | Join and read `/tmp/dhcp.leases`. | Lease row matches the client MAC. | |
-| RADIO_24_21 | `test_radio_24_21_no_ssid_during_boot` | Scan while the CPE is still booting. | Management SSID is absent during boot. | |
-| RADIO_24_22 | `test_radio_24_22_ssid_appears_after_boot` | Wait until boot finishes, then scan. | SSID is back. | |
+| RADIO_24_07 | `test_radio_24_07_dhcp_server_down_no_ip` | Plan `2.4G_RADIO_7`. Stop `lan24` DHCP and join. | Wi-Fi associates and gets no lease. | |
+| RADIO_24_08 | `test_radio_24_08_dhcp_recovery_after_reboot` | Plan `2.4G_RADIO_8`. Reboot with DHCP enabled. | Client gets a lease after boot. | |
+| RADIO_24_09 | `test_radio_24_09_dhcp_stress_connect_disconnect` | Plan `2.4G_RADIO_9`. Connect and disconnect the Wi-Fi NIC repeatedly. | Each connect gets a lease. | |
+| RADIO_24_10 | `test_radio_24_10_dhcp_logs_lease_assignment` | Plan `2.4G_RADIO_10`. Join and read `/tmp/dhcp.leases`. | Lease row matches the client MAC. | |
+| RADIO_24_11 | `test_radio_24_11_no_ssid_during_boot` | Plan `2.4G_RADIO_11`. Scan while the CPE is still booting. | Management SSID is absent during boot. | |
+| RADIO_24_12 | `test_radio_24_12_ssid_appears_after_boot` | Plan `2.4G_RADIO_12`. Wait until boot finishes, then scan. | SSID is back. | |
 | RADIO_24_41 | `test_radio_24_41_valid_api_call` | Call the 2.4 GHz API with valid auth. | HTTP success. | |
 | RADIO_24_42 | `test_radio_24_42_invalid_api_call` | Call an unknown path. | Error status. | |
 | RADIO_24_43 | `test_radio_24_43_unauthorized_access` | Call with no or bad auth. | 401 or 403. | |
@@ -619,33 +614,7 @@ Code: `tests/JumboFrames/test_jumbo_frames.py`.
 
 ## Process monitor
 
-Code: `tests/ProcessMonitor/test_process_monitor.py`.
-
-**Last verified:** not signed off here. Kill only the process the case names. Confirm it is running again before the next case. Do not reboot the bench unless the row is the watchdog reboot.
-
-Shared method: read the monitor page or the process list, kill or crash the target, wait for the restart, read the count and the log.
-
-| ID | Node suffix | How we test | Pass means | Result |
-|----|-------------|-------------|------------|--------|
-| PROCESS_01 | `test_process_01_visibility` | Open the process list. | Expected daemons are listed. | |
-| PROCESS_02 | `test_process_02_uptime` | Read process uptime. | Uptime increases across two reads. | |
-| PROCESS_03 | `test_process_03_restart_count` | Read the restart counter. | Counter is numeric and stable until a kill. | |
-| PROCESS_04 | `test_process_04_timestamp` | Read the last-start timestamp. | Timestamp is present. | |
-| PROCESS_05 | `test_process_05_crash_single` | Crash one process. | Monitor restarts it. Count increments. | |
-| PROCESS_06 | `test_process_06_crash_multiple` | Crash more than one process. | Each one returns. | |
-| PROCESS_07 | `test_process_07_crash_critical` | Crash a critical process. | It restarts. The device stays up. | |
-| PROCESS_08 | `test_process_08_crash_non_critical` | Crash a non-critical process. | It restarts. Link stays up. | |
-| PROCESS_09 | `test_process_09_watchdog_reboot` | Trip the watchdog. | Device reboots and SSH returns. | |
-| PROCESS_10 | `test_process_10_restart_logging` | Restart a process and read the log. | Log line records the restart. | |
-| PROCESS_11 | `test_process_11_stress_under_load` | Kill a process while traffic runs. | Process returns. Traffic recovers. | |
-| PROCESS_12 | `test_process_12_log_integrity` | Read logs after several restarts. | Lines stay in order and are not truncated. | |
-| PROCESS_13 | `test_process_13_unauthorized_kill` | Kill from a context that should be blocked. | Kill is refused or the monitor restarts the process. | |
-| PROCESS_14 | `test_process_14_dependency_handling` | Stop a dependency and watch the child. | Child recovers when the dependency returns. | |
-| PROCESS_15 | `test_process_15_monitor_recovery` | Restart the monitor itself. | Monitor returns and still lists processes. | |
-| PROCESS_16 | `test_process_16_kill_single` | Kill one process (clean kill, not a crash). | It restarts. | |
-| PROCESS_17 | `test_process_17_kill_multiple` | Kill several processes. | Each restarts. | |
-| PROCESS_18 | `test_process_18_kill_critical` | Kill a critical process. | It restarts. Device stays up. | |
-| PROCESS_19 | `test_process_19_kill_under_load` | Kill a process during traffic. | It restarts. Traffic recovers. | |
+Removed. `Senao UBR Test Plan.xlsx` has no Process Monitoring sheet.
 
 ---
 

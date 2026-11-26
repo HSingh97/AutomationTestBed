@@ -1,4 +1,4 @@
-"""VLAN catalog synced to ``Senao UBR P2MP Test Plan_Aug26_Alpha_2.xlsx`` sheet ``VLAN``.
+"""VLAN catalog synced to ``Senao UBR Test Plan.xlsx`` sheet ``VLAN``.
 
 Regenerate: ``PYTHONPATH=. python3 scripts/sync_vlan_catalog.py``
 

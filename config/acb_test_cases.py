@@ -1,4 +1,4 @@
-"""Asymmetric CBW catalog — ``Senao UBR P2MP Test Plan_Aug26_Alpha_UBR655.xlsx`` sheet ``Asymmetric CBW``."""
+"""Asymmetric CBW catalog — ``Senao UBR Test Plan.xlsx`` sheet ``Asymmetric CBW``."""
 
 from __future__ import annotations
 

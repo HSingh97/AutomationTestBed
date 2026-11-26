@@ -1,4 +1,4 @@
-"""Security catalog synced to ``Senao UBR P2MP Test Plan_Aug26_Alpha_UBR655.xlsx`` sheet ``Security``."""
+"""Security catalog synced to ``Senao UBR Test Plan.xlsx`` sheet ``Security``."""
 
 from __future__ import annotations
 

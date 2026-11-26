@@ -336,5 +336,5 @@ Common processes: `uhttpd`, `sshd`, `netifd`, `dnsmasq`, `odhcpd`, `ntpd`, `logd
 | VLAN builders | `utils/vlan_uci.py` |
 | Link formation | `utils/link_formation.py` |
 | ARP/Bridge | `utils/arp_bridge_table_flows.py` |
-| Process monitor | `config/process_monitor_catalog.py` |
+| Process monitor | removed — not on `Senao UBR Test Plan.xlsx` |
 | 2.4G / API | `utils/radio24_scan_flows.py`, `utils/cpe_api_24_*.py` |

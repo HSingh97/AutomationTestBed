@@ -1,4 +1,4 @@
-"""DFS catalog synced to ``Senao UBR P2MP Test Plan_Aug26_Alpha_UBR655.xlsx`` sheet ``DFS``.
+"""DFS catalog synced to ``Senao UBR Test Plan.xlsx`` sheet ``DFS``.
 
 Radar injection uses DUT ``radartool -i wifi1 bangradar`` (current channel).
 """

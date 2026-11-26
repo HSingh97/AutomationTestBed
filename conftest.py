@@ -352,24 +352,6 @@ def pytest_addoption(parser):
         help="Include CPE-side IP tests (default: BTS only). Also enabled when -k contains 'cpe'.",
     )
     group.addoption(
-        "--allow-process-monitor",
-        action="store_true",
-        default=False,
-        help="Enable PROCESS_01–PROCESS_19 process monitor tests (crashes/kills on local DUT).",
-    )
-    group.addoption(
-        "--allow-destructive-process",
-        action="store_true",
-        default=False,
-        help="Enable PROCESS_09/PROCESS_15 (watchdog/procd reboot validation).",
-    )
-    group.addoption(
-        "--no-procmon-recovery-reboot",
-        action="store_true",
-        default=False,
-        help="Disable ProcessMonitor SSH-loss recovery reboot (armed before each crash/kill).",
-    )
-    group.addoption(
         "--allow-functional",
         action="store_true",
         default=False,
@@ -1389,20 +1371,6 @@ def pytest_configure(config):
 
     for case in IP_TEST_CASES:
         config.addinivalue_line("markers", f"{case.case_id}: {case.title} ({case.category})")
-    from config.process_test_cases import OFFICIAL_PROCESS_TEST_CASES
-
-    for case in OFFICIAL_PROCESS_TEST_CASES:
-        config.addinivalue_line("markers", f"{case.case_id}: {case.title} ({case.category})")
-    from utils.process_monitor_flows import set_recovery_reboot_enabled
-
-    set_recovery_reboot_enabled(
-        bool(config.getoption("--allow-process-monitor"))
-        and not bool(config.getoption("--no-procmon-recovery-reboot"))
-    )
-    config.addinivalue_line(
-        "markers",
-        "ProcessMonitor: Process monitor suite (tests/ProcessMonitor/)",
-    )
     config.addinivalue_line(
         "markers",
         "IPv4: IP suite — IPv4 stack cases (pytest -m IPv4)",

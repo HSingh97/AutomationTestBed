@@ -213,7 +213,7 @@ async def _setup_lab_pcs(
     )
 
     # configure_mgmt_interface only places IPv6 on the tagged if. IPv4 suites /
-    # ProcessMonitor reach the BTS on 192.168.2.1 via enp3s0.101 — assign that too.
+    # Lab LAN 192.168.2.1 via enp3s0.101 — assign that too.
     primary_mgmt_v4 = str(
         primary_pc.get("mgmt_vlan_ipv4")
         or ip_cfg.get("lab_pc_mgmt_ipv4")

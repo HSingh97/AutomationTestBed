@@ -17,7 +17,7 @@ SSH_PASS = "Sen@0ubRNwk$"
 POLL_INTERVAL_S = 15
 LINK_SETTLE_S = 45
 MAX_WAIT_S = 600
-DEFAULT_MARKER = "RADIO_24_01 or RADIO_24_02"
+DEFAULT_MARKER = "RADIO_24_07 or RADIO_24_08"
 
 
 async def _link_stable() -> bool:

@@ -1,4 +1,4 @@
-"""Firewall suite — ``Senao UBR P2MP Test Plan_Aug26_Alpha_UBR655.xlsx`` sheet ``Firewall``.
+"""Firewall suite — ``Senao UBR Test Plan.xlsx`` sheet ``Firewall``.
 
 Gate live DUT runs with::
 
