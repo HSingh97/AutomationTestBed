@@ -151,6 +151,7 @@ properties([
 }
 #ecp_tput-bw .tr, #ecp_tput-mcs .tr { white-space: normal !important; }
 .jenkins-form-item:has(input[name="name"][value="TPUT_LAYOUT"]) { display: none !important; }
+#tput-mcs-actions { display: flex; gap: 8px; margin: 0 0 10px; }
 #tput-selection-summary { font-size: 15px; line-height: 1.45; padding: 8px 0 4px; }
 </style>
 <script>
@@ -195,10 +196,45 @@ properties([
     }
     bar.innerHTML = '<strong>' + runs + ' runs</strong> &nbsp;·&nbsp; <strong>' + format(mins) + '</strong><div style="color:#5f6b76;margin-top:2px">' + bw + ' bandwidths · ' + mcs + ' MCS · ' + each + 's traffic each</div>';
   }
+  function setMcs(on) {
+    document.querySelectorAll("#ecp_tput-mcs input[type=checkbox]").forEach(function (el) {
+      el.checked = on;
+      el.dispatchEvent(new Event("change", {bubbles: true}));
+    });
+  }
+  function mount() {
+    var grid = document.getElementById("ecp_tput-mcs");
+    if (!grid || document.getElementById("tput-mcs-actions")) return !!grid;
+    var bar = document.createElement("div");
+    bar.id = "tput-mcs-actions";
+    var all = document.createElement("button");
+    all.type = "button";
+    all.className = "jenkins-button";
+    all.textContent = "Select all";
+    all.addEventListener("click", function (event) { event.preventDefault(); setMcs(true); });
+    var none = document.createElement("button");
+    none.type = "button";
+    none.className = "jenkins-button";
+    none.textContent = "Unselect all";
+    none.addEventListener("click", function (event) { event.preventDefault(); setMcs(false); });
+    bar.appendChild(all);
+    bar.appendChild(none);
+    grid.parentNode.insertBefore(bar, grid);
+    return true;
+  }
   document.addEventListener("change", sync);
   document.addEventListener("input", sync);
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", sync);
-  else sync();
+  function boot() {
+    sync();
+    if (mount()) return;
+    var tries = 0;
+    var timer = setInterval(function () {
+      tries += 1;
+      if (mount() || tries > 20) clearInterval(timer);
+    }, 200);
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
 })();
 </script>"""'''
                 ]
