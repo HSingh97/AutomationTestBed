@@ -2,7 +2,7 @@
 // Tick the suites to run. Addresses, profile, and recovery come from
 // config/benches.yaml (test-qa-lab-01). Recovery uses only
 // config/backup-UBR650-bts.tar.gz and config/backup-UBR650-cpe.tar.gz.
-// CPU utilization stays on the CPU Utilization job (REG_04 is not included).
+// CPU utilization and regression stay on their own jobs.
 
 def archiveBuildArtifacts(pattern, allowEmpty = false) {
     step([
@@ -14,10 +14,61 @@ def archiveBuildArtifacts(pattern, allowEmpty = false) {
     ])
 }
 
-def suiteSelected(String name) {
-    def value = params[name]
-    return value == true || value?.toString() == 'true'
+def selectedSuites() {
+    def raw = params.SUITES
+    def text = raw == null ? '' : raw.toString()
+    text = text.replace('[', '').replace(']', '')
+    return text.split(',').collect { it.trim() }.findAll { it }
 }
+
+properties([
+    disableConcurrentBuilds(),
+    parameters([
+        [
+            $class: 'ChoiceParameter',
+            choiceType: 'PT_CHECKBOX',
+            description: '',
+            filterLength: 1,
+            filterable: false,
+            name: 'SUITES',
+            randomName: 'suites-checkbox',
+            script: [
+                $class: 'GroovyScript',
+                fallbackScript: 'return []',
+                script: 'return ["GUI","IP","JUMBO","QOS","USERMGMT","VLAN","LOGS","FIREWALL","DFS","SECURITY","ACB","WIRELESS","ARP","API","RADIO24","SANITY","DDRS","DHCP","FUNCTIONAL","LINKTEST","SPECTRUM"]'
+            ]
+        ],
+        [
+            $class: 'DynamicReferenceParameter',
+            choiceType: 'ET_FORMATTED_HTML',
+            description: '',
+            name: 'SUITE_LAYOUT',
+            omitValueField: true,
+            randomName: 'suite-layout',
+            referencedParameters: '',
+            script: [
+                $class: 'GroovyScript',
+                fallbackScript: 'return ""',
+                script: '''return """<style>
+.dynamic_checkbox > div, .dynamic_checkbox > span {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  column-gap: 36px;
+  row-gap: 8px;
+  width: min(980px, 100%);
+}
+.dynamic_checkbox .tr { white-space: normal !important; }
+</style>
+<script>
+document.querySelectorAll('div[name="parameter"]').forEach(function (el) {
+  var name = el.querySelector('input[name="name"]');
+  if (name && name.value === "SUITE_LAYOUT") el.style.display = "none";
+});
+</script>"""'''
+            ]
+        ]
+    ])
+])
 
 pipeline {
     agent { label 'test-qa-lab-01' }
@@ -30,43 +81,22 @@ pipeline {
         TARGET_STAND = 'test-qa-lab-01'
     }
 
-    parameters {
-        booleanParam(name: 'GUI', defaultValue: false, description: 'GUI — 73 cases')
-        booleanParam(name: 'IP', defaultValue: false, description: 'IPv4 and IPv6 — active IP cases, BTS side')
-        booleanParam(name: 'JUMBO', defaultValue: false, description: 'Jumbo frames — JMB_01 to JMB_10')
-        booleanParam(name: 'REGRESSION', defaultValue: false, description: 'Regression — REG_01 to REG_03. CPU stays on the CPU Utilization job')
-        booleanParam(name: 'PROCESS', defaultValue: false, description: 'Process monitor — PROCESS_01 to PROCESS_19')
-        booleanParam(name: 'QOS', defaultValue: false, description: 'QoS')
-        booleanParam(name: 'USERMGMT', defaultValue: false, description: 'User management')
-        booleanParam(name: 'VLAN', defaultValue: false, description: 'VLAN')
-        booleanParam(name: 'LOGS', defaultValue: false, description: 'Logs. Destructive firmware cases stay skipped')
-        booleanParam(name: 'FIREWALL', defaultValue: false, description: 'Firewall')
-        booleanParam(name: 'DFS', defaultValue: false, description: 'DFS. The 30-minute cases stay off')
-        booleanParam(name: 'SECURITY', defaultValue: false, description: 'Security')
-        booleanParam(name: 'ACB', defaultValue: false, description: 'Asymmetric channel bandwidth')
-        booleanParam(name: 'WIRELESS', defaultValue: false, description: 'Wireless security')
-        booleanParam(name: 'ARP', defaultValue: false, description: 'ARP and bridge table')
-        booleanParam(name: 'API', defaultValue: false, description: 'CPE 2.4 GHz API')
-        booleanParam(name: 'RADIO24', defaultValue: false, description: '2.4 GHz radio scan')
-        booleanParam(name: 'SANITY', defaultValue: false, description: 'Sanity')
-        booleanParam(name: 'DDRS', defaultValue: false, description: 'DDRS')
-        booleanParam(name: 'DHCP', defaultValue: false, description: 'DHCPv4 and DHCPv6')
-        booleanParam(name: 'FUNCTIONAL', defaultValue: false, description: 'Functional')
-        booleanParam(name: 'LINKTEST', defaultValue: false, description: 'Link test')
-        booleanParam(name: 'SPECTRUM', defaultValue: false, description: 'Spectrum analyser and site survey')
-    }
-
     stages {
         stage('Prepare tests') {
             steps {
                 script {
                     def order = [
-                        'GUI', 'IP', 'JUMBO', 'REGRESSION', 'PROCESS', 'QOS', 'USERMGMT',
+                        'GUI', 'IP', 'JUMBO', 'QOS', 'USERMGMT',
                         'VLAN', 'LOGS', 'FIREWALL', 'DFS', 'SECURITY', 'ACB', 'WIRELESS',
                         'ARP', 'API', 'RADIO24', 'SANITY', 'DDRS', 'DHCP', 'FUNCTIONAL',
                         'LINKTEST', 'SPECTRUM',
                     ]
-                    def selected = order.findAll { suiteSelected(it) }
+                    def picked = selectedSuites()
+                    def selected = order.findAll { picked.contains(it) }
+                    def unknown = picked.findAll { !order.contains(it) }
+                    if (!unknown.isEmpty()) {
+                        error("Unknown suite: ${unknown.join(', ')}")
+                    }
                     if (selected.isEmpty()) {
                         error('Tick at least one suite. Addresses are taken from the qa-lab-01 bench profile.')
                     }

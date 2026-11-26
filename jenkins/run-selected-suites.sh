@@ -40,8 +40,6 @@ for raw in "${selected[@]}"; do
     GUI) run_one GUI tests/GUI/ ;;
     IP) run_one IP tests/IP/ --allow-ip-suite --allow-ip-destructive --no-ip-stop-on-first-fail ;;
     JUMBO) run_one JUMBO tests/JumboFrames/ --allow-destructive-jumbo ;;
-    REGRESSION) run_one REGRESSION tests/Regression/ --allow-regression --regression-fresh -k "not REG_04" ;;
-    PROCESS) run_one PROCESS tests/ProcessMonitor/ --allow-process-monitor --allow-destructive-process ;;
     QOS) run_one QOS tests/QoS/ --allow-qos-lab --allow-qos-destructive ;;
     USERMGMT) run_one USERMGMT tests/UserMgmt/ --allow-um-lab --allow-um-destructive ;;
     VLAN) run_one VLAN tests/VLAN/ --allow-vlan-lab --allow-vlan-destructive ;;

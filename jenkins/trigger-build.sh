@@ -31,7 +31,7 @@ usage() {
 Usage: trigger-build.sh --suite GUI,IP
 
 Suites:
-  GUI IP JUMBO REGRESSION PROCESS QOS USERMGMT VLAN LOGS FIREWALL DFS
+  GUI IP JUMBO QOS USERMGMT VLAN LOGS FIREWALL DFS
   SECURITY ACB WIRELESS ARP API RADIO24 SANITY DDRS DHCP FUNCTIONAL
   LINKTEST SPECTRUM
 
@@ -181,20 +181,16 @@ if [[ -n "${CRUMB_JSON}" ]]; then
   CRUMB_VALUE="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("crumb",""))' <<< "${CRUMB_JSON}" 2>/dev/null || true)"
 fi
 
-ALL_SUITES=(
-  GUI IP JUMBO REGRESSION PROCESS QOS USERMGMT VLAN LOGS FIREWALL DFS
-  SECURITY ACB WIRELESS ARP API RADIO24 SANITY DDRS DHCP FUNCTIONAL
-  LINKTEST SPECTRUM
-)
-wanted=",$(echo "${SUITES}" | tr '[:lower:]' '[:upper:]' | tr -d ' '),"
-PARAMS=()
-for name in "${ALL_SUITES[@]}"; do
-  if [[ "${wanted}" == *",${name},"* ]]; then
-    PARAMS+=("${name}=true")
-  else
-    PARAMS+=("${name}=false")
+SUITES="$(echo "${SUITES}" | tr '[:lower:]' '[:upper:]' | tr -d ' ')"
+known=",GUI,IP,JUMBO,QOS,USERMGMT,VLAN,LOGS,FIREWALL,DFS,SECURITY,ACB,WIRELESS,ARP,API,RADIO24,SANITY,DDRS,DHCP,FUNCTIONAL,LINKTEST,SPECTRUM,"
+IFS=',' read -r -a picked <<< "${SUITES}"
+for name in "${picked[@]}"; do
+  if [[ "${known}" != *",${name},"* ]]; then
+    echo "Unknown suite: ${name}" >&2
+    exit 1
   fi
 done
+PARAMS=("SUITES=${SUITES}")
 
 # Form-encoded POST with per-param urlencoding (filters may contain spaces/commas).
 CURL_ARGS=(-sS -u "${AUTH}" -X POST -D /tmp/jenkins-trigger.headers -o /tmp/jenkins-trigger.out -w '%{http_code}')
