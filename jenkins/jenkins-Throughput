@@ -88,7 +88,7 @@ properties([
         [
             $class: 'StringParameterDefinition',
             name: 'DL:UL ratio',
-            defaultValue: '75:25',
+            defaultValue: '50:50',
             description: ''
         ],
         [
@@ -100,7 +100,7 @@ properties([
         [
             $class: 'StringParameterDefinition',
             name: 'SU count',
-            defaultValue: '6',
+            defaultValue: '1',
             description: ''
         ],
         [
@@ -233,7 +233,7 @@ pipeline {
                     def suCount = wholeNumber('SU count')
                     def ratio = (params['DL:UL ratio'] ?: '').toString().trim()
                     if (!(ratio ==~ /\d+:\d+/)) {
-                        error("DL:UL ratio must look like 75:25, got: ${ratio}")
+                        error("DL:UL ratio must look like 50:50, got: ${ratio}")
                     }
                     env.TPUT_BANDWIDTHS = bandwidths.join(',')
                     env.TPUT_MCS = mcsList.join(',')

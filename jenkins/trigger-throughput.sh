@@ -16,10 +16,10 @@ JOB_PATH="job/Automation%20Framework/job/Throughput%20Test%20-%20Trex"
 
 BANDWIDTH="${BANDWIDTH:-all}"
 MCS="${MCS:-all}"
-RATIO="${RATIO:-75:25}"
+RATIO="${RATIO:-50:50}"
 DURATION="${DURATION:-30}"
 PACKET_SIZE="${PACKET_SIZE:-1500}"
-SU_COUNT="${SU_COUNT:-6}"
+SU_COUNT="${SU_COUNT:-1}"
 WAIT="${WAIT:-false}"
 POLL_SECONDS="${POLL_SECONDS:-20}"
 
@@ -30,10 +30,10 @@ Usage: trigger-throughput.sh [OPTIONS]
 Options:
   --bandwidth LIST    HT20,HT40+,HT80,HT160 or all (default: HT20,HT40+,HT80)
   --mcs LIST          MCS list or all (default: all → MCS0..MCS23)
-  --ratio RATIO       DL:UL ratio (default: 75:25)
+  --ratio RATIO       DL:UL ratio (default: 50:50)
   --time SECONDS      Per-iteration duration (default: 30)
   --packet-size N     Frame size bytes (default: 1500)
-  --su-count N        Number of SUs (default: 6)
+  --su-count N        Number of SUs (default: 1)
   --wait              Poll until build completes
   -h, --help          Show help
 EOF
