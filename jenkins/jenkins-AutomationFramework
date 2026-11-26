@@ -48,6 +48,42 @@ properties([
         ],
         [
             $class: 'DynamicReferenceParameter',
+            choiceType: 'ET_FORMATTED_HTML',
+            description: '',
+            name: 'SELECTED',
+            omitValueField: true,
+            randomName: 'suite-total',
+            referencedParameters: 'SUITES',
+            script: [
+                $class: 'GroovyScript',
+                fallbackScript: [
+                    $class: 'SecureGroovyScript',
+                    sandbox: true,
+                    script: '''return '<div style="padding:6px 0;color:#667;">Tick the suites above. The total updates here, then press Build.</div>' '''
+                ],
+                script: [
+                    $class: 'SecureGroovyScript',
+                    sandbox: true,
+                    script: '''def counts = [GUI:73, IP:35, JUMBO:10, QOS:32, USERMGMT:50, VLAN:44, LOGS:72, FIREWALL:6, DFS:21, SECURITY:13, ACB:8, WIRELESS:8, ARP:11, API:18, RADIO24:19, SANITY:47, DDRS:49, DHCP:42, FUNCTIONAL:25, LINKTEST:14, SPECTRUM:22]
+def minutes = [GUI:150, IP:75, JUMBO:25, QOS:60, USERMGMT:120, VLAN:80, LOGS:70, FIREWALL:15, DFS:45, SECURITY:30, ACB:25, WIRELESS:40, ARP:20, API:35, RADIO24:45, SANITY:100, DDRS:120, DHCP:90, FUNCTIONAL:60, LINKTEST:30, SPECTRUM:40]
+def raw = ""
+try { raw = SUITES == null ? "" : SUITES.toString() } catch (Exception e) { raw = "" }
+def names = raw.split(",").collect { it.trim() }.findAll { it && counts.containsKey(it) }
+if (!names) {
+  return '<div style="padding:6px 0;color:#667;">Tick the suites above. The total updates here, then press Build.</div>'
+}
+int cases = 0
+int mins = 0
+names.each { n -> cases += (counts[n] as int); mins += (minutes[n] as int) }
+int h = (int) (mins / 60)
+int rem = mins % 60
+def time = h > 0 ? (rem > 0 ? "~" + h + "h " + rem + "m" : "~" + h + "h") : "~" + rem + "m"
+return '<div style="font-size:15px;line-height:1.45;padding:4px 0;"><strong>' + cases + ' cases</strong> &nbsp;&middot;&nbsp; <strong>' + time + '</strong><div style="color:#5f6b76;margin-top:2px;">' + names.join(", ") + '</div></div>' '''
+                ]
+            ]
+        ],
+        [
+            $class: 'DynamicReferenceParameter',
             choiceType: 'ET_FORMATTED_HIDDEN_HTML',
             description: '',
             name: 'SUITE_LAYOUT',
