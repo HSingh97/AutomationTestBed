@@ -34,8 +34,16 @@ properties([
             randomName: 'suites-checkbox',
             script: [
                 $class: 'GroovyScript',
-                fallbackScript: 'return []',
-                script: 'return ["GUI","IP","JUMBO","QOS","USERMGMT","VLAN","LOGS","FIREWALL","DFS","SECURITY","ACB","WIRELESS","ARP","API","RADIO24","SANITY","DDRS","DHCP","FUNCTIONAL","LINKTEST","SPECTRUM"]'
+                fallbackScript: [
+                    $class: 'SecureGroovyScript',
+                    sandbox: true,
+                    script: 'return []'
+                ],
+                script: [
+                    $class: 'SecureGroovyScript',
+                    sandbox: true,
+                    script: 'return ["GUI","IP","JUMBO","QOS","USERMGMT","VLAN","LOGS","FIREWALL","DFS","SECURITY","ACB","WIRELESS","ARP","API","RADIO24","SANITY","DDRS","DHCP","FUNCTIONAL","LINKTEST","SPECTRUM"]'
+                ]
             ]
         ],
         [
@@ -48,8 +56,15 @@ properties([
             referencedParameters: '',
             script: [
                 $class: 'GroovyScript',
-                fallbackScript: 'return ""',
-                script: '''return """<style>
+                fallbackScript: [
+                    $class: 'SecureGroovyScript',
+                    sandbox: false,
+                    script: 'return ""'
+                ],
+                script: [
+                    $class: 'SecureGroovyScript',
+                    sandbox: false,
+                    script: '''return """<style>
 .dynamic_checkbox > div, .dynamic_checkbox > span {
   display: grid !important;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
@@ -58,13 +73,9 @@ properties([
   width: min(980px, 100%);
 }
 .dynamic_checkbox .tr { white-space: normal !important; }
-</style>
-<script>
-document.querySelectorAll('div[name="parameter"]').forEach(function (el) {
-  var name = el.querySelector('input[name="name"]');
-  if (name && name.value === "SUITE_LAYOUT") el.style.display = "none";
-});
-</script>"""'''
+div[name="parameter"]:has(input[name="name"][value="SUITE_LAYOUT"]) { display: none !important; }
+</style>"""'''
+                ]
             ]
         ]
     ])
