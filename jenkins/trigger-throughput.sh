@@ -4,7 +4,7 @@
 # Examples:
 #   ./jenkins/trigger-throughput.sh
 #   ./jenkins/trigger-throughput.sh --mcs MCS23 --bandwidth HT80
-#   ./jenkins/trigger-throughput.sh --stand test-qa-lab-02 --wait
+#   ./jenkins/trigger-throughput.sh --wait
 #
 # Auth: same as jenkins/trigger-build.sh (JENKINS_USER + ~/.jenkins-api-token)
 
@@ -14,12 +14,8 @@ JENKINS_URL="${JENKINS_URL:-http://127.0.0.1:8081}"
 JENKINS_USER="${JENKINS_USER:-harman}"
 JOB_PATH="job/Automation%20Framework/job/Throughput%20Test%20-%20Trex"
 
-TARGET_STAND="${TARGET_STAND:-test-qa-lab-01}"
 BANDWIDTH="${BANDWIDTH:-all}"
 MCS="${MCS:-all}"
-TREX_IP="${TREX_IP:-}"
-BTS_IP="${BTS_IP:-}"
-CPE_IP="${CPE_IP:-}"
 RATIO="${RATIO:-75:25}"
 DURATION="${DURATION:-30}"
 PACKET_SIZE="${PACKET_SIZE:-1500}"
@@ -32,13 +28,8 @@ usage() {
 Usage: trigger-throughput.sh [OPTIONS]
 
 Options:
-  --stand STAND       TARGET_STAND / agent label (default: test-qa-lab-01)
-  --bandwidth LIST    Which boxes to check: HT20,HT40+,HT80,HT160 or all
-                      (default: all except HT160)
+  --bandwidth LIST    HT20,HT40+,HT80,HT160 or all (default: HT20,HT40+,HT80)
   --mcs LIST          MCS list or all (default: all → MCS0..MCS23)
-  --trex-ip IP        TRex server IP (default: stand profile)
-  --bts-ip IP         BTS management IP (default: stand profile)
-  --cpe-ip IP         CPE management IP (default: stand profile)
   --ratio RATIO       DL:UL ratio (default: 75:25)
   --time SECONDS      Per-iteration duration (default: 30)
   --packet-size N     Frame size bytes (default: 1500)
@@ -50,12 +41,10 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --stand) TARGET_STAND="$2"; shift 2 ;;
+    --stand) echo "This job runs only on qa-lab-01" >&2; exit 1 ;;
     --bandwidth) BANDWIDTH="$2"; shift 2 ;;
     --mcs) MCS="$2"; shift 2 ;;
-    --trex-ip) TREX_IP="$2"; shift 2 ;;
-    --bts-ip) BTS_IP="$2"; shift 2 ;;
-    --cpe-ip) CPE_IP="$2"; shift 2 ;;
+    --trex-ip|--bts-ip|--cpe-ip) echo "Addresses come from the qa-lab-01 bench" >&2; exit 1 ;;
     --ratio) RATIO="$2"; shift 2 ;;
     --time) DURATION="$2"; shift 2 ;;
     --packet-size) PACKET_SIZE="$2"; shift 2 ;;
@@ -77,25 +66,37 @@ if [[ -z "${JENKINS_TOKEN:-}" ]]; then
   fi
 fi
 
-HT20=false
-HT40=false
-HT80=false
-HT160=false
 bw_key="$(printf '%s' "${BANDWIDTH}" | tr '[:lower:]' '[:upper:]' | tr -d ' ')"
 if [[ -z "${bw_key}" || "${bw_key}" == "ALL" ]]; then
-  HT20=true
-  HT40=true
-  HT80=true
+  bw_key="HT20,HT40+,HT80"
+fi
+BANDWIDTH=""
+IFS=',' read -ra bw_items <<<"${bw_key}"
+for item in "${bw_items[@]}"; do
+  case "${item}" in
+    HT20|HT80|HT160) norm="${item}" ;;
+    HT40|HT40+) norm="HT40+" ;;
+    *) echo "Unknown bandwidth: ${item}" >&2; exit 1 ;;
+  esac
+  BANDWIDTH="${BANDWIDTH:+${BANDWIDTH},}${norm}"
+done
+
+mcs_key="$(printf '%s' "${MCS}" | tr -d ' ' )"
+if [[ -z "${mcs_key}" || "${mcs_key,,}" == "all" ]]; then
+  MCS=""
+  for n in $(seq 0 23); do
+    MCS="${MCS:+${MCS},}MCS${n}"
+  done
 else
-  IFS=',' read -ra bw_items <<<"${bw_key}"
-  for item in "${bw_items[@]}"; do
-    case "${item}" in
-      HT20) HT20=true ;;
-      HT40|HT40+) HT40=true ;;
-      HT80) HT80=true ;;
-      HT160) HT160=true ;;
-      *) echo "Unknown bandwidth: ${item}" >&2; exit 1 ;;
-    esac
+  MCS=""
+  IFS=',' read -ra mcs_items <<<"${mcs_key}"
+  for item in "${mcs_items[@]}"; do
+    item="$(printf '%s' "${item}" | tr '[:lower:]' '[:upper:]')"
+    if [[ ! "${item}" =~ ^MCS([0-9]|1[0-9]|2[0-3])$ ]]; then
+      echo "Unknown MCS: ${item}" >&2
+      exit 1
+    fi
+    MCS="${MCS:+${MCS},}${item}"
   done
 fi
 
@@ -104,22 +105,15 @@ CRUMB="$(python3 -c "import json,sys; print(json.load(sys.stdin).get('crumb','')
 CRUMB_FIELD="$(python3 -c "import json,sys; print(json.load(sys.stdin).get('crumbRequestField','Jenkins-Crumb'))" <<<"$CRUMB_JSON")"
 
 POST_DATA=(
-  --data-urlencode "TARGET_STAND=${TARGET_STAND}"
-  --data-urlencode "HT20=${HT20}"
-  --data-urlencode "HT40+=${HT40}"
-  --data-urlencode "HT80=${HT80}"
-  --data-urlencode "HT160=${HT160}"
+  --data-urlencode "BANDWIDTH=${BANDWIDTH}"
   --data-urlencode "MCS=${MCS}"
-  --data-urlencode "TRex IP=${TREX_IP}"
-  --data-urlencode "BTS IP=${BTS_IP}"
-  --data-urlencode "CPE IP=${CPE_IP}"
-  --data-urlencode "DL:UL Ratio=${RATIO}"
-  --data-urlencode "Throughput Test Time=${DURATION}"
-  --data-urlencode "Packet Size=${PACKET_SIZE}"
-  --data-urlencode "No of SU=${SU_COUNT}"
+  --data-urlencode "DL:UL ratio=${RATIO}"
+  --data-urlencode "Seconds each=${DURATION}"
+  --data-urlencode "Packet size=${PACKET_SIZE}"
+  --data-urlencode "SU count=${SU_COUNT}"
 )
 
-echo "[jenkins] Triggering Throughput Test - Trex on stand=${TARGET_STAND}"
+echo "[jenkins] Triggering Throughput Test - Trex on qa-lab-01"
 HTTP="$(curl -s -D /tmp/trigger-throughput.hdr -o /tmp/trigger-throughput.out -w "%{http_code}" \
   -u "${JENKINS_USER}:${JENKINS_TOKEN}" -X POST \
   -H "${CRUMB_FIELD}: ${CRUMB}" \

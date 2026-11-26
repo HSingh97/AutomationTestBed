@@ -1,5 +1,6 @@
-// UBR TRex performance matrix — runs on TARGET_STAND.
-// Report: Senao_Performance_<build>_Report_<date>.html (Grafana-style by default).
+// UBR TRex throughput-per-MCS matrix. Runs only on qa-lab-01.
+// Tick bandwidths and MCS rates. Addresses come from the bench profile.
+// Report: Senao_Performance_<build>_Report_<date>.html
 
 def archiveBuildArtifacts(pattern, allowEmpty = false) {
     step([
@@ -11,110 +12,245 @@ def archiveBuildArtifacts(pattern, allowEmpty = false) {
     ])
 }
 
-def selectedBandwidths(boolean failIfEmpty = true) {
-    def selected = []
-    if (params.HT20) {
-        selected << 'HT20'
+def selectedValues(String paramName, List order) {
+    def raw = params[paramName]
+    def text = raw == null ? '' : raw.toString()
+    text = text.replace('[', '').replace(']', '')
+    def picked = text.split(',').collect { it.trim() }.findAll { it }
+    def unknown = picked.findAll { !order.contains(it) }
+    if (!unknown.isEmpty()) {
+        error("Unknown ${paramName}: ${unknown.join(', ')}")
     }
-    if (params['HT40+']) {
-        selected << 'HT40+'
-    }
-    if (params.HT80) {
-        selected << 'HT80'
-    }
-    if (params.HT160) {
-        selected << 'HT160'
-    }
-    if (!selected) {
-        if (failIfEmpty) {
-            error('Select at least one bandwidth')
-        }
-        return '(none)'
-    }
-    return selected.join(',')
+    return order.findAll { picked.contains(it) }
 }
 
-def expandMcs(raw) {
-    def text = (raw ?: '').trim()
-    if (!text || text.equalsIgnoreCase('all')) {
-        return (0..23).collect { "MCS${it}" }.join(',')
+def wholeNumber(String name) {
+    def text = (params[name] ?: '').toString().trim()
+    if (!(text ==~ /[1-9][0-9]*/)) {
+        error("${name} must be a whole number, 1 or more.")
     }
     return text
 }
 
-pipeline {
-    agent { node { label "${TARGET_STAND}" } }
-
-    parameters {
-        choice(
-            name: 'TARGET_STAND',
-            choices: ['test-qa-lab-01', 'test-qa-lab-02', 'test-harman2', 'test-puneet'],
-            description: 'Jenkins agent / lab stand'
-        )
-        booleanParam(name: 'HT20', defaultValue: true, description: 'Run HT20')
-        booleanParam(name: 'HT40+', defaultValue: true, description: 'Run HT40+')
-        booleanParam(name: 'HT80', defaultValue: true, description: 'Run HT80')
-        booleanParam(name: 'HT160', defaultValue: false, description: 'Run HT160')
-        string(
+properties([
+    disableConcurrentBuilds(),
+    parameters([
+        [
+            $class: 'ChoiceParameter',
+            choiceType: 'PT_CHECKBOX',
+            description: '',
+            filterLength: 1,
+            filterable: false,
+            name: 'BANDWIDTH',
+            randomName: 'tput-bw',
+            script: [
+                $class: 'GroovyScript',
+                fallbackScript: [
+                    $class: 'SecureGroovyScript',
+                    sandbox: true,
+                    script: 'return []'
+                ],
+                script: [
+                    $class: 'SecureGroovyScript',
+                    sandbox: false,
+                    script: 'return ["HT20":"HT20:selected","HT40+":"HT40+:selected","HT80":"HT80:selected","HT160":"HT160"]'
+                ]
+            ]
+        ],
+        [
+            $class: 'ChoiceParameter',
+            choiceType: 'PT_CHECKBOX',
+            description: '',
+            filterLength: 1,
+            filterable: false,
             name: 'MCS',
-            defaultValue: 'all',
-            description: 'MCS list (e.g. MCS22,MCS23) or all → MCS0..MCS23'
-        )
-        string(
-            name: 'TRex IP',
-            defaultValue: '',
-            description: 'TRex server IP. Leave empty to use the stand profile.'
-        )
-        string(
-            name: 'BTS IP',
-            defaultValue: '',
-            description: 'BTS management IP. Leave empty to use the stand profile.'
-        )
-        string(
-            name: 'CPE IP',
-            defaultValue: '',
-            description: 'CPE / SU management IP. Leave empty to use the stand profile.'
-        )
-        string(
-            name: 'Packet Size',
+            randomName: 'tput-mcs',
+            script: [
+                $class: 'GroovyScript',
+                fallbackScript: [
+                    $class: 'SecureGroovyScript',
+                    sandbox: true,
+                    script: 'return []'
+                ],
+                script: [
+                    $class: 'SecureGroovyScript',
+                    sandbox: true,
+                    script: 'return ["MCS0":"MCS0:selected","MCS1":"MCS1:selected","MCS2":"MCS2:selected","MCS3":"MCS3:selected","MCS4":"MCS4:selected","MCS5":"MCS5:selected","MCS6":"MCS6:selected","MCS7":"MCS7:selected","MCS8":"MCS8:selected","MCS9":"MCS9:selected","MCS10":"MCS10:selected","MCS11":"MCS11:selected","MCS12":"MCS12:selected","MCS13":"MCS13:selected","MCS14":"MCS14:selected","MCS15":"MCS15:selected","MCS16":"MCS16:selected","MCS17":"MCS17:selected","MCS18":"MCS18:selected","MCS19":"MCS19:selected","MCS20":"MCS20:selected","MCS21":"MCS21:selected","MCS22":"MCS22:selected","MCS23":"MCS23:selected"]'
+                ]
+            ]
+        ],
+        [
+            $class: 'StringParameterDefinition',
+            name: 'Packet size',
             defaultValue: '1500',
-            description: 'TRex frame size in bytes'
-        )
-        string(
-            name: 'DL:UL Ratio',
+            description: ''
+        ],
+        [
+            $class: 'StringParameterDefinition',
+            name: 'DL:UL ratio',
             defaultValue: '75:25',
-            description: 'Bidirectional DL:UL ratio'
-        )
-        string(
-            name: 'Throughput Test Time',
+            description: ''
+        ],
+        [
+            $class: 'StringParameterDefinition',
+            name: 'Seconds each',
             defaultValue: '30',
-            description: 'TRex duration per iteration (seconds)'
-        )
-        string(
-            name: 'No of SU',
+            description: ''
+        ],
+        [
+            $class: 'StringParameterDefinition',
+            name: 'SU count',
             defaultValue: '6',
-            description: 'TRex SU count (capped to live-associated SUs at runtime)'
-        )
+            description: ''
+        ],
+        [
+            $class: 'DynamicReferenceParameter',
+            choiceType: 'ET_FORMATTED_HIDDEN_HTML',
+            description: '',
+            name: 'TPUT_LAYOUT',
+            omitValueField: true,
+            randomName: 'tput-layout',
+            referencedParameters: '',
+            script: [
+                $class: 'GroovyScript',
+                fallbackScript: [
+                    $class: 'SecureGroovyScript',
+                    sandbox: false,
+                    script: 'return ""'
+                ],
+                script: [
+                    $class: 'SecureGroovyScript',
+                    sandbox: false,
+                    script: '''return """<style>
+#ecp_tput-bw, #ecp_tput-mcs {
+  float: none !important;
+  overflow: visible !important;
+  height: auto !important;
+  width: 100% !important;
+  max-height: none !important;
+}
+.jenkins-form-item:has(#ecp_tput-bw) .active-choice,
+.jenkins-form-item:has(#ecp_tput-bw) .setting-main,
+.jenkins-form-item:has(#ecp_tput-mcs) .active-choice,
+.jenkins-form-item:has(#ecp_tput-mcs) .setting-main {
+  width: 100% !important;
+  align-items: stretch !important;
+}
+#ecp_tput-bw > div, #ecp_tput-bw > table {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  column-gap: 24px;
+  width: 100% !important;
+}
+#ecp_tput-mcs > div, #ecp_tput-mcs > table {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  column-gap: 18px;
+  row-gap: 6px;
+  width: 100% !important;
+}
+#ecp_tput-bw .tr, #ecp_tput-mcs .tr { white-space: normal !important; }
+.jenkins-form-item:has(input[name="name"][value="TPUT_LAYOUT"]) { display: none !important; }
+#tput-selection-summary { font-size: 15px; line-height: 1.45; padding: 8px 0 4px; }
+</style>
+<script>
+(function () {
+  function count(id) {
+    var n = 0;
+    document.querySelectorAll("#" + id + " input[type=checkbox]").forEach(function (el) {
+      if (el.checked) n += 1;
+    });
+    return n;
+  }
+  function seconds() {
+    var hidden = document.querySelector('input[name="name"][value="Seconds each"]');
+    var row = hidden ? hidden.closest(".jenkins-form-item") : null;
+    var field = row ? row.querySelector("input.jenkins-input") : null;
+    var n = field ? parseInt(field.value, 10) : 30;
+    return n > 0 ? n : 30;
+  }
+  function format(mins) {
+    var h = Math.floor(mins / 60);
+    var m = mins % 60;
+    if (h > 0) return m ? "~" + h + "h " + m + "m" : "~" + h + "h";
+    return "~" + m + "m";
+  }
+  function sync() {
+    var bw = count("ecp_tput-bw");
+    var mcs = count("ecp_tput-mcs");
+    var runs = bw * mcs;
+    var each = seconds();
+    var mins = Math.round(runs * (each + 60) / 60);
+    var bar = document.getElementById("tput-selection-summary");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "tput-selection-summary";
+      var button = document.querySelector("button.jenkins-button--primary");
+      var host = button ? button.parentNode : null;
+      if (host && host.parentNode) host.parentNode.insertBefore(bar, host);
+    }
+    if (!runs) {
+      bar.innerHTML = '<span style="color:#667">Tick at least one bandwidth and one MCS. The total updates here, then press Build.</span>';
+      return;
+    }
+    bar.innerHTML = '<strong>' + runs + ' runs</strong> &nbsp;·&nbsp; <strong>' + format(mins) + '</strong><div style="color:#5f6b76;margin-top:2px">' + bw + ' bandwidths · ' + mcs + ' MCS · ' + each + 's traffic each</div>';
+  }
+  document.addEventListener("change", sync);
+  document.addEventListener("input", sync);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", sync);
+  else sync();
+})();
+</script>"""'''
+                ]
+            ]
+        ]
+    ])
+])
+
+pipeline {
+    agent { label 'test-qa-lab-01' }
+
+    options {
+        disableConcurrentBuilds()
+    }
+
+    environment {
+        TARGET_STAND = 'test-qa-lab-01'
     }
 
     stages {
         stage('Prepare Testbed') {
             steps {
                 script {
-                    def bandwidths = selectedBandwidths()
-                    def mcsList = expandMcs(params.MCS)
+                    def bandwidths = selectedValues('BANDWIDTH', ['HT20', 'HT40+', 'HT80', 'HT160'])
+                    def mcsOrder = (0..23).collect { "MCS${it}" }
+                    def mcsList = selectedValues('MCS', mcsOrder)
+                    if (bandwidths.isEmpty() || mcsList.isEmpty()) {
+                        error('Tick at least one bandwidth and one MCS. Addresses are taken from the qa-lab-01 bench profile.')
+                    }
+                    def packet = wholeNumber('Packet size')
+                    def seconds = wholeNumber('Seconds each')
+                    def suCount = wholeNumber('SU count')
+                    def ratio = (params['DL:UL ratio'] ?: '').toString().trim()
+                    if (!(ratio ==~ /\d+:\d+/)) {
+                        error("DL:UL ratio must look like 75:25, got: ${ratio}")
+                    }
+                    env.TPUT_BANDWIDTHS = bandwidths.join(',')
+                    env.TPUT_MCS = mcsList.join(',')
+                    env.TPUT_PACKET = packet
+                    env.TPUT_SECONDS = seconds
+                    env.TPUT_SU = suCount
+                    env.TPUT_RATIO = ratio
                     echo '------------------------------------------'
-                    echo 'UBR Performance Throughput (TRex matrix)'
-                    echo "--- TARGET STAND: ${TARGET_STAND}"
-                    echo "Bandwidth:  ${bandwidths}"
-                    echo "MCS:        ${params.MCS} → ${mcsList}"
-                    echo "TRex IP:    ${params['TRex IP'] ?: '(stand profile)'}"
-                    echo "BTS IP:     ${params['BTS IP'] ?: '(stand profile)'}"
-                    echo "CPE IP:     ${params['CPE IP'] ?: '(stand profile)'}"
-                    echo "Packet:     ${params['Packet Size']}"
-                    echo "Ratio:      ${params['DL:UL Ratio']}"
-                    echo "Duration:   ${params['Throughput Test Time']}s"
-                    echo "No of SU:   ${params['No of SU']}"
+                    echo 'UBR throughput per MCS (TRex matrix)'
+                    echo 'Agent:       test-qa-lab-01'
+                    echo "Bandwidth:   ${env.TPUT_BANDWIDTHS}"
+                    echo "MCS:         ${mcsList.size()} rates"
+                    echo "Packet:      ${packet}"
+                    echo "Ratio:       ${ratio}"
+                    echo "Duration:    ${seconds}s"
+                    echo "SU count:    ${suCount}"
+                    echo 'Addresses:   qa-lab-01 bench profile'
                     echo '------------------------------------------'
                 }
             }
@@ -135,57 +271,23 @@ pipeline {
         stage('Run Performance Matrix') {
             steps {
                 script {
-                    def bandwidths = selectedBandwidths()
-                    def mcsList = expandMcs(params.MCS)
-                    def ratio = (params['DL:UL Ratio'] ?: '75:25').trim()
-                    def testTime = (params['Throughput Test Time'] ?: '30').trim()
-                    def suCount = (params['No of SU'] ?: '6').trim()
-                    def packetRaw = (params['Packet Size'] ?: '1500').trim()
-                    // Internal timeouts (not exposed in UI)
-                    def suLinkWait = '180'
-                    def bwApplyWait = '60'
-                    def bwRunningWait = '20'
-                    def operatingMcsWait = '45'
-                    def trexIp = (params['TRex IP'] ?: '').trim()
-                    def btsIp = (params['BTS IP'] ?: '').trim()
-                    def cpeIp = (params['CPE IP'] ?: '').trim()
-
-                    if (!(packetRaw ==~ /^\d+$/)) {
-                        error("Packet Size must be numeric bytes (e.g. 1500), got: ${packetRaw}")
-                    }
-                    if (!(suCount ==~ /^\d+$/)) {
-                        error("No of SU must be numeric (e.g. 6), got: ${suCount}")
-                    }
-
                     sh 'rm -rf reports/artifacts/performance_* reports/artifacts/Performance_Report_*.html Senao_Performance_*.html || true'
 
                     def cmd = new StringBuilder('PYTHONPATH=. venv/bin/python traffic/performance_matrix.py')
-                    cmd.append(" --bandwidths '${bandwidths}'")
-                    cmd.append(" --mcs '${mcsList}'")
-                    cmd.append(" --ratios '${ratio}'")
+                    cmd.append(" --bandwidths '${env.TPUT_BANDWIDTHS}'")
+                    cmd.append(" --mcs '${env.TPUT_MCS}'")
+                    cmd.append(" --ratios '${env.TPUT_RATIO}'")
                     cmd.append(' --ratios-only')
                     cmd.append(' --no-fail-on-rate-mismatch')
-                    cmd.append(" --time ${testTime}")
-                    cmd.append(" --packet-size ${packetRaw}")
-                    cmd.append(" --su-link-wait-s ${suLinkWait}")
-                    cmd.append(" --bandwidth-apply-wait-s ${bwApplyWait}")
-                    cmd.append(" --bandwidth-running-wait-s ${bwRunningWait}")
-                    cmd.append(" --operating-mcs-wait-s ${operatingMcsWait}")
+                    cmd.append(" --time ${env.TPUT_SECONDS}")
+                    cmd.append(" --packet-size ${env.TPUT_PACKET}")
+                    cmd.append(' --su-link-wait-s 180')
+                    cmd.append(' --bandwidth-apply-wait-s 60')
+                    cmd.append(' --bandwidth-running-wait-s 20')
+                    cmd.append(' --operating-mcs-wait-s 45')
                     cmd.append(' --deploy-client-script')
-                    cmd.append(" --stand '${TARGET_STAND}'")
-                    cmd.append(" --su-count ${suCount}")
-                    if (trexIp) {
-                        cmd.append(" --trex-server '${trexIp}'")
-                    }
-                    if (btsIp) {
-                        cmd.append(" --local-ip '${btsIp}'")
-                    }
-                    if (cpeIp) {
-                        cmd.append(" --cpe-ip '${cpeIp}'")
-                    }
-                    if (btsIp.contains('.') && !btsIp.contains(':')) {
-                        cmd.append(' --no-qinq')
-                    }
+                    cmd.append(" --stand 'test-qa-lab-01'")
+                    cmd.append(" --su-count ${env.TPUT_SU}")
 
                     def exitCode = sh(script: cmd.toString(), returnStatus: true)
                     env.PERF_MATRIX_EXIT = "${exitCode}"
@@ -247,24 +349,22 @@ pipeline {
                     senao.publishSenaoHtmlReport(reportFile, "Senao Performance Report - Build ${env.BUILD_NUMBER}")
                 }
 
+                def mcsCount = (env.TPUT_MCS ?: '').split(',').findAll { it.trim() }.size()
                 def detailsHtml = """\
-                    <p><strong>Stand:</strong> ${params.TARGET_STAND}</p>
-                    <p><strong>Bandwidth:</strong> ${selectedBandwidths(false)}</p>
-                    <p><strong>MCS:</strong> ${params.MCS}</p>
-                    <p><strong>TRex IP:</strong> ${params['TRex IP'] ?: '(stand profile)'}</p>
-                    <p><strong>BTS IP:</strong> ${params['BTS IP'] ?: '(stand profile)'}</p>
-                    <p><strong>CPE IP:</strong> ${params['CPE IP'] ?: '(stand profile)'}</p>
-                    <p><strong>Packet size:</strong> ${params['Packet Size']} bytes</p>
-                    <p><strong>DL:UL ratio:</strong> ${params['DL:UL Ratio']}</p>
-                    <p><strong>Duration:</strong> ${params['Throughput Test Time']}s per iteration</p>
-                    <p><strong>No of SU:</strong> ${params['No of SU']}</p>
+                    <p><strong>Bench:</strong> qa-lab-01</p>
+                    <p><strong>Bandwidth:</strong> ${env.TPUT_BANDWIDTHS ?: '—'}</p>
+                    <p><strong>MCS:</strong> ${mcsCount}</p>
+                    <p><strong>Packet size:</strong> ${env.TPUT_PACKET ?: '—'} bytes</p>
+                    <p><strong>DL:UL ratio:</strong> ${env.TPUT_RATIO ?: '—'}</p>
+                    <p><strong>Duration:</strong> ${env.TPUT_SECONDS ?: '—'}s per run</p>
+                    <p><strong>SU count:</strong> ${env.TPUT_SU ?: '—'}</p>
                 """
 
                 try {
                     senao.sendSenaoPipelineEmail([
                         subjectPrefix: 'UBR Performance Throughput',
                         reportTitle: 'UBR Performance Throughput Report',
-                        footerNote: 'TRex performance matrix with BTS/CPE testbed summary',
+                        footerNote: 'TRex throughput per MCS',
                         reportFile: hasReport ? reportFile : '',
                         detailsHtml: detailsHtml
                     ])
