@@ -12,10 +12,12 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from utils.profile_manager import load_profile_bundle
-from utils.testbed_bootstrap import TestbedState, bootstrap_testbed
+from utils.testbed_bootstrap import TestbedState, _restore_link_via_archives, bootstrap_testbed
 
 
 async def _main(args: argparse.Namespace) -> int:
+    if args.restore_archives:
+        args.with_gui = True
     bundle = load_profile_bundle(
         profile_name=args.profile,
         recovery_profile_name=args.recovery_profile,
@@ -70,6 +72,18 @@ async def _main(args: argparse.Namespace) -> int:
             if gui_page is None:
                 raise RuntimeError(f"GUI login failed for all hosts: {hosts_to_try}. Last={last_exc}")
 
+            if args.restore_archives:
+                print("[testbed] Restoring BTS and CPE from the golden backup archives.")
+                await _restore_link_via_archives(
+                    profile_bundle=bundle,
+                    device_creds=creds,
+                    gui_page=gui_page,
+                    password=creds["pass"],
+                )
+                await browser.close()
+                print("[testbed] Golden archive restore finished.")
+                return 0
+
             await bootstrap_testbed(
                 bundle, creds, gui_page=gui_page, cli_fallback_ip=args.fallback_ip or None
             )
@@ -95,6 +109,11 @@ if __name__ == "__main__":
     parser.add_argument("--username", default="root")
     parser.add_argument("--password", default="Sen@0ubRNwk$")
     parser.add_argument("--with-gui", action="store_true", help="Enable BTS/CPE .tgz restore via LuCI")
+    parser.add_argument(
+        "--restore-archives",
+        action="store_true",
+        help="Restore BTS and CPE from config/backup-UBR650-bts.tar.gz and config/backup-UBR650-cpe.tar.gz, then stop",
+    )
     parser.add_argument("--headed", action="store_true", help="Show browser when --with-gui")
     parser.add_argument(
         "--fallback-ip",

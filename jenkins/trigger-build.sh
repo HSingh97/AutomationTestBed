@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 # Trigger Jenkins job: Automation Framework / Automation Test Cases
 #
+# The job runs only on qa-lab-01. Tick suites; addresses come from the bench profile.
+#
 # Examples:
-#   ./jenkins/trigger-build.sh JMB_04
-#   ./jenkins/trigger-build.sh --filter JMB_04 --markers JumboFrames
-#   ./jenkins/trigger-build.sh --filter IP_18 --markers IP
-#   ./jenkins/trigger-build.sh --markers ProcessMonitor --filter ProcessMonitor
-#   ./jenkins/trigger-build.sh --markers ProcessMonitor --skip-bootstrap
-#   ./jenkins/trigger-build.sh --markers UserMgmt --skip-bootstrap
+#   ./jenkins/trigger-build.sh --suite GUI
+#   ./jenkins/trigger-build.sh --suite GUI,IP,JUMBO
 #
 # Auth (pick one):
 #   export JENKINS_USER=harman JENKINS_TOKEN=<api-token>
@@ -22,15 +20,7 @@ JENKINS_URL="${JENKINS_URL:-http://127.0.0.1:8081}"
 JENKINS_USER="${JENKINS_USER:-harman}"
 JOB_PATH="job/Automation%20Framework/job/Automation%20Test%20Cases"
 
-TARGET_STAND="${TARGET_STAND:-test-harman2}"
-TEST_MARKERS="${TEST_MARKERS:-JumboFrames}"
-TEST_FILTER="${TEST_FILTER:-}"
-RECOVERY_PROFILE_NAME="${RECOVERY_PROFILE_NAME:-link_formation}"
-LOCAL_IPV6="${LOCAL_IPV6:-}"
-REMOTE_IPV6="${REMOTE_IPV6:-}"
-FALLBACK_IP="${FALLBACK_IP:-10.0.0.1}"
-SKIP_TESTBED_BOOTSTRAP="${SKIP_TESTBED_BOOTSTRAP:-false}"
-RUN_IP_CPE="${RUN_IP_CPE:-false}"
+SUITES="${SUITES:-}"
 WAIT="${WAIT:-false}"
 WAIT_FOR_IDLE="${WAIT_FOR_IDLE:-true}"
 POLL_SECONDS="${POLL_SECONDS:-15}"
@@ -38,18 +28,17 @@ LOG_TAIL_LINES="${LOG_TAIL_LINES:-80}"
 
 usage() {
   cat <<'EOF'
-Usage: trigger-build.sh [OPTIONS] [TEST_FILTER]
+Usage: trigger-build.sh --suite GUI,IP
 
-Run a single Jumbo case:
-  ./jenkins/trigger-build.sh JMB_04
+Suites:
+  GUI IP JUMBO REGRESSION PROCESS QOS USERMGMT VLAN LOGS FIREWALL DFS
+  SECURITY ACB WIRELESS ARP API RADIO24 SANITY DDRS DHCP FUNCTIONAL
+  LINKTEST SPECTRUM
+
+The job always runs on qa-lab-01. IPs come from config/benches.yaml.
 
 Options:
-  --filter FILTER          pytest -k filter (comma = OR)
-  --markers MARKERS        TEST_MARKERS (default: JumboFrames)
-  --stand STAND            TARGET_STAND (default: test-harman2)
-  --recovery-profile NAME  RECOVERY_PROFILE_NAME (default: link_formation)
-  --skip-bootstrap         SKIP_TESTBED_BOOTSTRAP=true
-  --run-ip-cpe             RUN_IP_CPE=true
+  --suite LIST             Comma-separated suites to tick
   --url URL                JENKINS_URL (default: http://127.0.0.1:8081)
   --user USER              JENKINS_USER (default: harman)
   --wait                   Poll until the triggered build finishes (and show log tail)
@@ -60,12 +49,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --filter) TEST_FILTER="$2"; shift 2 ;;
-    --markers) TEST_MARKERS="$2"; shift 2 ;;
-    --stand) TARGET_STAND="$2"; shift 2 ;;
-    --recovery-profile) RECOVERY_PROFILE_NAME="$2"; shift 2 ;;
-    --skip-bootstrap) SKIP_TESTBED_BOOTSTRAP=true; shift ;;
-    --run-ip-cpe) RUN_IP_CPE=true; shift ;;
+    --suite) SUITES="$2"; shift 2 ;;
     --url) JENKINS_URL="$2"; shift 2 ;;
     --user) JENKINS_USER="$2"; shift 2 ;;
     --wait) WAIT=true; shift ;;
@@ -74,50 +58,17 @@ while [[ $# -gt 0 ]]; do
     --) shift; break ;;
     -*) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
     *)
-      if [[ -z "${TEST_FILTER}" ]]; then
-        TEST_FILTER="$1"
-      else
-        echo "Unexpected argument: $1" >&2
-        exit 1
-      fi
-      shift
+      echo "Unexpected argument: $1" >&2
+      usage >&2
+      exit 1
       ;;
   esac
 done
 
-is_process_monitor_markers() {
-  echo ",${TEST_MARKERS}," | grep -qi ',ProcessMonitor,'
-}
-
-is_qos_markers() {
-  echo ",${TEST_MARKERS}," | grep -qi ',QoS,'
-}
-
-is_usermgmt_markers() {
-  echo ",${TEST_MARKERS}," | grep -qiE ',UserMgmt,|,User_Mgmt,'
-}
-
-if [[ -z "${TEST_FILTER}" ]]; then
-  if is_process_monitor_markers || is_qos_markers || is_usermgmt_markers; then
-    TEST_FILTER=""
-  else
-    echo "TEST_FILTER is required (e.g. JMB_04 or --filter JMB_04). For ProcessMonitor use --markers ProcessMonitor. For QoS use --markers QoS. For UserMgmt use --markers UserMgmt." >&2
-    usage >&2
-    exit 1
-  fi
-fi
-
-# Infer marker from filter when caller did not override TEST_MARKERS env.
-if [[ "${TEST_MARKERS}" == "JumboFrames" && "${TEST_FILTER}" =~ ^GUI ]]; then
-  TEST_MARKERS="GUI"
-elif [[ "${TEST_MARKERS}" == "JumboFrames" && "${TEST_FILTER}" =~ ^IP_ ]]; then
-  TEST_MARKERS="IP"
-elif [[ "${TEST_MARKERS}" == "JumboFrames" && "${TEST_FILTER}" =~ ^PROCESS ]]; then
-  TEST_MARKERS="ProcessMonitor"
-elif [[ "${TEST_MARKERS}" == "JumboFrames" && "${TEST_FILTER}" =~ ^[Qq]o[Ss] ]]; then
-  TEST_MARKERS="QoS"
-elif [[ "${TEST_MARKERS}" == "JumboFrames" && "${TEST_FILTER}" =~ ^UM_ ]]; then
-  TEST_MARKERS="UserMgmt"
+if [[ -z "${SUITES}" ]]; then
+  echo "Pass --suite with at least one suite (for example --suite GUI)." >&2
+  usage >&2
+  exit 1
 fi
 
 resolve_auth() {
@@ -213,9 +164,8 @@ show_build_log_tail() {
 
 echo "[jenkins] URL:     ${BASE_URL}"
 echo "[jenkins] Job:     Automation Framework / Automation Test Cases"
-echo "[jenkins] Stand:   ${TARGET_STAND}"
-echo "[jenkins] Markers: ${TEST_MARKERS}"
-echo "[jenkins] Filter:  ${TEST_FILTER}"
+echo "[jenkins] Agent:   test-qa-lab-01"
+echo "[jenkins] Suites:  ${SUITES}"
 
 if [[ "${WAIT_FOR_IDLE}" == "true" ]] && job_is_busy; then
   wait_for_job_idle
@@ -231,17 +181,20 @@ if [[ -n "${CRUMB_JSON}" ]]; then
   CRUMB_VALUE="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("crumb",""))' <<< "${CRUMB_JSON}" 2>/dev/null || true)"
 fi
 
-PARAMS=(
-  "TEST_MARKERS=${TEST_MARKERS}"
-  "TEST_FILTER=${TEST_FILTER}"
-  "RECOVERY_PROFILE_NAME=${RECOVERY_PROFILE_NAME}"
-  "Local%20IPv6%20Address=${LOCAL_IPV6}"
-  "Remote%20IPv6%20Address=${REMOTE_IPV6}"
-  "FALLBACK_IP=${FALLBACK_IP}"
-  "SKIP_TESTBED_BOOTSTRAP=${SKIP_TESTBED_BOOTSTRAP}"
-  "RUN_IP_CPE=${RUN_IP_CPE}"
-  "TARGET_STAND=${TARGET_STAND}"
+ALL_SUITES=(
+  GUI IP JUMBO REGRESSION PROCESS QOS USERMGMT VLAN LOGS FIREWALL DFS
+  SECURITY ACB WIRELESS ARP API RADIO24 SANITY DDRS DHCP FUNCTIONAL
+  LINKTEST SPECTRUM
 )
+wanted=",$(echo "${SUITES}" | tr '[:lower:]' '[:upper:]' | tr -d ' '),"
+PARAMS=()
+for name in "${ALL_SUITES[@]}"; do
+  if [[ "${wanted}" == *",${name},"* ]]; then
+    PARAMS+=("${name}=true")
+  else
+    PARAMS+=("${name}=false")
+  fi
+done
 
 # Form-encoded POST with per-param urlencoding (filters may contain spaces/commas).
 CURL_ARGS=(-sS -u "${AUTH}" -X POST -D /tmp/jenkins-trigger.headers -o /tmp/jenkins-trigger.out -w '%{http_code}')
