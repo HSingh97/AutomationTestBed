@@ -48,7 +48,7 @@ properties([
         ],
         [
             $class: 'DynamicReferenceParameter',
-            choiceType: 'ET_FORMATTED_HTML',
+            choiceType: 'ET_FORMATTED_HIDDEN_HTML',
             description: '',
             name: 'SUITE_LAYOUT',
             omitValueField: true,
@@ -65,15 +65,27 @@ properties([
                     $class: 'SecureGroovyScript',
                     sandbox: false,
                     script: '''return """<style>
-.dynamic_checkbox > div, .dynamic_checkbox > span {
-  display: grid !important;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  column-gap: 36px;
-  row-gap: 8px;
-  width: min(980px, 100%);
+#ecp_suites-checkbox {
+  float: none !important;
+  overflow: visible !important;
+  height: auto !important;
+  width: 100% !important;
+  max-height: none !important;
 }
-.dynamic_checkbox .tr { white-space: normal !important; }
-div[name="parameter"]:has(input[name="name"][value="SUITE_LAYOUT"]) { display: none !important; }
+.jenkins-form-item:has(#ecp_suites-checkbox) .active-choice,
+.jenkins-form-item:has(#ecp_suites-checkbox) .setting-main {
+  width: 100% !important;
+  align-items: stretch !important;
+}
+#ecp_suites-checkbox > div, #ecp_suites-checkbox > table {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  column-gap: 28px;
+  row-gap: 6px;
+  width: 100% !important;
+}
+#ecp_suites-checkbox .tr { white-space: normal !important; }
+.jenkins-form-item:has(input[name="name"][value="SUITE_LAYOUT"]) { display: none !important; }
 </style>"""'''
                 ]
             ]
