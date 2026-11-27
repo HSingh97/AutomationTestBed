@@ -1086,7 +1086,7 @@ def run_performance_matrix(args: argparse.Namespace) -> dict[str, object]:
 
             if not args.skip_dut_config:
                 print(
-                    f"\n>>> Applying bandwidth once for all MCS: "
+                    f"\n>>> Bandwidth for all MCS: "
                     f"bw={bandwidth}, ratio={group_ratio}"
                 )
                 try:

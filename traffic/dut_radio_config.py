@@ -1733,20 +1733,43 @@ def radio_profile_already_matches(
     if not mcs_report.get("mcs_config_ok"):
         return False, mcs_report
 
-    actual_bw = _read_uci(bts_ip, user, password, f"uci get advwireless.ath{radio_idx}.htmode")
+    bw_ok, ratio_ok = _bts_bandwidth_is_current(
+        bts_ip, user, password, radio_idx, expected_bw, dl_ul_percent, ratio
+    )
+    return bw_ok and ratio_ok, mcs_report
+
+
+def _bts_bandwidth_is_current(
+    bts_ip: str,
+    user: str,
+    password: str,
+    radio_idx: int,
+    expected_bw: str,
+    dl_ul_percent: str,
+    ratio: str,
+) -> tuple[bool, bool]:
+    """Running cfg80211 mode is the bandwidth already on the air.
+
+    A stale advwireless htmode must not force another ucidyn apply when the
+    driver is already at the target width.
+    """
+    actual_bw = _read_uci(
+        bts_ip, user, password, f"uci get advwireless.ath{radio_idx}.htmode"
+    ).strip()
     running_bw = _read_running_bandwidth(bts_ip, user, password, radio_idx)
     actual_ratio = _read_uci(
         bts_ip, user, password, f"uci get ath{radio_idx}qos.qoscfg.dlulratio"
+    ).strip()
+    uci_ok = uci_htmode_matches(expected_bw, actual_bw)
+    running_ok = running_bw == expected_bw
+    ratio_ok = actual_ratio == dl_ul_percent
+    print(
+        f"[CONFIG] BTS current: uci={actual_bw or 'unset'}, "
+        f"running={running_bw or 'unknown'}, ratio={actual_ratio or 'unset'} "
+        f"(target {expected_bw}, {ratio})"
     )
-    uci_bw_ok = uci_htmode_matches(expected_bw, actual_bw.strip())
-    running_bw_ok = running_bw == expected_bw
-    ratio_ok = actual_ratio.strip() == dl_ul_percent
-    if uci_bw_ok and not running_bw_ok:
-        print(
-            f"[CONFIG] UCI htmode={actual_bw.strip()} but running mode is "
-            f"{running_bw or 'unknown'} (cfg80211tool) — bandwidth apply required"
-        )
-    return uci_bw_ok and running_bw_ok and ratio_ok, mcs_report
+    bandwidth_ok = running_ok or (running_bw is None and uci_ok)
+    return bandwidth_ok, ratio_ok
 
 
 def bandwidth_profile_matches(
@@ -1757,19 +1780,13 @@ def bandwidth_profile_matches(
     bandwidth: str,
     ratio: str,
 ) -> bool:
-    """Return True when BTS htmode, running mode, and DL:UL ratio already match."""
+    """Return True when the live bandwidth and DL:UL ratio already match."""
     expected_bw = normalize_bandwidth(bandwidth)
     dl_ul_percent = ratio_to_uci_dl_percent(ratio)
-    actual_bw = _read_uci(bts_ip, user, password, f"uci get advwireless.ath{radio_idx}.htmode")
-    running_bw = _read_running_bandwidth(bts_ip, user, password, radio_idx)
-    actual_ratio = _read_uci(
-        bts_ip, user, password, f"uci get ath{radio_idx}qos.qoscfg.dlulratio"
+    bandwidth_ok, ratio_ok = _bts_bandwidth_is_current(
+        bts_ip, user, password, radio_idx, expected_bw, dl_ul_percent, ratio
     )
-    return (
-        uci_htmode_matches(expected_bw, actual_bw.strip())
-        and running_bw == expected_bw
-        and actual_ratio.strip() == dl_ul_percent
-    )
+    return bandwidth_ok and ratio_ok
 
 
 def _verify_cpe_bandwidth(
@@ -1825,7 +1842,8 @@ def _apply_cpe_bandwidth(
     for host in hosts:
         actual = _read_uci(host, user, password, f"uci get advwireless.ath{radio_idx}.htmode")
         running = _read_running_bandwidth(host, user, password, radio_idx)
-        if uci_htmode_matches(bandwidth, actual) and running == expected:
+        # A station often keeps a stale UCI htmode while the link is already at the BTS width.
+        if running == expected or (running is None and uci_htmode_matches(bandwidth, actual)):
             print(
                 f"[CPE] Bandwidth already {expected} on {host} "
                 f"(uci={actual.strip()}, running={running})"
