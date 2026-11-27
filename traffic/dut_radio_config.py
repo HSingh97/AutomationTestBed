@@ -1871,6 +1871,99 @@ def _apply_cpe_bandwidth(
     return changed
 
 
+_CAC_LINE = re.compile(r"DFS CAC (started|end) on channel (\d+)", re.I)
+_WEATHER_DFS_CHANNELS = {120, 124, 128}
+
+
+def is_dfs_channel(channel: int | None) -> bool:
+    """5 GHz DFS: 52–64 and 100–144. 36–48 and 149–165 are not DFS."""
+    if channel is None:
+        return False
+    number = int(channel)
+    return (52 <= number <= 64) or (100 <= number <= 144)
+
+
+def cac_log_state(text: str, channel: int) -> str:
+    """Latest ``DFS CAC started/end`` for this channel: idle, running, or done."""
+    state = "idle"
+    for match in _CAC_LINE.finditer(text or ""):
+        if int(match.group(2)) != int(channel):
+            continue
+        state = "running" if match.group(1).lower() == "started" else "done"
+    return state
+
+
+def _read_configured_channel(
+    ip: str,
+    user: str,
+    password: str,
+    radio_idx: int,
+) -> int | None:
+    for command in (
+        f"uci get wireless.wifi{radio_idx}.channel",
+        f"uci get advwireless.ath{radio_idx}.channel",
+    ):
+        try:
+            raw = _read_uci(ip, user, password, command)
+        except Exception:
+            continue
+        token = raw.strip().split()[-1] if raw.strip() else ""
+        if token.isdigit() and int(token) > 0:
+            return int(token)
+    return None
+
+
+def wait_for_dfs_cac(
+    ip: str,
+    user: str,
+    password: str,
+    radio_idx: int,
+) -> None:
+    """After a bandwidth apply, let a DFS channel finish CAC before the link is used.
+
+    Normal DFS CAC is about 60s. Weather-radar channels 120/124/128 can take 10 minutes.
+    """
+    try:
+        channel = _read_configured_channel(ip, user, password, radio_idx)
+    except Exception as exc:
+        print(f"[CAC] Could not read the operating channel ({exc}) — continuing")
+        return
+    if channel is None:
+        print("[CAC] Operating channel is unknown — continuing")
+        return
+    if not is_dfs_channel(channel):
+        print(f"[CAC] Channel {channel} is not DFS — no CAC wait")
+        return
+
+    limit_s = 660 if channel in _WEATHER_DFS_CHANNELS else 150
+    print(f"[CAC] Channel {channel} is DFS — waiting for CAC to finish (up to {limit_s}s)")
+    started = time.monotonic()
+    while True:
+        elapsed = time.monotonic() - started
+        try:
+            logs = run_ssh_command(
+                ip,
+                user,
+                password,
+                "logread 2>/dev/null | grep -i 'DFS CAC' | tail -n 60",
+                timeout_s=20,
+            )
+        except Exception as exc:
+            logs = ""
+            print(f"[CAC] Could not read CAC logs ({exc})")
+        state = cac_log_state(logs, channel)
+        if state == "done":
+            print(f"[CAC] CAC finished on channel {channel} after {elapsed:.0f}s")
+            return
+        if state == "idle" and elapsed >= 20:
+            print(f"[CAC] No CAC in progress on channel {channel} — continuing")
+            return
+        if elapsed >= limit_s:
+            print(f"[CAC] CAC still running on channel {channel} after {limit_s}s — continuing")
+            return
+        time.sleep(5)
+
+
 def configure_bandwidth_profile(
     bts_ip: str,
     user: str,
@@ -2000,6 +2093,8 @@ def configure_bandwidth_profile(
         bandwidth_apply_wait_s=bandwidth_apply_wait_s,
         verify=verify,
     )
+
+    wait_for_dfs_cac(bts_ip, user, password, radio_idx)
 
     if su_link_wait_s > 0:
         post_link = wait_for_su_links(

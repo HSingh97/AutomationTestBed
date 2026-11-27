@@ -107,6 +107,12 @@ properties([
             description: ''
         ],
         [
+            $class: 'StringParameterDefinition',
+            name: 'TRex server IP',
+            defaultValue: '192.168.1.2',
+            description: ''
+        ],
+        [
             $class: 'DynamicReferenceParameter',
             choiceType: 'ET_FORMATTED_HIDDEN_HTML',
             description: '',
@@ -270,6 +276,10 @@ pipeline {
                     def packet = wholeNumber('Packet size')
                     def seconds = wholeNumber('Seconds each')
                     def suCount = wholeNumber('SU count')
+                    def trexIp = (params['TRex server IP'] ?: '').toString().trim()
+                    if (!(trexIp ==~ /\d{1,3}(\.\d{1,3}){3}/)) {
+                        error("TRex server IP must be an IPv4 address, got: ${trexIp}")
+                    }
                     def ratio = (params['DL:UL ratio'] ?: '').toString().trim()
                     if (!(ratio ==~ /\d+:\d+/)) {
                         error("DL:UL ratio must look like 50:50, got: ${ratio}")
@@ -279,6 +289,7 @@ pipeline {
                     env.TPUT_PACKET = packet
                     env.TPUT_SECONDS = seconds
                     env.TPUT_SU = suCount
+                    env.TPUT_TREX = trexIp
                     env.TPUT_RATIO = ratio
                     echo '------------------------------------------'
                     echo 'UBR throughput per MCS (TRex matrix)'
@@ -289,7 +300,8 @@ pipeline {
                     echo "Ratio:       ${ratio}"
                     echo "Duration:    ${seconds}s"
                     echo "SU count:    ${suCount}"
-                    echo 'Addresses:   qa-lab-01 bench profile'
+                    echo "TRex server: ${trexIp}"
+                    echo 'Radio:       qa-lab-01 bench profile'
                     echo '------------------------------------------'
                 }
             }
@@ -327,6 +339,7 @@ pipeline {
                     cmd.append(' --deploy-client-script')
                     cmd.append(" --stand 'test-qa-lab-01'")
                     cmd.append(" --su-count ${env.TPUT_SU}")
+                    cmd.append(" --trex-server '${env.TPUT_TREX}'")
 
                     def exitCode = sh(script: cmd.toString(), returnStatus: true)
                     env.PERF_MATRIX_EXIT = "${exitCode}"
@@ -397,6 +410,7 @@ pipeline {
                     <p><strong>DL:UL ratio:</strong> ${env.TPUT_RATIO ?: '—'}</p>
                     <p><strong>Duration:</strong> ${env.TPUT_SECONDS ?: '—'}s per run</p>
                     <p><strong>SU count:</strong> ${env.TPUT_SU ?: '—'}</p>
+                    <p><strong>TRex server:</strong> ${env.TPUT_TREX ?: '—'}</p>
                 """
 
                 try {

@@ -20,6 +20,7 @@ RATIO="${RATIO:-50:50}"
 DURATION="${DURATION:-30}"
 PACKET_SIZE="${PACKET_SIZE:-1500}"
 SU_COUNT="${SU_COUNT:-1}"
+TREX_SERVER="${TREX_SERVER:-192.168.1.2}"
 WAIT="${WAIT:-false}"
 POLL_SECONDS="${POLL_SECONDS:-20}"
 
@@ -34,6 +35,7 @@ Options:
   --time SECONDS      Per-iteration duration (default: 30)
   --packet-size N     Frame size bytes (default: 1500)
   --su-count N        Number of SUs (default: 1)
+  --trex-server IP    TRex server (default: 192.168.1.2)
   --wait              Poll until build completes
   -h, --help          Show help
 EOF
@@ -44,7 +46,8 @@ while [[ $# -gt 0 ]]; do
     --stand) echo "This job runs only on qa-lab-01" >&2; exit 1 ;;
     --bandwidth) BANDWIDTH="$2"; shift 2 ;;
     --mcs) MCS="$2"; shift 2 ;;
-    --trex-ip|--bts-ip|--cpe-ip) echo "Addresses come from the qa-lab-01 bench" >&2; exit 1 ;;
+    --trex-server|--trex-ip) TREX_SERVER="$2"; shift 2 ;;
+    --bts-ip|--cpe-ip) echo "Radio addresses come from the qa-lab-01 bench" >&2; exit 1 ;;
     --ratio) RATIO="$2"; shift 2 ;;
     --time) DURATION="$2"; shift 2 ;;
     --packet-size) PACKET_SIZE="$2"; shift 2 ;;
@@ -111,6 +114,7 @@ POST_DATA=(
   --data-urlencode "Seconds each=${DURATION}"
   --data-urlencode "Packet size=${PACKET_SIZE}"
   --data-urlencode "SU count=${SU_COUNT}"
+  --data-urlencode "TRex server IP=${TREX_SERVER}"
 )
 
 echo "[jenkins] Triggering Throughput Test - Trex on qa-lab-01"

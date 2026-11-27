@@ -1,10 +1,12 @@
 from unittest.mock import patch
 
 from traffic.dut_radio_config import (
+    cac_log_state,
     configure_bandwidth_profile,
     configure_bts_bandwidth_ratio,
     configure_mcs_profile,
     configure_radio_profile,
+    is_dfs_channel,
 )
 
 
@@ -99,28 +101,45 @@ def test_configure_radio_profile_applies_bandwidth_without_pre_link_gate():
     assert report.get("bandwidth_skipped") is False
 
 
+def test_dfs_channel_and_cac_log():
+    assert is_dfs_channel(52)
+    assert is_dfs_channel(100)
+    assert is_dfs_channel(144)
+    assert not is_dfs_channel(36)
+    assert not is_dfs_channel(149)
+    log = (
+        "Mon Nov 23 10:00:00 2026: DFS CAC started on channel 100\n"
+        "Mon Nov 23 10:01:01 2026: DFS CAC end on channel 100\n"
+        "Mon Nov 23 10:02:00 2026: DFS CAC started on channel 52\n"
+    )
+    assert cac_log_state(log, 100) == "done"
+    assert cac_log_state(log, 52) == "running"
+    assert cac_log_state(log, 36) == "idle"
+
+
 def test_configure_bandwidth_profile_applies_once_per_group():
-    with patch("traffic.dut_radio_config.configure_bts_bandwidth_ratio", return_value="75") as mock_bw:
-        with patch(
-            "traffic.su_link_ping.wait_for_su_links",
-            return_value={"ok": True, "responding": ["a", "b", "c", "d"]},
-        ):
-            with patch("traffic.dut_radio_config._wait_for_running_bandwidth"):
-                with patch("traffic.dut_radio_config._verify_bts_bandwidth_ratio"):
-                    with patch(
-                        "traffic.dut_radio_config.bandwidth_profile_matches",
-                        return_value=False,
-                    ):
-                        report = configure_bandwidth_profile(
-                            "10.0.0.1",
-                            "root",
-                            "pw",
-                            1,
-                            "HT80",
-                            "75:25",
-                            su_count=4,
-                            verify=False,
-                        )
+    with patch("traffic.dut_radio_config.wait_for_dfs_cac"):
+        with patch("traffic.dut_radio_config.configure_bts_bandwidth_ratio", return_value="75") as mock_bw:
+            with patch(
+                "traffic.su_link_ping.wait_for_su_links",
+                return_value={"ok": True, "responding": ["a", "b", "c", "d"]},
+            ):
+                with patch("traffic.dut_radio_config._wait_for_running_bandwidth"):
+                    with patch("traffic.dut_radio_config._verify_bts_bandwidth_ratio"):
+                        with patch(
+                            "traffic.dut_radio_config.bandwidth_profile_matches",
+                            return_value=False,
+                        ):
+                            report = configure_bandwidth_profile(
+                                "10.0.0.1",
+                                "root",
+                                "pw",
+                                1,
+                                "HT80",
+                                "75:25",
+                                su_count=4,
+                                verify=False,
+                            )
 
     mock_bw.assert_called_once()
     assert report.get("bandwidth_ok") is True
