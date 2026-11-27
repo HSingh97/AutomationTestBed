@@ -16,12 +16,15 @@ def selectedValues(String paramName, List order) {
     def raw = params[paramName]
     def text = raw == null ? '' : raw.toString()
     text = text.replace('[', '').replace(']', '')
-    def picked = text.split(',').collect { it.trim() }.findAll { it }
-    def unknown = picked.findAll { !order.contains(it) }
+    def picked = text.split(',').collect { it.toString().trim() }.findAll { it }
+    // Interpolated names such as "MCS${n}" are GStrings. List.contains uses
+    // equals(), and a GString is not equal to the String Jenkins submits.
+    def allowed = order.collect { it.toString() }
+    def unknown = picked.findAll { !allowed.contains(it) }
     if (!unknown.isEmpty()) {
         error("Unknown ${paramName}: ${unknown.join(', ')}")
     }
-    return order.findAll { picked.contains(it) }
+    return allowed.findAll { picked.contains(it) }
 }
 
 def wholeNumber(String name) {
