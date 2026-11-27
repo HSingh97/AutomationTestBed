@@ -1,4 +1,4 @@
-from traffic.trex_runner import parse_trex_server_port_states
+from traffic.trex_runner import parse_trex_server_port_states, ports_for_su_count
 
 
 def test_parse_trex_server_port_states_from_interactive_table():
@@ -38,3 +38,10 @@ link         :  Link Down
     assert states[0] == "UP"
     assert states[1] == "UP"
     assert states[2] == "DOWN"
+
+
+def test_ports_for_su_count_uses_bts_plus_one_port_per_su():
+    assert ports_for_su_count("0,1,2,3", 1) == "0,1"
+    assert ports_for_su_count("0,1,2,3", 2) == "0,1,2"
+    assert ports_for_su_count("0,1,2,3", 3) == "0,1,2,3"
+    assert ports_for_su_count("0,1,2,3", 6) == "0,1,2,3"

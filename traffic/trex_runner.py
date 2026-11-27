@@ -383,9 +383,30 @@ def _check_trex_ports_via_api(
     return states, output
 
 
+def _parse_trex_port_list(trex_ports: str) -> list[int]:
+    return [int(item.strip()) for item in str(trex_ports).split(",") if item.strip()]
+
+
 def _bsu_cpe_port_count(trex_ports: str) -> int:
-    ports = [int(item.strip()) for item in trex_ports.split(",") if item.strip()]
-    return len([port for port in ports if port != 0])
+    return len([port for port in _parse_trex_port_list(trex_ports) if port != 0])
+
+
+def ports_for_su_count(trex_ports: str, su_count: int) -> str:
+    """Ports this run actually uses. Port 0 is the BTS side; each SU takes the next port.
+
+    A profile allowlist of ``0,1,2,3`` is the 6-CPE bench. One SU only needs ``0,1``.
+    """
+    ports = _parse_trex_port_list(trex_ports)
+    if not ports:
+        return str(trex_ports)
+    if 0 in ports:
+        bts = 0
+        cpe_ports = [port for port in ports if port != 0]
+    else:
+        bts = ports[0]
+        cpe_ports = ports[1:]
+    selected = [bts] + cpe_ports[: max(0, int(su_count))]
+    return ",".join(str(port) for port in selected)
 
 
 def _su_server_port_allowlists(trex_ports: str, su_count: int, su_server_count: int) -> list[str]:
@@ -1177,6 +1198,15 @@ def run_trex_stats_check(
         trex_server_su3,
         trex_server_su4,
     )
+    # Extra TRex servers only carry CPE 4 and above. One SU stays on ports 0 and 1.
+    if int(trex_su_count) <= _bsu_cpe_port_count(trex_ports):
+        su_hosts = []
+    active_ports = ports_for_su_count(trex_ports, trex_su_count)
+    if active_ports != str(trex_ports).strip():
+        print(
+            f"[TRex] SU count {trex_su_count} — requiring ports {active_ports} "
+            f"(allowlist {trex_ports})"
+        )
     su_server_port_specs = _su_server_port_allowlists(
         trex_ports, trex_su_count, len(su_hosts)
     )
@@ -1211,11 +1241,11 @@ def run_trex_stats_check(
     client_script = build_trex_client_command(
         trex_client_script=trex_client_script,
         trex_pythonpath=trex_pythonpath,
-        trex_ports=trex_ports,
-        trex_server_su=trex_server_su,
-        trex_server_su2=trex_server_su2,
-        trex_server_su3=trex_server_su3,
-        trex_server_su4=trex_server_su4,
+        trex_ports=active_ports,
+        trex_server_su=trex_server_su if su_hosts else None,
+        trex_server_su2=trex_server_su2 if su_hosts else None,
+        trex_server_su3=trex_server_su3 if su_hosts else None,
+        trex_server_su4=trex_server_su4 if su_hosts else None,
         trex_su_count=trex_su_count,
         trex_dl_bw=trex_dl_bw,
         trex_ul_bw=trex_ul_bw,
@@ -1251,7 +1281,7 @@ def run_trex_stats_check(
                 trex_user=trex_user,
                 trex_password=trex_password,
                 trex_pythonpath=trex_pythonpath,
-                trex_ports=trex_ports,
+                trex_ports=active_ports,
                 server_output="",
                 timeout_s=20.0,
             )
@@ -1305,7 +1335,7 @@ def run_trex_stats_check(
                         trex_user=trex_user,
                         trex_password=trex_password,
                         trex_pythonpath=trex_pythonpath,
-                        trex_ports=trex_ports,
+                        trex_ports=active_ports,
                         server_output="",
                         timeout_s=60.0,
                     )
@@ -1335,7 +1365,7 @@ def run_trex_stats_check(
                     trex_user=trex_user,
                     trex_password=trex_password,
                     trex_pythonpath=trex_pythonpath,
-                    trex_ports=trex_ports,
+                    trex_ports=active_ports,
                     server_output=server_collector.text(),
                     server_output_getter=server_collector.text,
                     timeout_s=max(90.0, float(trex_server_startup_s) + 60.0),
@@ -1473,7 +1503,7 @@ def run_trex_stats_check(
             "trex_server": {
                 "host": trex_server,
                 "user": trex_user,
-                "ports": [port.strip() for port in trex_ports.split(",") if port.strip()],
+                "ports": [port.strip() for port in active_ports.split(",") if port.strip()],
                 "su_servers": [host for host in [trex_server_su, trex_server_su2, trex_server_su3, trex_server_su4] if host],
                 "directory": trex_dir,
                 "pythonpath": trex_pythonpath,
