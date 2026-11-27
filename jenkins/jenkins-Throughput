@@ -276,7 +276,7 @@ pipeline {
                     def packet = wholeNumber('Packet size')
                     def seconds = wholeNumber('Seconds each')
                     def suCount = wholeNumber('SU count')
-                    def trexIp = (params['TRex server IP'] ?: '').toString().trim()
+                    def trexIp = (params['TRex server IP'] ?: '192.168.1.2').toString().trim()
                     if (!(trexIp ==~ /\d{1,3}(\.\d{1,3}){3}/)) {
                         error("TRex server IP must be an IPv4 address, got: ${trexIp}")
                     }
