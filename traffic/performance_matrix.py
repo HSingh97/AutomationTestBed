@@ -38,10 +38,13 @@ AUTO_TREX_TRAFFIC_RATIO = "50:50"
 from traffic.dut_radio_config import (
     configure_bandwidth_profile,
     configure_mcs_profile,
-    read_running_bandwidth,
 )
 from traffic.link_stats import fetch_link_clients, resolve_cpe_hosts_for_run, validate_operating_rates
-from traffic.operating_rate_table import normalize_bandwidth, operating_rate_mbps
+from traffic.operating_rate_table import (
+    bandwidth_for_operating_rate,
+    normalize_bandwidth,
+    operating_rate_mbps,
+)
 from traffic.operating_rate_table import lookup_spec
 from traffic.phy_rate_targets import compute_traffic_targets
 from traffic.trex_runner import (
@@ -624,7 +627,8 @@ def _check_bandwidth_before_trex(
     source: str,
     cpe_hosts: list[str] | None,
 ) -> tuple[bool, str, dict[str, object]]:
-    """Return (ready, error_message, link_validation). Skips TRex when BW does not match."""
+    """Return (ready, error_message, link_validation). Width comes from the operating rate."""
+    del radio_idx
     if bandwidth_skipped:
         return (
             False,
@@ -633,13 +637,6 @@ def _check_bandwidth_before_trex(
         )
 
     expected_bw = normalize_bandwidth(bandwidth)
-    running_bw = read_running_bandwidth(dut_ip, user, password, radio_idx)
-    if running_bw and running_bw != expected_bw:
-        print(
-            f"[WARN] cfg80211tool running bandwidth {running_bw} != requested {expected_bw}. "
-            "Continuing from the advwireless link rate."
-        )
-
     validation = _fetch_link_validation(
         dut_ip,
         bandwidth=bandwidth,
@@ -656,29 +653,35 @@ def _check_bandwidth_before_trex(
     if validation.get("operating_rate_ok"):
         return True, "", validation
 
-    if running_bw is None or running_bw != expected_bw:
-        clients = validation.get("clients") or []
-        if clients:
-            primary = clients[0]
-            actual = primary.get("out_rate") or primary.get("tx_rate")
-            expected_rate = validation.get("expected_operating_rate_mbps")
-            return (
-                False,
-                (
-                    f"Operating rate mismatch for {expected_bw}/{mcs}: "
-                    f"expected ~{expected_rate} Mbps, current Out={actual}"
-                ),
-                validation,
+    clients = validation.get("clients") or []
+    if clients:
+        primary = clients[0]
+        actual = primary.get("out_rate_mbps") or primary.get("tx_rate_mbps")
+        if actual is None:
+            shown = primary.get("out_rate") or primary.get("tx_rate")
+            try:
+                actual = float(shown)
+            except (TypeError, ValueError):
+                actual = None
+        matched = (
+            bandwidth_for_operating_rate(
+                actual,
+                mcs,
+                tolerance_mbps=tolerance_mbps,
+                tolerance_pct=tolerance_pct,
             )
+            if actual
+            else None
+        )
+        expected_rate = validation.get("expected_operating_rate_mbps")
         return (
             False,
             (
-                f"Bandwidth/rate not confirmed for {expected_bw} "
-                f"(running={running_bw or 'unknown'})"
+                f"Operating rate {actual} Mbps at {mcs} matches {matched or 'no sheet width'}, "
+                f"not {expected_bw} (sheet {expected_rate} Mbps)"
             ),
             validation,
         )
-
     return True, "", validation
 
 

@@ -10,6 +10,7 @@ import re
 
 from pages.commands import RootCommands
 from traffic.operating_rate_table import (
+    bandwidth_for_operating_rate,
     lookup_spec,
     mcs_number,
     modulation_scheme,
@@ -487,19 +488,12 @@ def _verify_bts_bandwidth_ratio(
     dl_ul_percent: str,
     check_running: bool = True,
 ) -> None:
-    expected_bw = normalize_bandwidth(bandwidth)
     actual_bw = _read_uci(ip, user, password, f"uci get advwireless.ath{radio_idx}.htmode")
-    running_bw = _read_running_bandwidth(ip, user, password, radio_idx) if check_running else None
     actual_ratio = _read_uci(ip, user, password, f"uci get ath{radio_idx}qos.qoscfg.dlulratio")
     mismatches: list[str] = []
     if not uci_htmode_matches(bandwidth, actual_bw):
         mismatches.append(
             f"htmode expected {uci_htmode_value(bandwidth)}, got {actual_bw}"
-        )
-    if check_running and running_bw != expected_bw:
-        print(
-            f"[WARN] cfg80211tool reports {running_bw or 'unknown'} "
-            f"while advwireless.ath{radio_idx}.htmode is {actual_bw or 'unknown'}."
         )
     if actual_ratio != dl_ul_percent:
         mismatches.append(f"dlulratio expected {dl_ul_percent}, got {actual_ratio}")
@@ -508,12 +502,57 @@ def _verify_bts_bandwidth_ratio(
     if check_running:
         print(
             f"[BTS] Bandwidth/ratio verified on {ip}: htmode={actual_bw}, "
-            f"running={running_bw}, dlulratio={actual_ratio}"
+            f"dlulratio={actual_ratio}"
         )
     else:
         print(
             f"[BTS] Bandwidth/ratio UCI verified on {ip}: htmode={actual_bw}, dlulratio={actual_ratio}"
         )
+
+
+def _normalize_live_mcs(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text or text in {"-", "0"}:
+        return ""
+    if text.upper().startswith("MCS"):
+        return text.upper()
+    if text.isdigit():
+        return f"MCS{int(text)}"
+    return ""
+
+
+def _live_operating_sample(
+    ip: str,
+    user: str,
+    password: str,
+) -> tuple[float | None, str]:
+    """Current BTS downlink rate and MCS from SUA statistics.
+
+    cfg80211tool get_mode stays at HT160, so this rate is the bandwidth check.
+    """
+    try:
+        slots = read_operating_mcs_by_sua_slot(
+            ip,
+            ssh_user=user,
+            ssh_password=password,
+            max_sua=4,
+        )
+    except Exception as exc:
+        print(f"[CONFIG] Could not read operating rate: {exc}")
+        return None, ""
+    for slot in slots.values():
+        rate_raw = str(slot.get("tx_rate") or slot.get("rx_rate") or "")
+        rate_match = re.search(r"([\d.]+)", rate_raw.replace(",", ""))
+        rate = float(rate_match.group(1)) if rate_match else None
+        if rate is None or rate <= 0:
+            continue
+        mcs = _normalize_live_mcs(str(slot.get("tx_rate_mcs") or slot.get("rx_rate_mcs") or ""))
+        if not mcs:
+            paren = re.search(r"\((\d+)\)", rate_raw)
+            mcs = _normalize_live_mcs(paren.group(1) if paren else "")
+        if mcs:
+            return rate, mcs
+    return None, ""
 
 
 def _wait_for_running_bandwidth(
@@ -526,34 +565,47 @@ def _wait_for_running_bandwidth(
     timeout_s: float = 120.0,
     poll_s: float = 5.0,
 ) -> bool:
-    """Poll cfg80211tool until runtime htmode matches (after apply + link recovery)."""
+    """Poll the live PHY rate until it matches the sheet rate for this bandwidth.
+
+    ``radio_idx`` is unused: get_mode is not the width. The SUA operating rate is.
+    """
+    del radio_idx
     expected_bw = normalize_bandwidth(bandwidth)
     deadline = time.time() + timeout_s
     attempt = 0
+    wrong: tuple[str, float, str, float] | None = None
     print(
-        f"[BTS] Waiting for running bandwidth {expected_bw} via cfg80211tool "
-        f"(timeout {timeout_s:.0f}s)"
+        f"[BTS] Waiting for operating rate of {expected_bw} "
+        f"(cfg80211tool get_mode stays HT160; timeout {timeout_s:.0f}s)"
     )
     while time.time() < deadline:
         attempt += 1
-        raw, running_bw = _fetch_cfg80211_mode(ip, user, password, radio_idx)
-        if running_bw == expected_bw:
-            print(
-                f"[BTS] Running bandwidth {expected_bw} confirmed "
-                f"(attempt {attempt}, {raw})"
-            )
-            return True
-        if attempt == 1 or attempt % 4 == 0:
-            print(
-                f"[BTS] Running bandwidth {running_bw or 'unknown'} != {expected_bw} "
-                f"(attempt {attempt}, cfg: {raw})"
-            )
+        rate, mcs = _live_operating_sample(ip, user, password)
+        if rate and mcs:
+            matched = bandwidth_for_operating_rate(rate, mcs)
+            sheet = operating_rate_mbps(expected_bw, mcs)
+            if matched == expected_bw:
+                print(
+                    f"[BTS] Operating {rate:.0f} Mbps at {mcs} matches {expected_bw} "
+                    f"(sheet {sheet:.0f} Mbps, attempt {attempt})"
+                )
+                return True
+            wrong = (matched or "no sheet width", rate, mcs, sheet)
+            if attempt == 1 or attempt % 4 == 0:
+                print(
+                    f"[BTS] Operating {rate:.0f} Mbps at {mcs} matches {matched or 'no sheet width'} "
+                    f"(target {expected_bw} sheet {sheet:.0f} Mbps, attempt {attempt})"
+                )
+        elif attempt == 1 or attempt % 4 == 0:
+            print(f"[BTS] No operating rate yet (attempt {attempt})")
         time.sleep(poll_s)
-    raw, running_bw = _fetch_cfg80211_mode(ip, user, password, radio_idx)
-    print(
-        f"[WARN] Running bandwidth still {running_bw or 'unknown'} after {timeout_s:.0f}s "
-        f"(expected {expected_bw}, cfg: {raw})"
-    )
+    if wrong:
+        matched, rate, mcs, sheet = wrong
+        raise RuntimeError(
+            f"Operating rate {rate:.0f} Mbps at {mcs} matches {matched}, "
+            f"not {expected_bw} (sheet {sheet:.0f} Mbps)"
+        )
+    print(f"[WARN] No operating rate for {expected_bw} after {timeout_s:.0f}s")
     return False
 
 
@@ -1747,27 +1799,31 @@ def _bts_bandwidth_is_current(
     dl_ul_percent: str,
     ratio: str,
 ) -> tuple[bool, bool]:
-    """Running cfg80211 mode is the bandwidth already on the air.
-
-    A stale advwireless htmode must not force another ucidyn apply when the
-    driver is already at the target width.
-    """
+    """UCI htmode plus the live PHY rate. cfg80211tool get_mode stays at HT160."""
     actual_bw = _read_uci(
         bts_ip, user, password, f"uci get advwireless.ath{radio_idx}.htmode"
     ).strip()
-    running_bw = _read_running_bandwidth(bts_ip, user, password, radio_idx)
     actual_ratio = _read_uci(
         bts_ip, user, password, f"uci get ath{radio_idx}qos.qoscfg.dlulratio"
     ).strip()
     uci_ok = uci_htmode_matches(expected_bw, actual_bw)
-    running_ok = running_bw == expected_bw
     ratio_ok = actual_ratio == dl_ul_percent
-    print(
-        f"[CONFIG] BTS current: uci={actual_bw or 'unset'}, "
-        f"running={running_bw or 'unknown'}, ratio={actual_ratio or 'unset'} "
-        f"(target {expected_bw}, {ratio})"
-    )
-    bandwidth_ok = running_ok or (running_bw is None and uci_ok)
+    rate, mcs = _live_operating_sample(bts_ip, user, password)
+    matched = bandwidth_for_operating_rate(rate, mcs) if rate and mcs else None
+    if matched:
+        sheet = operating_rate_mbps(expected_bw, mcs)
+        print(
+            f"[CONFIG] BTS current: uci={actual_bw or 'unset'}, ratio={actual_ratio or 'unset'}, "
+            f"operating {rate:.0f} Mbps at {mcs} matches {matched} "
+            f"(target {expected_bw} sheet {sheet:.0f}, ratio {ratio})"
+        )
+        bandwidth_ok = matched == expected_bw
+    else:
+        print(
+            f"[CONFIG] BTS current: uci={actual_bw or 'unset'}, ratio={actual_ratio or 'unset'}, "
+            f"operating rate not available (target {expected_bw}, {ratio})"
+        )
+        bandwidth_ok = uci_ok
     return bandwidth_ok, ratio_ok
 
 
@@ -1797,29 +1853,15 @@ def _verify_cpe_bandwidth(
     *,
     bandwidth_running_wait_s: float = 120.0,
 ) -> None:
-    expected = normalize_bandwidth(bandwidth)
     htmode = uci_htmode_value(bandwidth)
+    del bandwidth_running_wait_s
     for host in [str(item).strip() for item in (cpe_hosts or []) if str(item).strip()]:
-        if bandwidth_running_wait_s > 0:
-            _wait_for_running_bandwidth(
-                host,
-                user,
-                password,
-                radio_idx,
-                bandwidth,
-                timeout_s=bandwidth_running_wait_s,
-            )
         actual = _read_uci(host, user, password, f"uci get advwireless.ath{radio_idx}.htmode")
-        running = _read_running_bandwidth(host, user, password, radio_idx)
         if not uci_htmode_matches(bandwidth, actual):
             raise RuntimeError(
                 f"CPE {host} htmode expected {htmode}, got {actual.strip() or 'unset'}"
             )
-        if bandwidth_running_wait_s > 0 and running != expected:
-            raise RuntimeError(
-                f"CPE {host} running bandwidth {running or 'unknown'} != {expected}"
-            )
-        print(f"[CPE] Bandwidth verified on {host}: uci={actual.strip()}, running={running}")
+        print(f"[CPE] Bandwidth verified on {host}: uci={actual.strip()}")
 
 
 def _apply_cpe_bandwidth(
@@ -1840,17 +1882,15 @@ def _apply_cpe_bandwidth(
     expected = normalize_bandwidth(bandwidth)
     for host in hosts:
         actual = _read_uci(host, user, password, f"uci get advwireless.ath{radio_idx}.htmode")
-        running = _read_running_bandwidth(host, user, password, radio_idx)
-        # A station often keeps a stale UCI htmode while the link is already at the BTS width.
-        if running == expected or (running is None and uci_htmode_matches(bandwidth, actual)):
+        if uci_htmode_matches(bandwidth, actual):
             print(
                 f"[CPE] Bandwidth already {expected} on {host} "
-                f"(uci={actual.strip()}, running={running})"
+                f"(uci={actual.strip()})"
             )
             continue
         print(
             f"[CPE] Applying bandwidth on {host}: htmode={htmode} "
-            f"(uci was {actual.strip() or 'unset'}, running {running or 'unknown'})"
+            f"(uci was {actual.strip() or 'unset'})"
         )
         # Apply in the background. The CPE management path is the wireless bridge,
         # so ucidyn apply drops SSH and a foreground apply is killed by SIGHUP

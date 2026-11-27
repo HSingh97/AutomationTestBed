@@ -111,6 +111,32 @@ def modulation_scheme(mcs: str) -> str:
     return MODULATION_SCHEMES[sheet_row_index(mcs)]
 
 
+def bandwidth_for_operating_rate(
+    rate_mbps: float | None,
+    mcs: str,
+    *,
+    spatial_streams: int = 2,
+    tolerance_mbps: float = 10.0,
+    tolerance_pct: float = 0.08,
+) -> str | None:
+    """Return the sheet bandwidth whose rate matches ``rate_mbps`` at this MCS.
+
+    cfg80211tool get_mode stays at HT160, so the live PHY rate is the width check.
+    """
+    if rate_mbps is None or rate_mbps <= 0 or not str(mcs or "").strip():
+        return None
+    best: str | None = None
+    best_delta: float | None = None
+    for bandwidth in OPERATING_RATE_DUAL_MBPS:
+        expected = operating_rate_mbps(bandwidth, mcs, spatial_streams=spatial_streams)
+        delta = abs(float(rate_mbps) - expected)
+        if delta <= tolerance_mbps or delta <= expected * tolerance_pct:
+            if best_delta is None or delta < best_delta:
+                best = bandwidth
+                best_delta = delta
+    return best
+
+
 def operating_rate_mbps(
     bandwidth: str,
     mcs: str,

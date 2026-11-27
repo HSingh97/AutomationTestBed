@@ -184,15 +184,15 @@ def test_configure_bandwidth_profile_skips_when_running_width_already_matches():
         if "dlulratio" in cmd:
             return "50"
         if "htmode" in cmd:
-            return "HT80"
+            return "HT20" if ip == "192.168.3.21" else "HT80"
         return ""
 
     with patch("traffic.dut_radio_config.configure_bts_bandwidth_ratio") as mock_bw:
         with patch("traffic.dut_radio_config.wait_for_dfs_cac") as mock_cac:
             with patch("traffic.dut_radio_config._read_uci", side_effect=fake_uci):
                 with patch(
-                    "traffic.dut_radio_config._read_running_bandwidth",
-                    return_value="HT20",
+                    "traffic.dut_radio_config._live_operating_sample",
+                    return_value=(286.0, "MCS23"),
                 ):
                     with patch("traffic.dut_radio_config.run_ssh_command") as mock_ssh:
                         report = configure_bandwidth_profile(
