@@ -34,7 +34,6 @@ def test_bandwidth_apply_uses_single_and_chain():
     assert len(captured) == 1
     chain = captured[0]["command"]
     assert chain == (
-        "ucidyn set wireless.wifi1.htmode HT80 && "
         "ucidyn set advwireless.ath1.htmode HT80 && "
         "ucidyn set ath1qos.qoscfg.dlulratio 75 && "
         "ucidyn apply && sleep 60 && cfg80211tool ath1 get_mode"

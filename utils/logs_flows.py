@@ -230,7 +230,7 @@ def _mode_radio_config_log(case: dict[str, Any], profile_active: dict[str, Any])
         target = "35" if baseline.strip() != "35" else "25"
         # Still attempt htmode via plain uci+wifi when bandwidth is explicit.
         if "bandwidth" in blob or "mhz" in blob:
-            key = "wireless.wifi1.htmode"
+            key = "advwireless.ath1.htmode"
             baseline = uci_get(profile_active, key) or "HT80"
             target = "HT40" if "80" in baseline else "HT80"
     elif "spatial" in blob or "stream" in blob or "chain" in blob:
@@ -260,18 +260,18 @@ def _mode_radio_config_log(case: dict[str, Any], profile_active: dict[str, Any])
         target = "30" if baseline.strip() != "30" else "25"
 
     def _apply() -> dict[str, Any]:
-        if key == "wireless.wifi1.htmode":
+        if key == "advwireless.ath1.htmode":
             # ucidyn often will not flip htmode; use uci + wifi reload.
             out = ssh(
                 profile_active,
-                f"uci set {key}={target}; uci commit wireless; "
+                f"uci set {key}={target}; uci commit advwireless; "
                 f"wifi reload 2>/dev/null || wifi up 2>/dev/null || true; echo RC:$?",
             )
             time.sleep(2)
             got = uci_get(profile_active, key)
             ssh(
                 profile_active,
-                f"uci set {key}={baseline}; uci commit wireless; "
+                f"uci set {key}={baseline}; uci commit advwireless; "
                 f"wifi reload 2>/dev/null || wifi up 2>/dev/null || true",
             )
             time.sleep(1)
@@ -514,7 +514,7 @@ def _mode_radio24_config_log(case: dict[str, Any], profile_active: dict[str, Any
         baseline = uci_get(profile_active, key) or "auto"
         target = "6" if baseline.strip() in {"auto", "0", ""} else "auto"
     elif "bandwidth" in steps or "mhz" in steps:
-        key = "wireless.wifi0.htmode"
+        key = "advwireless.ath0.htmode"
         baseline = uci_get(profile_active, key) or "HT20"
         target = "HT40" if "20" in baseline else "HT20"
     else:
@@ -529,7 +529,7 @@ def _mode_radio24_config_log(case: dict[str, Any], profile_active: dict[str, Any
         if str(target) not in got and got != str(target):
             out = ssh(
                 profile_active,
-                f"uci set {key}={target}; uci commit wireless; echo RC:$?",
+                f"uci set {key}={target}; uci commit {key.split('.', 1)[0]}; echo RC:$?",
             )
             got = uci_get(profile_active, key)
         ucidyn_set(profile_active, key, baseline)

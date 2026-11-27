@@ -499,8 +499,7 @@ def _verify_bts_bandwidth_ratio(
     if check_running and running_bw != expected_bw:
         print(
             f"[WARN] cfg80211tool reports {running_bw or 'unknown'} "
-            f"while advwireless.ath{radio_idx}.htmode is {actual_bw or 'unknown'}. "
-            "The link rate follows advwireless; cfg80211tool follows wireless.wifiN.htmode."
+            f"while advwireless.ath{radio_idx}.htmode is {actual_bw or 'unknown'}."
         )
     if actual_ratio != dl_ul_percent:
         mismatches.append(f"dlulratio expected {dl_ul_percent}, got {actual_ratio}")
@@ -1857,8 +1856,7 @@ def _apply_cpe_bandwidth(
         # so ucidyn apply drops SSH and a foreground apply is killed by SIGHUP
         # before the new htmode is stored.
         chain = (
-            f"ucidyn set wireless.wifi{radio_idx}.htmode {htmode}"
-            f" && ucidyn set advwireless.ath{radio_idx}.htmode {htmode}"
+            f"ucidyn set advwireless.ath{radio_idx}.htmode {htmode}"
             " && (trap '' HUP; ucidyn apply >/tmp/ucidyn-apply.log 2>&1 </dev/null &)"
             " && echo CPE_APPLY_STARTED"
         )

@@ -215,7 +215,7 @@ def apply_lab_nic_mtu(bts_if: str, cpe_if: str, mtu: int) -> None:
 
 
 def read_radio(host: str, password: str, radio: int) -> dict:
-    uci = _ssh_clean(_ssh_try(host, password, f"uci get wireless.wifi{radio}.htmode 2>/dev/null || true"))
+    uci = _ssh_clean(_ssh_try(host, password, f"uci get advwireless.ath{radio}.htmode 2>/dev/null || true"))
     raw = _ssh_clean(_ssh_try(host, password, f"cfg80211tool ath{radio} get_mode 2>/dev/null || true"))
     iw = _ssh_clean(_ssh_try(host, password, f"iwconfig ath{radio} 2>/dev/null || true"))
     run = _parse_running_htmode(raw) or _parse_running_htmode(iw) or "?"
@@ -266,7 +266,7 @@ def apply_ht(host: str, password: str, radio: int, ht: str, wait_s: float = 120.
     uci = _uci_htmode(ht)
     want = _canonical_ht(ht)
     print(f"[RF] {host}: htmode → {uci}")
-    _ssh(host, password, f"ucidyn set wireless.wifi{radio}.htmode {uci}; ucidyn apply")
+    _ssh(host, password, f"ucidyn set advwireless.ath{radio}.htmode {uci}; ucidyn apply")
     deadline = time.time() + wait_s
     st = read_radio(host, password, radio)
     uci_want = _uci_htmode(ht)

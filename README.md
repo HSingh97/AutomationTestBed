@@ -383,7 +383,7 @@ pytest tests/AsymmetricCBW -m AsymmetricCBW -v --allow-acb-lab \
   --username root --password "$DUT_PASSWORD" --skip-testbed-bootstrap
 ```
 
-DFS radar is `radartool -i wifi1 bangradar` on the current channel. `TC_DFS_008`, `TC_DFS_015`, and `TC_DFS_022` also need `--allow-dfs-long` (about 30 minutes each). Asymmetric CBW sets BTS `wireless.wifi1.htmode` (downlink) and CPE `advwireless.ath1.force_bw` (uplink). `dlulratio` is not used.
+DFS radar is `radartool -i wifi1 bangradar` on the current channel. `TC_DFS_008`, `TC_DFS_015`, and `TC_DFS_022` also need `--allow-dfs-long` (about 30 minutes each). Asymmetric CBW sets BTS `advwireless.ath1.htmode` (downlink) and CPE `advwireless.ath1.force_bw` (uplink). `dlulratio` is not used.
 
 ### IP suite flags
 

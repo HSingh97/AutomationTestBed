@@ -780,7 +780,7 @@ async def _ft03_read_backend_state(ssh, *, radio_idx: int, timeout_s: int) -> di
     cmd_timeout = max(15, min(int(timeout_s), 45))
     bw_uci = await _ssh(
         ssh,
-        f"uci get wireless.wifi{radio_idx}.htmode 2>/dev/null || true",
+        f"uci get advwireless.ath{radio_idx}.htmode 2>/dev/null || true",
         timeout_s=cmd_timeout,
     )
     try:
@@ -923,7 +923,7 @@ async def _ft03_apply_backend_state(
 ) -> None:
     cmds = []
     if apply_bandwidth:
-        cmds.append(f"ucidyn set wireless.wifi{radio_idx}.htmode {_ft05_uci_htmode_value(bandwidth)}")
+        cmds.append(f"ucidyn set advwireless.ath{radio_idx}.htmode {_ft05_uci_htmode_value(bandwidth)}")
     cmds.extend(
         [
             f"ucidyn set network.lan.ipaddr {ipv4}",
@@ -950,10 +950,10 @@ async def _ft03_pick_applicable_bandwidth(
         if not target or uci_htmode_matches(target, current_bandwidth):
             continue
         uci_bw = uci_htmode_value(target)
-        await _ssh(ssh, f"ucidyn set wireless.wifi{radio_idx}.htmode {uci_bw}", timeout_s=timeout_s)
+        await _ssh(ssh, f"ucidyn set advwireless.ath{radio_idx}.htmode {uci_bw}", timeout_s=timeout_s)
         await _ssh(ssh, "ucidyn apply", timeout_s=max(120, timeout_s))
         applied = _normalize_htmode(
-            await _ssh(ssh, f"uci get wireless.wifi{radio_idx}.htmode", timeout_s=timeout_s)
+            await _ssh(ssh, f"uci get advwireless.ath{radio_idx}.htmode", timeout_s=timeout_s)
         )
         if uci_htmode_matches(target, applied):
             return target, True
@@ -1913,7 +1913,7 @@ def _ft05_ipv6_mgmt_host(ipv6_cidr: str) -> str:
 
 
 def _ft05_htmode_uci_line(radio_idx: int, htmode: str) -> str:
-    return f"wireless.wifi{radio_idx}.htmode = {htmode}"
+    return f"advwireless.ath{radio_idx}.htmode = {htmode}"
 
 
 def _ft05_mgmt_ipv6_host(baseline: dict[str, str]) -> str:
@@ -2036,7 +2036,7 @@ async def _ft05_set_remote_htmode(
     try:
         await _ssh(
             ssh,
-            f"ucidyn set wireless.wifi{radio_idx}.htmode {htmode}",
+            f"ucidyn set advwireless.ath{radio_idx}.htmode {htmode}",
             timeout_s=max(45, timeout_s),
         )
         await _ssh(ssh, "ucidyn apply", timeout_s=max(25, min(int(timeout_s), 60)))
@@ -2109,7 +2109,7 @@ async def _ft05_restore_cpe_via_hop(
 
 async def _read_lan_backend_state(ssh, *, radio_idx: int, timeout_s: int) -> dict[str, str]:
     """Backend LAN + channel width (bandwidth/htmode) from UCI + runtime ucidyn."""
-    bw_uci = await _ssh(ssh, f"uci get wireless.wifi{radio_idx}.htmode 2>/dev/null || true", timeout_s=timeout_s)
+    bw_uci = await _ssh(ssh, f"uci get advwireless.ath{radio_idx}.htmode 2>/dev/null || true", timeout_s=timeout_s)
     bw_mode = await _ssh(ssh, f"cfg80211tool ath{radio_idx} get_mode 2>/dev/null || true", timeout_s=timeout_s)
     htmode_uci = _normalize_htmode(bw_uci)
     if not _is_valid_htmode(htmode_uci):
@@ -2160,7 +2160,7 @@ async def _apply_ft05_test_state(
     ``ucidyn apply`` on an IP change drops SSH; that is expected — caller reconnects.
     """
     cmds = [
-        f"ucidyn set wireless.wifi{radio_idx}.htmode {_ft05_uci_htmode_value(bandwidth)}",
+        f"ucidyn set advwireless.ath{radio_idx}.htmode {_ft05_uci_htmode_value(bandwidth)}",
         f"ucidyn set network.lan.proto {proto}",
         f"ucidyn set network.lan.ipaddr {ipv4}",
         f"ucidyn set network.lan.netmask {netmask}",
@@ -2195,7 +2195,7 @@ async def _apply_lan_backend_state(
     timeout_s: int,
 ) -> None:
     cmds = [
-        f"ucidyn set wireless.wifi{radio_idx}.htmode {uci_htmode_value(bandwidth)}",
+        f"ucidyn set advwireless.ath{radio_idx}.htmode {uci_htmode_value(bandwidth)}",
         f"ucidyn set network.lan.proto {proto}",
         f"ucidyn set network.lan.ipaddr {ipv4}",
         f"ucidyn set network.lan.netmask {netmask}",
@@ -2380,7 +2380,7 @@ async def _ft05_backend_per_bandwidth_on_device(
     bts_ht_baseline = ""
     if str(label).upper() == "CPE" and link_ssh is not None:
         bts_ht_baseline = clean_ssh_output(
-            await _ssh(link_ssh, f"uci get wireless.wifi{radio_idx}.htmode 2>/dev/null || true", timeout_s=timeout_s)
+            await _ssh(link_ssh, f"uci get advwireless.ath{radio_idx}.htmode 2>/dev/null || true", timeout_s=timeout_s)
         ).strip()
     try:
         for bandwidth in bandwidth_list:
@@ -2514,7 +2514,7 @@ async def _ft05_backend_per_bandwidth_on_device(
             try:
                 await _ssh(
                     link_ssh,
-                    f"ucidyn set wireless.wifi{radio_idx}.htmode {bts_ht_baseline}",
+                    f"ucidyn set advwireless.ath{radio_idx}.htmode {bts_ht_baseline}",
                     timeout_s=max(120, timeout_s),
                 )
                 await _ssh(link_ssh, "ucidyn apply", timeout_s=max(120, timeout_s))
@@ -3383,7 +3383,7 @@ async def _ft07_backend_apply_test_config(
     ht = _ft05_uci_htmode_value(bandwidth)
     # Apply in one short remote shell; ucidyn apply will drop the hop when LAN changes.
     batch = (
-        f"ucidyn set wireless.wifi{radio_idx}.htmode {ht} && "
+        f"ucidyn set advwireless.ath{radio_idx}.htmode {ht} && "
         f"ucidyn set network.lan.proto static && "
         f"ucidyn set network.lan.ipaddr {ipv4} && "
         f"ucidyn set network.lan.netmask {netmask} && "
@@ -3415,7 +3415,7 @@ async def _ft07_backend_mutate_and_factory_reset(
     retain_key = str(cfg.get("factory_reset_ucidyn_key", "tftp.retip.retainip"))
     ht = _ft05_uci_htmode_value(bandwidth)
     remote = (
-        f"ucidyn set wireless.wifi{radio_idx}.htmode {ht}; "
+        f"ucidyn set advwireless.ath{radio_idx}.htmode {ht}; "
         f"ucidyn set network.lan.proto static; "
         f"ucidyn set network.lan.ipaddr {ipv4}; "
         f"ucidyn set network.lan.netmask {netmask}; "
@@ -3753,7 +3753,7 @@ async def _ft07_restore_bts_network(
         cmds.append("ucidyn delete network.lan.ip6gw 2>/dev/null || true")
     if ssid and key:
         cmds.extend([
-            f"ucidyn set wireless.wifi{radio_idx}.htmode {ht}",
+            f"ucidyn set advwireless.ath{radio_idx}.htmode {ht}",
             f"ucidyn set wireless.@wifi-iface[{radio_idx}].ssid {shlex.quote(ssid)}",
             f"ucidyn set wireless.@wifi-iface[{radio_idx}].key {shlex.quote(key)}",
             f"ucidyn set wireless.wifi{radio_idx}.nwksecret {shlex.quote(key)}",
@@ -3818,7 +3818,7 @@ async def _ft07_restore_cpe_link(
         f"ucidyn set network.lan.proto static",
         f"ucidyn set network.lan.ipaddr {ipv4}",
         f"ucidyn set network.lan.netmask {netmask}",
-        f"ucidyn set wireless.wifi{radio_idx}.htmode {ht}",
+        f"ucidyn set advwireless.ath{radio_idx}.htmode {ht}",
         f"ucidyn set wireless.@wifi-iface[{radio_idx}].mode sta",
         f"ucidyn set wireless.@wifi-iface[{radio_idx}].ssid {shlex.quote(ssid)}",
         f"ucidyn set wireless.@wifi-iface[{radio_idx}].encryption {shlex.quote(encryption)}",
@@ -7007,11 +7007,11 @@ async def _ft15_verify_backend_pair(
 
 async def _ft16_apply_bandwidth(ssh, *, radio_idx: int, bandwidth: str, timeout_s: int) -> None:
     uci_bw = _ft05_uci_htmode_value(bandwidth)
-    await _ssh(ssh, f"ucidyn set wireless.wifi{radio_idx}.htmode {uci_bw}", timeout_s=timeout_s)
+    await _ssh(ssh, f"ucidyn set advwireless.ath{radio_idx}.htmode {uci_bw}", timeout_s=timeout_s)
     await _ssh(ssh, "ucidyn apply", timeout_s=max(120, timeout_s))
 
 async def _ft16_read_bandwidth(ssh, *, radio_idx: int, timeout_s: int) -> str:
-    bw_uci = await _ssh(ssh, f"uci get wireless.wifi{radio_idx}.htmode 2>/dev/null || true", timeout_s=timeout_s)
+    bw_uci = await _ssh(ssh, f"uci get advwireless.ath{radio_idx}.htmode 2>/dev/null || true", timeout_s=timeout_s)
     bw_mode = await _ssh(ssh, f"cfg80211tool ath{radio_idx} get_mode 2>/dev/null || true", timeout_s=timeout_s)
     return _normalize_htmode(f"{bw_uci}\n{bw_mode}")
 

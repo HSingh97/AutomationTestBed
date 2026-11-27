@@ -58,7 +58,7 @@ def _htmode_equal(expected_ht: str, actual_ht: str) -> bool:
 async def read_sanity_bandwidth_snap(ssh, *, radio_idx: int = RADIO_IDX) -> SanityBandwidthSnap:
     await ensure_sanity_ssh_open(ssh)
     raw = (
-        await sanity_ssh_run(ssh, f"uci -q get wireless.wifi{radio_idx}.htmode", timeout_s=30)
+        await sanity_ssh_run(ssh, f"uci -q get advwireless.ath{radio_idx}.htmode", timeout_s=30)
     ).strip()
     return SanityBandwidthSnap(htmode=raw, gui_mhz=_mhz_from_htmode(raw))
 
@@ -325,8 +325,8 @@ async def apply_sanity_bandwidth_ssh(
     # skips "wifi up" unless the change file names wifi1, so record the change
     # and bring the VAP back on the channel the STA was already using.
     parts = [
-        f"uci set wireless.wifi{RADIO_IDX}.htmode='{ht}'",
-        f"ucidyn set wireless.wifi{RADIO_IDX}.htmode {ht}",
+        f"uci set advwireless.ath{RADIO_IDX}.htmode='{ht}'",
+        f"ucidyn set advwireless.ath{RADIO_IDX}.htmode {ht}",
         "echo wireless.wifi1.htmode > /tmp/wifiintf_changes.txt",
     ]
     if keep_ch:
@@ -336,7 +336,7 @@ async def apply_sanity_bandwidth_ssh(
         ]
     parts.extend(
         [
-            "uci commit wireless",
+            "uci commit wireless; uci commit advwireless 2>/dev/null || true",
             "ucidyn apply >/dev/null 2>&1 || true",
             # ucidyn apply consumes the change file and can drop ath1.
             # Write it again immediately before wifi up, or this image skips the VAP.

@@ -242,9 +242,7 @@ class RootCommands:
         previous channel from a cached radio profile.
         """
         commands = [
-            # cfg80211tool follows wireless.wifiN.htmode. advwireless alone
-            # leaves the driver at the previous width.
-            f"ucidyn set wireless.wifi{radio_idx}.htmode {bandwidth}",
+            # Bandwidth is advwireless.athN.htmode only.
             f"ucidyn set advwireless.ath{radio_idx}.htmode {bandwidth}",
             f"ucidyn set ath{radio_idx}qos.qoscfg.dlulratio {dl_ul_percent}",
         ]

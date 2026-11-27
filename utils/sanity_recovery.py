@@ -340,7 +340,7 @@ async def restore_bts_from_snapshot(
         [
             "uci set advwireless.ath1.kwndfsacs=0 2>/dev/null || true",
             f"uci set wireless.wifi{radio_idx}.channel='149'",
-            f"uci set wireless.wifi{radio_idx}.htmode='HT80'",
+            f"uci set advwireless.ath{radio_idx}.htmode='HT80'",
             f"uci set advwireless.ath{radio_idx}.channel='149' 2>/dev/null || true",
             f"uci delete wireless.@wifi-iface[{radio_idx}].hidden 2>/dev/null || true",
             f"uci set wireless.@wifi-iface[{radio_idx}].hidden=0",
@@ -598,7 +598,7 @@ async def _ensure_bts_lab_channel_149(
         "set +e; "
         "uci set advwireless.ath1.kwndfsacs=0 2>/dev/null || true; "
         f"uci set wireless.wifi{radio_idx}.channel=149; "
-        f"uci set wireless.wifi{radio_idx}.htmode=HT80; "
+        f"uci set advwireless.ath{radio_idx}.htmode=HT80; "
         f"uci set advwireless.ath{radio_idx}.channel=149 2>/dev/null || true; "
         f"uci delete wireless.@wifi-iface[{radio_idx}].hidden 2>/dev/null || true; "
         f"uci set wireless.@wifi-iface[{radio_idx}].hidden=0; "

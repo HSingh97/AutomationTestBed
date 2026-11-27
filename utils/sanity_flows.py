@@ -6513,7 +6513,7 @@ async def assert_sanity_32_channel_mode(
             ).strip() or "psk2+ccmp-256"
             bts_ht = str(
                 await sanity_ssh_run(
-                    bts_ssh, "uci -q get wireless.wifi1.htmode", timeout_s=20
+                    bts_ssh, "uci -q get advwireless.ath1.htmode", timeout_s=20
                 )
                 or "HT80"
             ).strip() or "HT80"
@@ -6535,9 +6535,9 @@ async def assert_sanity_32_channel_mode(
                     f"uci set wireless.@wifi-iface[1].encryption={_shlex.quote(enc)}; "
                     "uci set wireless.@wifi-iface[1].mode=ap; "
                     "uci set wireless.@wifi-iface[1].disabled=0; "
-                    f"uci set wireless.wifi1.htmode={_shlex.quote(bts_ht)}; "
+                    f"uci set advwireless.ath1.htmode={_shlex.quote(bts_ht)}; "
                     f"uci set wireless.wifi1.channel={FIXED_CHANNEL}; "
-                    "uci commit wireless; "
+                    "uci commit wireless; uci commit advwireless; "
                     "wifi reload >/dev/null 2>&1 || wifi up >/dev/null 2>&1; true",
                     timeout_s=120,
                 )
@@ -6562,7 +6562,7 @@ async def assert_sanity_32_channel_mode(
             try:
                 remote = (
                     "set +e; "
-                    f"uci set wireless.wifi1.htmode={_shlex.quote(bts_ht)}; "
+                    f"uci set advwireless.ath1.htmode={_shlex.quote(bts_ht)}; "
                     "uci set wireless.@wifi-iface[1].mode=sta; "
                     f"uci set wireless.@wifi-iface[1].ssid={_shlex.quote(ssid)}; "
                     f"uci set wireless.@wifi-iface[1].key={_shlex.quote(key)}; "
@@ -6575,11 +6575,11 @@ async def assert_sanity_32_channel_mode(
                     "uci set network.lan.ipaddr=192.168.2.11; "
                     "uci set network.lan.netmask=255.255.255.0; "
                     f"uci set network.lan.ip6addr={_shlex.quote(cpe_v6 + '/120')}; "
-                    "uci commit wireless; "
+                    "uci commit wireless; uci commit advwireless; "
                     "uci commit network; "
                     # Prefer reload — wifi down can leave ath1 missing until reboot.
                     "wifi reload >/dev/null 2>&1 || wifi up >/dev/null 2>&1; sleep 8; "
-                    "echo CPE_ht=$(uci -q get wireless.wifi1.htmode); "
+                    "echo CPE_ht=$(uci -q get advwireless.ath1.htmode); "
                     "echo CPE_ssid=$(uci -q get wireless.@wifi-iface[1].ssid)"
                 )
                 out = await hop.run(remote, timeout_s=90)
@@ -6689,7 +6689,7 @@ async def assert_sanity_32_channel_mode(
             "uci set advwireless.ath1.dcsstatus=0 2>/dev/null || true; "
             "uci set wireless.wifi1.disabled=0; "
             f"uci set wireless.wifi1.channel={FIXED_CHANNEL}; "
-            "uci set wireless.wifi1.htmode=HT80; "
+            "uci set advwireless.ath1.htmode=HT80; "
             f"uci set advwireless.ath1.channel={FIXED_CHANNEL} 2>/dev/null || true; "
             "uci delete wireless.@wifi-iface[1].hidden 2>/dev/null || true; "
             "uci set wireless.@wifi-iface[1].hidden=0; "
@@ -7343,7 +7343,7 @@ async def assert_sanity_33_frequency_range(
                 "set +e; "
                 "uci set advwireless.ath1.kwndfsacs=0 2>/dev/null || true; "
                 "uci set wireless.wifi1.channel=149; "
-                "uci set wireless.wifi1.htmode=HT80; "
+                "uci set advwireless.ath1.htmode=HT80; "
                 "uci set advwireless.ath1.channel=149 2>/dev/null || true; "
                 "uci commit wireless; uci commit advwireless 2>/dev/null || true; "
                 "if iwconfig ath1 2>/dev/null | grep -q Mode; then "

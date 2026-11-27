@@ -460,7 +460,7 @@ def _runtime_htmode(raw: str) -> str:
 
 async def _read_htmode_uci(ssh, *, radio_idx: int = RADIO_INDEX) -> str:
     return ssh_scalar(
-        await _send_ssh(ssh, f"uci get wireless.wifi{radio_idx}.htmode 2>/dev/null || true")
+        await _send_ssh(ssh, f"uci get advwireless.ath{radio_idx}.htmode 2>/dev/null || true")
     ).strip()
 
 

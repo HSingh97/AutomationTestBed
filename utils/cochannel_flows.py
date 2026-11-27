@@ -569,7 +569,7 @@ def read_link_endpoint(cfg: CoChannelConfig, host: str, role: str, peer: str) ->
         host,
         f"iwconfig {cfg.wlan_iface}; echo ---STA---; "
         f"wlanconfig {cfg.wlan_iface} list sta 2>/dev/null | sed -n '2p'; echo ---HT---; "
-        f"uci get wireless.{cfg.wifi_iface}.htmode 2>/dev/null",
+        f"uci get advwireless.{cfg.wifi_iface.replace('wifi', 'ath')}.htmode 2>/dev/null",
         timeout_s=30,
     )
     text = str(raw or "")

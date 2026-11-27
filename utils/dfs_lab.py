@@ -80,7 +80,7 @@ def snapshot_radio(profile_active: dict[str, Any]) -> dict[str, Any]:
         "echo '---CFG_CH---'; "
         "uci get advwireless.ath1.channel 2>/dev/null || uci get wireless.wifi1.channel 2>/dev/null || true; "
         "echo '---HTMODE---'; "
-        "uci get wireless.wifi1.htmode 2>/dev/null || true; "
+        "uci get advwireless.ath1.htmode 2>/dev/null || true; "
         "echo '---IW---'; iwconfig ath1 2>/dev/null || true; "
         "echo '---MODE---'; cfg80211tool ath1 get_mode 2>/dev/null || true; "
         "echo '---DFSKEYS---'; "
@@ -128,7 +128,7 @@ def set_channel(profile_active: dict[str, Any], channel: int) -> str:
 def set_htmode(profile_active: dict[str, Any], htmode: str) -> str:
     return ssh(
         profile_active,
-        f"ucidyn set wireless.wifi1.htmode {htmode}; ucidyn apply; echo HT_RC:$?",
+        f"ucidyn set advwireless.ath1.htmode {htmode}; ucidyn apply; echo HT_RC:$?",
         timeout_s=90,
     )
 

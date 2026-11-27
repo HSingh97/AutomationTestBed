@@ -607,7 +607,7 @@ async def force_radio_channel_reload(
     try:
         cur_ht = str(
             await sanity_ssh_run(
-                ssh, f"uci -q get wireless.wifi{RADIO_IDX}.htmode", timeout_s=20
+                ssh, f"uci -q get advwireless.ath{RADIO_IDX}.htmode", timeout_s=20
             )
             or ""
         ).strip()
@@ -624,7 +624,7 @@ async def force_radio_channel_reload(
         "uci set advwireless.ath1.dcsstatus=0 2>/dev/null || true; "
         f"uci set wireless.wifi{RADIO_IDX}.disabled=0; "
         f"uci set wireless.wifi{RADIO_IDX}.channel={value}; "
-        f"uci set wireless.wifi{RADIO_IDX}.htmode={keep_ht}; "
+        f"uci set advwireless.ath{RADIO_IDX}.htmode={keep_ht}; "
         f"uci set advwireless.ath{RADIO_IDX}.channel={value} 2>/dev/null || true; "
         # Keep SSID broadcast so CPE can (re)associate after channel bounce.
         f"uci delete wireless.@wifi-iface[{RADIO_IDX}].hidden 2>/dev/null || true; "
@@ -667,7 +667,7 @@ async def force_radio_channel_reload(
                 ssh,
                 "set +e; "
                 f"ucidyn set wireless.wifi{RADIO_IDX}.channel {value}; "
-                f"ucidyn set wireless.wifi{RADIO_IDX}.htmode {keep_ht}; "
+                f"ucidyn set advwireless.ath{RADIO_IDX}.htmode {keep_ht}; "
                 f"ucidyn set advwireless.ath{RADIO_IDX}.channel {value}; "
                 "ucidyn apply; true",
                 timeout_s=120,
@@ -714,12 +714,12 @@ async def force_radio_channel_reload(
                 "set +e; "
                 "uci set advwireless.ath1.kwndfsacs=0 2>/dev/null || true; "
                 f"uci set wireless.wifi{RADIO_IDX}.channel={value}; "
-                f"uci set wireless.wifi{RADIO_IDX}.htmode={keep_ht}; "
+                f"uci set advwireless.ath{RADIO_IDX}.htmode={keep_ht}; "
                 f"uci set advwireless.ath{RADIO_IDX}.channel={value} 2>/dev/null || true; "
                 "uci commit wireless; "
                 "uci commit advwireless 2>/dev/null || true; "
                 f"ucidyn set wireless.wifi{RADIO_IDX}.channel {value} 2>/dev/null || true; "
-                f"ucidyn set wireless.wifi{RADIO_IDX}.htmode {keep_ht} 2>/dev/null || true; "
+                f"ucidyn set advwireless.ath{RADIO_IDX}.htmode {keep_ht} 2>/dev/null || true; "
                 "ucidyn apply 2>/dev/null || true",
                 timeout_s=120,
             )

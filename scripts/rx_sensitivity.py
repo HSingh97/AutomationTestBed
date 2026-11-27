@@ -261,7 +261,7 @@ def _lock_command(settings: Settings, *, master: bool) -> str:
     htmode = uci_htmode_value(settings.bandwidth)
     commands = [
         f"ucidyn set txparam.ath{radio}.ddrsrate {rate}",
-        f"ucidyn set wireless.wifi{radio}.htmode {htmode}",
+        f"ucidyn set advwireless.ath{radio}.htmode {htmode}",
     ]
     if master and settings.channel is not None:
         commands.append(f"ucidyn set advwireless.ath{radio}.channel {settings.channel}")
@@ -274,7 +274,7 @@ def _radio_lock_matches(settings: Settings, host: str) -> bool:
     radio = settings.radio_idx
     try:
         rate = _uci(settings, host, f"txparam.ath{radio}.ddrsrate")
-        htmode = _uci(settings, host, f"wireless.wifi{radio}.htmode")
+        htmode = _uci(settings, host, f"advwireless.ath{radio}.htmode")
     except RuntimeError:
         return False
     return rate == str(mcs_number(settings.mcs)) and uci_htmode_matches(settings.bandwidth, htmode)

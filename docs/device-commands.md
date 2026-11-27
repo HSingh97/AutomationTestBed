@@ -158,7 +158,7 @@ Primary code catalogs: `pages/commands.py` (`RootCommands`), `utils/sanity_comma
 | `uci get wireless.@wifi-iface[1].disabled` | Radio disabled flag |
 | `uci get wireless.wifi1.linktype` | Link type |
 | `uci get wireless.wifi1.nwksecret` | Network secret |
-| `uci get wireless.wifi1.htmode` | Channel width (HT20/40/80) |
+| `uci get advwireless.ath1.htmode` | Channel width (HT20/40/80) |
 | `uci get wireless.wifi1.distance` | Distance |
 | `uci get wireless.@wifi-iface[1].maxsta` | Max stations |
 | `uci get advwireless.ath1.channel` | Configured channel |
@@ -201,7 +201,7 @@ Primary code catalogs: `pages/commands.py` (`RootCommands`), `utils/sanity_comma
 |---|---|
 | `ucidyn set wireless.@wifi-iface[1].ssid <ssid>` | Set SSID |
 | `ucidyn set wireless.@wifi-iface[1].key <key>` | Set key |
-| `ucidyn set wireless.wifi1.htmode HT80` | Set channel width |
+| `ucidyn set advwireless.ath1.htmode HT80` | Set channel width |
 | `ucidyn set txparam.ath1.atpcpower 1` | Set Tx power |
 | `ucidyn set txparam.ath1.ddrsstatus 0` | Manual DDRS |
 | `ucidyn set txparam.ath1.ddrsrate 23` | Set MCS index |

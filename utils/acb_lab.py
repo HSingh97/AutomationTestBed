@@ -1,6 +1,6 @@
 """Asymmetric channel bandwidth.
 
-Downlink width is the BTS ``wireless.wifi1.htmode``.
+Downlink width is the BTS ``advwireless.ath1.htmode``.
 Uplink width is the CPE ``advwireless.ath1.force_bw`` (20/40/80, 0 = auto).
 ``dlulratio`` is duty-cycle and is not used here.
 """
@@ -71,7 +71,7 @@ def _remember_original(profile_active: dict[str, Any]) -> None:
     global _ORIG
     if _ORIG is not None:
         return
-    bts_ht = ssh(profile_active, "uci -q get wireless.wifi1.htmode || true")
+    bts_ht = ssh(profile_active, "uci -q get advwireless.ath1.htmode || true")
     cpe = cpe_host(profile_active)
     cpe_bw = ""
     if cpe:
@@ -90,7 +90,7 @@ def restore_acb(profile_active: dict[str, Any]) -> None:
     print(f"[acb] restore BTS htmode={_ORIG['bts_htmode']}")
     ssh(
         profile_active,
-        f"ucidyn set wireless.wifi1.htmode {_ORIG['bts_htmode']}; ucidyn apply; echo BTS_RESTORE:$?",
+        f"ucidyn set advwireless.ath1.htmode {_ORIG['bts_htmode']}; ucidyn apply; echo BTS_RESTORE:$?",
         timeout_s=90,
     )
     _wait_link_only(profile_active, timeout_s=120)
@@ -118,7 +118,7 @@ def _su_index(profile_active: dict[str, Any]) -> int:
 def read_link_snapshot(profile_active: dict[str, Any]) -> dict[str, Any]:
     idx = _su_index(profile_active)
     mode = ssh(profile_active, "cfg80211tool ath1 get_mode 2>/dev/null || true")
-    ht = ssh(profile_active, "uci -q get wireless.wifi1.htmode || true")
+    ht = ssh(profile_active, "uci -q get advwireless.ath1.htmode || true")
     base = f"/sys/class/kwn/sua{idx}/statistics" if idx else ""
     if idx:
         stats = ssh(
@@ -171,7 +171,7 @@ def apply_pair(profile_active: dict[str, Any], dl_mhz: int, ul_mhz: int) -> dict
         return snap
 
     dl_ht = uci_htmode_value(f"HT{int(dl_mhz)}")
-    current = ssh(profile_active, "uci -q get wireless.wifi1.htmode || true")
+    current = ssh(profile_active, "uci -q get advwireless.ath1.htmode || true")
     current_ht = (current.strip().splitlines() or [""])[-1].strip()
     notes: list[str] = []
     # Set uplink while the CPE is still reachable, then change downlink.
@@ -190,7 +190,7 @@ def apply_pair(profile_active: dict[str, Any], dl_mhz: int, ul_mhz: int) -> dict
         print(f"[acb] BTS htmode {current_ht} -> {dl_ht}")
         out = ssh(
             profile_active,
-            f"ucidyn set wireless.wifi1.htmode {dl_ht}; ucidyn apply; echo HT_RC:$?",
+            f"ucidyn set advwireless.ath1.htmode {dl_ht}; ucidyn apply; echo HT_RC:$?",
             timeout_s=90,
         )
         notes.append(out[-500:])

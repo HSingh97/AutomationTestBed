@@ -64,7 +64,7 @@ async def _bts_htmode(bts_host: str, username: str, password: str, *, radio_idx:
             connect_timeout=12,
         )
         try:
-            result = await conn.run(f"uci get wireless.wifi{radio_idx}.htmode", check=False)
+            result = await conn.run(f"uci get advwireless.ath{radio_idx}.htmode", check=False)
             value = (result.stdout or "").strip().splitlines()[-1].strip() if result.stdout else ""
             if value.upper().startswith("HT"):
                 return value.upper()
@@ -90,9 +90,9 @@ async def _prepare_cpe_for_btsconnect(
     ht = shlex.quote(htmode)
     cmd = (
         f"uci set wireless.wifi1.nwksecret={key}; "
-        f"uci set wireless.wifi1.htmode={ht}; "
-        "uci commit wireless; "
-        "echo CPE_PREP nwk=$(uci get wireless.wifi1.nwksecret) ht=$(uci get wireless.wifi1.htmode)"
+        f"uci set advwireless.ath1.htmode={ht}; "
+        "uci commit wireless; uci commit advwireless; "
+        "echo CPE_PREP nwk=$(uci get wireless.wifi1.nwksecret) ht=$(uci get advwireless.ath1.htmode)"
     )
     print(f"    -> [Preflight] sync CPE nwksecret + htmode={htmode} before btsconnect")
     code, out, err = await client.ssh_run(cmd, timeout_s=40)
